@@ -1,0 +1,61 @@
+Create this project from scratch as a professional Go application.
+
+Read `CLAUDE.md` first and follow it strictly.
+
+Build the first working increment of the local LLM TUI application.
+
+For the first increment, implement:
+
+1. Go module initialization
+2. Clean project structure
+3. Cobra CLI with commands:
+
+   * `llmtui chat`
+   * `llmtui config init`
+   * `llmtui config show`
+   * `llmtui config path`
+   * `llmtui providers`
+   * `llmtui models`
+   * `llmtui doctor`
+   * `llmtui version`
+4. Viper-based YAML config loading
+5. Config precedence:
+
+   * flags
+   * environment variables
+   * config file
+   * defaults
+6. Provider interface
+7. Mock provider for offline TUI testing
+8. OpenAI-compatible provider skeleton with streaming-ready architecture
+9. Ollama provider skeleton
+10. Basic Bubble Tea full-screen chat UI
+11. Premium Lip Gloss styling foundation
+12. Status bar showing provider, model, connection state, token/session stats
+13. Usage chart placeholder rendered as terminal-native bars/sparkline
+14. README with quick start
+15. Unit tests for config loading and provider interface basics
+
+The first version must compile and run even if no local LLM server is running. In that case, use the mock provider and show a polished demo chat experience.
+
+Use idiomatic Go, small packages, clean error handling, and context-aware HTTP clients.
+
+Do not create a monolithic single-file prototype.
+
+After implementation, run:
+
+```bash
+go fmt ./...
+go test ./...
+go vet ./...
+```
+
+Then show me:
+
+* repository structure
+* how to run the app
+* how to initialize config
+* how to test Ollama
+* how to test LM Studio
+* what remains for the next phase
+

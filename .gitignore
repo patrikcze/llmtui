@@ -1,0 +1,4 @@
+llmtui
+/dist/
+*.log
+.DS_Store
