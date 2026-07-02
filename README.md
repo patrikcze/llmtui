@@ -108,8 +108,9 @@ providers:
 | Key | Action |
 | --- | --- |
 | `Enter` | Send message |
-| `Shift+Enter` / `Alt+Enter` | Insert a newline — the input box grows with your prompt (up to 6 rows); see note below |
-| `Ctrl+J` | Insert a newline (works in every terminal) |
+| `Shift+Enter` | Insert a newline — works out of the box in iTerm2, VS Code, WezTerm, Ghostty, Alacritty (see note below) |
+| `\` + `Enter` | Insert a newline — trailing backslash continues the line, works in **every** terminal |
+| `Ctrl+J` | Insert a newline (also works everywhere) |
 | `Ctrl+S` | Save the session to the history directory |
 | `Ctrl+Y` | Copy the last assistant reply to the clipboard (raw Markdown) |
 | `Ctrl+O` | Toggle text-selection mode (releases the mouse so your terminal can select/copy; toggles back to wheel scrolling) |
@@ -119,15 +120,23 @@ providers:
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+C` `Ctrl+C` | Quit (press twice within 2 s). The first press stops generation or clears the input; quitting auto-saves the session |
 
-**Shift+Enter note:** most terminals send the exact same byte for Enter and
-Shift+Enter, so no TUI can tell them apart out of the box (Claude Code has
-the same limitation — its `/terminal-setup` just remaps the key). `Alt+Enter`
-works everywhere. To make Shift+Enter work, remap it in your terminal to send
-`Esc+Enter` (`\e\r`):
+**Shift+Enter note:** legacy terminal input sends the exact same byte for
+Enter and Shift+Enter, so historically TUIs couldn't tell them apart. llmtui
+enables the `modifyOtherKeys` keyboard protocol at startup, which makes
+Shift+Enter (and Ctrl+Enter) report distinctly in terminals that support it:
+**iTerm2, VS Code, WezTerm, Ghostty, Alacritty, xterm**. No configuration
+needed there.
 
-- **iTerm2**: Settings → Profiles → Keys → Key Mappings → add `⇧↩` → *Send Escape Sequence* → `\r` (enter `[13;2u` style not needed; use "Send text: `\e\r`")
-- **VS Code terminal**: add a `terminal.integrated` keybinding sending `\r`
-- **Kitty / WezTerm / Ghostty**: map `shift+enter` to send `\x1b\r`
+Two terminals need a different route:
+
+- **macOS Terminal.app** supports no keyboard protocol at all — use
+  `\` + `Enter` or `Ctrl+J`, or enable *Settings → Profiles → Keyboard →
+  Use Option as Meta key* to make `Option+Enter` work.
+- **Kitty** uses only its own protocol — map it yourself:
+  `map shift+enter send_text all \x1b[27;2;13~` in `kitty.conf`.
+
+(`Cmd+Enter` can never work: macOS terminals consume Cmd shortcuts
+themselves and never forward them to the running program.)
 
 ## Slash commands
 
@@ -150,6 +159,22 @@ navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
 | `/quit` | Save session and exit |
 
 Overlays close with `Esc`, `Enter`, or `q` and scroll with `↑`/`↓`/`PgUp`/`PgDn`.
+
+The full command set is documented in [docs/slash-commands.md](docs/slash-commands.md).
+Local-LLM experience helpers:
+
+| Command | Description |
+| --- | --- |
+| `/cache` | Local response cache — repeated prompts answer instantly ([docs](docs/cache.md)) |
+| `/profile` | Model profiles tune temperature, context window, prompt style per model family |
+| `/prompt preview` | See exactly what will be sent — the raw message is never rewritten ([docs](docs/prompt-composition.md)) |
+| `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
+| `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
+| `/template` | Reusable conversation templates from the config |
+| `/doctor` | Provider, model, and network diagnostics |
+| `/keys` | Key inspector — verify what your terminal sends ([docs](docs/keyboard.md)) |
+| `/retry` | Retry the last message; transient network errors also retry automatically |
+| `/debug last` | Full drawer for the last request: sections, cache status, retries, timings |
 
 ## Images (vision models)
 

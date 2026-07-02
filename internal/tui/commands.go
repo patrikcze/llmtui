@@ -17,10 +17,44 @@ import (
 
 // slashCommand is one command reachable by typing "/" in the input.
 type slashCommand struct {
-	name  string
-	usage string
-	desc  string
-	run   func(m *Model, args string) tea.Cmd
+	name     string
+	aliases  []string
+	usage    string
+	desc     string
+	category string
+	hidden   bool
+	run      func(m *Model, args string) tea.Cmd
+}
+
+// matches reports whether typed is a prefix of the name or any alias.
+func (c slashCommand) matches(typed string) bool {
+	if strings.HasPrefix(c.name, typed) {
+		return true
+	}
+	for _, a := range c.aliases {
+		if strings.HasPrefix(a, typed) {
+			return true
+		}
+	}
+	return false
+}
+
+// is reports whether name is the command's name or an alias.
+func (c slashCommand) is(name string) bool {
+	if c.name == name {
+		return true
+	}
+	for _, a := range c.aliases {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Command categories, in /help display order.
+var commandCategories = []string{
+	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -30,26 +64,43 @@ type modelsResultMsg struct {
 
 func slashCommands() []slashCommand {
 	return []slashCommand{
-		{"help", "/help", "show keyboard shortcuts and commands", func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.helpOverlay())
+		// --- Chat ---
+		{name: "help", usage: "/help [topic]", desc: "show keys and commands, grouped by category", category: "Chat", run: func(m *Model, args string) tea.Cmd {
+			m.openOverlay(m.helpOverlay(args))
 			return nil
 		}},
-		{"copy", "/copy", "copy the last reply to the clipboard", func(m *Model, _ string) tea.Cmd {
+		{name: "copy", usage: "/copy", desc: "copy the last reply to the clipboard", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			return m.copyLastReply()
 		}},
-		{"clear", "/clear", "clear the conversation", func(m *Model, _ string) tea.Cmd {
+		{name: "clear", usage: "/clear", desc: "clear the conversation", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			m.session.Clear()
+			m.summary = ""
 			m.refreshViewport()
 			return nil
 		}},
-		{"models", "/models", "list models on the current provider", func(m *Model, _ string) tea.Cmd {
+		{name: "retry", usage: "/retry", desc: "retry the last user message", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
+			return m.retryLast()
+		}},
+		{name: "quit", aliases: []string{"exit"}, usage: "/quit", desc: "save session and exit llmtui", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
+			return m.quit()
+		}},
+
+		// --- Provider ---
+		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", run: cmdProvider},
+		{name: "providers", usage: "/providers", desc: "list configured providers", category: "Provider", run: func(m *Model, _ string) tea.Cmd {
+			m.openOverlay(m.providersOverlay())
+			return nil
+		}},
+
+		// --- Model ---
+		{name: "models", usage: "/models [refresh]", desc: "list models on the current provider", category: "Model", run: func(m *Model, _ string) tea.Cmd {
 			prov := m.prov
 			return func() tea.Msg {
 				models, err := prov.ListModels(context.Background())
 				return modelsResultMsg{models: models, err: err}
 			}
 		}},
-		{"model", "/model <id>", "switch to a different model", func(m *Model, args string) tea.Cmd {
+		{name: "model", usage: "/model <id>", desc: "switch to a different model", category: "Model", run: func(m *Model, args string) tea.Cmd {
 			if args == "" {
 				m.errText = "usage: /model <id> (see /models)"
 				m.refreshViewport()
@@ -59,32 +110,38 @@ func slashCommands() []slashCommand {
 			m.notice = "model set to " + args
 			return nil
 		}},
-		{"providers", "/providers", "list configured providers", func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.providersOverlay())
-			return nil
-		}},
-		{"provider", "/provider <name>", "switch provider (and its default model)", func(m *Model, args string) tea.Cmd {
-			return m.switchProvider(args)
-		}},
-		{"stats", "/stats", "session and all-time usage statistics", func(m *Model, _ string) tea.Cmd {
+		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", run: cmdProfile},
+
+		// --- Prompt ---
+		{name: "prompt", usage: "/prompt [preview|raw|composed|mode <m>]", desc: "inspect and configure prompt composition", category: "Prompt", run: cmdPrompt},
+		{name: "template", usage: "/template [list|use <name>|clear|inspect <name>]", desc: "reusable conversation templates", category: "Prompt", run: cmdTemplate},
+
+		// --- Context ---
+		{name: "context", usage: "/context [summary|rebuild|clear-summary|strategy <s>]", desc: "context window management and session summary", category: "Context", run: cmdContext},
+
+		// --- Cache ---
+		{name: "cache", usage: "/cache [stats|clear|on|off]", desc: "local response cache", category: "Cache", run: cmdCache},
+
+		// --- Memory ---
+		{name: "memory", usage: "/memory [on|off|add <text>|list|remove <id>|clear]", desc: "local memory snippets (opt-in)", category: "Memory", run: cmdMemory},
+
+		// --- Diagnostics ---
+		{name: "doctor", usage: "/doctor [provider [name]]", desc: "provider and model diagnostics", category: "Diagnostics", run: cmdDoctor},
+		{name: "debug", usage: "/debug [on|off|last]", desc: "debug drawer for the last request", category: "Diagnostics", run: cmdDebug},
+		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", run: cmdKeys},
+		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", run: cmdConfig},
+
+		// --- Session ---
+		{name: "usage", usage: "/usage [session|last|reset|export]", desc: "usage dashboard: charts, models, cache, streaks", category: "Session", run: cmdUsage},
+		{name: "stats", usage: "/stats", desc: "per-exchange session statistics", category: "Session", run: func(m *Model, _ string) tea.Cmd {
 			m.openOverlay(m.statsOverlay())
 			return nil
 		}},
-		{"usage", "/usage", "all-time usage dashboard: charts, models, streaks", func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.usageOverlay())
-			return nil
-		}},
-		{"save", "/save", "save this session to the history directory", func(m *Model, _ string) tea.Cmd {
+		{name: "save", usage: "/save", desc: "save this session to the history directory", category: "Session", run: func(m *Model, _ string) tea.Cmd {
 			m.saveWithNotice()
 			return nil
 		}},
-		{"history", "/history", "list saved sessions", func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.historyOverlay())
-			return nil
-		}},
-		{"quit", "/quit", "save session and exit llmtui", func(m *Model, _ string) tea.Cmd {
-			return m.quit()
-		}},
+		{name: "history", usage: "/history [load <name>|search <q>|export md|json|clear]", desc: "saved sessions: list, load, search, export", category: "Session", run: cmdHistory},
 	}
 }
 
@@ -100,7 +157,7 @@ func (m *Model) updateSuggestions() {
 	if strings.HasPrefix(val, "/") && !strings.ContainsAny(val, " \n") {
 		typed := strings.TrimPrefix(val, "/")
 		for _, c := range slashCommands() {
-			if strings.HasPrefix(c.name, typed) {
+			if !c.hidden && c.matches(typed) {
 				m.sugs = append(m.sugs, c)
 				if len(m.sugs) == maxSuggestions {
 					break
@@ -132,7 +189,7 @@ func (m *Model) runSlashCommand() tea.Cmd {
 	m.syncInputHeight()
 
 	for _, c := range slashCommands() {
-		if c.name == name {
+		if c.is(name) {
 			m.errText = ""
 			return c.run(m, args)
 		}
@@ -140,6 +197,12 @@ func (m *Model) runSlashCommand() tea.Cmd {
 	m.errText = fmt.Sprintf("unknown command /%s — try /help", name)
 	m.refreshViewport()
 	return nil
+}
+
+// splitArgs returns the first argument word and the remaining text.
+func splitArgs(args string) (first, rest string) {
+	first, rest, _ = strings.Cut(strings.TrimSpace(args), " ")
+	return first, strings.TrimSpace(rest)
 }
 
 func (m *Model) switchProvider(name string) tea.Cmd {
@@ -154,7 +217,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
-	prov, err := app.BuildProvider(name, pc)
+	prov, err := app.BuildProvider(name, pc, m.cfg.Network)
 	if err != nil {
 		m.errText = err.Error()
 		m.refreshViewport()
@@ -182,41 +245,72 @@ func (m *Model) closeOverlay() {
 	m.refreshViewport()
 }
 
-func (m *Model) helpOverlay() string {
+func (m *Model) helpOverlay(topic string) string {
 	var b strings.Builder
-	title := m.theme.Badge.Render("llmtui help")
-	b.WriteString(title + "\n\n")
-
-	b.WriteString(m.theme.UserLabel.Render("keyboard") + "\n")
-	keys := [][2]string{
-		{"enter", "send message / run command"},
-		{"shift+↵", "newline (needs terminal remap, see README) — or alt+enter"},
-		{"ctrl+j", "insert newline (works everywhere)"},
-		{"ctrl+s", "save session to history"},
-		{"ctrl+y", "copy last reply to clipboard"},
-		{"ctrl+o", "toggle text-selection mode (release mouse)"},
-		{"ctrl+v", "paste image from clipboard (vision models)"},
-		{"ctrl+x", "remove last pasted image"},
-		{"esc", "stop generation · close this overlay"},
-		{"ctrl+l", "clear conversation"},
-		{"↑/↓", "navigate command suggestions · scroll"},
-		{"tab", "complete selected command"},
-		{"ctrl+c", "press twice to quit (first stops/clears)"},
+	title := "llmtui help"
+	if topic != "" {
+		title += " — " + topic
 	}
-	for _, k := range keys {
-		fmt.Fprintf(&b, "  %s  %s\n",
-			m.theme.StatusValue.Render(fmt.Sprintf("%-8s", k[0])),
-			m.theme.StatusBar.Render(k[1]))
+	b.WriteString(m.theme.Badge.Render(title) + "\n\n")
+
+	topic = strings.ToLower(strings.TrimSpace(topic))
+	if topic == "" {
+		b.WriteString(m.theme.UserLabel.Render("keyboard") + "\n")
+		keys := [][2]string{
+			{"enter", "send message / run command"},
+			{"shift+↵", "newline (iTerm2, VS Code, WezTerm, Ghostty, …; check /keys)"},
+			{"\\ + ↵", "newline — trailing backslash continues the line"},
+			{"ctrl+j", "insert newline (works everywhere)"},
+			{"ctrl+s", "save session to history"},
+			{"ctrl+y", "copy last reply to clipboard"},
+			{"ctrl+o", "toggle text-selection mode (release mouse)"},
+			{"ctrl+v", "paste image from clipboard (vision models)"},
+			{"ctrl+x", "remove last pasted image"},
+			{"esc", "stop generation · close this overlay"},
+			{"ctrl+l", "clear conversation"},
+			{"↑/↓", "navigate command suggestions · scroll"},
+			{"tab", "complete selected command"},
+			{"ctrl+c", "press twice to quit (first stops/clears)"},
+		}
+		for _, k := range keys {
+			fmt.Fprintf(&b, "  %s  %s\n",
+				m.theme.StatusValue.Render(fmt.Sprintf("%-8s", k[0])),
+				m.theme.StatusBar.Render(k[1]))
+		}
+		b.WriteString("\n")
 	}
 
-	b.WriteString("\n" + m.theme.UserLabel.Render("commands") + "\n")
+	// Commands grouped by category; a topic filters to matching
+	// category or command names.
+	byCategory := map[string][]slashCommand{}
 	for _, c := range slashCommands() {
-		fmt.Fprintf(&b, "  %s  %s\n",
-			m.theme.StatusValue.Render(fmt.Sprintf("%-20s", c.usage)),
-			m.theme.StatusBar.Render(c.desc))
+		if c.hidden {
+			continue
+		}
+		if topic != "" && !strings.EqualFold(c.category, topic) && !c.matches(topic) {
+			continue
+		}
+		byCategory[c.category] = append(byCategory[c.category], c)
+	}
+	for _, cat := range commandCategories {
+		cmds := byCategory[cat]
+		if len(cmds) == 0 {
+			continue
+		}
+		b.WriteString(m.theme.UserLabel.Render(strings.ToLower(cat)) + "\n")
+		for _, c := range cmds {
+			usage := c.usage
+			if len(c.aliases) > 0 {
+				usage += "  (alias: /" + strings.Join(c.aliases, ", /") + ")"
+			}
+			fmt.Fprintf(&b, "  %s  %s\n",
+				m.theme.StatusValue.Render(fmt.Sprintf("%-44s", usage)),
+				m.theme.StatusBar.Render(c.desc))
+		}
+		b.WriteString("\n")
 	}
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
+	b.WriteString(m.theme.SystemNote.Render("esc to close · /help <category> to filter"))
 	return b.String()
 }
 

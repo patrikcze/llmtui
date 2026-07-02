@@ -48,6 +48,8 @@ type ChatConfig struct {
 	// ForceVision allows image attachments even when the model ID is not
 	// recognized as a vision model by the built-in heuristic.
 	ForceVision bool `mapstructure:"force_vision" yaml:"force_vision"`
+	// ModelProfile pins a model profile ("auto" matches by model ID).
+	ModelProfile string `mapstructure:"model_profile" yaml:"model_profile"`
 }
 
 // UIConfig holds appearance settings.
@@ -68,14 +70,91 @@ type PrivacyConfig struct {
 	StorePrompts        bool `mapstructure:"store_prompts" yaml:"store_prompts"`
 }
 
+// CacheConfig configures the local response cache.
+type CacheConfig struct {
+	Enabled                bool   `mapstructure:"enabled" yaml:"enabled"`
+	Path                   string `mapstructure:"path" yaml:"path"`
+	TTL                    string `mapstructure:"ttl" yaml:"ttl"`
+	MaxSizeMB              int    `mapstructure:"max_size_mb" yaml:"max_size_mb"`
+	CacheStreamedResponses bool   `mapstructure:"cache_streamed_responses" yaml:"cache_streamed_responses"`
+}
+
+// MemoryConfig configures local memory snippets (disabled by default).
+type MemoryConfig struct {
+	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
+	Path        string `mapstructure:"path" yaml:"path"`
+	MaxSnippets int    `mapstructure:"max_snippets" yaml:"max_snippets"`
+	AutoExtract bool   `mapstructure:"auto_extract" yaml:"auto_extract"`
+}
+
+// PromptConfig configures prompt composition.
+type PromptConfig struct {
+	Mode                   string `mapstructure:"mode" yaml:"mode"`
+	ShowDebug              bool   `mapstructure:"show_debug" yaml:"show_debug"`
+	IncludeSessionSummary  bool   `mapstructure:"include_session_summary" yaml:"include_session_summary"`
+	IncludeLocalMemory     bool   `mapstructure:"include_local_memory" yaml:"include_local_memory"`
+	IncludeModelHints      bool   `mapstructure:"include_model_hints" yaml:"include_model_hints"`
+	IncludeFormattingHints bool   `mapstructure:"include_formatting_hints" yaml:"include_formatting_hints"`
+	HelperText             string `mapstructure:"helper_text" yaml:"helper_text,omitempty"`
+}
+
+// ContextConfig configures context-window management.
+type ContextConfig struct {
+	Strategy               string `mapstructure:"strategy" yaml:"strategy"`
+	MaxContextTokens       int    `mapstructure:"max_context_tokens" yaml:"max_context_tokens"` // 0 = auto from profile
+	ReserveResponseTokens  int    `mapstructure:"reserve_response_tokens" yaml:"reserve_response_tokens"`
+	SummarizeAfterMessages int    `mapstructure:"summarize_after_messages" yaml:"summarize_after_messages"`
+	KeepLastMessages       int    `mapstructure:"keep_last_messages" yaml:"keep_last_messages"`
+	SummaryMaxTokens       int    `mapstructure:"summary_max_tokens" yaml:"summary_max_tokens"`
+}
+
+// RetryConfig configures request retries.
+type RetryConfig struct {
+	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
+	MaxAttempts int    `mapstructure:"max_attempts" yaml:"max_attempts"`
+	Backoff     string `mapstructure:"backoff" yaml:"backoff"`
+}
+
+// NetworkConfig configures timeouts and retries.
+type NetworkConfig struct {
+	Timeout        string      `mapstructure:"timeout" yaml:"timeout"`
+	ConnectTimeout string      `mapstructure:"connect_timeout" yaml:"connect_timeout"`
+	Retry          RetryConfig `mapstructure:"retry" yaml:"retry"`
+}
+
+// TemplateConfig is one reusable conversation template.
+type TemplateConfig struct {
+	Description  string  `mapstructure:"description" yaml:"description"`
+	SystemPrompt string  `mapstructure:"system_prompt" yaml:"system_prompt"`
+	PromptMode   string  `mapstructure:"prompt_mode" yaml:"prompt_mode"`
+	Temperature  float64 `mapstructure:"temperature" yaml:"temperature"`
+}
+
+// ModelProfileConfig is one user-defined model profile.
+type ModelProfileConfig struct {
+	Match                []string `mapstructure:"match" yaml:"match"`
+	ContextWindow        int      `mapstructure:"context_window" yaml:"context_window"`
+	PreferredTemperature float64  `mapstructure:"preferred_temperature" yaml:"preferred_temperature"`
+	SupportsJSONMode     bool     `mapstructure:"supports_json_mode" yaml:"supports_json_mode"`
+	PromptStyle          string   `mapstructure:"prompt_style" yaml:"prompt_style"`
+	ReasoningHint        bool     `mapstructure:"reasoning_hint" yaml:"reasoning_hint"`
+}
+
 // Config is the fully merged configuration plus runtime overrides.
 type Config struct {
-	DefaultProvider string                    `mapstructure:"default_provider" yaml:"default_provider"`
-	DefaultModel    string                    `mapstructure:"default_model" yaml:"default_model"`
-	Providers       map[string]ProviderConfig `mapstructure:"providers" yaml:"providers"`
-	Chat            ChatConfig                `mapstructure:"chat" yaml:"chat"`
-	UI              UIConfig                  `mapstructure:"ui" yaml:"ui"`
-	Privacy         PrivacyConfig             `mapstructure:"privacy" yaml:"privacy"`
+	DefaultProvider string                        `mapstructure:"default_provider" yaml:"default_provider"`
+	DefaultModel    string                        `mapstructure:"default_model" yaml:"default_model"`
+	Providers       map[string]ProviderConfig     `mapstructure:"providers" yaml:"providers"`
+	Chat            ChatConfig                    `mapstructure:"chat" yaml:"chat"`
+	UI              UIConfig                      `mapstructure:"ui" yaml:"ui"`
+	Privacy         PrivacyConfig                 `mapstructure:"privacy" yaml:"privacy"`
+	Cache           CacheConfig                   `mapstructure:"cache" yaml:"cache"`
+	Memory          MemoryConfig                  `mapstructure:"memory" yaml:"memory"`
+	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
+	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
+	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
+	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
+	ModelProfiles   map[string]ModelProfileConfig `mapstructure:"model_profiles" yaml:"model_profiles,omitempty"`
 
 	// Runtime overrides sourced from flags/env (not persisted to YAML).
 	Provider string `mapstructure:"provider" yaml:"-"`
@@ -110,6 +189,14 @@ func (c *Config) ActiveProvider() (name string, pc ProviderConfig, ok bool) {
 		pc.APIKeyEnv = ""
 	}
 	return name, pc, true
+}
+
+// ActiveBaseURL returns the effective base URL of the active provider.
+func (c *Config) ActiveBaseURL() string {
+	if _, pc, ok := c.ActiveProvider(); ok {
+		return pc.BaseURL
+	}
+	return ""
 }
 
 // ActiveModel resolves the model with precedence:
@@ -262,6 +349,37 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("privacy.local_first", true)
 	v.SetDefault("privacy.redact_api_keys_in_logs", true)
 	v.SetDefault("privacy.store_prompts", true)
+
+	v.SetDefault("cache.enabled", true)
+	v.SetDefault("cache.path", "~/.cache/llmtui/responses")
+	v.SetDefault("cache.ttl", "24h")
+	v.SetDefault("cache.max_size_mb", 256)
+	v.SetDefault("cache.cache_streamed_responses", true)
+
+	v.SetDefault("memory.enabled", false)
+	v.SetDefault("memory.path", "~/.local/share/llmtui/memory.yaml")
+	v.SetDefault("memory.max_snippets", 100)
+	v.SetDefault("memory.auto_extract", false)
+
+	v.SetDefault("prompt.mode", "balanced")
+	v.SetDefault("prompt.show_debug", false)
+	v.SetDefault("prompt.include_session_summary", true)
+	v.SetDefault("prompt.include_local_memory", true)
+	v.SetDefault("prompt.include_model_hints", true)
+	v.SetDefault("prompt.include_formatting_hints", true)
+
+	v.SetDefault("context.strategy", "auto")
+	v.SetDefault("context.max_context_tokens", 0)
+	v.SetDefault("context.reserve_response_tokens", 2048)
+	v.SetDefault("context.summarize_after_messages", 12)
+	v.SetDefault("context.keep_last_messages", 8)
+	v.SetDefault("context.summary_max_tokens", 1200)
+
+	v.SetDefault("network.timeout", "120s")
+	v.SetDefault("network.connect_timeout", "10s")
+	v.SetDefault("network.retry.enabled", true)
+	v.SetDefault("network.retry.max_attempts", 2)
+	v.SetDefault("network.retry.backoff", "750ms")
 }
 
 // DefaultYAML is the annotated config written by `llmtui config init`.
@@ -314,6 +432,65 @@ privacy:
   local_first: true
   redact_api_keys_in_logs: true
   store_prompts: true
+
+# Local response cache: repeated prompts answer instantly.
+cache:
+  enabled: true
+  path: "~/.cache/llmtui/responses"
+  ttl: "24h"
+  max_size_mb: 256
+  cache_streamed_responses: true
+
+# Local memory snippets (opt-in; never store secrets here).
+memory:
+  enabled: false
+  path: "~/.local/share/llmtui/memory.yaml"
+  max_snippets: 100
+  auto_extract: false
+
+# Prompt composition: helpers are visible via /prompt composed.
+prompt:
+  mode: balanced # minimal | balanced | coding | strict
+  show_debug: false
+  include_session_summary: true
+  include_local_memory: true
+  include_model_hints: true
+  include_formatting_hints: true
+
+# Context-window management for small local models.
+context:
+  strategy: auto # none | truncate | summarize | auto
+  max_context_tokens: 0 # 0 = from model profile
+  reserve_response_tokens: 2048
+  summarize_after_messages: 12
+  keep_last_messages: 8
+  summary_max_tokens: 1200
+
+network:
+  # Whole-request ceiling; raise on slow machines where generation takes
+  # longer (a timeout keeps the partial reply).
+  timeout: "120s"
+  connect_timeout: "10s"
+  retry:
+    enabled: true
+    max_attempts: 2
+    backoff: "750ms"
+
+# Conversation templates (/template use <name>).
+templates:
+  golang:
+    description: "Go development assistant"
+    system_prompt: "You are an expert Go developer. Prefer idiomatic, tested Go code."
+    prompt_mode: coding
+    temperature: 0.25
+  coding:
+    description: "General coding assistant"
+    system_prompt: "You are a precise coding assistant. Prefer practical working solutions."
+    prompt_mode: coding
+    temperature: 0.3
+
+# Custom model profiles are matched before built-ins (/profile list).
+model_profiles: {}
 `
 
 // WriteDefault writes the default config file, refusing to overwrite.

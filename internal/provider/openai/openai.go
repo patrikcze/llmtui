@@ -219,7 +219,8 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 type chatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage *usagePayload `json:"usage"`
@@ -256,6 +257,9 @@ func (p *Provider) wholeResponse(body io.ReadCloser, req provider.ChatRequest, e
 		return
 	}
 	content := out.Choices[0].Message.Content
+	if content == "" && out.Choices[0].Message.ReasoningContent != "" {
+		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)
+	}
 	events <- provider.ChatEvent{Type: provider.EventDelta, Delta: content}
 	usage := out.Usage.toUsage()
 	if usage == nil {
@@ -275,5 +279,17 @@ func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage 
 		CompletionTokens: c,
 		TotalTokens:      prompt + c,
 		Estimated:        true,
+	}
+}
+
+// Capabilities describes a generic OpenAI-compatible server. Token usage is
+// requested via stream_options but not all servers honor it.
+func (p *Provider) Capabilities() provider.Capabilities {
+	return provider.Capabilities{
+		SupportsStreaming:    true,
+		SupportsModelList:    true,
+		SupportsTokenUsage:   true,
+		SupportsJSONMode:     true,
+		SupportsSystemPrompt: true,
 	}
 }

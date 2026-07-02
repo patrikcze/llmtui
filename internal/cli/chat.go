@@ -18,10 +18,12 @@ func newChatCmd(r *Root) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("start chat: %w", err)
 			}
+			cfgPath, _ := r.configPath()
 			return tui.Run(tui.Options{
-				Config:   r.cfg,
-				Provider: prov,
-				Model:    r.cfg.ActiveModel(),
+				Config:     r.cfg,
+				Provider:   prov,
+				Model:      r.cfg.ActiveModel(),
+				ConfigPath: cfgPath,
 			})
 		},
 	}

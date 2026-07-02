@@ -45,16 +45,29 @@ func extendedKeySeq(msg any) (string, bool) {
 // modifier. Both xterm forms are handled:
 //
 //	modifyOtherKeys format 0: 27;<mod>;13~
-//	CSI-u / format 1:         13;<mod>u
+//	CSI-u / format 1:         13;<mod>u   (kitty variant: 13;<mod>:<event>u)
 //
 // mod is 1+bitmask(shift=1, alt=2, ctrl=4), so anything ≥ 2 is modified.
 func isModifiedEnter(seq string) bool {
-	var mod int
-	if n, _ := fmt.Sscanf(seq, "27;%d;13~", &mod); n == 1 && strings.HasSuffix(seq, "~") {
-		return mod >= 2
+	if len(seq) < 2 {
+		return false
 	}
-	if n, _ := fmt.Sscanf(seq, "13;%du", &mod); n == 1 && strings.HasSuffix(seq, "u") {
-		return mod >= 2
+	final := seq[len(seq)-1]
+	parts := strings.Split(seq[:len(seq)-1], ";")
+	switch final {
+	case '~':
+		return len(parts) == 3 && parts[0] == "27" && parts[2] == "13" && modifierAtLeast(parts[1], 2)
+	case 'u':
+		if len(parts) != 2 || parts[0] != "13" {
+			return false
+		}
+		mod, _, _ := strings.Cut(parts[1], ":") // strip kitty event type
+		return modifierAtLeast(mod, 2)
 	}
 	return false
+}
+
+func modifierAtLeast(s string, minimum int) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= minimum
 }

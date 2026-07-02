@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +17,28 @@ import (
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	cfg := &config.Config{
-		Chat: config.ChatConfig{Stream: true, MaxTokens: 128},
+		Chat: config.ChatConfig{Stream: true, MaxTokens: 128, SystemPrompt: "You are a helpful local assistant."},
 		UI:   config.UIConfig{Markdown: false},
+		Memory: config.MemoryConfig{
+			Path:        filepath.Join(t.TempDir(), "memory.yaml"),
+			MaxSnippets: 10,
+		},
+		Prompt: config.PromptConfig{
+			Mode:                   "balanced",
+			IncludeSessionSummary:  true,
+			IncludeLocalMemory:     true,
+			IncludeModelHints:      true,
+			IncludeFormattingHints: true,
+		},
+		Context: config.ContextConfig{
+			Strategy:               "auto",
+			ReserveResponseTokens:  512,
+			SummarizeAfterMessages: 12,
+			KeepLastMessages:       8,
+			SummaryMaxTokens:       400,
+		},
+		Network: config.NetworkConfig{Timeout: "120s", ConnectTimeout: "10s"},
+		Cache:   config.CacheConfig{TTL: "1h", MaxSizeMB: 16, CacheStreamedResponses: true},
 	}
 	m := New(Options{Config: cfg, Provider: mock.New(), Model: "demo-model"})
 	m.resize(80, 24)
@@ -204,7 +225,7 @@ func TestHelpCommandOpensAndClosesOverlay(t *testing.T) {
 		t.Error("help overlay should show shortcuts")
 	}
 	// Full content (scrollable) lists commands further down.
-	if help := m.helpOverlay(); !strings.Contains(help, "/model") || !strings.Contains(help, "/provider") {
+	if help := m.helpOverlay(""); !strings.Contains(help, "/model") || !strings.Contains(help, "/provider") {
 		t.Error("help content should list slash commands")
 	}
 	if m.input.Value() != "" {
@@ -352,8 +373,8 @@ func TestCtrlSSavesSession(t *testing.T) {
 	if err != nil || len(metas) != 1 {
 		t.Fatalf("List = (%v, %v), want one saved session", metas, err)
 	}
-	if metas[0].Messages != 2 {
-		t.Errorf("saved messages = %d, want 2", metas[0].Messages)
+	if metas[0].Messages != 3 {
+		t.Errorf("saved messages = %d, want system + user + assistant", metas[0].Messages)
 	}
 }
 
@@ -435,7 +456,7 @@ func TestAltEnterInsertsNewline(t *testing.T) {
 	if got := m.input.Value(); got != "line one\nline two" {
 		t.Errorf("input = %q, want two lines", got)
 	}
-	if len(m.session.Messages) != 0 {
+	if userMessages(m) != 0 {
 		t.Error("alt+enter must not send the message")
 	}
 	if m.inputLines != 2 {
@@ -542,4 +563,15 @@ func TestEscStopsGeneration(t *testing.T) {
 	if m.errText != "generation stopped" {
 		t.Errorf("errText = %q, want generation stopped", m.errText)
 	}
+}
+
+// userMessages counts non-system messages in the session.
+func userMessages(m *Model) int {
+	n := 0
+	for _, msg := range m.session.Messages {
+		if msg.Role == provider.RoleUser {
+			n++
+		}
+	}
+	return n
 }

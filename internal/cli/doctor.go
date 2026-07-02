@@ -52,7 +52,7 @@ func newDoctorCmd(r *Root) *cobra.Command {
 			anyOnline := false
 			for _, name := range names {
 				pc := r.cfg.Providers[name]
-				prov, err := app.BuildProvider(name, pc)
+				prov, err := app.BuildProvider(name, pc, r.cfg.Network)
 				if err != nil {
 					warn(fmt.Sprintf("%s: %v", name, err))
 					continue

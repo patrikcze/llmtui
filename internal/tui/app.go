@@ -15,10 +15,14 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/chat"
 	"github.com/patrikcze/llmtui/internal/clipboard"
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/contextmgr"
 	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/memory"
+	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tui/components"
@@ -27,9 +31,10 @@ import (
 
 // Options configures the chat UI.
 type Options struct {
-	Config   *config.Config
-	Provider provider.Provider
-	Model    string
+	Config     *config.Config
+	Provider   provider.Provider
+	Model      string
+	ConfigPath string // path of the loaded config file, for /config
 }
 
 type healthMsg struct{ err error }
@@ -85,6 +90,27 @@ type Model struct {
 	sessionName   string
 	inputLines    int
 	ctrlCAt       time.Time
+
+	// Local-LLM experience helpers.
+	responseCache *cache.Cache
+	memStore      *memory.Store
+	memEnabled    bool
+	promptMode    string // "" = follow template/config
+	profileMode   string // "auto" or a profile name
+	profiles      []modelprofile.Profile
+	template      string
+	summary       string
+	ctxStrategy   string
+	ctxUsed       int
+	ctxWindow     int
+	lastUserMsg   string
+	lastImages    []provider.Image
+	lastDebug     debugInfo
+	debugMode     bool
+	keysMode      bool
+	keysRaw       bool
+	keyLog        []string
+	cfgPath       string
 }
 
 // New builds the chat model.
@@ -111,6 +137,44 @@ func New(opts Options) *Model {
 		}
 	}
 
+	cfg := opts.Config
+
+	var responseCache *cache.Cache
+	if dir, err := history.ExpandHome(cfg.Cache.Path); err == nil && dir != "" {
+		ttl, _ := time.ParseDuration(cfg.Cache.TTL)
+		responseCache = cache.New(dir, ttl, cfg.Cache.MaxSizeMB, cfg.Cache.Enabled)
+	}
+
+	var memStore *memory.Store
+	if path, err := history.ExpandHome(cfg.Memory.Path); err == nil && path != "" {
+		memStore = memory.NewStore(path, cfg.Memory.MaxSnippets)
+	}
+
+	// Config-defined profiles are matched before built-ins.
+	profiles := make([]modelprofile.Profile, 0, len(cfg.ModelProfiles)+4)
+	for name, pc := range cfg.ModelProfiles {
+		profiles = append(profiles, modelprofile.Profile{
+			Name:                 name,
+			Match:                pc.Match,
+			ContextWindow:        pc.ContextWindow,
+			PreferredTemperature: pc.PreferredTemperature,
+			SupportsJSONMode:     pc.SupportsJSONMode,
+			PromptStyle:          pc.PromptStyle,
+			ReasoningHint:        pc.ReasoningHint,
+		})
+	}
+	profiles = append(profiles, modelprofile.BuiltIn()...)
+
+	profileMode := "auto"
+	if cfg.Chat.ModelProfile != "" {
+		profileMode = cfg.Chat.ModelProfile
+	}
+
+	ctxStrategy := cfg.Context.Strategy
+	if !contextmgr.ValidStrategy(ctxStrategy) {
+		ctxStrategy = contextmgr.StrategyAuto
+	}
+
 	return &Model{
 		cfg:          opts.Config,
 		theme:        t,
@@ -123,6 +187,30 @@ func New(opts Options) *Model {
 		historyDir:   historyDir,
 		sessionName:  history.NewSessionName(time.Now()),
 		inputLines:   1,
+
+		responseCache: responseCache,
+		memStore:      memStore,
+		memEnabled:    cfg.Memory.Enabled,
+		profileMode:   profileMode,
+		profiles:      profiles,
+		ctxStrategy:   ctxStrategy,
+		cfgPath:       opts.ConfigPath,
+	}
+}
+
+// sessionRecord builds the persistable form of the current session.
+func (m *Model) sessionRecord() history.Session {
+	prof, _ := m.activeProfile()
+	return history.Session{
+		Provider:   m.prov.Name(),
+		Model:      m.model,
+		Template:   m.template,
+		PromptMode: m.effectivePromptMode(),
+		Profile:    prof.Name,
+		Messages:   m.session.Messages,
+		Prompt:     m.session.TotalPromptTokens,
+		Reply:      m.session.TotalCompletionTokens,
+		Estimated:  m.session.AnyEstimated,
 	}
 }
 
@@ -150,6 +238,18 @@ func waitForEvent(stream <-chan provider.ChatEvent) tea.Cmd {
 // Update handles all Bubble Tea messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// The /keys inspector sees every input event before normal handling.
+	if m.keysMode {
+		switch msg.(type) {
+		case tea.KeyMsg:
+			return m.updateKeysMode(msg)
+		default:
+			if _, ok := extendedKeySeq(msg); ok {
+				return m.updateKeysMode(msg)
+			}
+		}
+	}
 
 	// Modified Enter (Shift+Enter etc.) arrives as a raw CSI sequence when
 	// the terminal supports modifyOtherKeys; treat it as a newline.
@@ -274,6 +374,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case firstStreamMsg:
 		m.stream = msg.stream
+		m.lastDebug.Retries = msg.retries
 		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok})
 
 	case streamEventMsg:
@@ -288,6 +389,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.relayout()
 		m.refreshViewport()
+		return m, nil
+
+	case doctorResultMsg:
+		m.notice = ""
+		m.openOverlay(m.doctorOverlay(msg.report))
 		return m, nil
 
 	case modelsResultMsg:
@@ -353,43 +459,42 @@ func (m *Model) send() tea.Cmd {
 	m.input.Reset()
 	m.errText = ""
 	m.notice = ""
-	m.session.AddUser(text, m.attachments...)
+	images := m.attachments
 	m.attachments = nil
 	m.syncInputHeight()
 	m.relayout()
-	m.thinking = true
-	m.streamBuf.Reset()
-	m.streamStart = time.Now()
-	m.refreshViewport()
+	return m.dispatch(text, images)
+}
 
-	req := provider.ChatRequest{
-		Model:       m.model,
-		Messages:    append([]provider.Message(nil), m.session.Messages...),
-		Temperature: m.cfg.Chat.Temperature,
-		TopP:        m.cfg.Chat.TopP,
-		MaxTokens:   m.cfg.Chat.MaxTokens,
-		Stream:      m.cfg.StreamEnabled(),
+// retryLast re-sends the last user message with current settings.
+func (m *Model) retryLast() tea.Cmd {
+	if m.lastUserMsg == "" {
+		m.errText = "nothing to retry yet"
+		m.refreshViewport()
+		return nil
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelStream = cancel
-	prov := m.prov
-
-	return func() tea.Msg {
-		stream, err := prov.Chat(ctx, req)
-		if err != nil {
-			return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: err}, ok: true}
+	if m.thinking {
+		m.errText = "a request is already running (esc to stop it first)"
+		m.refreshViewport()
+		return nil
+	}
+	// Drop the previous attempt's user message if it got no reply, so the
+	// conversation doesn't contain the question twice.
+	if n := len(m.session.Messages); n > 0 {
+		last := m.session.Messages[n-1]
+		if last.Role == provider.RoleUser && last.Content == m.lastUserMsg {
+			m.session.Messages = m.session.Messages[:n-1]
 		}
-		ev, ok := <-stream
-		// Stash the channel on the first event via a wrapper message.
-		return firstStreamMsg{stream: stream, event: ev, ok: ok}
 	}
+	m.notice = "retrying last message"
+	return m.dispatch(m.lastUserMsg, m.lastImages)
 }
 
 type firstStreamMsg struct {
-	stream <-chan provider.ChatEvent
-	event  provider.ChatEvent
-	ok     bool
+	stream  <-chan provider.ChatEvent
+	event   provider.ChatEvent
+	ok      bool
+	retries int
 }
 
 func (m *Model) pasteImage() tea.Cmd {
@@ -423,14 +528,7 @@ func (m *Model) saveSession() (string, error) {
 	if m.historyDir == "" {
 		return "", fmt.Errorf("history saving is disabled (chat.save_history)")
 	}
-	return history.Save(m.historyDir, m.sessionName, history.Session{
-		Provider:  m.prov.Name(),
-		Model:     m.model,
-		Messages:  m.session.Messages,
-		Prompt:    m.session.TotalPromptTokens,
-		Reply:     m.session.TotalCompletionTokens,
-		Estimated: m.session.AnyEstimated,
-	})
+	return history.Save(m.historyDir, m.sessionName, m.sessionRecord())
 }
 
 func (m *Model) saveWithNotice() {
@@ -557,6 +655,12 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 	case provider.EventError:
 		m.thinking = false
 		m.errText = msg.event.Err.Error()
+		// Preserve partial streamed output instead of discarding it.
+		if partial := m.streamBuf.String(); partial != "" {
+			m.session.AddAssistant(partial)
+			m.streamBuf.Reset()
+			m.errText += " (partial reply kept)"
+		}
 		if m.cancelStream != nil {
 			m.cancelStream()
 			m.cancelStream = nil
@@ -578,10 +682,32 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	if reply != "" {
 		m.session.AddAssistant(reply)
 	}
+	// Cache the successful response (never failures or empty replies).
+	if reply != "" && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
+		len(m.lastImages) == 0 && (!m.cfg.StreamEnabled() || m.cfg.Cache.CacheStreamedResponses) {
+		if err := m.responseCache.Put(m.cacheKey(m.lastUserMsg), cache.Entry{
+			Response:         reply,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			Estimated:        usage.Estimated,
+			Provider:         m.prov.Name(),
+			Model:            m.model,
+		}); err == nil {
+			m.lastDebug.CacheStatus = "write"
+		}
+	}
+
 	if usage != nil {
 		duration := time.Since(m.streamStart)
 		st := m.session.RecordUsage(*usage, duration)
 		m.lastTPS = st.TokensPerSec
+		m.lastDebug.Duration = duration
+		m.lastDebug.Usage = usage
+		if m.debugMode {
+			m.notice = fmt.Sprintf("debug: %s · prompt %d · reply %d · cache %s · retries %d — /debug last",
+				duration.Round(10*time.Millisecond), usage.PromptTokens, usage.CompletionTokens,
+				m.lastDebug.CacheStatus, m.lastDebug.Retries)
+		}
 		if m.historyDir != "" {
 			// Best effort: stats must never interrupt the chat.
 			_ = history.AppendUsage(m.historyDir, history.UsageRecord{
@@ -738,14 +864,27 @@ func (m *Model) View() string {
 	}
 	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
 
+	prof, _ := m.activeProfile()
+	profileLabel := prof.Name
+	if m.profileMode == "auto" || m.profileMode == "" {
+		profileLabel = "auto/" + prof.Name
+	}
+	ctxWindow, _ := m.contextWindow()
 	status := components.StatusBar(m.theme, components.StatusBarData{
-		Provider:    m.prov.Name(),
-		Model:       m.model,
-		Connected:   m.connected,
-		DemoMode:    m.demoMode,
-		TotalTokens: m.session.TotalTokens(),
-		LastTPS:     m.lastTPS,
-		Estimated:   m.session.AnyEstimated,
+		Provider:     m.prov.Name(),
+		Model:        m.model,
+		Connected:    m.connected,
+		DemoMode:     m.demoMode,
+		TotalTokens:  m.session.TotalTokens(),
+		LastTPS:      m.lastTPS,
+		Estimated:    m.session.AnyEstimated,
+		Profile:      profileLabel,
+		PromptMode:   m.effectivePromptMode(),
+		Template:     m.template,
+		ContextUsed:  contextmgr.EstimateTokens(m.session.Messages),
+		ContextLimit: ctxWindow,
+		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
+		SummaryOn:    m.summary != "",
 	}, m.width)
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")

@@ -29,7 +29,7 @@ func newProvidersCmd(r *Root) *cobra.Command {
 			for _, name := range names {
 				pc := r.cfg.Providers[name]
 				status := "unreachable"
-				prov, err := app.BuildProvider(name, pc)
+				prov, err := app.BuildProvider(name, pc, r.cfg.Network)
 				if err == nil {
 					ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 					if prov.HealthCheck(ctx) == nil {

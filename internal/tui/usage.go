@@ -53,6 +53,20 @@ func (m *Model) usageOverlay() string {
 	now := time.Now()
 	ascii := false
 
+	// --- Active configuration ----------------------------------------------
+	prof, _ := m.activeProfile()
+	current := fmt.Sprintf("%s · %s · profile %s · prompt %s", m.prov.Name(), m.model, prof.Name, m.effectivePromptMode())
+	if m.template != "" {
+		current += " · template " + m.template
+	}
+	b.WriteString(m.theme.StatusValue.Render(current) + "\n")
+	if m.responseCache != nil {
+		cs := m.responseCache.Stats()
+		b.WriteString(m.theme.StatusBar.Render(fmt.Sprintf("cache %s · %d hits / %d misses this session · %d entries",
+			onOff(cs.Enabled), cs.Hits, cs.Misses, cs.Entries)) + "\n")
+	}
+	b.WriteString("\n")
+
 	// --- Tokens per day (last 30 days, gaps filled) -----------------------
 	b.WriteString(m.theme.UserLabel.Render("tokens per day") + "\n")
 	byDay := map[string]int{}

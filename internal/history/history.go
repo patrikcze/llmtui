@@ -17,14 +17,17 @@ import (
 // Session is the on-disk representation of one saved conversation.
 // Image attachments are intentionally not persisted.
 type Session struct {
-	Version   int                `json:"version"`
-	SavedAt   time.Time          `json:"saved_at"`
-	Provider  string             `json:"provider"`
-	Model     string             `json:"model"`
-	Messages  []provider.Message `json:"messages"`
-	Prompt    int                `json:"prompt_tokens"`
-	Reply     int                `json:"completion_tokens"`
-	Estimated bool               `json:"estimated"`
+	Version    int                `json:"version"`
+	SavedAt    time.Time          `json:"saved_at"`
+	Provider   string             `json:"provider"`
+	Model      string             `json:"model"`
+	Template   string             `json:"template,omitempty"`
+	PromptMode string             `json:"prompt_mode,omitempty"`
+	Profile    string             `json:"profile,omitempty"`
+	Messages   []provider.Message `json:"messages"`
+	Prompt     int                `json:"prompt_tokens"`
+	Reply      int                `json:"completion_tokens"`
+	Estimated  bool               `json:"estimated"`
 }
 
 // Meta summarizes a saved session for listings.

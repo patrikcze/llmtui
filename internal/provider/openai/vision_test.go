@@ -99,3 +99,57 @@ func TestChatSendsImagePayload(t *testing.T) {
 		t.Errorf("image url = %q, want jpeg data URL", url)
 	}
 }
+
+func TestReasoningOnlyStreamFallsBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking hard about MARCO\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" and POLO\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var text strings.Builder
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	got := text.String()
+	if !strings.Contains(got, "thinking hard about MARCO and POLO") {
+		t.Errorf("reasoning not surfaced: %q", got)
+	}
+	if !strings.Contains(got, "raise max_tokens") {
+		t.Errorf("fallback should explain the token budget: %q", got)
+	}
+}
+
+func TestReasoningIgnoredWhenContentPresent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking…\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"MARCO\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var text strings.Builder
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if text.String() != "MARCO" {
+		t.Errorf("reply = %q, want only the visible answer", text.String())
+	}
+}

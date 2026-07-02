@@ -20,6 +20,11 @@ type StatusBarData struct {
 	Estimated    bool
 	ContextUsed  int
 	ContextLimit int
+	Profile      string
+	PromptMode   string
+	Template     string
+	CacheOn      bool
+	SummaryOn    bool
 }
 
 // StatusBar renders the one-line status bar.
@@ -39,6 +44,26 @@ func StatusBar(t styles.Theme, d StatusBarData, width int) string {
 		fmt.Sprintf("%s %s", dot, state),
 		t.StatusKey.Render("provider ") + t.StatusValue.Render(d.Provider),
 		t.StatusKey.Render("model ") + t.StatusValue.Render(d.Model),
+	}
+
+	if d.Profile != "" {
+		parts = append(parts, t.StatusKey.Render("profile ")+t.StatusValue.Render(d.Profile))
+	}
+	if d.PromptMode != "" {
+		parts = append(parts, t.StatusKey.Render("prompt ")+t.StatusValue.Render(d.PromptMode))
+	}
+	if d.Template != "" {
+		parts = append(parts, t.StatusKey.Render("template ")+t.StatusValue.Render(d.Template))
+	}
+	if d.ContextLimit > 0 {
+		ctx := FormatTokens(d.ContextUsed) + "/" + FormatTokens(d.ContextLimit)
+		if d.SummaryOn {
+			ctx += "·sum"
+		}
+		parts = append(parts, t.StatusKey.Render("ctx ")+t.StatusValue.Render(ctx))
+	}
+	if d.CacheOn {
+		parts = append(parts, t.StatusKey.Render("cache ")+t.StatusValue.Render("on"))
 	}
 
 	tokens := fmt.Sprintf("%d tok", d.TotalTokens)

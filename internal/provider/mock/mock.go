@@ -86,3 +86,14 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 
 	return events, nil
 }
+
+// Capabilities describes the offline demo provider.
+func (p *Provider) Capabilities() provider.Capabilities {
+	return provider.Capabilities{
+		SupportsStreaming:    true,
+		SupportsModelList:    true,
+		SupportsTokenUsage:   true,
+		SupportsSystemPrompt: true,
+		ContextWindowTokens:  8192,
+	}
+}

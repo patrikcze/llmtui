@@ -256,3 +256,14 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	}
 	events <- provider.ChatEvent{Type: provider.EventDone, Usage: usage}
 }
+
+// Capabilities describes the native Ollama API.
+func (p *Provider) Capabilities() provider.Capabilities {
+	return provider.Capabilities{
+		SupportsStreaming:    true,
+		SupportsModelList:    true,
+		SupportsTokenUsage:   true, // prompt_eval_count / eval_count
+		SupportsJSONMode:     true, // format: json
+		SupportsSystemPrompt: true,
+	}
+}
