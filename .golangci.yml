@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Deferred Close on read-only bodies and Fprint to in-memory writers
+      # are conventional; failures there are not actionable.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*encoding/json.Encoder).Encode
+        - (*os.File).Close
+        - os.Remove

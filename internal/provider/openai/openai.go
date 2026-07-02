@@ -5,6 +5,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -112,24 +113,69 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 }
 
 type chatCompletionRequest struct {
-	Model       string             `json:"model"`
-	Messages    []provider.Message `json:"messages"`
-	Temperature float64            `json:"temperature,omitempty"`
-	TopP        float64            `json:"top_p,omitempty"`
-	MaxTokens   int                `json:"max_tokens,omitempty"`
-	Stream      bool               `json:"stream"`
-	StreamOpts  *streamOptions     `json:"stream_options,omitempty"`
+	Model       string         `json:"model"`
+	Messages    []wireMessage  `json:"messages"`
+	Temperature float64        `json:"temperature,omitempty"`
+	TopP        float64        `json:"top_p,omitempty"`
+	MaxTokens   int            `json:"max_tokens,omitempty"`
+	Stream      bool           `json:"stream"`
+	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
 }
 
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
 
+// wireMessage is the OpenAI message format. Content is a plain string for
+// text-only messages and a list of content parts when images are attached.
+type wireMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type contentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
+}
+
+type imageURL struct {
+	URL string `json:"url"`
+}
+
+func toWireMessages(msgs []provider.Message) []wireMessage {
+	out := make([]wireMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if len(m.Images) == 0 {
+			out = append(out, wireMessage{Role: string(m.Role), Content: m.Content})
+			continue
+		}
+		parts := make([]contentPart, 0, len(m.Images)+1)
+		if m.Content != "" {
+			parts = append(parts, contentPart{Type: "text", Text: m.Content})
+		}
+		for _, img := range m.Images {
+			mime := img.MIME
+			if mime == "" {
+				mime = "image/png"
+			}
+			parts = append(parts, contentPart{
+				Type: "image_url",
+				ImageURL: &imageURL{
+					URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(img.Data),
+				},
+			})
+		}
+		out = append(out, wireMessage{Role: string(m.Role), Content: parts})
+	}
+	return out
+}
+
 // Chat sends a chat completion request, streaming when req.Stream is set.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	body := chatCompletionRequest{
 		Model:       req.Model,
-		Messages:    req.Messages,
+		Messages:    toWireMessages(req.Messages),
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,

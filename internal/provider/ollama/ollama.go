@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,10 +107,29 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 }
 
 type chatRequest struct {
-	Model    string             `json:"model"`
-	Messages []provider.Message `json:"messages"`
-	Stream   bool               `json:"stream"`
-	Options  chatOptions        `json:"options"`
+	Model    string        `json:"model"`
+	Messages []wireMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Options  chatOptions   `json:"options"`
+}
+
+// wireMessage is the native Ollama message format; images are base64 strings.
+type wireMessage struct {
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
+	Images  []string `json:"images,omitempty"`
+}
+
+func toWireMessages(msgs []provider.Message) []wireMessage {
+	out := make([]wireMessage, 0, len(msgs))
+	for _, m := range msgs {
+		wm := wireMessage{Role: string(m.Role), Content: m.Content}
+		for _, img := range m.Images {
+			wm.Images = append(wm.Images, base64.StdEncoding.EncodeToString(img.Data))
+		}
+		out = append(out, wm)
+	}
+	return out
 }
 
 type chatOptions struct {
@@ -133,7 +153,7 @@ type chatChunk struct {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	body := chatRequest{
 		Model:    req.Model,
-		Messages: req.Messages,
+		Messages: toWireMessages(req.Messages),
 		Stream:   req.Stream,
 		Options: chatOptions{
 			Temperature: req.Temperature,

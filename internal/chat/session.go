@@ -34,9 +34,9 @@ func NewSession(systemPrompt string) *Session {
 	return s
 }
 
-// AddUser appends a user message.
-func (s *Session) AddUser(content string) {
-	s.Messages = append(s.Messages, provider.Message{Role: provider.RoleUser, Content: content})
+// AddUser appends a user message, optionally with image attachments.
+func (s *Session) AddUser(content string, images ...provider.Image) {
+	s.Messages = append(s.Messages, provider.Message{Role: provider.RoleUser, Content: content, Images: images})
 }
 
 // AddAssistant appends an assistant message.

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/patrikcze/llmtui/internal/chat"
+	"github.com/patrikcze/llmtui/internal/clipboard"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
@@ -34,6 +35,16 @@ type healthMsg struct{ err error }
 type streamEventMsg struct {
 	event provider.ChatEvent
 	ok    bool
+}
+
+type clipboardImageMsg struct {
+	img provider.Image
+	err error
+}
+
+type copyResultMsg struct {
+	chars int
+	err   error
 }
 
 // Model is the root Bubble Tea model for the chat screen.
@@ -60,6 +71,14 @@ type Model struct {
 	lastTPS       float64
 	errText       string
 	cancelStream  context.CancelFunc
+	attachments   []provider.Image
+	frame         int
+	renderWidth   int
+	mouseEnabled  bool
+	notice        string
+	overlayOpen   bool
+	sugs          []slashCommand
+	sugIdx        int
 }
 
 // New builds the chat model.
@@ -67,7 +86,7 @@ func New(opts Options) *Model {
 	t := styles.ByName(opts.Config.UI.Theme)
 
 	ta := textarea.New()
-	ta.Placeholder = "Ask anything… (Enter to send, Ctrl+C to quit)"
+	ta.Placeholder = "Ask anything… (/ for commands, Enter to send)"
 	ta.Prompt = "┃ "
 	ta.CharLimit = 0
 	ta.SetHeight(1)
@@ -80,13 +99,14 @@ func New(opts Options) *Model {
 	sp.Style = t.Spinner
 
 	return &Model{
-		cfg:     opts.Config,
-		theme:   t,
-		prov:    opts.Provider,
-		model:   opts.Model,
-		session: chat.NewSession(opts.Config.Chat.SystemPrompt),
-		input:   ta,
-		spinner: sp,
+		cfg:          opts.Config,
+		theme:        t,
+		prov:         opts.Provider,
+		model:        opts.Model,
+		session:      chat.NewSession(opts.Config.Chat.SystemPrompt),
+		input:        ta,
+		spinner:      sp,
+		mouseEnabled: true,
 	}
 }
 
@@ -121,6 +141,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.overlayOpen {
+			return m.updateOverlay(msg)
+		}
+		if len(m.sugs) > 0 {
+			switch msg.Type {
+			case tea.KeyUp:
+				m.sugIdx = (m.sugIdx - 1 + len(m.sugs)) % len(m.sugs)
+				return m, nil
+			case tea.KeyDown:
+				m.sugIdx = (m.sugIdx + 1) % len(m.sugs)
+				return m, nil
+			case tea.KeyTab:
+				m.input.SetValue("/" + m.sugs[m.sugIdx].name + " ")
+				m.input.CursorEnd()
+				m.updateSuggestions()
+				return m, nil
+			}
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.cancelStream != nil {
@@ -131,7 +169,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.Clear()
 			m.refreshViewport()
 			return m, nil
+		case tea.KeyCtrlV:
+			return m, m.pasteImage()
+		case tea.KeyCtrlX:
+			if len(m.attachments) > 0 {
+				m.attachments = m.attachments[:len(m.attachments)-1]
+				m.relayout()
+			}
+			return m, nil
+		case tea.KeyCtrlY:
+			return m, m.copyLastReply()
+		case tea.KeyCtrlO:
+			// Release the mouse so the terminal's native selection works;
+			// press again to get wheel scrolling back.
+			m.mouseEnabled = !m.mouseEnabled
+			if m.mouseEnabled {
+				m.notice = "mouse scrolling on — text selection captured by app"
+				return m, tea.EnableMouseCellMotion
+			}
+			m.notice = "text selection on — select & copy with your terminal, ctrl+o to switch back"
+			return m, tea.DisableMouse
+		case tea.KeyEsc:
+			if m.thinking && m.cancelStream != nil {
+				// Stop generation, keeping the partial reply.
+				m.cancelStream()
+				m.finishStream(nil)
+				m.errText = "generation stopped"
+				m.refreshViewport()
+			} else if strings.HasPrefix(m.input.Value(), "/") {
+				m.input.Reset()
+				m.updateSuggestions()
+			}
+			return m, nil
 		case tea.KeyEnter:
+			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
+				return m, m.runSlashCommand()
+			}
 			if !m.thinking {
 				return m, m.send()
 			}
@@ -159,7 +232,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStreamEvent(msg)
 
+	case clipboardImageMsg:
+		if msg.err != nil {
+			m.errText = msg.err.Error()
+		} else {
+			m.attachments = append(m.attachments, msg.img)
+			m.errText = ""
+		}
+		m.relayout()
+		m.refreshViewport()
+		return m, nil
+
+	case modelsResultMsg:
+		if msg.err != nil {
+			m.errText = "list models: " + msg.err.Error()
+			m.refreshViewport()
+		} else {
+			m.openOverlay(m.modelsOverlay(msg.models))
+		}
+		return m, nil
+
+	case copyResultMsg:
+		if msg.err != nil {
+			m.errText = "copy failed: " + msg.err.Error()
+			m.refreshViewport()
+		} else {
+			m.notice = fmt.Sprintf("✓ copied last reply (%d chars)", msg.chars)
+		}
+		return m, nil
+
 	case spinner.TickMsg:
+		m.frame++
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -168,19 +271,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
+	m.updateSuggestions()
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
 }
 
+// updateOverlay handles keys while an overlay (/help, /models, …) is open:
+// esc/enter/q close it, arrows scroll it, everything else is swallowed.
+func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc, tea.KeyEnter:
+		m.closeOverlay()
+		return m, nil
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	if msg.String() == "q" {
+		m.closeOverlay()
+	}
+	return m, nil
+}
+
 func (m *Model) send() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
-	if text == "" {
+	if text == "" && len(m.attachments) == 0 {
 		return nil
 	}
 	m.input.Reset()
 	m.errText = ""
-	m.session.AddUser(text)
+	m.notice = ""
+	m.session.AddUser(text, m.attachments...)
+	m.attachments = nil
+	m.relayout()
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.streamStart = time.Now()
@@ -216,7 +343,50 @@ type firstStreamMsg struct {
 	ok     bool
 }
 
+func (m *Model) pasteImage() tea.Cmd {
+	if !provider.SupportsVision(m.model) && !m.cfg.Chat.ForceVision {
+		m.errText = fmt.Sprintf("model %q does not appear to support images (set chat.force_vision: true to override)", m.model)
+		m.refreshViewport()
+		return nil
+	}
+	return func() tea.Msg {
+		data, mime, err := clipboard.ReadImage(context.Background())
+		if err != nil {
+			return clipboardImageMsg{err: err}
+		}
+		return clipboardImageMsg{img: provider.Image{Data: data, MIME: mime}}
+	}
+}
+
+// copyLastReply copies the most recent assistant text (or the in-flight
+// stream) to the system clipboard as raw Markdown.
+func (m *Model) copyLastReply() tea.Cmd {
+	text := ""
+	if m.thinking && m.streamBuf.Len() > 0 {
+		text = m.streamBuf.String()
+	} else {
+		for i := len(m.session.Messages) - 1; i >= 0; i-- {
+			if m.session.Messages[i].Role == provider.RoleAssistant {
+				text = m.session.Messages[i].Content
+				break
+			}
+		}
+	}
+	if text == "" {
+		m.notice = "nothing to copy yet"
+		return nil
+	}
+	return func() tea.Msg {
+		err := clipboard.WriteText(context.Background(), text)
+		return copyResultMsg{chars: len(text), err: err}
+	}
+}
+
 func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
+	if !m.thinking {
+		// Stream already finalized (e.g. stopped with Esc); drop late events.
+		return m, nil
+	}
 	if !msg.ok {
 		// Channel closed without a terminal event; treat as done.
 		m.finishStream(nil)
@@ -261,14 +431,27 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	m.refreshViewport()
 }
 
+// relayout recomputes panel heights after non-resize layout changes
+// (e.g. attachment chips appearing above the input).
+func (m *Model) relayout() {
+	if m.ready {
+		m.resize(m.width, m.height)
+	}
+}
+
 func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
 
 	m.input.SetWidth(w - 6)
 
-	// Layout: viewport fills space above usage panel (4), input (3),
-	// status bar (1), and help footer (1).
-	vpHeight := h - 4 - 3 - 1 - 1
+	// Layout: viewport fills space above usage panel (4), suggestion popup,
+	// input (3, +1 when attachment chips are shown), status bar (1), and
+	// help footer (1).
+	inputHeight := 3
+	if len(m.attachments) > 0 {
+		inputHeight++
+	}
+	vpHeight := h - 4 - len(m.sugs) - inputHeight - 1 - 1
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -284,12 +467,21 @@ func (m *Model) resize(w, h int) {
 	if renderWidth < 20 {
 		renderWidth = 20
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(renderWidth),
-	)
-	if err == nil {
-		m.renderer = r
+	if renderWidth != m.renderWidth {
+		m.renderWidth = renderWidth
+		// A fixed standard style avoids WithAutoStyle's terminal query,
+		// which can stall the update loop on terminals that never answer.
+		style := "light"
+		if lipgloss.HasDarkBackground() {
+			style = "dark"
+		}
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle(style),
+			glamour.WithWordWrap(renderWidth),
+		)
+		if err == nil {
+			m.renderer = r
+		}
 	}
 	m.refreshViewport()
 }
@@ -322,6 +514,12 @@ func (m *Model) refreshViewport() {
 			b.WriteString(m.theme.UserLabel.Render("you"))
 			b.WriteString("\n")
 			b.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(msg.Content))
+			for i := range msg.Images {
+				if i == 0 && msg.Content != "" {
+					b.WriteString(" ")
+				}
+				b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf("⌗ [image %d] ", i+1)))
+			}
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			b.WriteString(m.theme.AssistantLabel.Render("assistant"))
@@ -362,7 +560,16 @@ func (m *Model) View() string {
 		Estimated:    m.session.AnyEstimated,
 	}, m.width)
 
-	inputView := m.theme.InputPanel.Width(m.width - 2).Render(m.input.View())
+	inputContent := m.input.View()
+	if len(m.attachments) > 0 {
+		chips := make([]string, len(m.attachments))
+		for i, img := range m.attachments {
+			chips[i] = m.theme.Badge.Render(fmt.Sprintf("⌗ image %d", i+1)) +
+				m.theme.HelpFooter.Render(fmt.Sprintf(" %.0f KB · ctrl+x remove", float64(len(img.Data))/1024))
+		}
+		inputContent = strings.Join(chips, "   ") + "\n" + inputContent
+	}
+	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
 
 	status := components.StatusBar(m.theme, components.StatusBarData{
 		Provider:    m.prov.Name(),
@@ -374,18 +581,25 @@ func (m *Model) View() string {
 		Estimated:   m.session.AnyEstimated,
 	}, m.width)
 
-	help := m.theme.HelpFooter.Render("enter send · ctrl+l clear · ctrl+c quit")
+	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c quit")
+	if m.notice != "" {
+		help = m.theme.BadgeOK.Render(m.notice)
+	}
 	if m.thinking {
-		help = m.spinner.View() + " " + m.theme.SystemNote.Render("thinking…") + "  " + help
+		elapsed := fmt.Sprintf("%.1fs", time.Since(m.streamStart).Seconds())
+		help = m.spinner.View() + " " +
+			components.WorkingButton(m.theme, m.frame, elapsed) + " " +
+			components.StopButton(m.theme, m.frame) + "  " +
+			m.theme.HelpFooter.Render("ctrl+c quit")
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.viewport.View(),
-		usage,
-		inputView,
-		status,
-		help,
-	)
+	sections := []string{m.viewport.View(), usage}
+	if len(m.sugs) > 0 {
+		sections = append(sections, m.suggestionsView())
+	}
+	sections = append(sections, inputView, status,
+		lipgloss.NewStyle().MaxWidth(m.width).Render(help))
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 // Run starts the chat TUI and blocks until it exits.

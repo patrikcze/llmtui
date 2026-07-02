@@ -15,10 +15,18 @@ const (
 	RoleAssistant Role = "assistant"
 )
 
-// Message is a single chat message exchanged with a model.
+// Image is a binary image attachment for vision-capable models.
+type Image struct {
+	Data []byte
+	MIME string // e.g. "image/png"
+}
+
+// Message is a single chat message exchanged with a model. Images are
+// translated to each backend's wire format by the provider implementations.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role    Role    `json:"role"`
+	Content string  `json:"content"`
+	Images  []Image `json:"-"`
 }
 
 // ModelInfo describes a model available on a provider.

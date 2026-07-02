@@ -106,10 +106,51 @@ providers:
 | Key | Action |
 | --- | --- |
 | `Enter` | Send message |
+| `Ctrl+Y` | Copy the last assistant reply to the clipboard (raw Markdown) |
+| `Ctrl+O` | Toggle text-selection mode (releases the mouse so your terminal can select/copy; toggles back to wheel scrolling) |
+| `Ctrl+V` | Paste an image from the clipboard (vision models) |
+| `Ctrl+X` | Remove the last pasted image |
+| `Esc` | Stop the current generation (keeps partial reply) |
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+C` | Quit |
 
-More (provider/model pickers, command palette, help overlay) are planned.
+## Slash commands
+
+Type `/` in the chat input to open a live suggestion popup (`↑`/`↓` to
+navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
+
+| Command | Description |
+| --- | --- |
+| `/help` | Show all keyboard shortcuts and commands (scrollable overlay) |
+| `/copy` | Copy the last reply to the clipboard |
+| `/clear` | Clear the conversation |
+| `/models` | List models on the current provider |
+| `/model <id>` | Switch to a different model |
+| `/providers` | List configured providers |
+| `/provider <name>` | Switch provider (adopts its default model) |
+| `/stats` | Per-exchange token usage, durations, and tok/s |
+| `/quit` | Exit |
+
+Overlays close with `Esc`, `Enter`, or `q` and scroll with `↑`/`↓`/`PgUp`/`PgDn`.
+
+## Images (vision models)
+
+Copy an image, then press `Ctrl+V` in chat. The attachment shows as a chip
+above the input and is sent with your next message — as OpenAI-style
+`image_url` content parts for OpenAI-compatible servers, or native base64
+`images` for Ollama.
+
+Vision capability is detected from the model ID (llava, `*-vision`,
+qwen-vl, minicpm-v, gemma3, moondream, …). If your vision model is not
+recognized, set:
+
+```yaml
+chat:
+  force_vision: true
+```
+
+Clipboard backends: macOS `pngpaste` (optional, faster) or built-in
+AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.
 
 ## Troubleshooting
 
@@ -123,8 +164,17 @@ provider/model resolution, and pings every configured backend.
 
 ## Development
 
+All common tasks are in the Makefile:
+
 ```bash
-go fmt ./... && go vet ./... && go test ./...
+make build      # compile ./llmtui with version metadata
+make run        # build and launch chat
+make check      # fmt + vet + golangci-lint + race tests
+make test       # unit tests
+make cover      # coverage report
+make dist       # cross-compile darwin/linux/windows into dist/ with checksums
+make clean      # remove artifacts
+make help       # list all targets
 ```
 
 Package layout:

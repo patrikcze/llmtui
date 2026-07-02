@@ -45,6 +45,9 @@ type ChatConfig struct {
 	Stream       bool    `mapstructure:"stream" yaml:"stream"`
 	SaveHistory  bool    `mapstructure:"save_history" yaml:"save_history"`
 	HistoryDir   string  `mapstructure:"history_dir" yaml:"history_dir"`
+	// ForceVision allows image attachments even when the model ID is not
+	// recognized as a vision model by the built-in heuristic.
+	ForceVision bool `mapstructure:"force_vision" yaml:"force_vision"`
 }
 
 // UIConfig holds appearance settings.
@@ -244,6 +247,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("chat.top_p", 0.9)
 	v.SetDefault("chat.max_tokens", 4096)
 	v.SetDefault("chat.stream", true)
+	v.SetDefault("chat.force_vision", false)
 	v.SetDefault("chat.save_history", true)
 	v.SetDefault("chat.history_dir", "~/.local/share/llmtui/history")
 
@@ -292,6 +296,8 @@ chat:
   top_p: 0.9
   max_tokens: 4096
   stream: true
+  # Allow pasting images even when the model is not recognized as vision-capable:
+  force_vision: false
   save_history: true
   history_dir: "~/.local/share/llmtui/history"
 
