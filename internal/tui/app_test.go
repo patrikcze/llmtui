@@ -3,10 +3,12 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 )
@@ -287,6 +289,240 @@ func TestEscClearsSlashInput(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.input.Value() != "" || len(m.sugs) != 0 {
 		t.Error("esc should clear the pending command and popup")
+	}
+}
+
+func TestWrapLines(t *testing.T) {
+	tests := []struct {
+		value string
+		width int
+		want  int
+	}{
+		{"", 40, 1},
+		{"short", 40, 1},
+		{strings.Repeat("x", 90), 40, 3},
+		{"a\nb\nc", 40, 3},
+		{strings.Repeat("long line\n", 20), 40, 6}, // capped
+	}
+	for _, tt := range tests {
+		if got := wrapLines(tt.value, tt.width); got != tt.want {
+			t.Errorf("wrapLines(%d chars, %d) = %d, want %d", len(tt.value), tt.width, got, tt.want)
+		}
+	}
+}
+
+func TestInputBoxGrowsAndShrinks(t *testing.T) {
+	m := newTestModel(t)
+	if m.inputLines != 1 {
+		t.Fatalf("inputLines = %d, want 1 initially", m.inputLines)
+	}
+
+	typeText(m, strings.Repeat("word ", 40)) // ~200 chars, wraps at width 72
+	if m.inputLines < 2 {
+		t.Errorf("inputLines = %d, want growth for long prompt", m.inputLines)
+	}
+
+	// Ctrl+J adds explicit newlines.
+	before := m.inputLines
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if m.inputLines <= before && before < 6 {
+		t.Errorf("inputLines = %d, want growth after ctrl+j", m.inputLines)
+	}
+
+	// Sending resets the box to one row.
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.inputLines != 1 {
+		t.Errorf("inputLines = %d, want 1 after send", m.inputLines)
+	}
+}
+
+func TestCtrlSSavesSession(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	m.session.AddUser("hi")
+	m.session.AddAssistant("hello")
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !strings.Contains(m.notice, "session saved") {
+		t.Fatalf("notice = %q, want save confirmation", m.notice)
+	}
+
+	metas, err := history.List(m.historyDir)
+	if err != nil || len(metas) != 1 {
+		t.Fatalf("List = (%v, %v), want one saved session", metas, err)
+	}
+	if metas[0].Messages != 2 {
+		t.Errorf("saved messages = %d, want 2", metas[0].Messages)
+	}
+}
+
+func TestSaveDisabledShowsError(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = ""
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !strings.Contains(m.errText, "disabled") {
+		t.Errorf("errText = %q, want disabled error", m.errText)
+	}
+}
+
+func TestQuitAutoSaves(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	m.session.AddUser("hi")
+
+	cmd := m.quit()
+	if cmd == nil {
+		t.Fatal("quit should return tea.Quit")
+	}
+	metas, _ := history.List(m.historyDir)
+	if len(metas) != 1 {
+		t.Errorf("quit should auto-save, found %d sessions", len(metas))
+	}
+
+	// Empty sessions are not saved.
+	m2 := newTestModel(t)
+	m2.historyDir = t.TempDir()
+	m2.quit()
+	metas, _ = history.List(m2.historyDir)
+	if len(metas) != 0 {
+		t.Errorf("empty session saved, found %d sessions", len(metas))
+	}
+}
+
+func TestFinishStreamAppendsUsageRecord(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	m.input.SetValue("hello")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m.streamBuf.WriteString("reply")
+	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8})
+
+	records, err := history.ReadUsage(m.historyDir)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("ReadUsage = (%v, %v), want one record", records, err)
+	}
+	if records[0].PromptTokens != 3 || records[0].CompletionTokens != 5 {
+		t.Errorf("record = %+v", records[0])
+	}
+}
+
+func TestHistoryOverlayListsSessions(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	m.session.AddUser("hi")
+	m.saveWithNotice()
+
+	typeText(m, "/history")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.overlayOpen {
+		t.Fatal("/history should open an overlay")
+	}
+	if !strings.Contains(m.historyOverlay(), m.sessionName) {
+		t.Error("history overlay should list the saved session")
+	}
+}
+
+func TestAltEnterInsertsNewline(t *testing.T) {
+	m := newTestModel(t)
+	typeText(m, "line one")
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	typeText(m, "line two")
+
+	if got := m.input.Value(); got != "line one\nline two" {
+		t.Errorf("input = %q, want two lines", got)
+	}
+	if len(m.session.Messages) != 0 {
+		t.Error("alt+enter must not send the message")
+	}
+	if m.inputLines != 2 {
+		t.Errorf("inputLines = %d, want 2", m.inputLines)
+	}
+}
+
+func TestDoubleCtrlCQuits(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	m.session.AddUser("hi")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("first ctrl+c must not quit")
+	}
+	if !strings.Contains(m.notice, "again to exit") {
+		t.Errorf("notice = %q, want arm hint", m.notice)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("second ctrl+c should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("second ctrl+c returned %T, want tea.QuitMsg", cmd())
+	}
+	// Quit auto-saved the session.
+	metas, _ := history.List(m.historyDir)
+	if len(metas) != 1 {
+		t.Errorf("quit should auto-save, found %d sessions", len(metas))
+	}
+}
+
+func TestCtrlCClearsInputFirst(t *testing.T) {
+	m := newTestModel(t)
+	typeText(m, "draft text")
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.input.Value() != "" {
+		t.Error("first ctrl+c should clear the input")
+	}
+	if !strings.Contains(m.notice, "input cleared") {
+		t.Errorf("notice = %q, want input-cleared hint", m.notice)
+	}
+}
+
+func TestCtrlCStopsGenerationFirst(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("hello")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.thinking {
+		t.Fatal("should be thinking")
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("first ctrl+c while thinking must not quit")
+	}
+	if m.thinking {
+		t.Error("first ctrl+c should stop generation")
+	}
+}
+
+func TestUsageCommandOpensDashboard(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	if err := history.AppendUsage(m.historyDir, history.UsageRecord{
+		Time: time.Now(), Provider: "mock", Model: "demo-model",
+		PromptTokens: 100, CompletionTokens: 250, DurationMS: 800,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	typeText(m, "/usage")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.overlayOpen {
+		t.Fatal("/usage should open an overlay")
+	}
+	content := m.usageOverlay()
+	for _, want := range []string{"tokens per day", "activity", "mock/demo-model", "favorite model", "Less", "More"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("usage overlay missing %q", want)
+		}
+	}
+	if !strings.Contains(content, "350") {
+		t.Errorf("usage overlay should show 350 total tokens")
 	}
 }
 

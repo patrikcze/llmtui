@@ -99,6 +99,8 @@ providers:
 | `llmtui providers` | List configured providers and their status |
 | `llmtui config init / show / path` | Manage configuration |
 | `llmtui doctor` | Diagnose config and backend connectivity |
+| `llmtui history` | List saved chat sessions |
+| `llmtui stats` | All-time token usage per day with sparkline |
 | `llmtui version` | Version info |
 
 ## Keyboard shortcuts
@@ -106,13 +108,26 @@ providers:
 | Key | Action |
 | --- | --- |
 | `Enter` | Send message |
+| `Shift+Enter` / `Alt+Enter` | Insert a newline — the input box grows with your prompt (up to 6 rows); see note below |
+| `Ctrl+J` | Insert a newline (works in every terminal) |
+| `Ctrl+S` | Save the session to the history directory |
 | `Ctrl+Y` | Copy the last assistant reply to the clipboard (raw Markdown) |
 | `Ctrl+O` | Toggle text-selection mode (releases the mouse so your terminal can select/copy; toggles back to wheel scrolling) |
 | `Ctrl+V` | Paste an image from the clipboard (vision models) |
 | `Ctrl+X` | Remove the last pasted image |
 | `Esc` | Stop the current generation (keeps partial reply) |
 | `Ctrl+L` | Clear conversation |
-| `Ctrl+C` | Quit |
+| `Ctrl+C` `Ctrl+C` | Quit (press twice within 2 s). The first press stops generation or clears the input; quitting auto-saves the session |
+
+**Shift+Enter note:** most terminals send the exact same byte for Enter and
+Shift+Enter, so no TUI can tell them apart out of the box (Claude Code has
+the same limitation — its `/terminal-setup` just remaps the key). `Alt+Enter`
+works everywhere. To make Shift+Enter work, remap it in your terminal to send
+`Esc+Enter` (`\e\r`):
+
+- **iTerm2**: Settings → Profiles → Keys → Key Mappings → add `⇧↩` → *Send Escape Sequence* → `\r` (enter `[13;2u` style not needed; use "Send text: `\e\r`")
+- **VS Code terminal**: add a `terminal.integrated` keybinding sending `\r`
+- **Kitty / WezTerm / Ghostty**: map `shift+enter` to send `\x1b\r`
 
 ## Slash commands
 
@@ -128,8 +143,11 @@ navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
 | `/model <id>` | Switch to a different model |
 | `/providers` | List configured providers |
 | `/provider <name>` | Switch provider (adopts its default model) |
-| `/stats` | Per-exchange token usage, durations, and tok/s |
-| `/quit` | Exit |
+| `/stats` | Session + all-time token usage, durations, and tok/s |
+| `/usage` | Usage dashboard: tokens-per-day chart, activity heatmap, per-model breakdown, streaks |
+| `/save` | Save this session to the history directory |
+| `/history` | List saved sessions |
+| `/quit` | Save session and exit |
 
 Overlays close with `Esc`, `Enter`, or `q` and scroll with `↑`/`↓`/`PgUp`/`PgDn`.
 
@@ -151,6 +169,20 @@ chat:
 
 Clipboard backends: macOS `pngpaste` (optional, faster) or built-in
 AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.
+
+## History & usage stats
+
+With `chat.save_history: true` (the default), llmtui keeps everything under
+`chat.history_dir` (`~/.local/share/llmtui/history`):
+
+- **Sessions** — saved with `Ctrl+S` / `/save`, and automatically on quit.
+  One JSON file per chat session (messages + token totals); repeated saves
+  update the same file. Image attachments are never persisted.
+- **Usage log** — every completed exchange appends one line to
+  `usage.jsonl` (timestamp, provider, model, tokens, duration — no message
+  content). View it with `llmtui stats` or `/stats` in chat.
+
+Set `chat.save_history: false` to disable both.
 
 ## Troubleshooting
 

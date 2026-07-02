@@ -52,6 +52,8 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 		newProvidersCmd(r),
 		newModelsCmd(r),
 		newDoctorCmd(r),
+		newHistoryCmd(r),
+		newStatsCmd(r),
 		newVersionCmd(version, commit, date),
 	)
 

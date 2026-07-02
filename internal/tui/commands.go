@@ -10,7 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/patrikcze/llmtui/internal/app"
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/tui/components"
 )
 
 // slashCommand is one command reachable by typing "/" in the input.
@@ -64,12 +66,24 @@ func slashCommands() []slashCommand {
 		{"provider", "/provider <name>", "switch provider (and its default model)", func(m *Model, args string) tea.Cmd {
 			return m.switchProvider(args)
 		}},
-		{"stats", "/stats", "show session usage statistics", func(m *Model, _ string) tea.Cmd {
+		{"stats", "/stats", "session and all-time usage statistics", func(m *Model, _ string) tea.Cmd {
 			m.openOverlay(m.statsOverlay())
 			return nil
 		}},
-		{"quit", "/quit", "exit llmtui", func(_ *Model, _ string) tea.Cmd {
-			return tea.Quit
+		{"usage", "/usage", "all-time usage dashboard: charts, models, streaks", func(m *Model, _ string) tea.Cmd {
+			m.openOverlay(m.usageOverlay())
+			return nil
+		}},
+		{"save", "/save", "save this session to the history directory", func(m *Model, _ string) tea.Cmd {
+			m.saveWithNotice()
+			return nil
+		}},
+		{"history", "/history", "list saved sessions", func(m *Model, _ string) tea.Cmd {
+			m.openOverlay(m.historyOverlay())
+			return nil
+		}},
+		{"quit", "/quit", "save session and exit llmtui", func(m *Model, _ string) tea.Cmd {
+			return m.quit()
 		}},
 	}
 }
@@ -115,6 +129,7 @@ func (m *Model) runSlashCommand() tea.Cmd {
 
 	m.input.Reset()
 	m.updateSuggestions()
+	m.syncInputHeight()
 
 	for _, c := range slashCommands() {
 		if c.name == name {
@@ -175,6 +190,9 @@ func (m *Model) helpOverlay() string {
 	b.WriteString(m.theme.UserLabel.Render("keyboard") + "\n")
 	keys := [][2]string{
 		{"enter", "send message / run command"},
+		{"shift+↵", "newline (needs terminal remap, see README) — or alt+enter"},
+		{"ctrl+j", "insert newline (works everywhere)"},
+		{"ctrl+s", "save session to history"},
 		{"ctrl+y", "copy last reply to clipboard"},
 		{"ctrl+o", "toggle text-selection mode (release mouse)"},
 		{"ctrl+v", "paste image from clipboard (vision models)"},
@@ -183,7 +201,7 @@ func (m *Model) helpOverlay() string {
 		{"ctrl+l", "clear conversation"},
 		{"↑/↓", "navigate command suggestions · scroll"},
 		{"tab", "complete selected command"},
-		{"ctrl+c", "quit"},
+		{"ctrl+c", "press twice to quit (first stops/clears)"},
 	}
 	for _, k := range keys {
 		fmt.Fprintf(&b, "  %s  %s\n",
@@ -277,6 +295,62 @@ func (m *Model) statsOverlay() string {
 			total += "  (~ = estimated)"
 		}
 		b.WriteString(m.theme.UserLabel.Render(total) + "\n")
+	}
+
+	// All-time totals from the persistent usage log.
+	if m.historyDir != "" {
+		if records, err := history.ReadUsage(m.historyDir); err == nil && len(records) > 0 {
+			prompt, reply := 0, 0
+			for _, r := range records {
+				prompt += r.PromptTokens
+				reply += r.CompletionTokens
+			}
+			b.WriteString("\n" + m.theme.UserLabel.Render("all time") + "\n")
+			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(fmt.Sprintf(
+				"%d requests · prompt %d · reply %d · %d tokens",
+				len(records), prompt, reply, prompt+reply)))
+			days := history.AggregateByDay(records)
+			totals := make([]int, len(days))
+			for i, d := range days {
+				totals[i] = d.TotalTokens()
+			}
+			b.WriteString("  " + m.theme.ChartBar.Render(components.Sparkline(totals, 40, false)) +
+				m.theme.StatusBar.Render("  tokens/day") + "\n")
+		}
+	}
+
+	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
+	return b.String()
+}
+
+func (m *Model) historyOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("saved sessions") + "\n\n")
+
+	if m.historyDir == "" {
+		b.WriteString(m.theme.SystemNote.Render("history saving is disabled (chat.save_history)") + "\n")
+	} else {
+		metas, err := history.List(m.historyDir)
+		switch {
+		case err != nil:
+			b.WriteString(m.theme.ErrorText.Render(err.Error()) + "\n")
+		case len(metas) == 0:
+			b.WriteString(m.theme.SystemNote.Render("no saved sessions yet — /save or ctrl+s") + "\n")
+		default:
+			for _, meta := range metas {
+				marker := "  "
+				name := m.theme.StatusValue.Render(meta.Name)
+				if meta.Name == m.sessionName {
+					marker = m.theme.BadgeOK.Render("▸ ")
+					name = m.theme.BadgeOK.Render(meta.Name)
+				}
+				fmt.Fprintf(&b, "%s%s  %s\n", marker, name,
+					m.theme.StatusBar.Render(fmt.Sprintf("%s · %s/%s · %d msgs · %d tok",
+						meta.SavedAt.Format("2006-01-02 15:04"),
+						meta.Provider, meta.Model, meta.Messages, meta.Tokens)))
+			}
+		}
+		b.WriteString("\n" + m.theme.SystemNote.Render("stored in "+m.historyDir))
 	}
 
 	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))

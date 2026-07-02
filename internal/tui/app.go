@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -17,6 +18,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/chat"
 	"github.com/patrikcze/llmtui/internal/clipboard"
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tui/components"
@@ -79,6 +81,10 @@ type Model struct {
 	overlayOpen   bool
 	sugs          []slashCommand
 	sugIdx        int
+	historyDir    string
+	sessionName   string
+	inputLines    int
+	ctrlCAt       time.Time
 }
 
 // New builds the chat model.
@@ -98,6 +104,13 @@ func New(opts Options) *Model {
 	sp.Spinner = spinner.MiniDot
 	sp.Style = t.Spinner
 
+	historyDir := ""
+	if opts.Config.Chat.SaveHistory && opts.Config.Chat.HistoryDir != "" {
+		if dir, err := history.ExpandHome(opts.Config.Chat.HistoryDir); err == nil {
+			historyDir = dir
+		}
+	}
+
 	return &Model{
 		cfg:          opts.Config,
 		theme:        t,
@@ -107,6 +120,9 @@ func New(opts Options) *Model {
 		input:        ta,
 		spinner:      sp,
 		mouseEnabled: true,
+		historyDir:   historyDir,
+		sessionName:  history.NewSessionName(time.Now()),
+		inputLines:   1,
 	}
 }
 
@@ -135,6 +151,16 @@ func waitForEvent(stream <-chan provider.ChatEvent) tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Modified Enter (Shift+Enter etc.) arrives as a raw CSI sequence when
+	// the terminal supports modifyOtherKeys; treat it as a newline.
+	if seq, ok := extendedKeySeq(msg); ok {
+		if isModifiedEnter(seq) && !m.overlayOpen {
+			m.input.InsertString("\n")
+			m.syncInputHeight()
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
@@ -161,10 +187,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
-			if m.cancelStream != nil {
-				m.cancelStream()
-			}
-			return m, tea.Quit
+			return m.handleCtrlC()
+		case tea.KeyCtrlS:
+			m.saveWithNotice()
+			return m, nil
+		case tea.KeyCtrlJ:
+			// Insert a newline; the input box grows with the content.
+			m.input.InsertString("\n")
+			m.syncInputHeight()
+			return m, nil
 		case tea.KeyCtrlL:
 			m.session.Clear()
 			m.refreshViewport()
@@ -199,9 +230,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if strings.HasPrefix(m.input.Value(), "/") {
 				m.input.Reset()
 				m.updateSuggestions()
+				m.syncInputHeight()
 			}
 			return m, nil
 		case tea.KeyEnter:
+			// Alt/Option+Enter inserts a newline (with "Option as Meta"
+			// enabled on macOS terminals; see README).
+			if msg.Alt {
+				m.input.InsertString("\n")
+				m.syncInputHeight()
+				return m, nil
+			}
+			// Universal fallback: a trailing backslash continues the line.
+			if val := m.input.Value(); strings.HasSuffix(val, "\\") {
+				m.input.SetValue(strings.TrimSuffix(val, "\\"))
+				m.input.CursorEnd()
+				m.input.InsertString("\n")
+				m.syncInputHeight()
+				return m, nil
+			}
 			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
 				return m, m.runSlashCommand()
 			}
@@ -272,6 +319,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
 	m.updateSuggestions()
+	m.syncInputHeight()
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
@@ -282,7 +330,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		return m, tea.Quit
+		return m.handleCtrlC()
 	case tea.KeyEsc, tea.KeyEnter:
 		m.closeOverlay()
 		return m, nil
@@ -307,6 +355,7 @@ func (m *Model) send() tea.Cmd {
 	m.notice = ""
 	m.session.AddUser(text, m.attachments...)
 	m.attachments = nil
+	m.syncInputHeight()
 	m.relayout()
 	m.thinking = true
 	m.streamBuf.Reset()
@@ -355,6 +404,111 @@ func (m *Model) pasteImage() tea.Cmd {
 			return clipboardImageMsg{err: err}
 		}
 		return clipboardImageMsg{img: provider.Image{Data: data, MIME: mime}}
+	}
+}
+
+func (m *Model) hasUserContent() bool {
+	for _, msg := range m.session.Messages {
+		if msg.Role == provider.RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
+// saveSession writes the conversation to the history directory. The same
+// session name is reused for the whole chat, so repeated saves update
+// one file instead of scattering copies.
+func (m *Model) saveSession() (string, error) {
+	if m.historyDir == "" {
+		return "", fmt.Errorf("history saving is disabled (chat.save_history)")
+	}
+	return history.Save(m.historyDir, m.sessionName, history.Session{
+		Provider:  m.prov.Name(),
+		Model:     m.model,
+		Messages:  m.session.Messages,
+		Prompt:    m.session.TotalPromptTokens,
+		Reply:     m.session.TotalCompletionTokens,
+		Estimated: m.session.AnyEstimated,
+	})
+}
+
+func (m *Model) saveWithNotice() {
+	path, err := m.saveSession()
+	if err != nil {
+		m.errText = "save failed: " + err.Error()
+		m.refreshViewport()
+		return
+	}
+	m.notice = "✓ session saved to " + path
+}
+
+// ctrlCWindow is how long the first Ctrl+C stays armed for the second.
+const ctrlCWindow = 2 * time.Second
+
+// handleCtrlC implements two-step quit: the first press stops generation or
+// clears the input, the second press within the window exits (auto-saving).
+func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
+	if time.Since(m.ctrlCAt) < ctrlCWindow {
+		return m, m.quit()
+	}
+	m.ctrlCAt = time.Now()
+	switch {
+	case m.thinking && m.cancelStream != nil:
+		m.cancelStream()
+		m.finishStream(nil)
+		m.errText = "generation stopped"
+		m.notice = "press ctrl+c again to exit"
+		m.refreshViewport()
+	case m.input.Value() != "":
+		m.input.Reset()
+		m.updateSuggestions()
+		m.syncInputHeight()
+		m.notice = "input cleared — press ctrl+c again to exit"
+	default:
+		m.notice = "press ctrl+c again to exit (session auto-saves)"
+	}
+	return m, nil
+}
+
+// quit stops any stream, auto-saves the session, and exits.
+func (m *Model) quit() tea.Cmd {
+	if m.cancelStream != nil {
+		m.cancelStream()
+	}
+	if m.historyDir != "" && m.hasUserContent() {
+		_, _ = m.saveSession() // best effort on exit
+	}
+	return tea.Quit
+}
+
+// wrapLines estimates how many rows value occupies at the given wrap width.
+func wrapLines(value string, width int) int {
+	if width < 1 {
+		width = 1
+	}
+	lines := 0
+	for _, l := range strings.Split(value, "\n") {
+		lines += 1 + utf8.RuneCountInString(l)/width
+	}
+	const maxInputLines = 6
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > maxInputLines {
+		lines = maxInputLines
+	}
+	return lines
+}
+
+// syncInputHeight grows and shrinks the input box with its content,
+// Claude-Code style: 1 row when empty, up to 6 rows for long prompts.
+func (m *Model) syncInputHeight() {
+	lines := wrapLines(m.input.Value(), m.width-8)
+	if lines != m.inputLines {
+		m.inputLines = lines
+		m.input.SetHeight(lines)
+		m.relayout()
 	}
 }
 
@@ -425,8 +579,21 @@ func (m *Model) finishStream(usage *provider.Usage) {
 		m.session.AddAssistant(reply)
 	}
 	if usage != nil {
-		st := m.session.RecordUsage(*usage, time.Since(m.streamStart))
+		duration := time.Since(m.streamStart)
+		st := m.session.RecordUsage(*usage, duration)
 		m.lastTPS = st.TokensPerSec
+		if m.historyDir != "" {
+			// Best effort: stats must never interrupt the chat.
+			_ = history.AppendUsage(m.historyDir, history.UsageRecord{
+				Time:             time.Now(),
+				Provider:         m.prov.Name(),
+				Model:            m.model,
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+				DurationMS:       duration.Milliseconds(),
+				Estimated:        usage.Estimated,
+			})
+		}
 	}
 	m.refreshViewport()
 }
@@ -445,9 +612,9 @@ func (m *Model) resize(w, h int) {
 	m.input.SetWidth(w - 6)
 
 	// Layout: viewport fills space above usage panel (4), suggestion popup,
-	// input (3, +1 when attachment chips are shown), status bar (1), and
-	// help footer (1).
-	inputHeight := 3
+	// input (border + content rows, +1 when attachment chips are shown),
+	// status bar (1), and help footer (1).
+	inputHeight := 2 + m.inputLines
 	if len(m.attachments) > 0 {
 		inputHeight++
 	}
@@ -581,7 +748,7 @@ func (m *Model) View() string {
 		Estimated:   m.session.AnyEstimated,
 	}, m.width)
 
-	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c quit")
+	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
 		help = m.theme.BadgeOK.Render(m.notice)
 	}
@@ -605,6 +772,12 @@ func (m *Model) View() string {
 // Run starts the chat TUI and blocks until it exits.
 func Run(opts Options) error {
 	m := New(opts)
+
+	// Ask the terminal to report modified Enter (Shift+Enter, Ctrl+Enter)
+	// via modifyOtherKeys; unsupported terminals ignore this sequence.
+	fmt.Print(enableModifyOtherKeys)
+	defer fmt.Print(disableModifyOtherKeys)
+
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
