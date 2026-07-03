@@ -281,9 +281,21 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		Stream:      req.Stream,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), app.RequestTimeout(m.cfg.Network))
-	m.cancelStream = cancel
+	// A streaming reply can legitimately take many minutes on a slow local
+	// model. A whole-request deadline would cut a healthy generation off
+	// mid-answer, so network.timeout is treated as an *inactivity* window:
+	// the watchdog fires only when no token has arrived for that long, and
+	// handleStreamEvent resets it on every delta.
+	idle := app.RequestTimeout(m.cfg.Network)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
 	m.streamCtx = ctx
+	m.idleWatchdog = watchdog
+	m.idleTimeout = idle
+	m.cancelStream = func() {
+		watchdog.Stop()
+		cancel(context.Canceled)
+	}
 	prov := m.prov
 	netCfg := m.cfg.Network
 	baseURL := m.cfg.ActiveBaseURL()

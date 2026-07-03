@@ -467,8 +467,11 @@ context:
   summary_max_tokens: 1200
 
 network:
-  # Whole-request ceiling; raise on slow machines where generation takes
-  # longer (a timeout keeps the partial reply).
+  # Inactivity timeout: how long to wait for the *next* streamed token
+  # before giving up. It resets on every token, so a slow model that keeps
+  # producing output is never cut off — only a genuinely stalled server
+  # trips it. Raise it if your model has long pauses (e.g. heavy reasoning
+  # before the first token).
   timeout: "120s"
   connect_timeout: "10s"
   retry:

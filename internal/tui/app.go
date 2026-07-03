@@ -38,6 +38,11 @@ type Options struct {
 	ConfigPath string // path of the loaded config file, for /config
 }
 
+// errStreamIdle is the cancellation cause when the inactivity watchdog fires:
+// the server sent no token for network.timeout, so we treat the stream as
+// stalled. Distinct from a user Esc (context.Canceled) so we can report why.
+var errStreamIdle = errors.New("stream idle timeout")
+
 type healthMsg struct {
 	err      error
 	provider string // which provider was checked, to discard stale results
@@ -84,6 +89,8 @@ type Model struct {
 	errText       string
 	cancelStream  context.CancelFunc
 	streamCtx     context.Context
+	idleWatchdog  *time.Timer
+	idleTimeout   time.Duration
 	attachments   []provider.Image
 	frame         int
 	renderWidth   int
@@ -662,29 +669,49 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !msg.ok {
-		// Channel closed without a terminal event. When our deadline expired
-		// the producer may not have been able to deliver the error, so report
-		// the timeout ourselves instead of silently treating it as done.
-		if m.streamCtx != nil && errors.Is(m.streamCtx.Err(), context.DeadlineExceeded) {
-			m.streamFailed(friendlyError(m.streamCtx.Err(), m.prov.Name(), ""))
-			return m, nil
+		// Channel closed without a terminal event. If the inactivity watchdog
+		// tripped, say so; otherwise treat it as a clean finish.
+		if m.streamCanceledByIdle() {
+			m.streamFailed(m.idleError())
+		} else {
+			m.finishStream(nil)
 		}
-		m.finishStream(nil)
 		return m, nil
 	}
 	switch msg.event.Type {
 	case provider.EventDelta:
 		m.streamBuf.WriteString(msg.event.Delta)
+		// A token arrived: the stream is healthy, so push the idle deadline out.
+		if m.idleWatchdog != nil {
+			m.idleWatchdog.Reset(m.idleTimeout)
+		}
 		m.refreshViewport()
 		return m, waitForEvent(m.stream)
 	case provider.EventDone:
 		m.finishStream(msg.event.Usage)
 		return m, nil
 	case provider.EventError:
-		m.streamFailed(msg.event.Err)
+		// A cancellation caused by the idle watchdog surfaces here as
+		// context.Canceled; report it as a stall, not a raw cancel.
+		if m.streamCanceledByIdle() {
+			m.streamFailed(m.idleError())
+		} else {
+			m.streamFailed(msg.event.Err)
+		}
 		return m, nil
 	}
 	return m, nil
+}
+
+// streamCanceledByIdle reports whether the current stream's context was
+// canceled by the inactivity watchdog rather than by the user.
+func (m *Model) streamCanceledByIdle() bool {
+	return m.streamCtx != nil && errors.Is(context.Cause(m.streamCtx), errStreamIdle)
+}
+
+func (m *Model) idleError() error {
+	return fmt.Errorf("no response from %s for %s — the model may be stuck, or raise network.timeout if it just needs more time",
+		m.prov.Name(), m.idleTimeout)
 }
 
 // streamFailed finalizes a failed stream, preserving partial output.
@@ -701,6 +728,7 @@ func (m *Model) streamFailed(err error) {
 		m.cancelStream()
 		m.cancelStream = nil
 	}
+	m.idleWatchdog = nil
 	m.drainStream()
 	m.refreshViewport()
 }
@@ -727,6 +755,7 @@ func (m *Model) finishStream(usage *provider.Usage) {
 		m.cancelStream()
 		m.cancelStream = nil
 	}
+	m.idleWatchdog = nil
 	m.drainStream()
 	if reply != "" {
 		m.session.AddAssistant(reply)

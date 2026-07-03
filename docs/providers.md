@@ -14,7 +14,13 @@ Unknown backends get conservative defaults.
 ## Network behavior
 
 - `network.connect_timeout` (default 10s) bounds connection attempts.
-- `network.timeout` (default 120s) bounds the whole request.
+- `network.timeout` (default 120s) is an **inactivity** timeout for streams:
+  it's the maximum wait for the *next* token and resets on every token, so a
+  slow local model is never cut off mid-answer as long as it keeps producing
+  output. Only a stalled server (no tokens for that long) trips it. For a
+  non-streaming request it acts as a whole-response cap. Raise it if your
+  model pauses a long time before the first token (e.g. heavy reasoning or a
+  cold model load).
 - Transient failures (connection refused/reset, timeouts) retry up to
   `network.retry.max_attempts` with `network.retry.backoff` — HTTP errors
   (wrong model, bad request) and user cancellations are never retried.
