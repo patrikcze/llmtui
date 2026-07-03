@@ -40,12 +40,33 @@ add` reminds you).
 
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
-- Workspace tools (`/tools`) are off by default. When enabled, the model can
-  only touch files under the directory llmtui was launched from: absolute
-  paths, `..`, and symlinks resolving outside the workspace are rejected;
-  reads and writes are size-capped; and there is no delete or
-  shell-execution tool. Every tool action is displayed in the chat as it
-  happens.
+- Workspace tools (`/tools`) are off by default and follow the
+  least-privilege posture of mainstream coding agents (per OWASP LLM Top 10,
+  "Excessive Agency"):
+  - **Disclosure** — while tools are on, a standing banner in the chat names
+    the exact directory the model can act on and the approval mode; every
+    executed action and its result are shown in the conversation.
+  - **Approval gate** — writes and non-read-only commands require an
+    explicit `y`/`a` from the user before anything happens (`tools.approve:
+    ask`, the default). Only reads, listings, and allowlisted read-only
+    commands without shell metacharacters run unprompted.
+  - **Confinement** — absolute paths, `..`, and symlinks resolving outside
+    the launch directory are rejected; commands run with the workspace as
+    their working directory.
+  - **`.git` protection** — writes into `.git/` are blocked; a
+    model-written git hook would otherwise execute on your next git command.
+  - **Secret hygiene** — the environment passed to `run_command` is
+    stripped of `LLMTUI_*` and anything matching key/token/secret/password
+    patterns, so credentials cannot round-trip into model context via `env`.
+  - **Bounded execution** — commands are time-limited
+    (`tools.command_timeout`), reads/writes/outputs are size-capped, the
+    tool loop stops after `tools.max_iterations` rounds per message, and
+    there is no delete tool.
+  - **Residual risk to know about** — content the model reads (files,
+    command output) re-enters its context; a malicious file could try to
+    instruct the model to take actions (prompt injection). The approval
+    gate exists precisely so *you* are the final check on every mutating
+    action — prefer `ask` mode when working on untrusted repositories.
 - Debug output (`/debug last`) shows request shape, sections, and timings,
   never credentials.
 - The `privacy` config section documents intent (`local_first`,

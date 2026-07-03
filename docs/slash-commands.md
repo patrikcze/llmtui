@@ -69,8 +69,9 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 ## Tools
 | Command | Description |
 | --- | --- |
-| `/tools` · `/tools status` | Workspace tools overlay: state, workspace root, limits |
-| `/tools on` / `/tools off` | Let the model list/read/write files under the launch directory |
+| `/tools` · `/tools status` | Workspace tools overlay: state, approval mode, workspace root, limits |
+| `/tools on` / `/tools off` | Let the model list/read/write files and run commands under the launch directory |
+| `/tools ask` / `/tools auto` | Require y/n approval for writes & commands (default), or run them unprompted |
 
 ## Diagnostics
 | Command | Description |

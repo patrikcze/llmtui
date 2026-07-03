@@ -173,7 +173,7 @@ Local-LLM experience helpers:
 | `/prompt preview` | See exactly what will be sent — the raw message is never rewritten ([docs](docs/prompt-composition.md)) |
 | `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
 | `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
-| `/tools` | Opt-in workspace file tools — the model can create, read, and list files in your current directory |
+| `/tools` | Opt-in agent mode — the model can create/read files and run commands in your current directory, with y/n approval |
 | `/template` | Reusable conversation templates from the config |
 | `/doctor` | Provider, model, and network diagnostics |
 | `/keys` | Key inspector — verify what your terminal sends ([docs](docs/keyboard.md)) |
@@ -216,20 +216,38 @@ Enable per session with `/tools on` (status: `/tools`), or permanently:
 ```yaml
 tools:
   enabled: true
+  approve: ask # ask | auto
   max_iterations: 4 # tool rounds per user message
-  max_file_kb: 512  # per-file read/write cap
+  max_file_kb: 512  # per-file read/write and command output cap
+  command_timeout: "30s"
 ```
 
-Three tools are available: `list_dir`, `read_file`, and `write_file`. The
-model calls them with fenced blocks in its reply; llmtui executes them and
-feeds the results back automatically until the model answers normally (or
-the round limit hits). Every action is shown in the chat.
+Four tools are available: `list_dir`, `read_file`, `write_file`, and
+`run_command` (one shell command in the workspace — `sh` on macOS/Linux,
+`cmd` on Windows, detected automatically). The model calls them with fenced
+blocks in its reply; llmtui executes them and feeds the results back until
+the model answers normally (or the round limit hits).
 
-Safety: tools are **off by default**, everything is confined to the launch
-directory (absolute paths, `..`, and symlink escapes are rejected), there is
-no delete or execute tool, and file sizes are capped. Works with any local
-model — no native function-calling support required, though instruction-tuned
-models ≥7B follow the tool syntax most reliably.
+**You stay in control**, the same way Claude Code or Codex work:
+
+- While tools are on, a standing banner in the chat shows the exact
+  directory the model can act on and the approval mode.
+- Reads, listings, and provably read-only commands (`ls`, `grep`, `cat`,
+  `find`, `git status/log/diff`, … with no shell metacharacters) run
+  automatically.
+- **Writes and every other command stop and ask first** — `y` allows once,
+  `a` allows for the rest of the session, `n` denies (the model is told and
+  continues without it). Set `approve: auto` or `/tools auto` to skip
+  prompts entirely.
+
+Safety: tools are **off by default**; everything is confined to the launch
+directory (absolute paths, `..`, and symlink escapes rejected); writes into
+`.git/` are blocked (a written git hook would be code execution); command
+environments are stripped of secrets (`*_API_KEY`, tokens, passwords, all
+`LLMTUI_*` vars); commands are time-limited; file sizes and outputs are
+capped; and there is no delete tool. Works with any local model — no native
+function-calling support required, though instruction-tuned models ≥7B
+follow the tool syntax most reliably.
 
 ## History & usage stats
 

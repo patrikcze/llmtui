@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSingleWrite(t *testing.T) {
@@ -153,6 +154,128 @@ func TestRunnerReadTruncation(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "truncated") || len(res.Output) > 1200 {
 		t.Errorf("expected truncated output, got %d bytes", len(res.Output))
+	}
+}
+
+func TestRunCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	root := t.TempDir()
+	r := NewRunner(root, 64)
+
+	res := r.Execute(Call{Tool: ToolRunCommand, Body: "echo hello\n"})
+	if res.Err != nil || res.Output != "hello" {
+		t.Errorf("echo = %q err=%v", res.Output, res.Err)
+	}
+
+	// Runs in the workspace directory.
+	res = r.Execute(Call{Tool: ToolRunCommand, Body: "pwd"})
+	if res.Err != nil {
+		t.Fatalf("pwd: %v", res.Err)
+	}
+	want, _ := filepath.EvalSymlinks(root)
+	got, _ := filepath.EvalSymlinks(res.Output)
+	if got != want {
+		t.Errorf("pwd = %q, want %q", got, want)
+	}
+
+	// Failures surface the exit error and keep the output.
+	res = r.Execute(Call{Tool: ToolRunCommand, Body: "sh -c 'echo oops >&2; exit 3'"})
+	if res.Err == nil || !strings.Contains(res.Output, "oops") {
+		t.Errorf("failed command: out=%q err=%v", res.Output, res.Err)
+	}
+
+	if res := r.Execute(Call{Tool: ToolRunCommand, Body: ""}); res.Err == nil {
+		t.Error("empty command allowed")
+	}
+	if res := r.Execute(Call{Tool: ToolRunCommand, Body: "echo a\necho b\n"}); res.Err == nil {
+		t.Error("multi-line command allowed")
+	}
+}
+
+func TestRunCommandTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	r := NewRunner(t.TempDir(), 64)
+	r.CommandTimeout = 100 * time.Millisecond
+	res := r.Execute(Call{Tool: ToolRunCommand, Body: "sleep 5"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "timed out") {
+		t.Errorf("timeout not enforced: %v", res.Err)
+	}
+}
+
+func TestSanitizedEnv(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin", "HOME=/home/x", "LANG=C",
+		"LLMTUI_API_KEY=hunter2", "OPENAI_API_KEY=sk-x", "MY_SECRET=x",
+		"DB_PASSWORD=x", "AUTH_TOKEN=x", "AWS_CREDENTIALS=x", "LLMTUI_MODEL=qwen3",
+	}
+	out := strings.Join(sanitizedEnv(in), "\n")
+	for _, keep := range []string{"PATH=", "HOME=", "LANG="} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("sanitizedEnv dropped %s", keep)
+		}
+	}
+	for _, drop := range []string{"KEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIALS", "LLMTUI_"} {
+		if strings.Contains(out, drop) {
+			t.Errorf("sanitizedEnv leaked a var containing %s:\n%s", drop, out)
+		}
+	}
+}
+
+func TestWriteFileBlocksGitInternals(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	for _, path := range []string{".git/hooks/pre-commit", "sub/.git/config", ".git/HEAD"} {
+		if res := r.Execute(Call{Tool: ToolWriteFile, Path: path, Body: "evil"}); res.Err == nil {
+			t.Errorf("write into %q allowed", path)
+		}
+	}
+	// A file merely named like git things is fine.
+	if res := r.Execute(Call{Tool: ToolWriteFile, Path: "gitnotes.md", Body: "ok"}); res.Err != nil {
+		t.Errorf("gitnotes.md rejected: %v", res.Err)
+	}
+}
+
+func TestSafeAutoCommand(t *testing.T) {
+	safe := []string{
+		"ls -la", "grep -rn TODO .", "cat main.go", "git status", "git log --oneline",
+		"find . -name '*.go'", "wc -l main.go", "pwd",
+	}
+	for _, c := range safe {
+		if !SafeAutoCommand(c) {
+			t.Errorf("SafeAutoCommand(%q) = false, want true", c)
+		}
+	}
+	unsafe := []string{
+		"rm -rf /", "ls; rm x", "cat a > b", "grep x | sh", "git push", "git commit -m x",
+		"find . -name '*.go' -delete", "find . -exec rm {} \\;", "curl http://x",
+		"ls `rm x`", "echo $(rm x)", "", "sh script.sh",
+	}
+	for _, c := range unsafe {
+		if SafeAutoCommand(c) {
+			t.Errorf("SafeAutoCommand(%q) = true, want false", c)
+		}
+	}
+}
+
+func TestNeedsApproval(t *testing.T) {
+	cases := []struct {
+		call Call
+		want bool
+	}{
+		{Call{Tool: ToolListDir}, false},
+		{Call{Tool: ToolReadFile, Path: "a.txt"}, false},
+		{Call{Tool: ToolWriteFile, Path: "a.txt", Body: "x"}, true},
+		{Call{Tool: ToolRunCommand, Body: "ls -la"}, false},
+		{Call{Tool: ToolRunCommand, Body: "rm -rf ."}, true},
+		{Call{Tool: "mystery"}, true},
+	}
+	for _, c := range cases {
+		if got := NeedsApproval(c.call); got != c.want {
+			t.Errorf("NeedsApproval(%+v) = %v, want %v", c.call, got, c.want)
+		}
 	}
 }
 

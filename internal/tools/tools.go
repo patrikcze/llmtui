@@ -13,12 +13,17 @@
 package tools
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ResultsPrefix marks the follow-up message that carries tool output back to
@@ -27,9 +32,10 @@ const ResultsPrefix = "[tool results]"
 
 // Known tool names.
 const (
-	ToolListDir   = "list_dir"
-	ToolReadFile  = "read_file"
-	ToolWriteFile = "write_file"
+	ToolListDir    = "list_dir"
+	ToolReadFile   = "read_file"
+	ToolWriteFile  = "write_file"
+	ToolRunCommand = "run_command"
 )
 
 // Call is one parsed tool invocation from an assistant reply.
@@ -91,6 +97,9 @@ func joinBody(lines []string) string {
 type Runner struct {
 	root  string
 	maxKB int
+
+	// CommandTimeout bounds run_command execution (default 30s).
+	CommandTimeout time.Duration
 }
 
 // NewRunner confines execution to root; maxKB caps file reads and writes.
@@ -98,7 +107,7 @@ func NewRunner(root string, maxKB int) *Runner {
 	if maxKB <= 0 {
 		maxKB = 512
 	}
-	return &Runner{root: root, maxKB: maxKB}
+	return &Runner{root: root, maxKB: maxKB, CommandTimeout: 30 * time.Second}
 }
 
 // Root returns the workspace directory.
@@ -137,9 +146,11 @@ func (r *Runner) Execute(c Call) Result {
 		res.Output, res.Err = r.readFile(c.Path)
 	case ToolWriteFile:
 		res.Output, res.Err = r.writeFile(c.Path, c.Body)
+	case ToolRunCommand:
+		res.Output, res.Err = r.runCommand(c.Body)
 	default:
-		res.Err = fmt.Errorf("unknown tool %q (available: %s, %s, %s)",
-			c.Tool, ToolListDir, ToolReadFile, ToolWriteFile)
+		res.Err = fmt.Errorf("unknown tool %q (available: %s, %s, %s, %s)",
+			c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand)
 	}
 	return res
 }
@@ -204,6 +215,12 @@ func (r *Runner) writeFile(rel, content string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("write_file needs a path")
 	}
+	// A written git hook would execute on the user's next git command.
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/") {
+		if part == ".git" {
+			return "", fmt.Errorf("writing inside .git is not allowed")
+		}
+	}
 	if len(content) > r.maxKB*1024 {
 		return "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
 	}
@@ -223,6 +240,127 @@ func (r *Runner) writeFile(rel, content string) (string, error) {
 	return fmt.Sprintf("wrote %d bytes to %s", len(content), rel), nil
 }
 
+// runCommand executes one shell command in the workspace directory. The
+// shell is picked per OS (sh on Unix, cmd on Windows), output is size-capped,
+// execution is time-limited, and the environment is sanitized so secrets in
+// the parent process never reach the command (or, through its output, the
+// model).
+func (r *Runner) runCommand(body string) (string, error) {
+	cmdline := strings.TrimSpace(body)
+	if cmdline == "" {
+		return "", fmt.Errorf("run_command needs a command in the block body")
+	}
+	if strings.ContainsAny(cmdline, "\n\r") {
+		return "", fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first")
+	}
+
+	timeout := r.CommandTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/C", cmdline)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", cmdline)
+	}
+	cmd.Dir = r.root
+	cmd.Env = sanitizedEnv(os.Environ())
+
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimRight(string(out), "\n")
+	if limit := r.maxKB * 1024; len(output) > limit {
+		output = output[:limit] + "\n… output truncated"
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return output, fmt.Errorf("command timed out after %s", timeout)
+	}
+	if err != nil {
+		return output, fmt.Errorf("command failed: %w", err)
+	}
+	if output == "" {
+		output = "(no output)"
+	}
+	return output, nil
+}
+
+// secretEnvPattern matches environment variable names that likely hold
+// credentials; those never reach commands the model runs.
+var secretEnvPattern = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|credential|passphrase)`)
+
+func sanitizedEnv(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(name, "LLMTUI_") || secretEnvPattern.MatchString(name) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// NeedsApproval reports whether a call mutates state or runs code and must
+// be confirmed by the user (unless approvals are set to auto). Read-only
+// calls and provably read-only commands run without asking.
+func NeedsApproval(c Call) bool {
+	switch c.Tool {
+	case ToolListDir, ToolReadFile:
+		return false
+	case ToolRunCommand:
+		return !SafeAutoCommand(c.Body)
+	default:
+		return true
+	}
+}
+
+// autoAllowedCommands are read-only inspection commands that may run without
+// per-call approval, provided the command line has no shell metacharacters.
+var autoAllowedCommands = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
+	"rg": true, "find": true, "wc": true, "pwd": true, "file": true,
+	"stat": true, "du": true, "tree": true, "which": true, "date": true,
+	"dir": true, // Windows
+}
+
+// autoAllowedGitSubcommands are the read-only git operations.
+var autoAllowedGitSubcommands = map[string]bool{
+	"status": true, "log": true, "diff": true, "show": true,
+	"branch": true, "remote": true, "blame": true,
+}
+
+// SafeAutoCommand reports whether a command line is a plain read-only
+// inspection command: an allowlisted program, no shell metacharacters that
+// could chain or redirect, and no argument that turns a reader into a writer.
+func SafeAutoCommand(body string) bool {
+	cmdline := strings.TrimSpace(body)
+	if cmdline == "" || strings.ContainsAny(cmdline, "|;&<>`$\\\n\r") {
+		return false
+	}
+	fields := strings.Fields(cmdline)
+	prog := fields[0]
+	if prog == "git" {
+		return len(fields) > 1 && autoAllowedGitSubcommands[fields[1]]
+	}
+	if !autoAllowedCommands[prog] {
+		return false
+	}
+	// find -delete / -exec / -ok escalate a read into a write or execution.
+	for _, f := range fields[1:] {
+		switch f {
+		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf":
+			return false
+		}
+	}
+	return true
+}
+
 // FormatResults renders execution results as the follow-up message body.
 func FormatResults(results []Result) string {
 	var b strings.Builder
@@ -235,11 +373,29 @@ func FormatResults(results []Result) string {
 		fmt.Fprintf(&b, "\n### %s\n", target)
 		if res.Err != nil {
 			b.WriteString("error: " + res.Err.Error() + "\n")
+			if res.Output != "" {
+				b.WriteString(res.Output + "\n")
+			}
 			continue
 		}
 		b.WriteString(res.Output + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// Describe renders one call for the approval prompt.
+func (c Call) Describe() string {
+	switch c.Tool {
+	case ToolRunCommand:
+		return "run: " + strings.TrimSpace(c.Body)
+	case ToolWriteFile:
+		return fmt.Sprintf("write %s (%d bytes)", c.Path, len(c.Body))
+	default:
+		if c.Path == "" {
+			return c.Tool
+		}
+		return c.Tool + " " + c.Path
+	}
 }
 
 // Instructions is appended to the system prompt while tools are enabled.
@@ -250,17 +406,36 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - list_dir [path] — list a directory (path optional, defaults to the project root)
 - read_file <path> — return a file's contents
 - write_file <path> — create or overwrite a file with the block's body
+- run_command — run one shell command in the project directory; the command is the block's body
 
-Example — save a script:
+Example — save a script, then a read-only command:
 
 `+"```"+`tool write_file scripts/hello.sh
 #!/bin/sh
 echo hello
 `+"```"+`
 
+`+"```"+`tool run_command
+grep -rn "TODO" scripts
+`+"```"+`
+
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
+- run_command takes exactly one command line; save multi-line scripts with write_file first.
+- Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".
 - Use one block per action. If a body contains triple backticks, open the tool block with four.
 - When the task is complete, reply normally without any tool blocks.`, root, ResultsPrefix))
+}
+
+// ErrDenied is the result error for calls the user rejected.
+var ErrDenied = errors.New("denied by the user")
+
+// DeniedResults builds the results message for a rejected batch.
+func DeniedResults(calls []Call) []Result {
+	out := make([]Result, len(calls))
+	for i, c := range calls {
+		out[i] = Result{Call: c, Err: ErrDenied}
+	}
+	return out
 }

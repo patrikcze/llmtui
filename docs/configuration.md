@@ -69,8 +69,10 @@ section and [security.md](security.md)):
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Master switch (or `/tools on` per session) |
+| `approve` | `ask` | `ask` prompts y/n before writes and non-read-only commands; `auto` runs them unprompted |
 | `max_iterations` | `4` | Tool rounds per user message before the loop stops |
-| `max_file_kb` | `512` | Per-file read/write size cap |
+| `max_file_kb` | `512` | Per-file read/write and command output size cap |
+| `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 
 ### `cache`, `memory`, `prompt`, `context`, `network`
 

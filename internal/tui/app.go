@@ -115,11 +115,15 @@ type Model struct {
 	replyCount int
 	savedPath  string
 
-	// Workspace file tools (list/read/write under the launch directory).
-	toolsOn     bool
-	toolRunner  *tools.Runner
-	toolDepth   int  // auto follow-up rounds for the current user turn
-	bypassCache bool // skip the response cache for the next dispatch
+	// Workspace tools (list/read/write/run under the launch directory).
+	toolsOn          bool
+	toolsAutoApprove bool // "auto" approval mode: skip the y/n prompt
+	toolRunner       *tools.Runner
+	toolDepth        int          // auto follow-up rounds for the current user turn
+	pendingCalls     []tools.Call // parsed calls awaiting the user's approval
+	toolOK           int          // executed tool calls (exit summary)
+	toolErr          int          // failed or denied tool calls (exit summary)
+	bypassCache      bool         // skip the response cache for the next dispatch
 
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
@@ -190,6 +194,8 @@ func New(opts Options) *Model {
 		ctxStrategy: ctxStrategy,
 		cfgPath:     opts.ConfigPath,
 		toolsOn:     cfg.Tools.Enabled,
+
+		toolsAutoApprove: cfg.Tools.Approve == "auto",
 	}
 	m.rebuildFromConfig()
 	return m
@@ -223,6 +229,9 @@ func (m *Model) rebuildFromConfig() {
 	m.toolRunner = nil
 	if wd, err := os.Getwd(); err == nil {
 		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
+		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
+			m.toolRunner.CommandTimeout = d
+		}
 	}
 
 	// Config-defined profiles are matched before built-ins.
@@ -291,6 +300,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if _, ok := extendedKeySeq(msg); ok {
 				return m.updateKeysMode(msg)
 			}
+		}
+	}
+
+	// A pending tool approval owns the keyboard until answered.
+	if len(m.pendingCalls) > 0 {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			return m.updateToolApproval(key)
 		}
 	}
 
@@ -521,9 +537,10 @@ func (m *Model) send() tea.Cmd {
 	return m.dispatch(text, images)
 }
 
-// maybeRunTools executes any tool blocks in the newest assistant reply and
-// feeds the results back to the model, bounded by tools.max_iterations per
-// user turn so a confused model cannot loop forever.
+// maybeRunTools handles tool blocks in the newest assistant reply: read-only
+// calls run immediately; mutating calls (writes, non-read-only commands) wait
+// for the user's y/n unless approvals are set to auto. The loop is bounded by
+// tools.max_iterations per user turn so a confused model cannot run forever.
 func (m *Model) maybeRunTools() tea.Cmd {
 	if !m.toolsOn || m.toolRunner == nil {
 		return nil
@@ -536,24 +553,87 @@ func (m *Model) maybeRunTools() tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
-	maxIter := m.cfg.Tools.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 4
-	}
-	if m.toolDepth >= maxIter {
-		m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", maxIter)
+	if m.toolDepth >= m.toolMaxIter() {
+		m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", m.toolMaxIter())
 		m.refreshViewport()
 		return nil
 	}
+	if !m.toolsAutoApprove {
+		for _, c := range calls {
+			if tools.NeedsApproval(c) {
+				m.pendingCalls = calls
+				m.refreshViewport()
+				return nil
+			}
+		}
+	}
+	return m.runToolCalls(calls)
+}
+
+func (m *Model) toolMaxIter() int {
+	if m.cfg.Tools.MaxIterations > 0 {
+		return m.cfg.Tools.MaxIterations
+	}
+	return 4
+}
+
+// runToolCalls executes an approved batch and feeds the results back.
+func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.toolDepth++
 	results := make([]tools.Result, 0, len(calls))
 	for _, c := range calls {
-		results = append(results, m.toolRunner.Execute(c))
+		res := m.toolRunner.Execute(c)
+		if res.Err != nil {
+			m.toolErr++
+		} else {
+			m.toolOK++
+		}
+		results = append(results, res)
 	}
-	m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, maxIter)
+	m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, m.toolMaxIter())
+	return m.sendToolResults(results)
+}
+
+// denyPendingTools rejects the pending batch and tells the model, so it can
+// finish the task without the denied actions instead of waiting forever.
+func (m *Model) denyPendingTools() tea.Cmd {
+	calls := m.pendingCalls
+	m.pendingCalls = nil
+	m.toolDepth++
+	m.toolErr += len(calls)
+	m.notice = fmt.Sprintf("✗ denied %d tool call(s)", len(calls))
+	return m.sendToolResults(tools.DeniedResults(calls))
+}
+
+func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// Results must reach the model, not a stale cached reply.
 	m.bypassCache = true
 	return m.dispatch(tools.FormatResults(results), nil)
+}
+
+// updateToolApproval owns the keyboard while an approval prompt is showing:
+// y runs the batch once, a approves everything for the rest of the session,
+// n/esc denies. Ctrl+C still quits; everything else is swallowed so stray
+// typing cannot approve anything by accident.
+func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		return m.handleCtrlC()
+	}
+	switch msg.String() {
+	case "y", "Y":
+		calls := m.pendingCalls
+		m.pendingCalls = nil
+		return m, m.runToolCalls(calls)
+	case "a", "A":
+		m.toolsAutoApprove = true
+		calls := m.pendingCalls
+		m.pendingCalls = nil
+		m.notice = "⚒ tool approvals set to auto for this session (/tools ask to revert)"
+		return m, m.runToolCalls(calls)
+	case "n", "N", "esc":
+		return m, m.denyPendingTools()
+	}
+	return m, nil
 }
 
 // retryLast re-sends the last user message with current settings.
@@ -971,6 +1051,18 @@ func (m *Model) refreshViewport() {
 		b.WriteString("\n\n")
 	}
 
+	// Standing disclosure while agent mode is on: the user must always be
+	// able to see that the model can act on this directory, and which one.
+	if m.toolsOn && m.toolRunner != nil {
+		mode := "asks before writes & commands"
+		if m.toolsAutoApprove {
+			mode = "auto-approve"
+		}
+		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
+			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, m.toolRunner.Root())))
+		b.WriteString("\n\n")
+	}
+
 	for _, msg := range m.session.Messages {
 		switch msg.Role {
 		case provider.RoleUser:
@@ -1019,6 +1111,18 @@ func (m *Model) refreshViewport() {
 
 	if m.errText != "" {
 		b.WriteString(m.theme.ErrorText.Render("✗ " + m.errText))
+		b.WriteString("\n")
+	}
+
+	// Approval prompt: list exactly what the model wants to do before any
+	// of it happens.
+	if len(m.pendingCalls) > 0 {
+		b.WriteString(m.theme.BadgeWarn.Render("⚒ the model wants to:"))
+		b.WriteString("\n")
+		for _, c := range m.pendingCalls {
+			b.WriteString("  " + m.theme.StatusValue.Render("▸ "+c.Describe()) + "\n")
+		}
+		b.WriteString(m.theme.SystemNote.Render("  y allow once · a always allow (this session) · n deny"))
 		b.WriteString("\n")
 	}
 
@@ -1077,6 +1181,10 @@ func (m *Model) View() string {
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
 		help = m.theme.BadgeOK.Render(m.notice)
+	}
+	if len(m.pendingCalls) > 0 {
+		help = m.theme.BadgeWarn.Render(fmt.Sprintf("⚒ approve %d tool action(s)?", len(m.pendingCalls))) +
+			m.theme.HelpFooter.Render("  y allow · a always · n deny")
 	}
 	if m.thinking {
 		elapsed := fmt.Sprintf("%.1fs", time.Since(m.streamStart).Seconds())

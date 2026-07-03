@@ -976,30 +976,47 @@ func cmdTools(m *Model, args string) tea.Cmd {
 		m.openOverlay(m.toolsOverlay())
 	case "on":
 		m.toolsOn = true
-		m.notice = "⚒ workspace tools enabled — the model can read/write files under " + m.toolRunner.Root()
+		mode := "writes & commands will ask for approval"
+		if m.toolsAutoApprove {
+			mode = "approvals are set to auto"
+		}
+		m.notice = fmt.Sprintf("⚒ workspace tools enabled in %s — %s", m.toolRunner.Root(), mode)
 	case "off":
 		m.toolsOn = false
 		m.notice = "workspace tools disabled"
+	case "ask":
+		m.toolsAutoApprove = false
+		m.notice = "⚒ tools will ask before writes and non-read-only commands"
+	case "auto":
+		m.toolsAutoApprove = true
+		m.notice = "⚒ tool approvals set to auto — writes and commands run without asking"
 	default:
-		return m.fail("usage: /tools [on|off|status]")
+		return m.fail("usage: /tools [on|off|ask|auto|status]")
 	}
 	return nil
 }
 
 func (m *Model) toolsOverlay() string {
+	approval := "ask (y/n before writes & commands)"
+	if m.toolsAutoApprove {
+		approval = "auto (no confirmation)"
+	}
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
 	m.kv(&b, "enabled", onOff(m.toolsOn))
+	m.kv(&b, "approval", approval)
 	m.kv(&b, "workspace", m.toolRunner.Root())
 	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
-	m.kv(&b, "file size cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))
+	m.kv(&b, "file/output cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))
+	m.kv(&b, "command timeout", m.toolRunner.CommandTimeout.String())
 	b.WriteString("\n")
 	b.WriteString(m.theme.UserLabel.Render("available tools") + "\n")
-	m.kv(&b, tools.ToolListDir, "list a directory in the workspace")
-	m.kv(&b, tools.ToolReadFile, "read a file's contents")
-	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file")
+	m.kv(&b, tools.ToolListDir, "list a directory in the workspace (auto)")
+	m.kv(&b, tools.ToolReadFile, "read a file's contents (auto)")
+	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
+	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
 	b.WriteString("\n")
-	b.WriteString(m.theme.SystemNote.Render("the model acts via \"tool <name> <path>\" fenced blocks; everything is\nconfined to the workspace directory and every action is shown in the chat") + "\n")
+	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nsymlink escapes, and writes into .git are rejected; command environments are\nstripped of secrets; every action is shown in the chat before and after") + "\n")
 	if !m.toolsOn {
 		b.WriteString("\n" + m.theme.SystemNote.Render("enable with /tools on (or tools.enabled in config)") + "\n")
 	}

@@ -108,12 +108,17 @@ type ContextConfig struct {
 	SummaryMaxTokens       int    `mapstructure:"summary_max_tokens" yaml:"summary_max_tokens"`
 }
 
-// ToolsConfig configures workspace file tools for the chat (the model can
-// list, read, and write files under the directory llmtui was started from).
+// ToolsConfig configures workspace tools for the chat (the model can list,
+// read, and write files and run commands under the directory llmtui was
+// started from).
 type ToolsConfig struct {
 	Enabled       bool `mapstructure:"enabled" yaml:"enabled"`
 	MaxIterations int  `mapstructure:"max_iterations" yaml:"max_iterations"`
 	MaxFileKB     int  `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	// Approve gates mutating actions (writes, non-read-only commands):
+	// "ask" prompts in the TUI, "auto" runs them without asking.
+	Approve        string `mapstructure:"approve" yaml:"approve"`
+	CommandTimeout string `mapstructure:"command_timeout" yaml:"command_timeout"`
 }
 
 // RetryConfig configures request retries.
@@ -393,6 +398,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 4)
 	v.SetDefault("tools.max_file_kb", 512)
+	v.SetDefault("tools.approve", "ask")
+	v.SetDefault("tools.command_timeout", "30s")
 
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
@@ -485,13 +492,18 @@ context:
   keep_last_messages: 8
   summary_max_tokens: 1200
 
-# Workspace file tools: lets the model list, read, and write files under the
-# directory llmtui was started from, via "tool <name> <path>" fenced blocks
-# in replies. Off by default — enable here or per session with /tools on.
+# Workspace tools: lets the model list, read, and write files and run
+# commands under the directory llmtui was started from, via
+# "tool <name> <path>" fenced blocks in replies. Off by default — enable
+# here or per session with /tools on. Reads and read-only commands (ls,
+# grep, git status, …) run automatically; writes and other commands ask
+# for your approval first unless approve is set to auto.
 tools:
   enabled: false
+  approve: ask # ask | auto
   max_iterations: 4 # tool rounds per user message before the loop stops
-  max_file_kb: 512  # per-file read/write size cap
+  max_file_kb: 512  # per-file read/write and command output size cap
+  command_timeout: "30s"
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token

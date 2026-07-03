@@ -29,6 +29,8 @@ type exitSummaryData struct {
 	Saved       bool
 	UserMsgs    int
 	ReplyMsgs   int
+	ToolOK      int
+	ToolErr     int
 	CacheOn     bool
 	CacheHits   int
 	CacheMisses int
@@ -45,6 +47,8 @@ func (m *Model) exitSummary() exitSummaryData {
 		Saved:     m.savedPath != "",
 		UserMsgs:  m.sentCount,
 		ReplyMsgs: m.replyCount,
+		ToolOK:    m.toolOK,
+		ToolErr:   m.toolErr,
 		WallTime:  time.Since(m.startedAt),
 		APITime:   m.apiTime,
 		Models:    m.modelStats,
@@ -115,6 +119,9 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 	b.WriteString(heading.Render("Interaction Summary") + "\n")
 	row(&b, "Session ID", d.SessionID)
 	row(&b, "Messages", fmt.Sprintf("%d sent · %d replies", d.UserMsgs, d.ReplyMsgs))
+	if d.ToolOK+d.ToolErr > 0 {
+		row(&b, "Tool Calls", fmt.Sprintf("%d ( ✓ %d · ✗ %d )", d.ToolOK+d.ToolErr, d.ToolOK, d.ToolErr))
+	}
 	if d.CacheOn {
 		row(&b, "Cache", fmt.Sprintf("%d hits · %d misses", d.CacheHits, d.CacheMisses))
 	}
