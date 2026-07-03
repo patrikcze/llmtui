@@ -1,4 +1,11 @@
-llmtui
+# Built binary at the repo root only — an unanchored "llmtui" would also
+# ignore the cmd/llmtui/ source directory.
+/llmtui
 /dist/
 *.log
 .DS_Store
+
+# Local editor/agent settings and secrets — never publish.
+.claude/
+*.env
+config.local.yaml
