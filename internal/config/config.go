@@ -124,6 +124,17 @@ type ToolsConfig struct {
 	// prompt protocol if the backend rejects them; "off" always uses the
 	// fenced-block protocol.
 	Native string `mapstructure:"native" yaml:"native"`
+	// Web enables the optional web tools (web_search, web_fetch).
+	Web ToolsWebConfig `mapstructure:"web" yaml:"web"`
+}
+
+// ToolsWebConfig configures the optional web tools. Off by default:
+// llmtui is local-first and never calls external services unconfigured.
+type ToolsWebConfig struct {
+	Enabled    bool   `mapstructure:"enabled" yaml:"enabled"`
+	MaxResults int    `mapstructure:"max_results" yaml:"max_results"`
+	MaxPageKB  int    `mapstructure:"max_page_kb" yaml:"max_page_kb"`
+	Timeout    string `mapstructure:"timeout" yaml:"timeout"`
 }
 
 // RetryConfig configures request retries.
@@ -406,6 +417,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.approve", "ask")
 	v.SetDefault("tools.command_timeout", "30s")
 	v.SetDefault("tools.native", "auto")
+	v.SetDefault("tools.web.enabled", false)
+	v.SetDefault("tools.web.max_results", 5)
+	v.SetDefault("tools.web.max_page_kb", 128)
+	v.SetDefault("tools.web.timeout", "20s")
 
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
@@ -514,6 +529,14 @@ tools:
   #                    asks whether to grant more rounds or wrap up
   max_file_kb: 512 # per-file read/write and command output size cap
   command_timeout: "30s"
+  # Web tools: web_search (DuckDuckGo, no API key) and web_fetch (page as
+  # Markdown). Off by default; fetches ask for approval per URL. Toggle per
+  # session with /web on.
+  web:
+    enabled: false
+    max_results: 5 # search hits returned per web_search call
+    max_page_kb: 128 # fetched page content cap sent to the model
+    timeout: "20s"
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token

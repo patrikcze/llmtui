@@ -225,3 +225,27 @@ func TestRedact(t *testing.T) {
 		}
 	}
 }
+
+func TestWebToolsDefaults(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	w := cfg.Tools.Web
+	if w.Enabled {
+		t.Error("tools.web must be disabled by default (local-first)")
+	}
+	if w.MaxResults != 5 {
+		t.Errorf("max_results = %d, want 5", w.MaxResults)
+	}
+	if w.MaxPageKB != 128 {
+		t.Errorf("max_page_kb = %d, want 128", w.MaxPageKB)
+	}
+	if w.Timeout != "20s" {
+		t.Errorf("timeout = %q, want 20s", w.Timeout)
+	}
+}
