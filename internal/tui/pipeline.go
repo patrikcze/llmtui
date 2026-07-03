@@ -178,9 +178,9 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 		// Native mode only needs the house rules — the protocol itself is
 		// carried by the request's tool specs. The fenced-block fallback must
 		// additionally teach the model the protocol.
-		instructions := tools.Instructions(m.toolRunner.Root())
+		instructions := tools.Instructions(m.toolRunner.Root(), m.webOn)
 		if m.toolsNative {
-			instructions = tools.NativeInstructions(m.toolRunner.Root())
+			instructions = tools.NativeInstructions(m.toolRunner.Root(), m.webOn)
 		}
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}

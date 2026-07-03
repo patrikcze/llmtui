@@ -179,7 +179,7 @@ func TestCollapseBlocksReplacesToolBlocks(t *testing.T) {
 }
 
 func TestNativeInstructionsMentionRootAndRules(t *testing.T) {
-	s := NativeInstructions("/work/proj")
+	s := NativeInstructions("/work/proj", false)
 	for _, want := range []string{"/work/proj", "relative", "approval", "final answer"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("native instructions missing %q", want)

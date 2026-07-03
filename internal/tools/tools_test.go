@@ -295,7 +295,7 @@ func TestFormatResults(t *testing.T) {
 }
 
 func TestInstructionsMentionEveryTool(t *testing.T) {
-	ins := Instructions("/tmp/project")
+	ins := Instructions("/tmp/project", false)
 	for _, want := range []string{ToolListDir, ToolReadFile, ToolWriteFile, ResultsPrefix, "/tmp/project"} {
 		if !strings.Contains(ins, want) {
 			t.Errorf("instructions missing %q", want)

@@ -29,6 +29,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
+	"github.com/patrikcze/llmtui/internal/web"
 )
 
 // Options configures the chat UI.
@@ -126,6 +127,8 @@ type Model struct {
 	approvalIdx      int                 // selected row in the approval menu (0 yes, 1 always, 2 no)
 	toolOK           int                 // executed tool calls (exit summary)
 	toolErr          int                 // failed or denied tool calls (exit summary)
+	webOn            bool                // web tools (web_search/web_fetch) enabled
+	webClient        *web.Client         // shared web client; nil if the runner is unavailable
 	bypassCache      bool                // skip the response cache for the next dispatch
 	streamToolCalls  []provider.ToolCall // native calls from the finishing stream
 

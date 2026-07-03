@@ -63,9 +63,12 @@ func Specs() []provider.ToolSpec {
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-	Command string `json:"command"`
+	Path       string `json:"path"`
+	Content    string `json:"content"`
+	Command    string `json:"command"`
+	Query      string `json:"query"`
+	URL        string `json:"url"`
+	MaxResults int    `json:"max_results"`
 }
 
 // CallsFromNative converts native function calls into runnable Calls.
@@ -91,10 +94,45 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			c.Body = args.Content
 		case ToolRunCommand:
 			c.Body = args.Command
+		case ToolWebSearch:
+			c.Body = args.Query
+			c.Max = args.MaxResults
+		case ToolWebFetch:
+			c.Path = args.URL
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// WebSpecs declares the web tools; appended to Specs() only when the user
+// has enabled web access.
+func WebSpecs() []provider.ToolSpec {
+	return []provider.ToolSpec{
+		{
+			Name:        ToolWebSearch,
+			Description: "Search the web (DuckDuckGo) and get result titles, URLs, and snippets. Use it to find current information, then web_fetch the most promising URL.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "The search query."},
+					"max_results": {"type": "integer", "description": "Maximum results to return. Optional."}
+				},
+				"required": ["query"]
+			}`),
+		},
+		{
+			Name:        ToolWebFetch,
+			Description: "Fetch one web page and return its readable content as Markdown. May require the user's approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"url": {"type": "string", "description": "The http(s) URL to fetch."}
+				},
+				"required": ["url"]
+			}`),
+		},
+	}
 }
 
 // NativeResults renders execution results as role:"tool" messages, one per
@@ -134,11 +172,16 @@ func LimitResults(calls []Call, max int) []Result {
 
 // NativeInstructions is appended to the system prompt when tools are offered
 // natively; the protocol itself needs no explanation, only the house rules.
-func NativeInstructions(root string) string {
+// withWeb adds the web-tool rules when the user has turned them on.
+func NativeInstructions(root string, withWeb bool) string {
+	webRules := ""
+	if withWeb {
+		webRules = "\n\n" + webInstructions
+	}
 	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using the provided tools.
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
-- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.`, root))
+- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
 }

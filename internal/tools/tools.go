@@ -36,6 +36,8 @@ const (
 	ToolReadFile   = "read_file"
 	ToolWriteFile  = "write_file"
 	ToolRunCommand = "run_command"
+	ToolWebSearch  = "web_search"
+	ToolWebFetch   = "web_fetch"
 )
 
 // Call is one tool invocation: parsed from a fenced block in an assistant
@@ -46,6 +48,8 @@ type Call struct {
 	Tool string
 	Path string
 	Body string
+	// Max caps web_search results (native max_results argument).
+	Max int
 }
 
 // Result is the outcome of executing one call. Diff is a display-only
@@ -106,6 +110,11 @@ type Runner struct {
 
 	// CommandTimeout bounds run_command execution (default 30s).
 	CommandTimeout time.Duration
+
+	// Web enables web_search/web_fetch when non-nil; WebMaxResults caps
+	// search hits per call.
+	Web           WebClient
+	WebMaxResults int
 }
 
 // NewRunner confines execution to root; maxKB caps file reads and writes.
@@ -154,9 +163,13 @@ func (r *Runner) Execute(c Call) Result {
 		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
 	case ToolRunCommand:
 		res.Output, res.Err = r.runCommand(c.Body)
+	case ToolWebSearch:
+		res.Output, res.Err = r.webSearch(c)
+	case ToolWebFetch:
+		res.Output, res.Err = r.webFetch(c)
 	default:
-		res.Err = fmt.Errorf("unknown tool %q (available: %s, %s, %s, %s)",
-			c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand)
+		res.Err = fmt.Errorf("unknown tool %q (available: %s, %s, %s, %s, %s, %s)",
+			c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
 	}
 	return res
 }
@@ -338,7 +351,7 @@ func sanitizedEnv(environ []string) []string {
 // calls and provably read-only commands run without asking.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile:
+	case ToolListDir, ToolReadFile, ToolWebSearch:
 		return false
 	case ToolRunCommand:
 		return !SafeAutoCommand(c.Body)
@@ -489,11 +502,18 @@ func SummarizeOutput(s string) string {
 		}
 		return truncateLine(first, 120)
 	}
+	// Web tool outputs carry a summary-ready status as their first line.
+	if strings.HasPrefix(first, "fetched ") || webResultsLine.MatchString(first) {
+		return truncateLine(first, 120)
+	}
 	if len(lines) == 1 {
 		return truncateLine(first, 100)
 	}
 	return fmt.Sprintf("%d lines of output", len(lines))
 }
+
+// webResultsLine matches the first line of a web_search result block.
+var webResultsLine = regexp.MustCompile(`^(\d+ results|no results) for "`)
 
 func truncateLine(s string, max int) string {
 	r := []rune(s)
@@ -510,6 +530,10 @@ func (c Call) Describe() string {
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:
 		return fmt.Sprintf("write %s (%d bytes)", c.Path, len(c.Body))
+	case ToolWebSearch:
+		return fmt.Sprintf("web_search(%q)", strings.TrimSpace(c.Body))
+	case ToolWebFetch:
+		return "fetch " + c.Path
 	default:
 		if c.Path == "" {
 			return c.Tool
@@ -518,8 +542,14 @@ func (c Call) Describe() string {
 	}
 }
 
-// Instructions is appended to the system prompt while tools are enabled.
-func Instructions(root string) string {
+// Instructions is appended to the system prompt while tools are enabled;
+// withWeb adds the web tools when the user has turned them on.
+func Instructions(root string, withWeb bool) string {
+	webTools, webRules := "", ""
+	if withWeb {
+		webTools = webFencedForms + "\n"
+		webRules = "\n\n" + webInstructions
+	}
 	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using tools.
 To use a tool, emit a fenced code block whose info string is "tool <name> [path]". Available tools:
 
@@ -527,7 +557,7 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - read_file <path> — return a file's contents
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
-
+%s
 Example — save a script, then a read-only command:
 
 `+"```"+`tool write_file scripts/hello.sh
@@ -545,7 +575,7 @@ Rules:
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".
 - Use one block per action. If a body contains triple backticks, open the tool block with four.
-- When the task is complete, reply normally without any tool blocks.`, root, ResultsPrefix))
+- When the task is complete, reply normally without any tool blocks.%s`, root, webTools, ResultsPrefix, webRules))
 }
 
 // ErrDenied is the result error for calls the user rejected.
