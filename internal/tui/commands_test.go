@@ -71,8 +71,16 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	m := newTestModel(t)
 	m.responseCache = cache.New(t.TempDir(), time.Hour, 16, true)
 
-	// Simulate a completed exchange writing to the cache.
+	// Simulate a completed exchange writing to the cache. dispatch snapshots
+	// the cache key and attribution into lastDebug; finishStream uses only
+	// that snapshot.
 	m.lastUserMsg = "what is Go?"
+	m.lastDebug = debugInfo{
+		CacheKey: m.cacheKey("what is Go?"),
+		Provider: m.prov.Name(),
+		Model:    m.model,
+		Stream:   m.cfg.StreamEnabled(),
+	}
 	m.streamBuf.WriteString("Go is a language.")
 	m.thinking = true
 	m.finishStream(&provider.Usage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12})
@@ -95,6 +103,39 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	last := m.session.Messages[len(m.session.Messages)-1]
 	if last.Content != "Go is a language." {
 		t.Errorf("cached reply = %q", last.Content)
+	}
+}
+
+// Switching the model while a reply streams must not store that reply under
+// the new model's cache key (cache poisoning) or misattribute it.
+func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
+	m := newTestModel(t)
+	m.responseCache = cache.New(t.TempDir(), time.Hour, 16, true)
+
+	m.model = "model-a"
+	keyA := m.cacheKey("hello")
+	m.lastUserMsg = "hello"
+	m.lastDebug = debugInfo{CacheKey: keyA, Provider: m.prov.Name(), Model: "model-a", Stream: m.cfg.StreamEnabled()}
+	m.streamBuf.WriteString("answer from model-a")
+	m.thinking = true
+
+	// /model is blocked while thinking; even a direct switch must not leak
+	// into the finished exchange.
+	runCommand(m, "/model model-b")
+	if m.errText == "" {
+		t.Error("/model should be rejected while a reply is streaming")
+	}
+	m.model = "model-b" // simulate any other path that changes the model
+
+	m.finishStream(&provider.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3})
+
+	if entry, ok := m.responseCache.Get(keyA); !ok {
+		t.Fatal("reply should be cached under the dispatch-time key")
+	} else if entry.Model != "model-a" {
+		t.Errorf("cached entry attributed to %q, want model-a", entry.Model)
+	}
+	if _, ok := m.responseCache.Get(m.cacheKey("hello")); ok {
+		t.Error("reply must not be cached under the new model's key")
 	}
 }
 

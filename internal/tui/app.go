@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,7 +38,11 @@ type Options struct {
 	ConfigPath string // path of the loaded config file, for /config
 }
 
-type healthMsg struct{ err error }
+type healthMsg struct {
+	err      error
+	provider string // which provider was checked, to discard stale results
+	initial  bool   // startup check: only then may we fall back to demo mode
+}
 
 type streamEventMsg struct {
 	event provider.ChatEvent
@@ -78,6 +83,7 @@ type Model struct {
 	lastTPS       float64
 	errText       string
 	cancelStream  context.CancelFunc
+	streamCtx     context.Context
 	attachments   []provider.Image
 	frame         int
 	renderWidth   int
@@ -130,24 +136,62 @@ func New(opts Options) *Model {
 	sp.Spinner = spinner.MiniDot
 	sp.Style = t.Spinner
 
-	historyDir := ""
-	if opts.Config.Chat.SaveHistory && opts.Config.Chat.HistoryDir != "" {
-		if dir, err := history.ExpandHome(opts.Config.Chat.HistoryDir); err == nil {
-			historyDir = dir
+	cfg := opts.Config
+
+	profileMode := "auto"
+	if cfg.Chat.ModelProfile != "" {
+		profileMode = cfg.Chat.ModelProfile
+	}
+
+	ctxStrategy := cfg.Context.Strategy
+	if !contextmgr.ValidStrategy(ctxStrategy) {
+		ctxStrategy = contextmgr.StrategyAuto
+	}
+
+	m := &Model{
+		cfg:          opts.Config,
+		theme:        t,
+		prov:         opts.Provider,
+		model:        opts.Model,
+		session:      chat.NewSession(opts.Config.Chat.SystemPrompt),
+		input:        ta,
+		spinner:      sp,
+		mouseEnabled: true,
+		sessionName:  history.NewSessionName(time.Now()),
+		inputLines:   1,
+
+		memEnabled:  cfg.Memory.Enabled,
+		profileMode: profileMode,
+		ctxStrategy: ctxStrategy,
+		cfgPath:     opts.ConfigPath,
+	}
+	m.rebuildFromConfig()
+	return m
+}
+
+// rebuildFromConfig (re)derives the components that mirror the config:
+// history dir, response cache, memory store, and model profiles. It runs at
+// startup and after /config reload; session-scoped choices the user made at
+// runtime (/profile, /context strategy, /memory on|off) are left alone.
+func (m *Model) rebuildFromConfig() {
+	cfg := m.cfg
+
+	m.historyDir = ""
+	if cfg.Chat.SaveHistory && cfg.Chat.HistoryDir != "" {
+		if dir, err := history.ExpandHome(cfg.Chat.HistoryDir); err == nil {
+			m.historyDir = dir
 		}
 	}
 
-	cfg := opts.Config
-
-	var responseCache *cache.Cache
+	m.responseCache = nil
 	if dir, err := history.ExpandHome(cfg.Cache.Path); err == nil && dir != "" {
 		ttl, _ := time.ParseDuration(cfg.Cache.TTL)
-		responseCache = cache.New(dir, ttl, cfg.Cache.MaxSizeMB, cfg.Cache.Enabled)
+		m.responseCache = cache.New(dir, ttl, cfg.Cache.MaxSizeMB, cfg.Cache.Enabled)
 	}
 
-	var memStore *memory.Store
+	m.memStore = nil
 	if path, err := history.ExpandHome(cfg.Memory.Path); err == nil && path != "" {
-		memStore = memory.NewStore(path, cfg.Memory.MaxSnippets)
+		m.memStore = memory.NewStore(path, cfg.Memory.MaxSnippets)
 	}
 
 	// Config-defined profiles are matched before built-ins.
@@ -163,39 +207,7 @@ func New(opts Options) *Model {
 			ReasoningHint:        pc.ReasoningHint,
 		})
 	}
-	profiles = append(profiles, modelprofile.BuiltIn()...)
-
-	profileMode := "auto"
-	if cfg.Chat.ModelProfile != "" {
-		profileMode = cfg.Chat.ModelProfile
-	}
-
-	ctxStrategy := cfg.Context.Strategy
-	if !contextmgr.ValidStrategy(ctxStrategy) {
-		ctxStrategy = contextmgr.StrategyAuto
-	}
-
-	return &Model{
-		cfg:          opts.Config,
-		theme:        t,
-		prov:         opts.Provider,
-		model:        opts.Model,
-		session:      chat.NewSession(opts.Config.Chat.SystemPrompt),
-		input:        ta,
-		spinner:      sp,
-		mouseEnabled: true,
-		historyDir:   historyDir,
-		sessionName:  history.NewSessionName(time.Now()),
-		inputLines:   1,
-
-		responseCache: responseCache,
-		memStore:      memStore,
-		memEnabled:    cfg.Memory.Enabled,
-		profileMode:   profileMode,
-		profiles:      profiles,
-		ctxStrategy:   ctxStrategy,
-		cfgPath:       opts.ConfigPath,
-	}
+	m.profiles = append(profiles, modelprofile.BuiltIn()...)
 }
 
 // sessionRecord builds the persistable form of the current session.
@@ -216,15 +228,15 @@ func (m *Model) sessionRecord() history.Session {
 
 // Init starts the spinner and kicks off the provider health check.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, textarea.Blink, m.checkHealth())
+	return tea.Batch(m.spinner.Tick, textarea.Blink, m.checkHealth(true))
 }
 
-func (m *Model) checkHealth() tea.Cmd {
+func (m *Model) checkHealth(initial bool) tea.Cmd {
 	prov := m.prov
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		return healthMsg{err: prov.HealthCheck(ctx)}
+		return healthMsg{err: prov.HealthCheck(ctx), provider: prov.Name(), initial: initial}
 	}
 }
 
@@ -359,15 +371,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case healthMsg:
-		if msg.err != nil {
-			// Backend unreachable: fall back to the offline demo provider.
+		if msg.provider != m.prov.Name() {
+			// Stale result from a provider we already switched away from.
+			return m, nil
+		}
+		switch {
+		case msg.err == nil:
+			m.connected = true
+			m.demoMode = false
+		case msg.initial:
+			// Backend unreachable at startup: fall back to the demo provider.
 			m.connected = false
 			m.demoMode = true
 			m.prov = mock.New()
 			m.model = "demo-model"
-		} else {
-			m.connected = true
-			m.demoMode = false
+		default:
+			// A mid-session check (e.g. after /provider switch) must never
+			// silently replace the user's chosen provider and model.
+			m.connected = false
+			m.errText = fmt.Sprintf("%s health check failed: %v", msg.provider, msg.err)
 		}
 		m.refreshViewport()
 		return m, nil
@@ -640,7 +662,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !msg.ok {
-		// Channel closed without a terminal event; treat as done.
+		// Channel closed without a terminal event. When our deadline expired
+		// the producer may not have been able to deliver the error, so report
+		// the timeout ourselves instead of silently treating it as done.
+		if m.streamCtx != nil && errors.Is(m.streamCtx.Err(), context.DeadlineExceeded) {
+			m.streamFailed(friendlyError(m.streamCtx.Err(), m.prov.Name(), ""))
+			return m, nil
+		}
 		m.finishStream(nil)
 		return m, nil
 	}
@@ -653,22 +681,42 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.finishStream(msg.event.Usage)
 		return m, nil
 	case provider.EventError:
-		m.thinking = false
-		m.errText = msg.event.Err.Error()
-		// Preserve partial streamed output instead of discarding it.
-		if partial := m.streamBuf.String(); partial != "" {
-			m.session.AddAssistant(partial)
-			m.streamBuf.Reset()
-			m.errText += " (partial reply kept)"
-		}
-		if m.cancelStream != nil {
-			m.cancelStream()
-			m.cancelStream = nil
-		}
-		m.refreshViewport()
+		m.streamFailed(msg.event.Err)
 		return m, nil
 	}
 	return m, nil
+}
+
+// streamFailed finalizes a failed stream, preserving partial output.
+func (m *Model) streamFailed(err error) {
+	m.thinking = false
+	m.errText = err.Error()
+	// Preserve partial streamed output instead of discarding it.
+	if partial := m.streamBuf.String(); partial != "" {
+		m.session.AddAssistant(partial)
+		m.streamBuf.Reset()
+		m.errText += " (partial reply kept)"
+	}
+	if m.cancelStream != nil {
+		m.cancelStream()
+		m.cancelStream = nil
+	}
+	m.drainStream()
+	m.refreshViewport()
+}
+
+// drainStream consumes any remaining events of an abandoned stream in the
+// background. The provider goroutine may still be blocked sending; reading
+// until the channel closes lets it exit and release its HTTP connection.
+func (m *Model) drainStream() {
+	if m.stream == nil {
+		return
+	}
+	go func(s <-chan provider.ChatEvent) {
+		for range s {
+		}
+	}(m.stream)
+	m.stream = nil
 }
 
 func (m *Model) finishStream(usage *provider.Usage) {
@@ -679,19 +727,22 @@ func (m *Model) finishStream(usage *provider.Usage) {
 		m.cancelStream()
 		m.cancelStream = nil
 	}
+	m.drainStream()
 	if reply != "" {
 		m.session.AddAssistant(reply)
 	}
 	// Cache the successful response (never failures or empty replies).
+	// Key, provider, and model come from the dispatch-time snapshot: the user
+	// may have run /model or /provider while this reply was streaming.
 	if reply != "" && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
-		len(m.lastImages) == 0 && (!m.cfg.StreamEnabled() || m.cfg.Cache.CacheStreamedResponses) {
-		if err := m.responseCache.Put(m.cacheKey(m.lastUserMsg), cache.Entry{
+		len(m.lastImages) == 0 && (!m.lastDebug.Stream || m.cfg.Cache.CacheStreamedResponses) {
+		if err := m.responseCache.Put(m.lastDebug.CacheKey, cache.Entry{
 			Response:         reply,
 			PromptTokens:     usage.PromptTokens,
 			CompletionTokens: usage.CompletionTokens,
 			Estimated:        usage.Estimated,
-			Provider:         m.prov.Name(),
-			Model:            m.model,
+			Provider:         m.lastDebug.Provider,
+			Model:            m.lastDebug.Model,
 		}); err == nil {
 			m.lastDebug.CacheStatus = "write"
 		}
@@ -709,11 +760,12 @@ func (m *Model) finishStream(usage *provider.Usage) {
 				m.lastDebug.CacheStatus, m.lastDebug.Retries)
 		}
 		if m.historyDir != "" {
-			// Best effort: stats must never interrupt the chat.
+			// Best effort: stats must never interrupt the chat. Attribution
+			// uses the dispatch-time snapshot, not the current selection.
 			_ = history.AppendUsage(m.historyDir, history.UsageRecord{
 				Time:             time.Now(),
-				Provider:         m.prov.Name(),
-				Model:            m.model,
+				Provider:         m.lastDebug.Provider,
+				Model:            m.lastDebug.Model,
 				PromptTokens:     usage.PromptTokens,
 				CompletionTokens: usage.CompletionTokens,
 				DurationMS:       duration.Milliseconds(),
@@ -791,7 +843,10 @@ func (m *Model) renderMarkdown(s string) string {
 }
 
 func (m *Model) refreshViewport() {
-	if !m.ready {
+	// While an overlay is showing, the viewport belongs to it; async events
+	// (health results, stream deltas) must not stomp its content. The chat
+	// re-renders when the overlay closes.
+	if !m.ready || m.overlayOpen {
 		return
 	}
 	var b strings.Builder

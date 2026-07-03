@@ -194,7 +194,9 @@ func TestStreamEnabled(t *testing.T) {
 func TestRedact(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"", ""},
-		{"abc", "****"},
+		{"abc", "********"},
+		{"secret", "********"},    // short keys reveal nothing
+		{"lm-studio", "********"}, // 9 chars: 2+2 visible would leak half
 		{"sk-verysecretkey", "sk******ey"},
 	}
 	for _, tt := range tests {

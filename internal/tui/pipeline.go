@@ -28,7 +28,8 @@ type debugInfo struct {
 	Template    string
 	Sections    []prompt.Section
 	CtxDecision contextmgr.Decision
-	CacheStatus string // hit | miss | disabled | write
+	CacheStatus string    // hit | miss | disabled | write
+	CacheKey    cache.Key // snapshotted at dispatch so mid-stream /model or /provider changes cannot poison the cache
 	Temperature float64
 	MaxTokens   int
 	Stream      bool
@@ -274,6 +275,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		Sections:    composed.Sections,
 		CtxDecision: decision,
 		CacheStatus: cacheStatus,
+		CacheKey:    key,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
@@ -281,8 +283,10 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 
 	ctx, cancel := context.WithTimeout(context.Background(), app.RequestTimeout(m.cfg.Network))
 	m.cancelStream = cancel
+	m.streamCtx = ctx
 	prov := m.prov
 	netCfg := m.cfg.Network
+	baseURL := m.cfg.ActiveBaseURL()
 
 	return func() tea.Msg {
 		attempts := 1
@@ -306,19 +310,19 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			case <-time.After(app.RetryBackoff(netCfg)):
 			}
 		}
-		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), m.cfg)}, ok: true}
+		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true}
 	}
 }
 
 // friendlyError converts raw network errors into actionable guidance.
-func friendlyError(err error, providerName string, cfg interface{ ActiveBaseURL() string }) error {
+func friendlyError(err error, providerName, baseURL string) error {
 	if err == nil {
 		return nil
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") {
 		return fmt.Errorf("cannot connect to %s at %s — check that the server is running or change the provider base_url (%v)",
-			providerName, cfg.ActiveBaseURL(), err)
+			providerName, baseURL, err)
 	}
 	if strings.Contains(msg, "context deadline exceeded") {
 		return fmt.Errorf("%s did not respond within the configured network.timeout — the model may still be loading (%v)", providerName, err)

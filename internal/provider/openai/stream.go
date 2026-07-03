@@ -63,7 +63,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode stream chunk: %w", err)}
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode stream chunk: %w", err)})
 			return
 		}
 		if chunk.Usage != nil {
@@ -77,17 +77,15 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 				continue
 			}
 			completion.WriteString(choice.Delta.Content)
-			select {
-			case events <- provider.ChatEvent{Type: provider.EventDelta, Delta: choice.Delta.Content}:
-			case <-ctx.Done():
-				events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: choice.Delta.Content}) {
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)}
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)})
 		return
 	}
 
@@ -96,10 +94,8 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if completion.Len() == 0 && reasoning.Len() > 0 {
 		fallback := reasoningFallback(reasoning.String())
 		completion.WriteString(fallback)
-		select {
-		case events <- provider.ChatEvent{Type: provider.EventDelta, Delta: fallback}:
-		case <-ctx.Done():
-			events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: fallback}) {
+			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 			return
 		}
 	}
@@ -107,5 +103,5 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if usage == nil {
 		usage = estimateUsage(req, completion.String())
 	}
-	events <- provider.ChatEvent{Type: provider.EventDone, Usage: usage}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
 }

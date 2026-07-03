@@ -88,6 +88,29 @@ type Provider interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// Emit delivers ev on events, giving up when ctx is canceled so producers
+// never block forever on an abandoned stream. It reports whether ev was sent.
+func Emit(ctx context.Context, events chan<- ChatEvent, ev ChatEvent) bool {
+	select {
+	case events <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// TryEmit delivers ev only if a receiver is ready right now. Producers use it
+// for best-effort error notification after ctx is already canceled, where a
+// blocking send could hang forever.
+func TryEmit(events chan<- ChatEvent, ev ChatEvent) bool {
+	select {
+	case events <- ev:
+		return true
+	default:
+		return false
+	}
+}
+
 // EstimateTokens approximates token counts when a backend does not report
 // usage. It uses the common ~4 characters per token heuristic.
 func EstimateTokens(text string) int {
@@ -100,3 +123,8 @@ func EstimateTokens(text string) int {
 
 // DefaultTimeout is a sensible per-request ceiling for non-streaming calls.
 const DefaultTimeout = 30 * time.Second
+
+// EstimatedTokensPerImage is a rough prompt-token cost per attached image,
+// used only when the backend does not report usage (results are marked
+// Estimated). Real cost varies with resolution and model.
+const EstimatedTokensPerImage = 256

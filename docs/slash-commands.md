@@ -2,7 +2,13 @@
 
 Type `/` in the chat input to open the suggestion popup. `↑`/`↓` navigate,
 `Tab` completes, `Enter` runs the highlighted command, `Esc` dismisses.
-`/help` shows everything grouped by category; `/help <category>` filters.
+An exactly typed command always runs itself even when a longer command is
+suggested. `/help` shows everything grouped by category; `/help <category>`
+filters.
+
+Commands that would change what an in-flight request depends on (`/clear`,
+`/provider`, `/model`, `/config reload`, `/history load|clear`) are
+unavailable while a reply is streaming — press `Esc` to stop it first.
 
 ## Chat
 | Command | Description |

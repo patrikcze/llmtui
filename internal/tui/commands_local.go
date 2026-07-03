@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
@@ -486,9 +487,14 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 		name = rest
 	}
 	prov := m.prov
+	// The report must show the checked provider's own config; the active
+	// provider's includes any base-url/api-key overrides.
+	pc, configured := m.cfg.Providers[name]
+	if name == m.cfg.ActiveProviderName() {
+		_, pc, configured = m.cfg.ActiveProvider()
+	}
 	if name != m.prov.Name() {
-		pc, ok := m.cfg.Providers[name]
-		if !ok {
+		if !configured {
 			return m.fail(fmt.Sprintf("provider %q is not configured", name))
 		}
 		p, err := buildProviderForDoctor(m, name, pc)
@@ -503,11 +509,11 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 	m.notice = "running diagnostics…"
 
 	return func() tea.Msg {
-		return doctorResultMsg{report: doctorReport(prov, model, cfg, window, source)}
+		return doctorResultMsg{report: doctorReport(prov, pc, model, cfg, window, source)}
 	}
 }
 
-func doctorReport(prov provider.Provider, model string, cfg *config.Config, window int, windowSource string) string {
+func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string, cfg *config.Config, window int, windowSource string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
@@ -516,7 +522,6 @@ func doctorReport(prov provider.Provider, model string, cfg *config.Config, wind
 	add := func(k, v string) { lines = append(lines, fmt.Sprintf("%-18s %s", k, v)) }
 
 	add("provider", prov.Name())
-	_, pc, _ := cfg.ActiveProvider()
 	add("type", pc.Type)
 	add("base URL", pc.BaseURL)
 
@@ -690,8 +695,10 @@ func cmdConfig(m *Model, args string) tea.Cmd {
 		}
 		m.notice = "config: " + path
 	case "reload":
-		path := m.cfgPath
-		v, err := config.NewViper(path)
+		if m.thinking {
+			return m.fail("/config reload is unavailable while a reply is streaming — esc to stop it first")
+		}
+		v, err := config.NewViper(m.cfgPath)
 		if err != nil {
 			return m.fail("reload: " + err.Error())
 		}
@@ -699,8 +706,28 @@ func cmdConfig(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail("reload: " + err.Error())
 		}
+		// Keep runtime overrides: CLI flags and in-session /provider switches
+		// are not in the file and must survive a reload.
+		cfg.Provider, cfg.Model = m.cfg.Provider, m.cfg.Model
+		cfg.BaseURL, cfg.APIKey = m.cfg.BaseURL, m.cfg.APIKey
+		cfg.Debug, cfg.NoStream = m.cfg.Debug, m.cfg.NoStream
 		m.cfg = cfg
+		m.rebuildFromConfig()
 		m.notice = "configuration reloaded"
+		// Rebuild the active provider so base_url/api_key edits take effect;
+		// from demo mode this is the user's explicit attempt to reconnect.
+		if name, pc, ok := cfg.ActiveProvider(); ok {
+			if prov, err := app.BuildProvider(name, pc, cfg.Network); err == nil {
+				wasDemo := m.demoMode
+				m.prov = prov
+				m.demoMode = false
+				m.connected = false
+				if wasDemo {
+					m.model = cfg.ActiveModel()
+				}
+				return m.checkHealth(wasDemo)
+			}
+		}
 	default:
 		return m.fail("usage: /config [path|show|reload]")
 	}
@@ -780,11 +807,17 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 	case "save":
 		m.saveWithNotice()
 	case "clear":
+		if m.thinking {
+			return m.fail("/history clear is unavailable while a reply is streaming — esc to stop it first")
+		}
 		m.session.Clear()
 		m.summary = ""
 		m.refreshViewport()
 		m.notice = "conversation cleared"
 	case "load":
+		if m.thinking {
+			return m.fail("/history load is unavailable while a reply is streaming — esc to stop it first")
+		}
 		if rest == "" || m.historyDir == "" {
 			return m.fail("usage: /history load <name> (see /history)")
 		}
@@ -792,7 +825,14 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail(err.Error())
 		}
+		// Adopt the loaded session wholesale: its name (so saves update the
+		// same file instead of duplicating it) and its token totals.
 		m.session.Messages = s.Messages
+		m.session.Stats = nil
+		m.session.TotalPromptTokens = s.Prompt
+		m.session.TotalCompletionTokens = s.Reply
+		m.session.AnyEstimated = s.Estimated
+		m.sessionName = rest
 		m.summary = ""
 		m.refreshViewport()
 		m.notice = fmt.Sprintf("loaded %s (%d messages, %s/%s)", rest, len(s.Messages), s.Provider, s.Model)
@@ -852,6 +892,14 @@ func excerptAround(s string, idx, width int) string {
 	end := start + width
 	if end > len(s) {
 		end = len(s)
+	}
+	// Snap the byte window to rune boundaries so multibyte characters at the
+	// edges never render as mojibake.
+	for start > 0 && !utf8.RuneStart(s[start]) {
+		start--
+	}
+	for end < len(s) && !utf8.RuneStart(s[end]) {
+		end++
 	}
 	return "…" + strings.ReplaceAll(s[start:end], "\n", " ") + "…"
 }

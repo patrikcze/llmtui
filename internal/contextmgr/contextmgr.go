@@ -209,8 +209,8 @@ func firstSentence(s string) string {
 		}
 	}
 	s = s[:cut]
-	if len(s) > 160 {
-		s = s[:159] + "…"
+	if r := []rune(s); len(r) > 160 {
+		s = string(r[:159]) + "…"
 	}
 	return s
 }

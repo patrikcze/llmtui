@@ -34,7 +34,7 @@ func BuildProvider(name string, pc config.ProviderConfig, netCfg config.NetworkC
 	client := httpClient(netCfg)
 	switch pc.Type {
 	case "ollama":
-		return ollama.New(pc.BaseURL, ollama.WithHTTPClient(client)), nil
+		return ollama.New(pc.BaseURL, ollama.WithHTTPClient(client), ollama.WithName(name)), nil
 	case "openai_compatible":
 		return openai.New(name, pc.BaseURL, pc.ResolveAPIKey(), openai.WithHTTPClient(client)), nil
 	case "mock":

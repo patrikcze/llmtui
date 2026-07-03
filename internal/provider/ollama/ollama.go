@@ -19,6 +19,7 @@ import (
 
 // Provider speaks the native Ollama HTTP API (/api/chat, /api/tags).
 type Provider struct {
+	name    string
 	baseURL string
 	client  *http.Client
 }
@@ -31,12 +32,24 @@ func WithHTTPClient(c *http.Client) Option {
 	return func(p *Provider) { p.client = c }
 }
 
+// WithName sets the configured provider name, so two ollama-typed providers
+// (e.g. "ollama" and "ollama-remote") stay distinguishable in the status bar
+// and cache attribution.
+func WithName(name string) Option {
+	return func(p *Provider) {
+		if name != "" {
+			p.name = name
+		}
+	}
+}
+
 // New creates an Ollama provider. baseURL defaults to http://localhost:11434.
 func New(baseURL string, opts ...Option) *Provider {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
 	p := &Provider{
+		name:    "ollama",
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{}, // no global timeout: streams are long-lived
 	}
@@ -46,7 +59,7 @@ func New(baseURL string, opts ...Option) *Provider {
 	return p
 }
 
-func (p *Provider) Name() string { return "ollama" }
+func (p *Provider) Name() string { return p.name }
 
 // HealthCheck pings the Ollama root endpoint.
 func (p *Provider) HealthCheck(ctx context.Context) error {
@@ -58,11 +71,11 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ollama unreachable: %w", err)
+		return fmt.Errorf("%s unreachable: %w", p.name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		return fmt.Errorf("%s returned status %d", p.name, resp.StatusCode)
 	}
 	return nil
 }
@@ -133,8 +146,11 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 }
 
 type chatOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
-	TopP        float64 `json:"top_p,omitempty"`
+	// Temperature and top_p are sent unconditionally: 0 is a meaningful value
+	// (deterministic sampling), so omitempty would silently fall back to the
+	// model default. num_predict keeps omitempty — 0 there means "unset".
+	Temperature float64 `json:"temperature"`
+	TopP        float64 `json:"top_p"`
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
@@ -208,19 +224,17 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		}
 		var chunk chatChunk
 		if err := json.Unmarshal(line, &chunk); err != nil {
-			events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode stream chunk: %w", err)}
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode stream chunk: %w", err)})
 			return
 		}
 		if chunk.Error != "" {
-			events <- provider.ChatEvent{Type: provider.EventError, Err: errors.New(chunk.Error)}
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: errors.New(chunk.Error)})
 			return
 		}
 		if chunk.Message.Content != "" {
 			completion.WriteString(chunk.Message.Content)
-			select {
-			case events <- provider.ChatEvent{Type: provider.EventDelta, Delta: chunk.Message.Content}:
-			case <-ctx.Done():
-				events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: chunk.Message.Content}) {
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
 		}
@@ -237,7 +251,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	}
 
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)}
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)})
 		return
 	}
 
@@ -245,6 +259,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		prompt := 0
 		for _, m := range req.Messages {
 			prompt += provider.EstimateTokens(m.Content)
+			prompt += provider.EstimatedTokensPerImage * len(m.Images)
 		}
 		c := provider.EstimateTokens(completion.String())
 		usage = &provider.Usage{
@@ -254,7 +269,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			Estimated:        true,
 		}
 	}
-	events <- provider.ChatEvent{Type: provider.EventDone, Usage: usage}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
 }
 
 // Capabilities describes the native Ollama API.

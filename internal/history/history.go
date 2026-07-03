@@ -57,9 +57,21 @@ func NewSessionName(t time.Time) string {
 	return "session-" + t.Format("20060102-150405")
 }
 
+// validName rejects session names that could escape the history directory
+// (path separators, "..", hidden files) — names come from user input.
+func validName(name string) error {
+	if name == "" || name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("invalid session name %q", name)
+	}
+	return nil
+}
+
 // Save writes the session as <name>.json in dir, creating dir as needed.
 // Saving the same name again overwrites, so a running chat updates in place.
 func Save(dir, name string, s Session) (string, error) {
+	if err := validName(name); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create history directory: %w", err)
 	}
@@ -79,6 +91,9 @@ func Save(dir, name string, s Session) (string, error) {
 // Load reads a saved session by name.
 func Load(dir, name string) (Session, error) {
 	var s Session
+	if err := validName(name); err != nil {
+		return s, err
+	}
 	data, err := os.ReadFile(filepath.Join(dir, name+".json"))
 	if err != nil {
 		return s, fmt.Errorf("read session: %w", err)

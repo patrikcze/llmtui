@@ -170,8 +170,8 @@ func summarizeRecent(msgs []provider.Message) string {
 			b.WriteString("\n")
 		}
 		content := m.Content
-		if len(content) > 120 {
-			content = content[:119] + "…"
+		if r := []rune(content); len(r) > 120 {
+			content = string(r[:119]) + "…"
 		}
 		b.WriteString(string(m.Role) + ": " + strings.ReplaceAll(content, "\n", " "))
 	}

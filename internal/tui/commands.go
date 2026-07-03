@@ -23,7 +23,10 @@ type slashCommand struct {
 	desc     string
 	category string
 	hidden   bool
-	run      func(m *Model, args string) tea.Cmd
+	// blockWhileThinking rejects the command while a reply is streaming:
+	// it would mutate state the in-flight request still depends on.
+	blockWhileThinking bool
+	run                func(m *Model, args string) tea.Cmd
 }
 
 // matches reports whether typed is a prefix of the name or any alias.
@@ -72,7 +75,7 @@ func slashCommands() []slashCommand {
 		{name: "copy", usage: "/copy", desc: "copy the last reply to the clipboard", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			return m.copyLastReply()
 		}},
-		{name: "clear", usage: "/clear", desc: "clear the conversation", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
+		{name: "clear", usage: "/clear", desc: "clear the conversation", category: "Chat", blockWhileThinking: true, run: func(m *Model, _ string) tea.Cmd {
 			m.session.Clear()
 			m.summary = ""
 			m.refreshViewport()
@@ -86,7 +89,7 @@ func slashCommands() []slashCommand {
 		}},
 
 		// --- Provider ---
-		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", run: cmdProvider},
+		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, run: cmdProvider},
 		{name: "providers", usage: "/providers", desc: "list configured providers", category: "Provider", run: func(m *Model, _ string) tea.Cmd {
 			m.openOverlay(m.providersOverlay())
 			return nil
@@ -100,7 +103,7 @@ func slashCommands() []slashCommand {
 				return modelsResultMsg{models: models, err: err}
 			}
 		}},
-		{name: "model", usage: "/model <id>", desc: "switch to a different model", category: "Model", run: func(m *Model, args string) tea.Cmd {
+		{name: "model", usage: "/model <id>", desc: "switch to a different model", category: "Model", blockWhileThinking: true, run: func(m *Model, args string) tea.Cmd {
 			if args == "" {
 				m.errText = "usage: /model <id> (see /models)"
 				m.refreshViewport()
@@ -158,7 +161,13 @@ func (m *Model) updateSuggestions() {
 		typed := strings.TrimPrefix(val, "/")
 		for _, c := range slashCommands() {
 			if !c.hidden && c.matches(typed) {
-				m.sugs = append(m.sugs, c)
+				// An exact name match leads the list ("/model" must not
+				// highlight "/models" just because it registers earlier).
+				if c.is(typed) {
+					m.sugs = append([]slashCommand{c}, m.sugs...)
+				} else {
+					m.sugs = append(m.sugs, c)
+				}
 				if len(m.sugs) == maxSuggestions {
 					break
 				}
@@ -179,9 +188,19 @@ func (m *Model) runSlashCommand() tea.Cmd {
 	name, args, _ := strings.Cut(strings.TrimPrefix(val, "/"), " ")
 	args = strings.TrimSpace(args)
 
-	// A highlighted suggestion wins over the partially typed name.
-	if len(m.sugs) > 0 {
-		name = m.sugs[m.sugIdx].name
+	// A highlighted suggestion completes a partially typed name, but an
+	// exactly typed command always runs itself ("/model" is not "/models").
+	if len(m.sugs) > 0 && !m.sugs[m.sugIdx].is(name) {
+		exact := false
+		for _, c := range slashCommands() {
+			if c.is(name) {
+				exact = true
+				break
+			}
+		}
+		if !exact {
+			name = m.sugs[m.sugIdx].name
+		}
 	}
 
 	m.input.Reset()
@@ -190,6 +209,11 @@ func (m *Model) runSlashCommand() tea.Cmd {
 
 	for _, c := range slashCommands() {
 		if c.is(name) {
+			if m.thinking && c.blockWhileThinking {
+				m.errText = fmt.Sprintf("/%s is unavailable while a reply is streaming — esc to stop it first", c.name)
+				m.refreshViewport()
+				return nil
+			}
 			m.errText = ""
 			return c.run(m, args)
 		}
@@ -224,13 +248,19 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 		return nil
 	}
 	m.prov = prov
+	// Keep the config's notion of the active provider in sync, so cache keys,
+	// error messages, and /doctor resolve this provider's settings. The
+	// base-url/api-key overrides belonged to the launch-time provider.
+	m.cfg.Provider = name
+	m.cfg.BaseURL = ""
+	m.cfg.APIKey = ""
 	if pc.DefaultModel != "" {
 		m.model = pc.DefaultModel
 	}
 	m.demoMode = false
 	m.connected = false
 	m.notice = fmt.Sprintf("switched to %s (%s)", name, m.model)
-	return m.checkHealth()
+	return m.checkHealth(false)
 }
 
 // openOverlay shows scrollable content in the viewport area until Esc.

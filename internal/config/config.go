@@ -507,13 +507,14 @@ func WriteDefault(path string) error {
 	return nil
 }
 
-// Redact masks a secret for safe display.
+// Redact masks a secret for safe display. Short keys are masked entirely:
+// revealing 4 characters of a 6-character key is most of the secret.
 func Redact(s string) string {
 	if s == "" {
 		return ""
 	}
-	if len(s) <= 4 {
-		return "****"
+	if len(s) < 12 {
+		return "********"
 	}
 	return s[:2] + strings.Repeat("*", 6) + s[len(s)-2:]
 }

@@ -60,28 +60,26 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 			if p.Delay > 0 {
 				select {
 				case <-ctx.Done():
-					events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+					provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 					return
 				case <-time.After(p.Delay):
 				}
 			} else if ctx.Err() != nil {
-				events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
 			completion += provider.EstimateTokens(w)
-			select {
-			case events <- provider.ChatEvent{Type: provider.EventDelta, Delta: w}:
-			case <-ctx.Done():
-				events <- provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()}
+			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: w}) {
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
 		}
-		events <- provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{
 			PromptTokens:     promptTokens,
 			CompletionTokens: completion,
 			TotalTokens:      promptTokens + completion,
 			Estimated:        true,
-		}}
+		}})
 	}()
 
 	return events, nil

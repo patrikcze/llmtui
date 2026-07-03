@@ -113,10 +113,13 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 }
 
 type chatCompletionRequest struct {
-	Model       string         `json:"model"`
-	Messages    []wireMessage  `json:"messages"`
-	Temperature float64        `json:"temperature,omitempty"`
-	TopP        float64        `json:"top_p,omitempty"`
+	Model    string        `json:"model"`
+	Messages []wireMessage `json:"messages"`
+	// Temperature and TopP are sent unconditionally: 0 is a meaningful value
+	// (deterministic sampling), so omitempty would silently fall back to the
+	// server default. Config defaults always populate them.
+	Temperature float64        `json:"temperature"`
+	TopP        float64        `json:"top_p"`
 	MaxTokens   int            `json:"max_tokens,omitempty"`
 	Stream      bool           `json:"stream"`
 	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
@@ -211,7 +214,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	if req.Stream {
 		go p.streamResponse(ctx, resp.Body, req, events)
 	} else {
-		go p.wholeResponse(resp.Body, req, events)
+		go p.wholeResponse(ctx, resp.Body, req, events)
 	}
 	return events, nil
 }
@@ -243,35 +246,38 @@ func (u *usagePayload) toUsage() *provider.Usage {
 	}
 }
 
-func (p *Provider) wholeResponse(body io.ReadCloser, req provider.ChatRequest, events chan<- provider.ChatEvent) {
+func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req provider.ChatRequest, events chan<- provider.ChatEvent) {
 	defer close(events)
 	defer body.Close()
 
 	var out chatCompletionResponse
 	if err := json.NewDecoder(body).Decode(&out); err != nil {
-		events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode response: %w", err)}
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode response: %w", err)})
 		return
 	}
 	if len(out.Choices) == 0 {
-		events <- provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("response contained no choices")}
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("response contained no choices")})
 		return
 	}
 	content := out.Choices[0].Message.Content
 	if content == "" && out.Choices[0].Message.ReasoningContent != "" {
 		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)
 	}
-	events <- provider.ChatEvent{Type: provider.EventDelta, Delta: content}
+	if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
+		return
+	}
 	usage := out.Usage.toUsage()
 	if usage == nil {
 		usage = estimateUsage(req, content)
 	}
-	events <- provider.ChatEvent{Type: provider.EventDone, Usage: usage}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {
 	prompt := 0
 	for _, m := range req.Messages {
 		prompt += provider.EstimateTokens(m.Content)
+		prompt += provider.EstimatedTokensPerImage * len(m.Images)
 	}
 	c := provider.EstimateTokens(completion)
 	return &provider.Usage{

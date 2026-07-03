@@ -118,8 +118,8 @@ func (m *Model) usageOverlay() string {
 			pct = 100 * float64(mt.total()) / float64(grand)
 		}
 		name := mt.Model
-		if len(name) > 40 {
-			name = name[:39] + "…"
+		if r := []rune(name); len(r) > 40 {
+			name = string(r[:39]) + "…"
 		}
 		fmt.Fprintf(&b, "  %s %s %s\n", dot,
 			m.theme.StatusValue.Render(fmt.Sprintf("%-42s", name)),
