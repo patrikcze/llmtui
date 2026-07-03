@@ -197,6 +197,47 @@ func TestApprovalMenuRendering(t *testing.T) {
 	}
 }
 
+func TestWriteFileDiffRenderedInChat(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 30)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("old line\nkeep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.session.AddUser("update f.txt")
+	m.thinking = true
+	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{ID: "c1", Name: "write_file", Arguments: `{"path":"f.txt","content":"new line\nkeep\n"}`},
+	}}
+	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true}); cmd == nil {
+		t.Fatal("write did not execute")
+	}
+	m.refreshViewport()
+
+	joined := strings.Join(strings.Fields(m.viewport.View()), " ")
+	for _, want := range []string{
+		"Update(f.txt) — added 1 line(s), removed 1 line(s)",
+		"- 1 old line",
+		"+ 1 new line",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("diff view missing %q", want)
+		}
+	}
+	// The model-facing tool result stays compact — no diff leaks onto the wire.
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleTool || strings.Contains(last.Content, "Update(") {
+		t.Errorf("tool result content = %+v", last)
+	}
+	if last.Display == "" {
+		t.Error("display diff missing from tool result message")
+	}
+}
+
 func TestToolOutputCollapsedByDefault(t *testing.T) {
 	m := newTestModel(t)
 	m.resize(100, 30)

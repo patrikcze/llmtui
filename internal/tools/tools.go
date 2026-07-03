@@ -48,10 +48,13 @@ type Call struct {
 	Body string
 }
 
-// Result is the outcome of executing one call.
+// Result is the outcome of executing one call. Diff is a display-only
+// rendering of what a write_file changed (see RenderWriteDiff); it is shown
+// in the TUI but never sent to the model.
 type Result struct {
 	Call   Call
 	Output string
+	Diff   string
 	Err    error
 }
 
@@ -148,7 +151,7 @@ func (r *Runner) Execute(c Call) Result {
 	case ToolReadFile:
 		res.Output, res.Err = r.readFile(c.Path)
 	case ToolWriteFile:
-		res.Output, res.Err = r.writeFile(c.Path, c.Body)
+		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
 	case ToolRunCommand:
 		res.Output, res.Err = r.runCommand(c.Body)
 	default:
@@ -214,33 +217,54 @@ func (r *Runner) readFile(rel string) (string, error) {
 	return string(data), nil
 }
 
-func (r *Runner) writeFile(rel, content string) (string, error) {
+func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {
 	if rel == "" {
-		return "", fmt.Errorf("write_file needs a path")
+		return "", "", fmt.Errorf("write_file needs a path")
 	}
 	// A written git hook would execute on the user's next git command.
 	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/") {
 		if part == ".git" {
-			return "", fmt.Errorf("writing inside .git is not allowed")
+			return "", "", fmt.Errorf("writing inside .git is not allowed")
 		}
 	}
 	if len(content) > r.maxKB*1024 {
-		return "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
+		return "", "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
 	}
 	abs, err := r.resolve(rel)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if info, err := os.Stat(abs); err == nil && info.IsDir() {
-		return "", fmt.Errorf("%q is a directory", rel)
+	// Capture the previous content so the TUI can show what changed.
+	existed := false
+	oldContent := ""
+	oldTooBig := false
+	if info, err := os.Stat(abs); err == nil {
+		if info.IsDir() {
+			return "", "", fmt.Errorf("%q is a directory", rel)
+		}
+		existed = true
+		if info.Size() <= int64(r.maxKB)*1024 {
+			if data, rerr := os.ReadFile(abs); rerr == nil {
+				oldContent = string(data)
+			} else {
+				oldTooBig = true // unreadable: treat like undiffable
+			}
+		} else {
+			oldTooBig = true
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return "", fmt.Errorf("create parent directory: %w", err)
+		return "", "", fmt.Errorf("create parent directory: %w", err)
 	}
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("write file: %w", err)
+		return "", "", fmt.Errorf("write file: %w", err)
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), rel), nil
+	if oldTooBig {
+		diff = fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", rel)
+	} else {
+		diff = RenderWriteDiff(rel, oldContent, content, existed)
+	}
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), rel), diff, nil
 }
 
 // runCommand executes one shell command in the workspace directory. The

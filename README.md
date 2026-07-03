@@ -243,10 +243,15 @@ what it already has — the turn never dead-ends in an error.
 - While tools are on, a standing banner in the chat shows the exact
   directory the model can act on and the approval mode.
 - Tool activity renders compactly, Claude-Code style: one line per action
-  (`⚒ run: ls -la`) and one line per result (`⚒ run_command → 24 lines of
-  output`); errors stay visible in full. `/tools output` toggles the
-  complete output for inspection. The model always receives the full text —
-  collapsing is display only.
+  (`⚒ run: ls -la`) and one line per result (`⎿ 24 lines of output`);
+  errors stay visible in full. `/tools output` toggles the complete output
+  for inspection. The model always receives the full text — collapsing is
+  display only.
+- **File writes show a diff**, Claude-Code style: `Create(file)` lists the
+  new content, `Update(file)` shows added/removed counts and a
+  line-numbered `+`/`-` diff against the previous content (green/red, with
+  unchanged context elided). Long diffs are capped in compact mode; the
+  diff is never sent to the model.
 - Reads, listings, and provably read-only commands (`ls`, `grep`, `cat`,
   `find`, `git status/log/diff`, … with no shell metacharacters) run
   automatically.

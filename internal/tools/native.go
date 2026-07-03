@@ -114,6 +114,7 @@ func NativeResults(results []Result) []provider.Message {
 			Content:    content,
 			ToolCallID: res.Call.ID,
 			ToolName:   res.Call.Tool,
+			Display:    res.Diff,
 		})
 	}
 	return out

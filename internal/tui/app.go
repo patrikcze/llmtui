@@ -659,7 +659,15 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		}
 		return m.continueChat()
 	}
-	return m.dispatch(tools.FormatResults(results), nil)
+	cmd := m.dispatch(tools.FormatResults(results), nil)
+	// Attach the write diffs to the just-added results message so the TUI
+	// can show what changed (display only; the model sees FormatResults).
+	if diff := tools.CollectDiffs(results); diff != "" {
+		if n := len(m.session.Messages); n > 0 && m.session.Messages[n-1].Role == provider.RoleUser {
+			m.session.Messages[n-1].Display = diff
+		}
+	}
+	return cmd
 }
 
 // Approval menu rows, Claude-Code style: pick with ↑/↓ + Enter, or jump
@@ -1267,10 +1275,15 @@ func (m *Model) refreshViewport() {
 					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
 					b.WriteString("\n")
 					b.WriteString(m.theme.SystemNote.Render(msg.Content))
+					b.WriteString("\n")
 				} else {
 					b.WriteString(m.theme.SystemNote.Render(tools.CollapseResults(msg.Content)))
+					b.WriteString("\n")
 				}
-				b.WriteString("\n\n")
+				if msg.Display != "" {
+					b.WriteString(m.renderToolDiff(msg.Display))
+				}
+				b.WriteString("\n")
 				continue
 			}
 			b.WriteString(m.theme.UserLabel.Render("you"))
@@ -1309,17 +1322,22 @@ func (m *Model) refreshViewport() {
 			}
 		case provider.RoleTool:
 			// Native tool results attach under their call, Claude-Code
-			// style, one summary line per call unless the user asked for
-			// full output with /tools output.
-			if m.toolsShowOutput {
+			// style. A write_file renders its diff; everything else is one
+			// summary line per call unless /tools output asked for more.
+			switch {
+			case msg.Display != "":
+				b.WriteString(m.renderToolDiff(msg.Display))
+			case m.toolsShowOutput:
 				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + msg.ToolName))
 				b.WriteString("\n")
 				b.WriteString(m.theme.SystemNote.Render(msg.Content))
-			} else {
+				b.WriteString("\n")
+			default:
 				b.WriteString(m.theme.SystemNote.Render(
 					"  ⎿ " + tools.SummarizeOutput(msg.Content)))
+				b.WriteString("\n")
 			}
-			b.WriteString("\n\n")
+			b.WriteString("\n")
 		}
 	}
 
@@ -1352,6 +1370,42 @@ func (m *Model) refreshViewport() {
 
 	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(b.String()))
 	m.viewport.GotoBottom()
+}
+
+// renderToolDiff colorizes a write_file display diff: Create()/Update()
+// headers get the accent color, added lines green, removed lines red,
+// context dim. In compact mode long diffs are capped; /tools output lifts
+// the cap.
+func (m *Model) renderToolDiff(display string) string {
+	lines := strings.Split(display, "\n")
+	const maxRows = 24
+	truncated := 0
+	if !m.toolsShowOutput && len(lines) > maxRows {
+		truncated = len(lines) - maxRows
+		lines = lines[:maxRows]
+	}
+	add := lipgloss.NewStyle().Foreground(m.theme.Good)
+	del := lipgloss.NewStyle().Foreground(m.theme.Bad)
+	var b strings.Builder
+	for _, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "Create(") || strings.HasPrefix(l, "Update("):
+			b.WriteString(m.theme.SystemNote.Render("  ⎿ ") + m.theme.StatusValue.Render(l))
+		case strings.HasPrefix(l, "+"):
+			b.WriteString(add.Render("      " + l))
+		case strings.HasPrefix(l, "-"):
+			b.WriteString(del.Render("      " + l))
+		default:
+			b.WriteString(m.theme.SystemNote.Render("      " + l))
+		}
+		b.WriteString("\n")
+	}
+	if truncated > 0 {
+		b.WriteString(m.theme.SystemNote.Render(
+			fmt.Sprintf("      … +%d more diff lines (/tools output to show all)", truncated)))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // renderApprovalPrompt draws the confirmation block, Claude-Code style:

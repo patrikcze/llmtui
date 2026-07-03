@@ -53,6 +53,10 @@ type Message struct {
 	// ToolCallID and ToolName identify which call a RoleTool message answers.
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolName   string `json:"tool_name,omitempty"`
+
+	// Display is a UI-only annotation (e.g. the rendered diff of a
+	// write_file result). It is never serialized or sent to a backend.
+	Display string `json:"-" yaml:"-"`
 }
 
 // ModelInfo describes a model available on a provider.
