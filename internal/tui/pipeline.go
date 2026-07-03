@@ -315,6 +315,9 @@ func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
 	}
 	if m.useNativeTools() {
 		req.Tools = tools.Specs()
+		if m.webOn {
+			req.Tools = append(req.Tools, tools.WebSpecs()...)
+		}
 	}
 	return req
 }

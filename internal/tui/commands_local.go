@@ -1004,6 +1004,35 @@ func cmdTools(m *Model, args string) tea.Cmd {
 	return nil
 }
 
+func cmdWeb(m *Model, args string) tea.Cmd {
+	sub, _ := splitArgs(args)
+	if m.toolRunner == nil || m.webClient == nil {
+		return m.fail("web tools unavailable: could not resolve the working directory")
+	}
+	switch sub {
+	case "", "status":
+		state := "off — enable with /web on"
+		if m.webOn {
+			state = "on — web_search runs automatically, web_fetch asks per URL"
+		}
+		m.notice = "🌐 web tools " + state
+	case "on":
+		m.webOn = true
+		m.toolRunner.Web = m.webClient
+		m.notice = "🌐 web tools on — web_search (DuckDuckGo) auto, web_fetch asks per URL"
+		if !m.toolsOn {
+			m.notice += " · also run /tools on so the model can use tools"
+		}
+	case "off":
+		m.webOn = false
+		m.toolRunner.Web = nil
+		m.notice = "web tools off"
+	default:
+		return m.fail("usage: /web [on|off|status]")
+	}
+	return nil
+}
+
 func (m *Model) toolsOverlay() string {
 	approval := "ask (y/n before writes & commands)"
 	if m.toolsAutoApprove {
@@ -1020,6 +1049,7 @@ func (m *Model) toolsOverlay() string {
 		output = "full (/tools output to collapse)"
 	}
 	m.kv(&b, "enabled", onOff(m.toolsOn))
+	m.kv(&b, "web", onOff(m.webOn))
 	m.kv(&b, "approval", approval)
 	m.kv(&b, "protocol", protocol)
 	m.kv(&b, "output", output)
@@ -1033,6 +1063,8 @@ func (m *Model) toolsOverlay() string {
 	m.kv(&b, tools.ToolReadFile, "read a file's contents (auto)")
 	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
 	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
+	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")
+	m.kv(&b, tools.ToolWebFetch, "fetch one page as Markdown (approval per URL)")
 	b.WriteString("\n")
 	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nsymlink escapes, and writes into .git are rejected; command environments are\nstripped of secrets; every action is shown in the chat before and after") + "\n")
 	if !m.toolsOn {

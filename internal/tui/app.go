@@ -240,6 +240,17 @@ func (m *Model) rebuildFromConfig() {
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
+		wcfg := cfg.Tools.Web
+		wtimeout, err := time.ParseDuration(wcfg.Timeout)
+		if err != nil || wtimeout <= 0 {
+			wtimeout = 20 * time.Second
+		}
+		m.webClient = web.NewClient(wtimeout, wcfg.MaxPageKB)
+		m.toolRunner.WebMaxResults = wcfg.MaxResults
+		m.webOn = wcfg.Enabled
+		if m.webOn {
+			m.toolRunner.Web = m.webClient
+		}
 	}
 
 	// Config-defined profiles are matched before built-ins.
