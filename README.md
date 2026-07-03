@@ -120,6 +120,7 @@ The full reference for every section lives in
 | `Ctrl+V` | Paste an image from the clipboard (vision models) |
 | `Ctrl+X` | Remove the last pasted image |
 | `Esc` | Stop the current generation (keeps partial reply) |
+| `PgUp` / `PgDn` | Scroll the chat (mouse wheel works too); typing never scrolls it |
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+C` `Ctrl+C` | Quit (press twice within 2 s). The first press stops generation or clears the input; quitting auto-saves the session |
 
@@ -240,6 +241,11 @@ final answer rather than the turn dead-ending in an error.
 
 - While tools are on, a standing banner in the chat shows the exact
   directory the model can act on and the approval mode.
+- Tool activity renders compactly, Claude-Code style: one line per action
+  (`⚒ run: ls -la`) and one line per result (`⚒ run_command → 24 lines of
+  output`); errors stay visible in full. `/tools output` toggles the
+  complete output for inspection. The model always receives the full text —
+  collapsing is display only.
 - Reads, listings, and provably read-only commands (`ls`, `grep`, `cat`,
   `find`, `git status/log/diff`, … with no shell metacharacters) run
   automatically.

@@ -990,8 +990,16 @@ func cmdTools(m *Model, args string) tea.Cmd {
 	case "auto":
 		m.toolsAutoApprove = true
 		m.notice = "⚒ tool approvals set to auto — writes and commands run without asking"
+	case "output":
+		m.toolsShowOutput = !m.toolsShowOutput
+		if m.toolsShowOutput {
+			m.notice = "⚒ showing full tool output (/tools output to collapse again)"
+		} else {
+			m.notice = "⚒ tool output collapsed to one-line summaries"
+		}
+		m.refreshViewport()
 	default:
-		return m.fail("usage: /tools [on|off|ask|auto|status]")
+		return m.fail("usage: /tools [on|off|ask|auto|output|status]")
 	}
 	return nil
 }
@@ -1007,9 +1015,14 @@ func (m *Model) toolsOverlay() string {
 	}
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
+	output := "compact one-line summaries (/tools output for full text)"
+	if m.toolsShowOutput {
+		output = "full (/tools output to collapse)"
+	}
 	m.kv(&b, "enabled", onOff(m.toolsOn))
 	m.kv(&b, "approval", approval)
 	m.kv(&b, "protocol", protocol)
+	m.kv(&b, "output", output)
 	m.kv(&b, "workspace", m.toolRunner.Root())
 	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
 	m.kv(&b, "file/output cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))

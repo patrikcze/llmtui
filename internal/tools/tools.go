@@ -386,6 +386,99 @@ func FormatResults(results []Result) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// CollapseBlocks replaces each fenced tool block in reply with a one-line
+// description, for compact chat rendering (full bodies stay in the session
+// and on the wire — this is display only).
+func CollapseBlocks(reply string) string {
+	lines := strings.Split(reply, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		open := fenceOpen.FindStringSubmatch(strings.TrimRight(lines[i], "\r"))
+		if open == nil {
+			out = append(out, lines[i])
+			continue
+		}
+		closing := regexp.MustCompile("^`{" + fmt.Sprint(len(open[1])) + ",}[ \t]*$")
+		var body []string
+		closed := false
+		for j := i + 1; j < len(lines); j++ {
+			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
+				c := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
+				out = append(out, "⚒ "+c.Describe())
+				i = j
+				closed = true
+				break
+			}
+			body = append(body, strings.TrimRight(lines[j], "\r"))
+		}
+		if !closed { // unterminated block: show it as-is
+			out = append(out, lines[i:]...)
+			break
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// CollapseResults renders a compact one-line-per-call view of a results
+// message produced by FormatResults.
+func CollapseResults(content string) string {
+	var (
+		out  []string
+		name string
+		body []string
+	)
+	flush := func() {
+		if name != "" {
+			out = append(out, "⚒ "+name+" → "+SummarizeOutput(strings.Join(body, "\n")))
+		}
+	}
+	for _, l := range strings.Split(content, "\n") {
+		if rest, ok := strings.CutPrefix(l, "### "); ok {
+			flush()
+			name = strings.TrimSpace(rest)
+			body = nil
+			continue
+		}
+		if name != "" {
+			body = append(body, l)
+		}
+	}
+	flush()
+	if len(out) == 0 {
+		return SummarizeOutput(content)
+	}
+	return strings.Join(out, "\n")
+}
+
+// SummarizeOutput reduces one tool result to a single line: short outputs
+// and errors show their text, long outputs just their line count.
+func SummarizeOutput(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "(no output)"
+	}
+	lines := strings.Split(s, "\n")
+	first := strings.TrimSpace(lines[0])
+	if strings.HasPrefix(first, "error:") {
+		if len(lines) > 1 {
+			return truncateLine(first, 120) + fmt.Sprintf(" (+%d lines)", len(lines)-1)
+		}
+		return truncateLine(first, 120)
+	}
+	if len(lines) == 1 {
+		return truncateLine(first, 100)
+	}
+	return fmt.Sprintf("%d lines of output", len(lines))
+}
+
+func truncateLine(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 // Describe renders one call for the approval prompt.
 func (c Call) Describe() string {
 	switch c.Tool {

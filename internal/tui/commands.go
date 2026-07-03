@@ -129,7 +129,7 @@ func slashCommands() []slashCommand {
 		{name: "memory", usage: "/memory [on|off|add <text>|list|remove <id>|clear]", desc: "local memory snippets (opt-in)", category: "Memory", run: cmdMemory},
 
 		// --- Tools ---
-		{name: "tools", usage: "/tools [on|off|ask|auto|status]", desc: "let the model read/write files and run commands in the current directory", category: "Tools", blockWhileThinking: true, run: cmdTools},
+		{name: "tools", usage: "/tools [on|off|ask|auto|output|status]", desc: "let the model read/write files and run commands in the current directory", category: "Tools", blockWhileThinking: true, run: cmdTools},
 
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]]", desc: "provider and model diagnostics", category: "Diagnostics", run: cmdDoctor},

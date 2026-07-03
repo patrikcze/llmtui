@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -119,6 +118,7 @@ type Model struct {
 	toolsOn          bool
 	toolsAutoApprove bool // "auto" approval mode: skip the y/n prompt
 	toolsNative      bool // offer tools via native function calling
+	toolsShowOutput  bool // show full tool output instead of one-line summaries
 	toolRunner       *tools.Runner
 	toolDepth        int                 // auto follow-up rounds for the current user turn
 	toolNudged       bool                // the budget-spent wrap-up request was already sent this turn
@@ -501,10 +501,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	if key, ok := msg.(tea.KeyMsg); ok {
+		// Typed keys must never scroll the chat: the viewport's default
+		// keymap binds letters (j/k/u/d/b/f/h/l) and space, so feeding it
+		// keystrokes makes the screen jump around while typing. It only
+		// ever sees the dedicated scroll keys; everything else belongs to
+		// the input box.
+		switch key.Type {
+		case tea.KeyPgUp, tea.KeyPgDown:
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		m.input, cmd = m.input.Update(msg)
+		m.updateSuggestions()
+		m.syncInputHeight()
+		return m, cmd
+	}
+	// Non-key events (mouse wheel, cursor blink, …) go to both components.
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
-	m.updateSuggestions()
-	m.syncInputHeight()
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
@@ -796,14 +811,17 @@ func (m *Model) quit() tea.Cmd {
 	return tea.Quit
 }
 
-// wrapLines estimates how many rows value occupies at the given wrap width.
+// wrapLines counts how many rows value occupies at the given wrap width.
+// The bubbles textarea renders with greedy *word* wrapping, which produces
+// more rows than a plain character count — undercounting here left the box
+// too short, so it scrolled internally and hid all but the cursor row.
 func wrapLines(value string, width int) int {
 	if width < 1 {
 		width = 1
 	}
 	lines := 0
 	for _, l := range strings.Split(value, "\n") {
-		lines += 1 + utf8.RuneCountInString(l)/width
+		lines += wordWrappedRows(l, width)
 	}
 	const maxInputLines = 6
 	if lines < 1 {
@@ -813,6 +831,40 @@ func wrapLines(value string, width int) int {
 		lines = maxInputLines
 	}
 	return lines
+}
+
+// wordWrappedRows mirrors the textarea's greedy word wrap: a word (plus its
+// trailing spaces) moves to a fresh row when it would overflow the current
+// one; a word as wide as the row hard-breaks onto its own row.
+func wordWrappedRows(line string, width int) int {
+	rows, lineW, wordW, spaces := 1, 0, 0, 0
+	for _, r := range line {
+		if r == ' ' || r == '\t' {
+			spaces++
+		} else {
+			wordW++
+		}
+		switch {
+		case spaces > 0:
+			if lineW+wordW+spaces > width {
+				rows++
+				lineW = wordW + spaces
+			} else {
+				lineW += wordW + spaces
+			}
+			wordW, spaces = 0, 0
+		case wordW >= width:
+			// The word alone fills a row: place it on a fresh one.
+			if lineW > 0 {
+				rows++
+			}
+			lineW, wordW = width, 0
+		}
+	}
+	if wordW > 0 && lineW+wordW+spaces > width {
+		rows++
+	}
+	return rows
 }
 
 // syncInputHeight grows and shrinks the input box with its content,
@@ -1123,11 +1175,17 @@ func (m *Model) refreshViewport() {
 		switch msg.Role {
 		case provider.RoleUser:
 			// Tool results travel as user messages; style them as machinery,
-			// not as something the human typed.
+			// not as something the human typed. Compact by default — the
+			// model sees everything, the human sees one line per call
+			// (/tools output shows the full text).
 			if strings.HasPrefix(msg.Content, tools.ResultsPrefix) {
-				b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
-				b.WriteString("\n")
-				b.WriteString(m.theme.SystemNote.Render(msg.Content))
+				if m.toolsShowOutput {
+					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
+					b.WriteString("\n")
+					b.WriteString(m.theme.SystemNote.Render(msg.Content))
+				} else {
+					b.WriteString(m.theme.SystemNote.Render(tools.CollapseResults(msg.Content)))
+				}
 				b.WriteString("\n\n")
 				continue
 			}
@@ -1144,8 +1202,14 @@ func (m *Model) refreshViewport() {
 		case provider.RoleAssistant:
 			b.WriteString(m.theme.AssistantLabel.Render("assistant"))
 			b.WriteString("\n")
-			if msg.Content != "" || len(msg.ToolCalls) == 0 {
-				b.WriteString(m.renderMarkdown(msg.Content))
+			content := msg.Content
+			if !m.toolsShowOutput {
+				// Compact mode: fenced tool blocks (file bodies, scripts)
+				// render as one-line actions instead of full payloads.
+				content = tools.CollapseBlocks(content)
+			}
+			if content != "" || len(msg.ToolCalls) == 0 {
+				b.WriteString(m.renderMarkdown(content))
 			}
 			// Native tool calls: show what the model asked for, so a
 			// tool-only turn never renders as an empty reply.
@@ -1155,11 +1219,16 @@ func (m *Model) refreshViewport() {
 			}
 			b.WriteString("\n")
 		case provider.RoleTool:
-			// Native tool results: machinery, styled like the fenced-protocol
-			// results but one block per call.
-			b.WriteString(m.theme.SystemNote.Render("⚒ " + msg.ToolName))
-			b.WriteString("\n")
-			b.WriteString(m.theme.SystemNote.Render(msg.Content))
+			// Native tool results: machinery, one line per call unless the
+			// user asked for full output with /tools output.
+			if m.toolsShowOutput {
+				b.WriteString(m.theme.SystemNote.Render("⚒ " + msg.ToolName))
+				b.WriteString("\n")
+				b.WriteString(m.theme.SystemNote.Render(msg.Content))
+			} else {
+				b.WriteString(m.theme.SystemNote.Render(
+					"⚒ " + msg.ToolName + " → " + tools.SummarizeOutput(msg.Content)))
+			}
 			b.WriteString("\n\n")
 		}
 	}

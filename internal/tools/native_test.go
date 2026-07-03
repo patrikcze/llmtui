@@ -118,6 +118,66 @@ func TestLimitResults(t *testing.T) {
 	}
 }
 
+func TestSummarizeOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", "(no output)"},
+		{"single short line", "wrote 46 bytes to test.ps1", "wrote 46 bytes to test.ps1"},
+		{"multi-line counts", "a\nb\nc", "3 lines of output"},
+		{"error kept visible", "error: no such file", "error: no such file"},
+		{"error with extra lines", "error: boom\ndetail\nmore", "error: boom (+2 lines)"},
+		{"long single line truncated", strings.Repeat("x", 150), strings.Repeat("x", 100) + "…"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SummarizeOutput(tc.in); got != tc.want {
+				t.Errorf("SummarizeOutput(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollapseResults(t *testing.T) {
+	content := FormatResults([]Result{
+		{Call: Call{Tool: ToolListDir}, Output: "a.txt\nb.txt\nc.txt"},
+		{Call: Call{Tool: ToolReadFile, Path: "x.go"}, Err: ErrDenied},
+	})
+	got := CollapseResults(content)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("collapsed to %d lines, want 2: %q", len(lines), got)
+	}
+	if lines[0] != "⚒ list_dir → 3 lines of output" {
+		t.Errorf("line 0 = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "read_file x.go") || !strings.Contains(lines[1], "denied by the user") {
+		t.Errorf("line 1 = %q", lines[1])
+	}
+}
+
+func TestCollapseBlocksReplacesToolBlocks(t *testing.T) {
+	reply := "Saving the script:\n```tool write_file a.sh\n#!/bin/sh\necho hi\n```\nDone."
+	got := CollapseBlocks(reply)
+	if strings.Contains(got, "echo hi") {
+		t.Errorf("body leaked into collapsed view: %q", got)
+	}
+	if !strings.Contains(got, "⚒ write a.sh (18 bytes)") {
+		t.Errorf("missing collapsed description: %q", got)
+	}
+	if !strings.Contains(got, "Saving the script:") || !strings.Contains(got, "Done.") {
+		t.Errorf("surrounding prose lost: %q", got)
+	}
+
+	// Unterminated blocks and plain code fences stay untouched.
+	plain := "```go\nfmt.Println(1)\n```"
+	if CollapseBlocks(plain) != plain {
+		t.Error("plain code fence modified")
+	}
+}
+
 func TestNativeInstructionsMentionRootAndRules(t *testing.T) {
 	s := NativeInstructions("/work/proj")
 	for _, want := range []string{"/work/proj", "relative", "approval", "final answer"} {
