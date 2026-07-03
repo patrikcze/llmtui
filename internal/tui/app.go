@@ -105,6 +105,14 @@ type Model struct {
 	inputLines    int
 	ctrlCAt       time.Time
 
+	// Exit summary bookkeeping, reported after the TUI closes.
+	startedAt  time.Time
+	apiTime    time.Duration
+	modelStats []modelUsageStat
+	sentCount  int
+	replyCount int
+	savedPath  string
+
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
 	memStore      *memory.Store
@@ -167,6 +175,7 @@ func New(opts Options) *Model {
 		mouseEnabled: true,
 		sessionName:  history.NewSessionName(time.Now()),
 		inputLines:   1,
+		startedAt:    time.Now(),
 
 		memEnabled:  cfg.Memory.Enabled,
 		profileMode: profileMode,
@@ -568,6 +577,7 @@ func (m *Model) saveWithNotice() {
 		m.refreshViewport()
 		return
 	}
+	m.savedPath = path
 	m.notice = "✓ session saved to " + path
 }
 
@@ -605,7 +615,9 @@ func (m *Model) quit() tea.Cmd {
 		m.cancelStream()
 	}
 	if m.historyDir != "" && m.hasUserContent() {
-		_, _ = m.saveSession() // best effort on exit
+		if path, err := m.saveSession(); err == nil { // best effort on exit
+			m.savedPath = path
+		}
 	}
 	return tea.Quit
 }
@@ -733,6 +745,7 @@ func (m *Model) streamFailed(err error) {
 	// Preserve partial streamed output instead of discarding it.
 	if partial := m.streamBuf.String(); partial != "" {
 		m.session.AddAssistant(partial)
+		m.replyCount++
 		m.streamBuf.Reset()
 		m.errText += " (partial reply kept)"
 	}
@@ -771,6 +784,7 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	m.drainStream()
 	if reply != "" {
 		m.session.AddAssistant(reply)
+		m.replyCount++
 	}
 	// Cache the successful response (never failures or empty replies).
 	// Key, provider, and model come from the dispatch-time snapshot: the user
@@ -795,6 +809,9 @@ func (m *Model) finishStream(usage *provider.Usage) {
 		m.lastTPS = st.TokensPerSec
 		m.lastDebug.Duration = duration
 		m.lastDebug.Usage = usage
+		// Attribute to the dispatch-time provider/model for the exit summary.
+		m.recordModelUsage(m.lastDebug.Provider, m.lastDebug.Model,
+			usage.PromptTokens, usage.CompletionTokens, usage.Estimated, duration)
 		if m.debugMode {
 			m.notice = fmt.Sprintf("debug: %s · prompt %d · reply %d · cache %s · retries %d — /debug last",
 				duration.Round(10*time.Millisecond), usage.PromptTokens, usage.CompletionTokens,
@@ -1021,9 +1038,14 @@ func Run(opts Options) error {
 	defer fmt.Print(disableModifyOtherKeys)
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := p.Run()
+	final, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run TUI: %w", err)
+	}
+	// The alt screen is gone now; leave the session report in the scrollback,
+	// the way modern agent CLIs sign off.
+	if fm, ok := final.(*Model); ok {
+		fmt.Println(renderExitSummary(fm.theme, fm.exitSummary()))
 	}
 	return nil
 }

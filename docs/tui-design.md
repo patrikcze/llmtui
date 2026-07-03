@@ -47,6 +47,17 @@ keeps them testable without a terminal.
   detected background — never a per-frame terminal query, which can stall
   odd terminals or SSH sessions.
 
+## Exit summary
+
+Quitting the chat (`Ctrl+C` twice or `/quit`) leaves a session report in the
+terminal scrollback after the alt screen closes, the way modern agent CLIs
+sign off: session ID, messages sent/replies received, cache hits, wall time
+vs. API time, average generation speed, and a per-model table of requests
+with input/output token totals (marked `~` when the provider returned no
+usage and the counts are estimated). When the session was auto-saved, a
+final hint points at `llmtui history`. The renderer lives in
+`internal/tui/exitsummary.go` as a pure function of theme + data.
+
 ## Behavior rules
 
 - Streaming renders token-by-token into the viewport; the whole frame is

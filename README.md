@@ -203,6 +203,9 @@ AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.
 With `chat.save_history: true` (the default), llmtui keeps everything under
 `chat.history_dir` (`~/.local/share/llmtui/history`):
 
+- **Exit summary** — quitting the chat prints a session report to the
+  terminal: session ID, message counts, wall/API time, average speed, and
+  per-model token usage, plus a pointer to the saved session.
 - **Sessions** — saved with `Ctrl+S` / `/save`, and automatically on quit.
   One JSON file per chat session (messages + token totals); repeated saves
   update the same file. Image attachments are never persisted.

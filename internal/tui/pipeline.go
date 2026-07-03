@@ -218,6 +218,7 @@ func (m *Model) cacheKey(raw string) cache.Key {
 func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.lastUserMsg = raw
 	m.lastImages = images
+	m.sentCount++
 
 	// Cache lookup happens before composition mutates context state.
 	key := m.cacheKey(raw)
@@ -225,6 +226,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		if entry, ok := m.responseCache.Get(key); ok {
 			m.session.AddUser(raw)
 			m.session.AddAssistant(entry.Response)
+			m.replyCount++
 			st := m.session.RecordUsage(provider.Usage{
 				PromptTokens:     entry.PromptTokens,
 				CompletionTokens: entry.CompletionTokens,
