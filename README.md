@@ -217,16 +217,24 @@ Enable per session with `/tools on` (status: `/tools`), or permanently:
 tools:
   enabled: true
   approve: ask # ask | auto
-  max_iterations: 4 # tool rounds per user message
-  max_file_kb: 512  # per-file read/write and command output cap
+  native: auto # auto | off — tool-calling protocol (see below)
+  max_iterations: 10 # tool rounds per user message
+  max_file_kb: 512   # per-file read/write and command output cap
   command_timeout: "30s"
 ```
 
 Four tools are available: `list_dir`, `read_file`, `write_file`, and
 `run_command` (one shell command in the workspace — `sh` on macOS/Linux,
-`cmd` on Windows, detected automatically). The model calls them with fenced
-blocks in its reply; llmtui executes them and feeds the results back until
-the model answers normally (or the round limit hits).
+`cmd` on Windows, detected automatically). With `native: auto` (the default)
+they are offered through **standard function calling**: the tool schemas ride
+in the request, the model answers with structured `tool_calls`, and results
+go back as `role:"tool"` messages — the protocol tool-capable models
+(Ollama's `tools` models, LM Studio, vLLM, llama.cpp) are trained on, so
+multi-step tasks end naturally with a final answer instead of running into
+the round limit. Backends that reject tool declarations fall back
+automatically to a fenced-block prompt protocol that works with any model.
+If the round limit is ever reached, the model is asked to wrap up with a
+final answer rather than the turn dead-ending in an error.
 
 **You stay in control**, the same way Claude Code or Codex work:
 
@@ -245,9 +253,9 @@ directory (absolute paths, `..`, and symlink escapes rejected); writes into
 `.git/` are blocked (a written git hook would be code execution); command
 environments are stripped of secrets (`*_API_KEY`, tokens, passwords, all
 `LLMTUI_*` vars); commands are time-limited; file sizes and outputs are
-capped; and there is no delete tool. Works with any local model — no native
-function-calling support required, though instruction-tuned models ≥7B
-follow the tool syntax most reliably.
+capped; and there is no delete tool. Works with any local model — models
+with native tool support interact most reliably; for the rest the fenced
+fallback needs an instruction-tuned model (≥7B recommended).
 
 ## History & usage stats
 

@@ -135,6 +135,12 @@ func (m *Model) applyContext() ([]provider.Message, contextmgr.Decision) {
 // compose builds the provider-ready messages for a raw user message.
 // preview=true composes without touching context state (for /prompt preview).
 func (m *Model) compose(raw string, images []provider.Image, preview bool) (prompt.Output, contextmgr.Decision) {
+	return m.composeWith(raw, images, preview, false)
+}
+
+// composeWith adds the omitRaw knob: tool-loop continuations compose the
+// session as-is (it already ends with tool results) without a new user turn.
+func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRaw bool) (prompt.Output, contextmgr.Decision) {
 	var (
 		recent   []provider.Message
 		decision contextmgr.Decision
@@ -169,7 +175,14 @@ func (m *Model) compose(raw string, images []provider.Image, preview bool) (prom
 
 	systemPrompt := m.cfg.Chat.SystemPrompt
 	if m.toolsOn && m.toolRunner != nil {
-		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + tools.Instructions(m.toolRunner.Root()))
+		// Native mode only needs the house rules — the protocol itself is
+		// carried by the request's tool specs. The fenced-block fallback must
+		// additionally teach the model the protocol.
+		instructions := tools.Instructions(m.toolRunner.Root())
+		if m.toolsNative {
+			instructions = tools.NativeInstructions(m.toolRunner.Root())
+		}
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
 	templatePrompt := ""
 	if m.template != "" {
@@ -196,6 +209,7 @@ func (m *Model) compose(raw string, images []provider.Image, preview bool) (prom
 			ModelHints:      m.cfg.Prompt.IncludeModelHints,
 			FormattingHints: m.cfg.Prompt.IncludeFormattingHints,
 		},
+		OmitRaw: omitRaw,
 	})
 	return out, decision
 }
@@ -259,14 +273,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
-	req := provider.ChatRequest{
-		Model:       m.model,
-		Messages:    composed.Messages,
-		Temperature: m.effectiveTemperature(),
-		TopP:        m.cfg.Chat.TopP,
-		MaxTokens:   m.cfg.Chat.MaxTokens,
-		Stream:      m.cfg.StreamEnabled(),
-	}
+	req := m.buildRequest(composed.Messages)
 
 	cacheStatus := "miss"
 	if m.responseCache == nil || !m.responseCache.Enabled() {
@@ -292,6 +299,62 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		Stream:      req.Stream,
 	}
 
+	return m.startRequest(req)
+}
+
+// buildRequest assembles a ChatRequest for the given messages under the
+// current settings, offering native tool specs when enabled.
+func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
+	req := provider.ChatRequest{
+		Model:       m.model,
+		Messages:    messages,
+		Temperature: m.effectiveTemperature(),
+		TopP:        m.cfg.Chat.TopP,
+		MaxTokens:   m.cfg.Chat.MaxTokens,
+		Stream:      m.cfg.StreamEnabled(),
+	}
+	if m.useNativeTools() {
+		req.Tools = tools.Specs()
+	}
+	return req
+}
+
+// continueChat re-invokes the model after tool results were appended to the
+// session (native function-calling protocol). No user message is added and
+// the cache is not consulted: the conversation simply continues.
+func (m *Model) continueChat() tea.Cmd {
+	m.bypassCache = false // consumed: continuations never touch the cache
+	composed, decision := m.composeWith("", nil, false, true)
+	m.thinking = true
+	m.streamBuf.Reset()
+	m.reasoningLen = 0
+	m.streamStart = time.Now()
+	m.errText = ""
+	m.refreshViewport()
+
+	prof, _ := m.activeProfile()
+	req := m.buildRequest(composed.Messages)
+	m.lastDebug = debugInfo{
+		When:        time.Now(),
+		RawMessage:  "(tool results continuation)",
+		Provider:    m.prov.Name(),
+		Model:       m.model,
+		Profile:     prof.Name,
+		PromptMode:  m.effectivePromptMode(),
+		Template:    m.template,
+		Sections:    composed.Sections,
+		CtxDecision: decision,
+		CacheStatus: "bypass",
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+		Stream:      req.Stream,
+	}
+	return m.startRequest(req)
+}
+
+// startRequest owns the streaming machinery for one provider request:
+// inactivity watchdog, retries, and native-tools fallback.
+func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 	// A streaming reply can legitimately take many minutes on a slow local
 	// model. A whole-request deadline would cut a healthy generation off
 	// mid-answer, so network.timeout is treated as an *inactivity* window:
@@ -316,12 +379,22 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		if netCfg.Retry.Enabled && netCfg.Retry.MaxAttempts > attempts {
 			attempts = netCfg.Retry.MaxAttempts
 		}
+		fellBack := false
 		var lastErr error
 		for attempt := 1; attempt <= attempts; attempt++ {
 			stream, err := prov.Chat(ctx, req)
 			if err == nil {
 				ev, ok := <-stream
-				return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1}
+				return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1, toolsFellBack: fellBack}
+			}
+			// A backend without native tool support rejects the whole request;
+			// retry immediately without the specs (the TUI then switches to
+			// the fenced-block protocol for the rest of the session).
+			if len(req.Tools) > 0 && ctx.Err() == nil && toolsRejectedError(err) {
+				req.Tools = nil
+				fellBack = true
+				attempt--
+				continue
 			}
 			lastErr = err
 			if ctx.Err() != nil || !provider.RetryableError(err) {
@@ -335,6 +408,22 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		}
 		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true}
 	}
+}
+
+// toolsRejectedError reports whether a chat error looks like the backend
+// refusing native tool declarations (e.g. Ollama's "does not support tools",
+// or an OpenAI-compatible 400 mentioning tools).
+func toolsRejectedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "tool") {
+		return false
+	}
+	return strings.Contains(s, "does not support") || strings.Contains(s, "not supported") ||
+		strings.Contains(s, "status 400") || strings.Contains(s, "status 422") ||
+		strings.Contains(s, "invalid")
 }
 
 // friendlyError converts raw network errors into actionable guidance.

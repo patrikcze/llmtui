@@ -123,17 +123,82 @@ type chatCompletionRequest struct {
 	MaxTokens   int            `json:"max_tokens,omitempty"`
 	Stream      bool           `json:"stream"`
 	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
+	Tools       []wireTool     `json:"tools,omitempty"`
 }
 
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
 
+// wireTool is the OpenAI function-calling tool declaration.
+type wireTool struct {
+	Type     string       `json:"type"`
+	Function wireFunction `json:"function"`
+}
+
+type wireFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// wireToolCall is one tool invocation in an assistant message or response.
+type wireToolCall struct {
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function wireFunctionCall `json:"function"`
+}
+
+type wireFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+func toWireTools(specs []provider.ToolSpec) []wireTool {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]wireTool, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, wireTool{Type: "function", Function: wireFunction{
+			Name:        s.Name,
+			Description: s.Description,
+			Parameters:  s.Parameters,
+		}})
+	}
+	return out
+}
+
+func toWireToolCalls(calls []provider.ToolCall) []wireToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]wireToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, wireToolCall{ID: c.ID, Type: "function",
+			Function: wireFunctionCall{Name: c.Name, Arguments: c.Arguments}})
+	}
+	return out
+}
+
+func fromWireToolCalls(calls []wireToolCall) []provider.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]provider.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, provider.ToolCall{ID: c.ID, Name: c.Function.Name, Arguments: c.Function.Arguments})
+	}
+	return out
+}
+
 // wireMessage is the OpenAI message format. Content is a plain string for
 // text-only messages and a list of content parts when images are attached.
 type wireMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string         `json:"role"`
+	Content    any            `json:"content"`
+	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 type contentPart struct {
@@ -150,7 +215,12 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 	out := make([]wireMessage, 0, len(msgs))
 	for _, m := range msgs {
 		if len(m.Images) == 0 {
-			out = append(out, wireMessage{Role: string(m.Role), Content: m.Content})
+			out = append(out, wireMessage{
+				Role:       string(m.Role),
+				Content:    m.Content,
+				ToolCalls:  toWireToolCalls(m.ToolCalls),
+				ToolCallID: m.ToolCallID,
+			})
 			continue
 		}
 		parts := make([]contentPart, 0, len(m.Images)+1)
@@ -183,6 +253,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
+		Tools:       toWireTools(req.Tools),
 	}
 	if req.Stream {
 		body.StreamOpts = &streamOptions{IncludeUsage: true}
@@ -222,8 +293,9 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 type chatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
+			Content          string         `json:"content"`
+			ReasoningContent string         `json:"reasoning_content"`
+			ToolCalls        []wireToolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage *usagePayload `json:"usage"`
@@ -259,8 +331,9 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("response contained no choices")})
 		return
 	}
+	toolCalls := fromWireToolCalls(out.Choices[0].Message.ToolCalls)
 	content := out.Choices[0].Message.Content
-	if content == "" && out.Choices[0].Message.ReasoningContent != "" {
+	if content == "" && len(toolCalls) == 0 && out.Choices[0].Message.ReasoningContent != "" {
 		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)
 	}
 	if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
@@ -270,7 +343,7 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	if usage == nil {
 		usage = estimateUsage(req, content)
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls})
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {

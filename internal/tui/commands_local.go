@@ -1001,10 +1001,15 @@ func (m *Model) toolsOverlay() string {
 	if m.toolsAutoApprove {
 		approval = "auto (no confirmation)"
 	}
+	protocol := "prompt-based (fenced blocks)"
+	if m.toolsNative {
+		protocol = "native function calling (auto-falls back if unsupported)"
+	}
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
 	m.kv(&b, "enabled", onOff(m.toolsOn))
 	m.kv(&b, "approval", approval)
+	m.kv(&b, "protocol", protocol)
 	m.kv(&b, "workspace", m.toolRunner.Root())
 	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
 	m.kv(&b, "file/output cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))

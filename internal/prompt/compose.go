@@ -63,6 +63,10 @@ type Input struct {
 	MemorySnippets []string
 	RecentMessages []provider.Message // prior turns, without system prompt
 	Include        Include
+	// OmitRaw skips the trailing user message. Used for tool-loop
+	// continuations, where the conversation already ends with tool results
+	// and appending a user turn would break the function-calling protocol.
+	OmitRaw bool
 }
 
 // Section is one labeled part of the composition, for /prompt preview.
@@ -142,12 +146,14 @@ func Compose(in Input) Output {
 	}
 	msgs = append(msgs, in.RecentMessages...)
 
-	// The raw user message: verbatim, always last.
-	msgs = append(msgs, provider.Message{
-		Role:    provider.RoleUser,
-		Content: in.RawMessage,
-		Images:  in.Images,
-	})
+	// The raw user message: verbatim, always last (unless omitted).
+	if !in.OmitRaw {
+		msgs = append(msgs, provider.Message{
+			Role:    provider.RoleUser,
+			Content: in.RawMessage,
+			Images:  in.Images,
+		})
+	}
 
 	// Preview-only sections for recent conversation and the raw message.
 	preview := make([]Section, len(sections), len(sections)+2)
@@ -158,7 +164,9 @@ func Compose(in Input) Output {
 			Content: summarizeRecent(in.RecentMessages),
 		})
 	}
-	preview = append(preview, Section{Title: "Raw User Message", Content: in.RawMessage})
+	if !in.OmitRaw {
+		preview = append(preview, Section{Title: "Raw User Message", Content: in.RawMessage})
+	}
 
 	return Output{Messages: msgs, Sections: preview}
 }

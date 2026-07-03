@@ -130,6 +130,28 @@ func TestRecentMessagesIncludedBetweenSystemAndRaw(t *testing.T) {
 	}
 }
 
+func TestOmitRawSkipsTrailingUserMessage(t *testing.T) {
+	recent := []provider.Message{
+		{Role: provider.RoleUser, Content: "list files"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "c1", Name: "list_dir"}}},
+		{Role: provider.RoleTool, Content: "a.txt", ToolCallID: "c1"},
+	}
+	out := Compose(Input{
+		SystemPrompt:   "sys",
+		RecentMessages: recent,
+		Mode:           ModeBalanced,
+		Include:        allIncludes(),
+		OmitRaw:        true,
+	})
+	if len(out.Messages) != 4 {
+		t.Fatalf("messages = %d, want system + 3 recent (no raw)", len(out.Messages))
+	}
+	last := out.Messages[len(out.Messages)-1]
+	if last.Role != provider.RoleTool {
+		t.Errorf("last message role = %s, want tool (continuation must not append a user turn)", last.Role)
+	}
+}
+
 func TestImagesRideOnRawMessage(t *testing.T) {
 	img := provider.Image{Data: []byte("png"), MIME: "image/png"}
 	out := Compose(Input{RawMessage: "what is this?", Images: []provider.Image{img}, Mode: ModeMinimal})

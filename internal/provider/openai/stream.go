@@ -18,11 +18,61 @@ type streamChunk struct {
 			Content string `json:"content"`
 			// Reasoning models (served by LM Studio, vLLM, …) stream their
 			// thinking separately from the visible answer.
-			ReasoningContent string `json:"reasoning_content"`
+			ReasoningContent string           `json:"reasoning_content"`
+			ToolCalls        []streamToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *usagePayload `json:"usage"`
+}
+
+// streamToolCall is one fragment of a streamed tool call: the id and name
+// arrive on the first fragment for an index, the JSON arguments in pieces.
+type streamToolCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// toolCallAccumulator reassembles streamed tool-call fragments by index.
+type toolCallAccumulator struct {
+	order []int
+	calls map[int]*provider.ToolCall
+}
+
+func (a *toolCallAccumulator) add(fragments []streamToolCall) {
+	if a.calls == nil {
+		a.calls = make(map[int]*provider.ToolCall)
+	}
+	for _, f := range fragments {
+		tc, ok := a.calls[f.Index]
+		if !ok {
+			tc = &provider.ToolCall{}
+			a.calls[f.Index] = tc
+			a.order = append(a.order, f.Index)
+		}
+		if f.ID != "" {
+			tc.ID = f.ID
+		}
+		if f.Function.Name != "" {
+			tc.Name = f.Function.Name
+		}
+		tc.Arguments += f.Function.Arguments
+	}
+}
+
+func (a *toolCallAccumulator) result() []provider.ToolCall {
+	if len(a.order) == 0 {
+		return nil
+	}
+	out := make([]provider.ToolCall, 0, len(a.order))
+	for _, idx := range a.order {
+		out = append(out, *a.calls[idx])
+	}
+	return out
 }
 
 // reasoningFallback formats captured reasoning when the model produced no
@@ -42,6 +92,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		usage      *provider.Usage
 		completion strings.Builder
 		reasoning  strings.Builder
+		toolCalls  toolCallAccumulator
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -70,6 +121,9 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			usage = chunk.Usage.toUsage()
 		}
 		for _, choice := range chunk.Choices {
+			// Tool-call fragments carry no visible text; reassemble them and
+			// report them with the Done event.
+			toolCalls.add(choice.Delta.ToolCalls)
 			if choice.Delta.ReasoningContent != "" {
 				reasoning.WriteString(choice.Delta.ReasoningContent)
 				// Emit reasoning as activity so consumers know the model is
@@ -95,9 +149,12 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		return
 	}
 
+	calls := toolCalls.result()
+
 	// A reasoning model that ran out of tokens produced no visible answer;
-	// surface the reasoning rather than an empty reply.
-	if completion.Len() == 0 && reasoning.Len() > 0 {
+	// surface the reasoning rather than an empty reply. A reply that is pure
+	// tool calls is not that case: the calls are the answer.
+	if completion.Len() == 0 && reasoning.Len() > 0 && len(calls) == 0 {
 		fallback := reasoningFallback(reasoning.String())
 		completion.WriteString(fallback)
 		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: fallback}) {
@@ -109,5 +166,5 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if usage == nil {
 		usage = estimateUsage(req, completion.String())
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls})
 }

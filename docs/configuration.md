@@ -70,7 +70,8 @@ section and [security.md](security.md)):
 | --- | --- | --- |
 | `enabled` | `false` | Master switch (or `/tools on` per session) |
 | `approve` | `ask` | `ask` prompts y/n before writes and non-read-only commands; `auto` runs them unprompted |
-| `max_iterations` | `4` | Tool rounds per user message before the loop stops |
+| `native` | `auto` | Tool-calling protocol: `auto` uses standard function calling (tools declared in the request, results returned as `role:"tool"` messages) and falls back automatically to the fenced-block prompt protocol when the backend rejects tools; `off` always uses fenced blocks |
+| `max_iterations` | `10` | Tool rounds per user message. When spent, the model is asked once to give its final answer without tools; the loop hard-stops only if it keeps requesting them |
 | `max_file_kb` | `512` | Per-file read/write and command output size cap |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 

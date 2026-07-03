@@ -119,6 +119,11 @@ type ToolsConfig struct {
 	// "ask" prompts in the TUI, "auto" runs them without asking.
 	Approve        string `mapstructure:"approve" yaml:"approve"`
 	CommandTimeout string `mapstructure:"command_timeout" yaml:"command_timeout"`
+	// Native selects the tool-calling protocol: "auto" (default) offers the
+	// tools via standard function calling and falls back to the fenced-block
+	// prompt protocol if the backend rejects them; "off" always uses the
+	// fenced-block protocol.
+	Native string `mapstructure:"native" yaml:"native"`
 }
 
 // RetryConfig configures request retries.
@@ -396,10 +401,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context.summary_max_tokens", 1200)
 
 	v.SetDefault("tools.enabled", false)
-	v.SetDefault("tools.max_iterations", 4)
+	v.SetDefault("tools.max_iterations", 10)
 	v.SetDefault("tools.max_file_kb", 512)
 	v.SetDefault("tools.approve", "ask")
 	v.SetDefault("tools.command_timeout", "30s")
+	v.SetDefault("tools.native", "auto")
 
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
@@ -493,16 +499,20 @@ context:
   summary_max_tokens: 1200
 
 # Workspace tools: lets the model list, read, and write files and run
-# commands under the directory llmtui was started from, via
-# "tool <name> <path>" fenced blocks in replies. Off by default — enable
-# here or per session with /tools on. Reads and read-only commands (ls,
-# grep, git status, …) run automatically; writes and other commands ask
-# for your approval first unless approve is set to auto.
+# commands under the directory llmtui was started from. Off by default —
+# enable here or per session with /tools on. Tool-capable models are driven
+# through standard native function calling (native: auto); backends without
+# tool support fall back to fenced "tool <name> <path>" blocks automatically.
+# Reads and read-only commands (ls, grep, git status, …) run automatically;
+# writes and other commands ask for your approval first unless approve is
+# set to auto.
 tools:
   enabled: false
   approve: ask # ask | auto
-  max_iterations: 4 # tool rounds per user message before the loop stops
-  max_file_kb: 512  # per-file read/write and command output size cap
+  native: auto # auto | off — off forces the fenced-block prompt protocol
+  max_iterations: 10 # tool rounds per user message; when spent, the model
+  #                    is asked to give its final answer without tools
+  max_file_kb: 512 # per-file read/write and command output size cap
   command_timeout: "30s"
 
 network:

@@ -124,19 +124,89 @@ type chatRequest struct {
 	Messages []wireMessage `json:"messages"`
 	Stream   bool          `json:"stream"`
 	Options  chatOptions   `json:"options"`
+	Tools    []wireTool    `json:"tools,omitempty"`
+}
+
+// wireTool declares one callable function (same shape as the OpenAI format).
+type wireTool struct {
+	Type     string       `json:"type"`
+	Function wireFunction `json:"function"`
+}
+
+type wireFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// wireToolCall is one tool invocation. Ollama transports the arguments as a
+// JSON object, not a string, so RawMessage bridges both directions.
+type wireToolCall struct {
+	Function struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	} `json:"function"`
 }
 
 // wireMessage is the native Ollama message format; images are base64 strings.
 type wireMessage struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Images  []string `json:"images,omitempty"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	Images    []string       `json:"images,omitempty"`
+	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
+}
+
+func toWireTools(specs []provider.ToolSpec) []wireTool {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]wireTool, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, wireTool{Type: "function", Function: wireFunction{
+			Name:        s.Name,
+			Description: s.Description,
+			Parameters:  s.Parameters,
+		}})
+	}
+	return out
+}
+
+func toWireToolCalls(calls []provider.ToolCall) []wireToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]wireToolCall, 0, len(calls))
+	for _, c := range calls {
+		var wc wireToolCall
+		wc.Function.Name = c.Name
+		if json.Valid([]byte(c.Arguments)) {
+			wc.Function.Arguments = json.RawMessage(c.Arguments)
+		} else {
+			wc.Function.Arguments = json.RawMessage("{}")
+		}
+		out = append(out, wc)
+	}
+	return out
+}
+
+func fromWireToolCalls(calls []wireToolCall) []provider.ToolCall {
+	out := make([]provider.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, provider.ToolCall{Name: c.Function.Name, Arguments: string(c.Function.Arguments)})
+	}
+	return out
 }
 
 func toWireMessages(msgs []provider.Message) []wireMessage {
 	out := make([]wireMessage, 0, len(msgs))
 	for _, m := range msgs {
-		wm := wireMessage{Role: string(m.Role), Content: m.Content}
+		wm := wireMessage{
+			Role:      string(m.Role),
+			Content:   m.Content,
+			ToolCalls: toWireToolCalls(m.ToolCalls),
+			ToolName:  m.ToolName,
+		}
 		for _, img := range m.Images {
 			wm.Images = append(wm.Images, base64.StdEncoding.EncodeToString(img.Data))
 		}
@@ -159,7 +229,8 @@ type chatChunk struct {
 	Message struct {
 		Content string `json:"content"`
 		// Thinking is streamed separately by reasoning models.
-		Thinking string `json:"thinking"`
+		Thinking  string         `json:"thinking"`
+		ToolCalls []wireToolCall `json:"tool_calls"`
 	} `json:"message"`
 	Done            bool   `json:"done"`
 	Error           string `json:"error"`
@@ -173,6 +244,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		Model:    req.Model,
 		Messages: toWireMessages(req.Messages),
 		Stream:   req.Stream,
+		Tools:    toWireTools(req.Tools),
 		Options: chatOptions{
 			Temperature: req.Temperature,
 			TopP:        req.TopP,
@@ -214,6 +286,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	var (
 		usage      *provider.Usage
 		completion strings.Builder
+		toolCalls  []provider.ToolCall
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -238,6 +311,11 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
+		}
+		if len(chunk.Message.ToolCalls) > 0 {
+			// Ollama sends each tool call complete (never fragmented), so
+			// collecting across chunks is enough; they ride the Done event.
+			toolCalls = append(toolCalls, fromWireToolCalls(chunk.Message.ToolCalls)...)
 		}
 		if chunk.Message.Content != "" {
 			completion.WriteString(chunk.Message.Content)
@@ -277,7 +355,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			Estimated:        true,
 		}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage})
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls})
 }
 
 // Capabilities describes the native Ollama API.

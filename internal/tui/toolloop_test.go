@@ -148,7 +148,7 @@ func TestMaybeRunToolsDisabledOrNoCalls(t *testing.T) {
 	}
 }
 
-func TestMaybeRunToolsIterationCap(t *testing.T) {
+func TestMaybeRunToolsIterationCapNudgesThenStops(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
@@ -156,11 +156,98 @@ func TestMaybeRunToolsIterationCap(t *testing.T) {
 	m.toolDepth = 2
 	withToolReply(m, "```tool list_dir\n```")
 
+	// First over-budget batch: nothing executes, but the model is asked once
+	// to wrap up so the turn still ends with a real answer.
+	if m.maybeRunTools() == nil {
+		t.Fatal("expected a wrap-up dispatch when the budget is spent")
+	}
+	if !m.toolNudged {
+		t.Error("toolNudged not set after the wrap-up request")
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if !strings.Contains(last.Content, "iteration limit") {
+		t.Errorf("wrap-up message missing the limit explanation: %q", last.Content)
+	}
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty on the wrap-up round", m.errText)
+	}
+
+	// The model insists on more tools anyway: now the loop hard-stops.
+	m.session.AddAssistant("```tool list_dir\n```")
 	if m.maybeRunTools() != nil {
-		t.Fatal("loop exceeded max_iterations")
+		t.Fatal("loop continued after the wrap-up request")
 	}
 	if !strings.Contains(m.errText, "tool loop stopped") {
 		t.Errorf("errText = %q", m.errText)
+	}
+}
+
+func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.session.AddUser("what files are here?")
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{ID: "call_1", Name: "list_dir", Arguments: `{"path":""}`},
+	}}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+	if cmd == nil {
+		t.Fatal("native tool calls did not trigger execution")
+	}
+
+	n := len(m.session.Messages)
+	if n < 2 {
+		t.Fatalf("messages = %d, want assistant + tool result", n)
+	}
+	assistant := m.session.Messages[n-2]
+	if assistant.Role != provider.RoleAssistant || len(assistant.ToolCalls) != 1 {
+		t.Errorf("assistant message = %+v, want one tool call", assistant)
+	}
+	result := m.session.Messages[n-1]
+	if result.Role != provider.RoleTool || result.ToolCallID != "call_1" || result.ToolName != "list_dir" {
+		t.Errorf("tool result = %+v", result)
+	}
+	if m.toolOK != 1 {
+		t.Errorf("toolOK = %d, want 1", m.toolOK)
+	}
+}
+
+func TestNativeToolCallsRespectApproval(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.session.AddUser("write a file")
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{ID: "call_1", Name: "write_file", Arguments: `{"path":"a.txt","content":"data"}`},
+	}}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+	if cmd != nil {
+		t.Fatal("write executed without approval")
+	}
+	if len(m.pendingCalls) != 1 {
+		t.Fatalf("pendingCalls = %d, want 1", len(m.pendingCalls))
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err == nil {
+		t.Fatal("file written before approval")
+	}
+
+	_, cmd = m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("expected a continuation command after approval")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Fatalf("file not written after approval: %v", err)
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleTool || last.ToolCallID != "call_1" {
+		t.Errorf("tool result = %+v", last)
 	}
 }
 

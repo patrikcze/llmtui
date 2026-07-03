@@ -38,8 +38,11 @@ const (
 	ToolRunCommand = "run_command"
 )
 
-// Call is one parsed tool invocation from an assistant reply.
+// Call is one tool invocation: parsed from a fenced block in an assistant
+// reply, or converted from a native function call (in which case ID is set
+// and the results must go back as role:"tool" messages).
 type Call struct {
+	ID   string
 	Tool string
 	Path string
 	Body string

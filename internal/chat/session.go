@@ -44,6 +44,12 @@ func (s *Session) AddAssistant(content string) {
 	s.Messages = append(s.Messages, provider.Message{Role: provider.RoleAssistant, Content: content})
 }
 
+// AddMessage appends a prebuilt message (assistant messages carrying tool
+// calls, role:"tool" results).
+func (s *Session) AddMessage(msg provider.Message) {
+	s.Messages = append(s.Messages, msg)
+}
+
 // RecordUsage folds one request's usage into the session totals and returns
 // the derived per-request stats.
 func (s *Session) RecordUsage(u provider.Usage, d time.Duration) RequestStats {

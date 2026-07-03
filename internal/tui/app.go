@@ -118,12 +118,15 @@ type Model struct {
 	// Workspace tools (list/read/write/run under the launch directory).
 	toolsOn          bool
 	toolsAutoApprove bool // "auto" approval mode: skip the y/n prompt
+	toolsNative      bool // offer tools via native function calling
 	toolRunner       *tools.Runner
-	toolDepth        int          // auto follow-up rounds for the current user turn
-	pendingCalls     []tools.Call // parsed calls awaiting the user's approval
-	toolOK           int          // executed tool calls (exit summary)
-	toolErr          int          // failed or denied tool calls (exit summary)
-	bypassCache      bool         // skip the response cache for the next dispatch
+	toolDepth        int                 // auto follow-up rounds for the current user turn
+	toolNudged       bool                // the budget-spent wrap-up request was already sent this turn
+	pendingCalls     []tools.Call        // parsed calls awaiting the user's approval
+	toolOK           int                 // executed tool calls (exit summary)
+	toolErr          int                 // failed or denied tool calls (exit summary)
+	bypassCache      bool                // skip the response cache for the next dispatch
+	streamToolCalls  []provider.ToolCall // native calls from the finishing stream
 
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
@@ -196,6 +199,7 @@ func New(opts Options) *Model {
 		toolsOn:     cfg.Tools.Enabled,
 
 		toolsAutoApprove: cfg.Tools.Approve == "auto",
+		toolsNative:      cfg.Tools.Native != "off",
 	}
 	m.rebuildFromConfig()
 	return m
@@ -444,6 +448,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case firstStreamMsg:
 		m.stream = msg.stream
 		m.lastDebug.Retries = msg.retries
+		if msg.toolsFellBack && m.toolsNative {
+			// The backend rejected native tool calling; use the fenced-block
+			// prompt protocol from the next request on.
+			m.toolsNative = false
+			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
+		}
 		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok})
 
 	case streamEventMsg:
@@ -534,13 +544,13 @@ func (m *Model) send() tea.Cmd {
 	m.relayout()
 	m.sentCount++
 	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
+	m.toolNudged = false
 	return m.dispatch(text, images)
 }
 
-// maybeRunTools handles tool blocks in the newest assistant reply: read-only
-// calls run immediately; mutating calls (writes, non-read-only commands) wait
-// for the user's y/n unless approvals are set to auto. The loop is bounded by
-// tools.max_iterations per user turn so a confused model cannot run forever.
+// maybeRunTools handles fenced ```tool blocks in the newest assistant reply.
+// This is the fallback protocol for models without native function calling;
+// native calls arrive structured on the Done event and skip the parsing.
 func (m *Model) maybeRunTools() tea.Cmd {
 	if !m.toolsOn || m.toolRunner == nil {
 		return nil
@@ -549,14 +559,29 @@ func (m *Model) maybeRunTools() tea.Cmd {
 	if n == 0 || m.session.Messages[n-1].Role != provider.RoleAssistant {
 		return nil
 	}
-	calls := tools.Parse(m.session.Messages[n-1].Content)
+	return m.startToolBatch(tools.Parse(m.session.Messages[n-1].Content))
+}
+
+// startToolBatch runs one batch of tool calls (native or parsed): read-only
+// calls run immediately; mutating calls (writes, non-read-only commands) wait
+// for the user's y/n unless approvals are set to auto. The loop is bounded by
+// tools.max_iterations per user turn; when the budget is spent the model is
+// told once to wrap up, so the turn still ends with a real answer.
+func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
 	if m.toolDepth >= m.toolMaxIter() {
-		m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", m.toolMaxIter())
-		m.refreshViewport()
-		return nil
+		if m.toolNudged {
+			// The model kept requesting tools even after being told to stop.
+			m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", m.toolMaxIter())
+			m.refreshViewport()
+			return nil
+		}
+		m.toolNudged = true
+		m.toolErr += len(calls)
+		m.notice = fmt.Sprintf("⚒ tool budget spent (%d rounds) — asking the model for its final answer", m.toolMaxIter())
+		return m.sendToolResults(tools.LimitResults(calls, m.toolMaxIter()))
 	}
 	if !m.toolsAutoApprove {
 		for _, c := range calls {
@@ -574,7 +599,13 @@ func (m *Model) toolMaxIter() int {
 	if m.cfg.Tools.MaxIterations > 0 {
 		return m.cfg.Tools.MaxIterations
 	}
-	return 4
+	return 10
+}
+
+// useNativeTools reports whether requests should offer the tools via native
+// function calling (versus the fenced-block prompt protocol).
+func (m *Model) useNativeTools() bool {
+	return m.toolsOn && m.toolRunner != nil && m.toolsNative
 }
 
 // runToolCalls executes an approved batch and feeds the results back.
@@ -608,6 +639,14 @@ func (m *Model) denyPendingTools() tea.Cmd {
 func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// Results must reach the model, not a stale cached reply.
 	m.bypassCache = true
+	// Native calls (they carry IDs) answer with role:"tool" messages per the
+	// function-calling protocol; parsed fenced blocks keep the text protocol.
+	if len(results) > 0 && results[0].Call.ID != "" {
+		for _, msg := range tools.NativeResults(results) {
+			m.session.AddMessage(msg)
+		}
+		return m.continueChat()
+	}
 	return m.dispatch(tools.FormatResults(results), nil)
 }
 
@@ -666,6 +705,9 @@ type firstStreamMsg struct {
 	event   provider.ChatEvent
 	ok      bool
 	retries int
+	// toolsFellBack reports that the backend rejected native tool specs and
+	// the request was retried without them.
+	toolsFellBack bool
 }
 
 func (m *Model) pasteImage() tea.Cmd {
@@ -844,8 +886,17 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream)
 	case provider.EventDone:
+		m.streamToolCalls = msg.event.ToolCalls
 		m.finishStream(msg.event.Usage)
 		// Tools only run on a clean finish, never on Esc/Ctrl+C partials.
+		// Native calls arrive structured on the Done event; otherwise fall
+		// back to parsing fenced blocks out of the reply text.
+		if len(msg.event.ToolCalls) > 0 && m.toolsOn && m.toolRunner != nil {
+			if cmd := m.startToolBatch(tools.CallsFromNative(msg.event.ToolCalls)); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
 		if cmd := m.maybeRunTools(); cmd != nil {
 			return m, cmd
 		}
@@ -912,20 +963,25 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	m.thinking = false
 	reply := m.streamBuf.String()
 	m.streamBuf.Reset()
+	toolCalls := m.streamToolCalls
+	m.streamToolCalls = nil
 	if m.cancelStream != nil {
 		m.cancelStream()
 		m.cancelStream = nil
 	}
 	m.idleWatchdog = nil
 	m.drainStream()
-	if reply != "" {
-		m.session.AddAssistant(reply)
+	if reply != "" || len(toolCalls) > 0 {
+		m.session.AddMessage(provider.Message{
+			Role:      provider.RoleAssistant,
+			Content:   reply,
+			ToolCalls: toolCalls,
+		})
 		m.replyCount++
 	}
-	// Cache the successful response (never failures or empty replies).
-	// Key, provider, and model come from the dispatch-time snapshot: the user
-	// may have run /model or /provider while this reply was streaming.
-	if reply != "" && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
+	// Cache the successful response (never failures, empty replies, or
+	// tool-calling turns — those depend on live workspace state).
+	if reply != "" && len(toolCalls) == 0 && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
 		m.lastDebug.CacheStatus != "bypass" &&
 		len(m.lastImages) == 0 && (!m.lastDebug.Stream || m.cfg.Cache.CacheStreamedResponses) {
 		if err := m.responseCache.Put(m.lastDebug.CacheKey, cache.Entry{
@@ -1088,8 +1144,23 @@ func (m *Model) refreshViewport() {
 		case provider.RoleAssistant:
 			b.WriteString(m.theme.AssistantLabel.Render("assistant"))
 			b.WriteString("\n")
-			b.WriteString(m.renderMarkdown(msg.Content))
+			if msg.Content != "" || len(msg.ToolCalls) == 0 {
+				b.WriteString(m.renderMarkdown(msg.Content))
+			}
+			// Native tool calls: show what the model asked for, so a
+			// tool-only turn never renders as an empty reply.
+			for _, c := range tools.CallsFromNative(msg.ToolCalls) {
+				b.WriteString(m.theme.SystemNote.Render("⚒ " + c.Describe()))
+				b.WriteString("\n")
+			}
 			b.WriteString("\n")
+		case provider.RoleTool:
+			// Native tool results: machinery, styled like the fenced-protocol
+			// results but one block per call.
+			b.WriteString(m.theme.SystemNote.Render("⚒ " + msg.ToolName))
+			b.WriteString("\n")
+			b.WriteString(m.theme.SystemNote.Render(msg.Content))
+			b.WriteString("\n\n")
 		}
 	}
 

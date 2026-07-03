@@ -3,6 +3,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -13,7 +14,26 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	// RoleTool carries the result of one tool call back to the model
+	// (standard function-calling protocol).
+	RoleTool Role = "tool"
 )
+
+// ToolCall is one function invocation requested by the model via native
+// function calling. Arguments is the raw JSON object text.
+type ToolCall struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// ToolSpec declares one callable function to the model. Parameters is a JSON
+// Schema object describing the arguments.
+type ToolSpec struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
 
 // Image is a binary image attachment for vision-capable models.
 type Image struct {
@@ -27,6 +47,12 @@ type Message struct {
 	Role    Role    `json:"role"`
 	Content string  `json:"content"`
 	Images  []Image `json:"-"`
+
+	// ToolCalls is set on assistant messages that request tool execution.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID and ToolName identify which call a RoleTool message answers.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
 }
 
 // ModelInfo describes a model available on a provider.
@@ -45,6 +71,10 @@ type ChatRequest struct {
 	TopP        float64
 	MaxTokens   int
 	Stream      bool
+	// Tools, when non-empty, enables native function calling: the specs are
+	// sent to the backend and the model may answer with ToolCalls instead of
+	// (or in addition to) text.
+	Tools []ToolSpec
 }
 
 // Usage reports token accounting for a completed request. Estimated is set
@@ -79,6 +109,9 @@ type ChatEvent struct {
 	Delta string
 	Usage *Usage
 	Err   error
+	// ToolCalls is set on EventDone when the model requested tool execution
+	// via native function calling.
+	ToolCalls []ToolCall
 }
 
 // Provider is implemented by every LLM backend.
