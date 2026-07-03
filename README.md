@@ -23,7 +23,7 @@ enter send · ctrl+l clear · ctrl+c quit
 ```
 
 Local-first: no telemetry, no external calls unless you configure them,
-API keys never logged.
+API keys never logged — see [docs/security.md](docs/security.md).
 
 ## Install
 
@@ -89,6 +89,9 @@ providers:
   openai_compatible:
     api_key_env: LLMTUI_API_KEY
 ```
+
+The full reference for every section lives in
+[docs/configuration.md](docs/configuration.md).
 
 ## Commands
 
@@ -258,3 +261,10 @@ internal/tui/             Bubble Tea chat screen
 internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme
 ```
+
+Design principles and layout are described in
+[docs/tui-design.md](docs/tui-design.md).
+
+## License
+
+[MIT](LICENSE)
