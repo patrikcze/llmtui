@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,6 +84,112 @@ func TestInputGrowsWithWrappedText(t *testing.T) {
 	}
 	if m.input.Height() != m.inputLines {
 		t.Errorf("textarea height %d != tracked lines %d", m.input.Height(), m.inputLines)
+	}
+}
+
+func pendingWrite(t *testing.T, m *Model) string {
+	t.Helper()
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.session.AddUser("write a file")
+	m.session.AddAssistant("```tool write_file a.txt\ndata\n```")
+	if m.maybeRunTools() != nil {
+		t.Fatal("write must wait for approval")
+	}
+	return root
+}
+
+func TestApprovalMenuArrowSelection(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	root := pendingWrite(t, m)
+
+	// Down twice lands on "No", Enter confirms it: batch denied, no file.
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.approvalIdx != approvalNo {
+		t.Fatalf("approvalIdx = %d, want %d", m.approvalIdx, approvalNo)
+	}
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("denial must be dispatched back to the model")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err == nil {
+		t.Fatal("file written despite selecting No")
+	}
+	if len(m.pendingCalls) != 0 {
+		t.Error("pending batch not cleared")
+	}
+}
+
+func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	root := pendingWrite(t, m)
+
+	if m.approvalIdx != approvalYes {
+		t.Fatalf("menu must start on Yes, got row %d", m.approvalIdx)
+	}
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected execution after confirming Yes")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Fatalf("file not written after Yes: %v", err)
+	}
+}
+
+func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	pendingWrite(t, m)
+
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if cmd == nil {
+		t.Fatal("expected execution after choosing 2")
+	}
+	if !m.toolsAutoApprove {
+		t.Error("row 2 must enable session auto-approve")
+	}
+}
+
+func TestApprovalMenuEscDenies(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	root := pendingWrite(t, m)
+
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("esc must deny and report back to the model")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err == nil {
+		t.Fatal("file written despite esc")
+	}
+	if m.toolErr != 1 {
+		t.Errorf("toolErr = %d, want 1", m.toolErr)
+	}
+}
+
+func TestApprovalMenuRendering(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 30)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.session.AddUser("run it")
+	m.session.AddAssistant("```tool run_command\nrm -i old.txt\n```")
+	m.maybeRunTools()
+	m.refreshViewport()
+
+	joined := strings.Join(strings.Fields(m.viewport.View()), " ")
+	for _, want := range []string{
+		"run command", "rm -i old.txt",
+		"Do you want to proceed?",
+		"❯ 1. Yes", "2. Yes, and don't ask again this session", "3. No",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("approval prompt missing %q", want)
+		}
 	}
 }
 

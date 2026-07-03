@@ -249,10 +249,12 @@ final answer rather than the turn dead-ending in an error.
 - Reads, listings, and provably read-only commands (`ls`, `grep`, `cat`,
   `find`, `git status/log/diff`, … with no shell metacharacters) run
   automatically.
-- **Writes and every other command stop and ask first** — `y` allows once,
-  `a` allows for the rest of the session, `n` denies (the model is told and
-  continues without it). Set `approve: auto` or `/tools auto` to skip
-  prompts entirely.
+- **Writes and every other command stop and ask first** with a
+  Claude-Code-style menu — the exact command or file is shown, then
+  `Yes` / `Yes, and don't ask again this session` / `No`, picked with
+  `↑`/`↓` + `Enter` (or `1`/`2`/`3`; `y`/`a`/`n` still work). `Esc`
+  denies — the model is told and continues without the action. Set
+  `approve: auto` or `/tools auto` to skip prompts entirely.
 
 Safety: tools are **off by default**; everything is confined to the launch
 directory (absolute paths, `..`, and symlink escapes rejected); writes into

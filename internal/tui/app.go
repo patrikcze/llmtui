@@ -123,6 +123,7 @@ type Model struct {
 	toolDepth        int                 // auto follow-up rounds for the current user turn
 	toolNudged       bool                // the budget-spent wrap-up request was already sent this turn
 	pendingCalls     []tools.Call        // parsed calls awaiting the user's approval
+	approvalIdx      int                 // selected row in the approval menu (0 yes, 1 always, 2 no)
 	toolOK           int                 // executed tool calls (exit summary)
 	toolErr          int                 // failed or denied tool calls (exit summary)
 	bypassCache      bool                // skip the response cache for the next dispatch
@@ -602,6 +603,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		for _, c := range calls {
 			if tools.NeedsApproval(c) {
 				m.pendingCalls = calls
+				m.approvalIdx = 0
 				m.refreshViewport()
 				return nil
 			}
@@ -665,29 +667,68 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	return m.dispatch(tools.FormatResults(results), nil)
 }
 
-// updateToolApproval owns the keyboard while an approval prompt is showing:
-// y runs the batch once, a approves everything for the rest of the session,
-// n/esc denies. Ctrl+C still quits; everything else is swallowed so stray
-// typing cannot approve anything by accident.
+// Approval menu rows, Claude-Code style: pick with ↑/↓ + Enter, or jump
+// straight there with 1/2/3 (y/a/n still work as shortcuts).
+const (
+	approvalYes = iota
+	approvalAlways
+	approvalNo
+	approvalCount
+)
+
+// updateToolApproval owns the keyboard while an approval prompt is showing.
+// Ctrl+C still quits; everything else is swallowed so stray typing cannot
+// approve anything by accident.
 func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC {
+	switch msg.Type {
+	case tea.KeyCtrlC:
 		return m.handleCtrlC()
+	case tea.KeyUp:
+		m.approvalIdx = (m.approvalIdx + approvalCount - 1) % approvalCount
+		m.refreshViewport()
+		return m, nil
+	case tea.KeyDown, tea.KeyTab:
+		m.approvalIdx = (m.approvalIdx + 1) % approvalCount
+		m.refreshViewport()
+		return m, nil
+	case tea.KeyEnter:
+		return m, m.resolveApproval(m.approvalIdx)
+	case tea.KeyEsc:
+		return m, m.resolveApproval(approvalNo)
 	}
 	switch msg.String() {
-	case "y", "Y":
+	case "1", "y", "Y":
+		return m, m.resolveApproval(approvalYes)
+	case "2", "a", "A":
+		return m, m.resolveApproval(approvalAlways)
+	case "3", "n", "N":
+		return m, m.resolveApproval(approvalNo)
+	case "k":
+		m.approvalIdx = (m.approvalIdx + approvalCount - 1) % approvalCount
+		m.refreshViewport()
+	case "j":
+		m.approvalIdx = (m.approvalIdx + 1) % approvalCount
+		m.refreshViewport()
+	}
+	return m, nil
+}
+
+// resolveApproval executes the chosen menu row for the pending batch.
+func (m *Model) resolveApproval(choice int) tea.Cmd {
+	switch choice {
+	case approvalYes:
 		calls := m.pendingCalls
 		m.pendingCalls = nil
-		return m, m.runToolCalls(calls)
-	case "a", "A":
+		return m.runToolCalls(calls)
+	case approvalAlways:
 		m.toolsAutoApprove = true
 		calls := m.pendingCalls
 		m.pendingCalls = nil
 		m.notice = "⚒ tool approvals set to auto for this session (/tools ask to revert)"
-		return m, m.runToolCalls(calls)
-	case "n", "N", "esc":
-		return m, m.denyPendingTools()
+		return m.runToolCalls(calls)
+	default:
+		return m.denyPendingTools()
 	}
-	return m, nil
 }
 
 // retryLast re-sends the last user message with current settings.
@@ -1257,17 +1298,57 @@ func (m *Model) refreshViewport() {
 	// Approval prompt: list exactly what the model wants to do before any
 	// of it happens.
 	if len(m.pendingCalls) > 0 {
-		b.WriteString(m.theme.BadgeWarn.Render("⚒ the model wants to:"))
-		b.WriteString("\n")
-		for _, c := range m.pendingCalls {
-			b.WriteString("  " + m.theme.StatusValue.Render("▸ "+c.Describe()) + "\n")
-		}
-		b.WriteString(m.theme.SystemNote.Render("  y allow once · a always allow (this session) · n deny"))
-		b.WriteString("\n")
+		b.WriteString(m.renderApprovalPrompt())
 	}
 
 	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(b.String()))
 	m.viewport.GotoBottom()
+}
+
+// renderApprovalPrompt draws the confirmation block, Claude-Code style:
+// what the model wants to do (commands shown verbatim), then a selectable
+// Yes / Yes-always / No menu driven by ↑/↓ + Enter.
+func (m *Model) renderApprovalPrompt() string {
+	var b strings.Builder
+	text := lipgloss.NewStyle().Foreground(m.theme.Text)
+
+	for _, c := range m.pendingCalls {
+		switch c.Tool {
+		case tools.ToolRunCommand:
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ run command"))
+			b.WriteString("\n")
+			b.WriteString(text.Render("    " + strings.TrimSpace(c.Body)))
+			b.WriteString("\n")
+		case tools.ToolWriteFile:
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ write file"))
+			b.WriteString("\n")
+			b.WriteString(text.Render(fmt.Sprintf("    %s (%d bytes)", c.Path, len(c.Body))))
+			b.WriteString("\n")
+		default:
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + c.Describe()))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(text.Render("Do you want to proceed?"))
+	b.WriteString("\n")
+	rows := []string{
+		"1. Yes",
+		"2. Yes, and don't ask again this session",
+		"3. No",
+	}
+	for i, row := range rows {
+		if i == m.approvalIdx {
+			b.WriteString(m.theme.StatusValue.Render("❯ " + row))
+		} else {
+			b.WriteString(m.theme.SystemNote.Render("  " + row))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(m.theme.HelpFooter.Render("↑/↓ select · enter confirm · esc cancels · y/a/n shortcuts"))
+	b.WriteString("\n")
+	return b.String()
 }
 
 // View renders the full screen.
