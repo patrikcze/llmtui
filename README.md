@@ -173,6 +173,7 @@ Local-LLM experience helpers:
 | `/prompt preview` | See exactly what will be sent — the raw message is never rewritten ([docs](docs/prompt-composition.md)) |
 | `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
 | `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
+| `/tools` | Opt-in workspace file tools — the model can create, read, and list files in your current directory |
 | `/template` | Reusable conversation templates from the config |
 | `/doctor` | Provider, model, and network diagnostics |
 | `/keys` | Key inspector — verify what your terminal sends ([docs](docs/keyboard.md)) |
@@ -197,6 +198,38 @@ chat:
 
 Clipboard backends: macOS `pngpaste` (optional, faster) or built-in
 AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.
+
+## Workspace tools (agent mode)
+
+With tools enabled, the model can act on files in the directory you started
+`llmtui` from — ask for a script and it lands on disk, not just in the chat:
+
+```text
+you: write a backup script and save it as scripts/backup.sh
+assistant: (emits a write_file tool block)
+⚒ tools: wrote 214 bytes to scripts/backup.sh
+assistant: Saved. Run it with: sh scripts/backup.sh
+```
+
+Enable per session with `/tools on` (status: `/tools`), or permanently:
+
+```yaml
+tools:
+  enabled: true
+  max_iterations: 4 # tool rounds per user message
+  max_file_kb: 512  # per-file read/write cap
+```
+
+Three tools are available: `list_dir`, `read_file`, and `write_file`. The
+model calls them with fenced blocks in its reply; llmtui executes them and
+feeds the results back automatically until the model answers normally (or
+the round limit hits). Every action is shown in the chat.
+
+Safety: tools are **off by default**, everything is confined to the launch
+directory (absolute paths, `..`, and symlink escapes are rejected), there is
+no delete or execute tool, and file sizes are capped. Works with any local
+model — no native function-calling support required, though instruction-tuned
+models ≥7B follow the tool syntax most reliably.
 
 ## History & usage stats
 
@@ -270,6 +303,7 @@ internal/cache/           local response cache (/cache)
 internal/contextmgr/      context-window budgeting + heuristic summaries
 internal/memory/          opt-in local memory snippets (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
+internal/tools/           workspace file tools for agent mode (/tools)
 internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log
 internal/clipboard/       image paste / text copy via platform tools

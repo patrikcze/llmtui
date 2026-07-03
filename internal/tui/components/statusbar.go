@@ -25,6 +25,7 @@ type StatusBarData struct {
 	Template     string
 	CacheOn      bool
 	SummaryOn    bool
+	ToolsOn      bool
 }
 
 // StatusBar renders the one-line status bar.
@@ -64,6 +65,9 @@ func StatusBar(t styles.Theme, d StatusBarData, width int) string {
 	}
 	if d.CacheOn {
 		parts = append(parts, t.StatusKey.Render("cache ")+t.StatusValue.Render("on"))
+	}
+	if d.ToolsOn {
+		parts = append(parts, t.StatusKey.Render("tools ")+t.BadgeOK.Render("on"))
 	}
 
 	tokens := fmt.Sprintf("%d tok", d.TotalTokens)

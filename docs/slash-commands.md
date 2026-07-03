@@ -66,6 +66,12 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | `/memory remove <id>` / `/memory clear` | Forget |
 | `/memory on` / `/memory off` | Toggle for this session |
 
+## Tools
+| Command | Description |
+| --- | --- |
+| `/tools` · `/tools status` | Workspace tools overlay: state, workspace root, limits |
+| `/tools on` / `/tools off` | Let the model list/read/write files under the launch directory |
+
 ## Diagnostics
 | Command | Description |
 | --- | --- |

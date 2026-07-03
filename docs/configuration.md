@@ -60,6 +60,18 @@ as built-ins even with an empty config. `default_provider` and
 | `force_vision` | `false` | Allow image paste for unrecognized models |
 | `model_profile` | auto | Pin a model profile by name |
 
+### `tools`
+
+Workspace file tools let the model list, read, and write files under the
+directory llmtui was launched from (see the README's "Workspace tools"
+section and [security.md](security.md)):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch (or `/tools on` per session) |
+| `max_iterations` | `4` | Tool rounds per user message before the loop stops |
+| `max_file_kb` | `512` | Per-file read/write size cap |
+
 ### `cache`, `memory`, `prompt`, `context`, `network`
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),

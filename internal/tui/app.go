@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +27,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
+	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
@@ -113,6 +115,12 @@ type Model struct {
 	replyCount int
 	savedPath  string
 
+	// Workspace file tools (list/read/write under the launch directory).
+	toolsOn     bool
+	toolRunner  *tools.Runner
+	toolDepth   int  // auto follow-up rounds for the current user turn
+	bypassCache bool // skip the response cache for the next dispatch
+
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
 	memStore      *memory.Store
@@ -181,6 +189,7 @@ func New(opts Options) *Model {
 		profileMode: profileMode,
 		ctxStrategy: ctxStrategy,
 		cfgPath:     opts.ConfigPath,
+		toolsOn:     cfg.Tools.Enabled,
 	}
 	m.rebuildFromConfig()
 	return m
@@ -209,6 +218,11 @@ func (m *Model) rebuildFromConfig() {
 	m.memStore = nil
 	if path, err := history.ExpandHome(cfg.Memory.Path); err == nil && path != "" {
 		m.memStore = memory.NewStore(path, cfg.Memory.MaxSnippets)
+	}
+
+	m.toolRunner = nil
+	if wd, err := os.Getwd(); err == nil {
+		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
 	}
 
 	// Config-defined profiles are matched before built-ins.
@@ -502,7 +516,44 @@ func (m *Model) send() tea.Cmd {
 	m.attachments = nil
 	m.syncInputHeight()
 	m.relayout()
+	m.sentCount++
+	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
 	return m.dispatch(text, images)
+}
+
+// maybeRunTools executes any tool blocks in the newest assistant reply and
+// feeds the results back to the model, bounded by tools.max_iterations per
+// user turn so a confused model cannot loop forever.
+func (m *Model) maybeRunTools() tea.Cmd {
+	if !m.toolsOn || m.toolRunner == nil {
+		return nil
+	}
+	n := len(m.session.Messages)
+	if n == 0 || m.session.Messages[n-1].Role != provider.RoleAssistant {
+		return nil
+	}
+	calls := tools.Parse(m.session.Messages[n-1].Content)
+	if len(calls) == 0 {
+		return nil
+	}
+	maxIter := m.cfg.Tools.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 4
+	}
+	if m.toolDepth >= maxIter {
+		m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", maxIter)
+		m.refreshViewport()
+		return nil
+	}
+	m.toolDepth++
+	results := make([]tools.Result, 0, len(calls))
+	for _, c := range calls {
+		results = append(results, m.toolRunner.Execute(c))
+	}
+	m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, maxIter)
+	// Results must reach the model, not a stale cached reply.
+	m.bypassCache = true
+	return m.dispatch(tools.FormatResults(results), nil)
 }
 
 // retryLast re-sends the last user message with current settings.
@@ -526,6 +577,7 @@ func (m *Model) retryLast() tea.Cmd {
 		}
 	}
 	m.notice = "retrying last message"
+	m.sentCount++
 	return m.dispatch(m.lastUserMsg, m.lastImages)
 }
 
@@ -713,6 +765,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.stream)
 	case provider.EventDone:
 		m.finishStream(msg.event.Usage)
+		// Tools only run on a clean finish, never on Esc/Ctrl+C partials.
+		if cmd := m.maybeRunTools(); cmd != nil {
+			return m, cmd
+		}
 		return m, nil
 	case provider.EventError:
 		// A cancellation caused by the idle watchdog surfaces here as
@@ -790,6 +846,7 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	// Key, provider, and model come from the dispatch-time snapshot: the user
 	// may have run /model or /provider while this reply was streaming.
 	if reply != "" && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
+		m.lastDebug.CacheStatus != "bypass" &&
 		len(m.lastImages) == 0 && (!m.lastDebug.Stream || m.cfg.Cache.CacheStreamedResponses) {
 		if err := m.responseCache.Put(m.lastDebug.CacheKey, cache.Entry{
 			Response:         reply,
@@ -917,6 +974,15 @@ func (m *Model) refreshViewport() {
 	for _, msg := range m.session.Messages {
 		switch msg.Role {
 		case provider.RoleUser:
+			// Tool results travel as user messages; style them as machinery,
+			// not as something the human typed.
+			if strings.HasPrefix(msg.Content, tools.ResultsPrefix) {
+				b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
+				b.WriteString("\n")
+				b.WriteString(m.theme.SystemNote.Render(msg.Content))
+				b.WriteString("\n\n")
+				continue
+			}
 			b.WriteString(m.theme.UserLabel.Render("you"))
 			b.WriteString("\n")
 			b.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(msg.Content))
@@ -1005,6 +1071,7 @@ func (m *Model) View() string {
 		ContextLimit: ctxWindow,
 		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
 		SummaryOn:    m.summary != "",
+		ToolsOn:      m.toolsOn,
 	}, m.width)
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")

@@ -40,6 +40,12 @@ add` reminds you).
 
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
+- Workspace tools (`/tools`) are off by default. When enabled, the model can
+  only touch files under the directory llmtui was launched from: absolute
+  paths, `..`, and symlinks resolving outside the workspace are rejected;
+  reads and writes are size-capped; and there is no delete or
+  shell-execution tool. Every tool action is displayed in the chat as it
+  happens.
 - Debug output (`/debug last`) shows request shape, sections, and timings,
   never credentials.
 - The `privacy` config section documents intent (`local_first`,

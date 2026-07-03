@@ -15,6 +15,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/tools"
 )
 
 // debugInfo captures the last request for /debug last.
@@ -167,6 +168,9 @@ func (m *Model) compose(raw string, images []provider.Image, preview bool) (prom
 	}
 
 	systemPrompt := m.cfg.Chat.SystemPrompt
+	if m.toolsOn && m.toolRunner != nil {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + tools.Instructions(m.toolRunner.Root()))
+	}
 	templatePrompt := ""
 	if m.template != "" {
 		if t, ok := m.cfg.Templates[m.template]; ok {
@@ -218,11 +222,12 @@ func (m *Model) cacheKey(raw string) cache.Key {
 func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.lastUserMsg = raw
 	m.lastImages = images
-	m.sentCount++
+	skipCache := m.bypassCache
+	m.bypassCache = false
 
 	// Cache lookup happens before composition mutates context state.
 	key := m.cacheKey(raw)
-	if m.responseCache != nil && m.responseCache.Enabled() && len(images) == 0 {
+	if !skipCache && m.responseCache != nil && m.responseCache.Enabled() && len(images) == 0 {
 		if entry, ok := m.responseCache.Get(key); ok {
 			m.session.AddUser(raw)
 			m.session.AddAssistant(entry.Response)
@@ -266,6 +271,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	cacheStatus := "miss"
 	if m.responseCache == nil || !m.responseCache.Enabled() {
 		cacheStatus = "disabled"
+	}
+	if skipCache {
+		cacheStatus = "bypass"
 	}
 	m.lastDebug = debugInfo{
 		When:        time.Now(),

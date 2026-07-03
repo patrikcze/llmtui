@@ -57,7 +57,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Diagnostics", "Session",
+	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -127,6 +127,9 @@ func slashCommands() []slashCommand {
 
 		// --- Memory ---
 		{name: "memory", usage: "/memory [on|off|add <text>|list|remove <id>|clear]", desc: "local memory snippets (opt-in)", category: "Memory", run: cmdMemory},
+
+		// --- Tools ---
+		{name: "tools", usage: "/tools [on|off|status]", desc: "let the model read/write files in the current directory", category: "Tools", blockWhileThinking: true, run: cmdTools},
 
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]]", desc: "provider and model diagnostics", category: "Diagnostics", run: cmdDoctor},

@@ -20,6 +20,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
 
@@ -963,4 +964,44 @@ func memState(m *Model) string {
 		return " · session: on"
 	}
 	return " · session: off"
+}
+
+func cmdTools(m *Model, args string) tea.Cmd {
+	sub, _ := splitArgs(args)
+	if m.toolRunner == nil {
+		return m.fail("tools unavailable: could not resolve the working directory")
+	}
+	switch sub {
+	case "", "status":
+		m.openOverlay(m.toolsOverlay())
+	case "on":
+		m.toolsOn = true
+		m.notice = "⚒ workspace tools enabled — the model can read/write files under " + m.toolRunner.Root()
+	case "off":
+		m.toolsOn = false
+		m.notice = "workspace tools disabled"
+	default:
+		return m.fail("usage: /tools [on|off|status]")
+	}
+	return nil
+}
+
+func (m *Model) toolsOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
+	m.kv(&b, "enabled", onOff(m.toolsOn))
+	m.kv(&b, "workspace", m.toolRunner.Root())
+	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
+	m.kv(&b, "file size cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))
+	b.WriteString("\n")
+	b.WriteString(m.theme.UserLabel.Render("available tools") + "\n")
+	m.kv(&b, tools.ToolListDir, "list a directory in the workspace")
+	m.kv(&b, tools.ToolReadFile, "read a file's contents")
+	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file")
+	b.WriteString("\n")
+	b.WriteString(m.theme.SystemNote.Render("the model acts via \"tool <name> <path>\" fenced blocks; everything is\nconfined to the workspace directory and every action is shown in the chat") + "\n")
+	if !m.toolsOn {
+		b.WriteString("\n" + m.theme.SystemNote.Render("enable with /tools on (or tools.enabled in config)") + "\n")
+	}
+	return m.overlayFooter(&b)
 }

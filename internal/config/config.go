@@ -108,6 +108,14 @@ type ContextConfig struct {
 	SummaryMaxTokens       int    `mapstructure:"summary_max_tokens" yaml:"summary_max_tokens"`
 }
 
+// ToolsConfig configures workspace file tools for the chat (the model can
+// list, read, and write files under the directory llmtui was started from).
+type ToolsConfig struct {
+	Enabled       bool `mapstructure:"enabled" yaml:"enabled"`
+	MaxIterations int  `mapstructure:"max_iterations" yaml:"max_iterations"`
+	MaxFileKB     int  `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+}
+
 // RetryConfig configures request retries.
 type RetryConfig struct {
 	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
@@ -152,6 +160,7 @@ type Config struct {
 	Memory          MemoryConfig                  `mapstructure:"memory" yaml:"memory"`
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
+	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
 	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
 	ModelProfiles   map[string]ModelProfileConfig `mapstructure:"model_profiles" yaml:"model_profiles,omitempty"`
@@ -381,6 +390,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context.keep_last_messages", 8)
 	v.SetDefault("context.summary_max_tokens", 1200)
 
+	v.SetDefault("tools.enabled", false)
+	v.SetDefault("tools.max_iterations", 4)
+	v.SetDefault("tools.max_file_kb", 512)
+
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
 	v.SetDefault("network.retry.enabled", true)
@@ -471,6 +484,14 @@ context:
   summarize_after_messages: 12
   keep_last_messages: 8
   summary_max_tokens: 1200
+
+# Workspace file tools: lets the model list, read, and write files under the
+# directory llmtui was started from, via "tool <name> <path>" fenced blocks
+# in replies. Off by default — enable here or per session with /tools on.
+tools:
+  enabled: false
+  max_iterations: 4 # tool rounds per user message before the loop stops
+  max_file_kb: 512  # per-file read/write size cap
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token
