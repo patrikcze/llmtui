@@ -474,10 +474,11 @@ context:
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token
-  # before giving up. It resets on every token, so a slow model that keeps
-  # producing output is never cut off — only a genuinely stalled server
-  # trips it. Raise it if your model has long pauses (e.g. heavy reasoning
-  # before the first token).
+  # before giving up. It resets on every token and on reasoning activity, so
+  # a model that keeps producing output (or is actively thinking) is never
+  # cut off — only a genuine stall trips it. Raise it only if your model
+  # pauses a long time before its first token (a cold load). You can also set
+  # this without editing the file: LLMTUI_NETWORK_TIMEOUT=600s
   timeout: "120s"
   connect_timeout: "10s"
   retry:

@@ -68,13 +68,23 @@ Documented in detail in [cache.md](cache.md), [memory.md](memory.md),
 
 ```yaml
 network:
-  timeout: "120s"        # whole-request ceiling; raise on slow machines
-  connect_timeout: "10s"
+  # Inactivity timeout: the maximum wait for the *next* streamed token. It
+  # resets on every token — and on reasoning activity — so a model that keeps
+  # producing output is never cut off, however long the full answer is. Only
+  # a genuine stall trips it. See docs/providers.md.
+  timeout: "120s"
+  connect_timeout: "10s"   # connection-attempt timeout
   retry:
-    enabled: true        # retries only transient network errors
+    enabled: true          # retries only transient network errors
     max_attempts: 2
     backoff: "750ms"
 ```
+
+`network.timeout` is the value to raise for a slow model with a long pause
+before its first token (a cold load, or lengthy thinking that produces no
+tokens at all). Set it in the file, or without a config file via
+`LLMTUI_NETWORK_TIMEOUT=600s`, or per run with `--config`. Precedence is the
+usual flags > env > file > defaults, so an env var overrides the file.
 
 ### `templates` and `model_profiles`
 

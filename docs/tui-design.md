@@ -52,6 +52,9 @@ keeps them testable without a terminal.
 - Streaming renders token-by-token into the viewport; the whole frame is
   composed with `lipgloss.JoinVertical`, so Bubble Tea diffs cleanly and
   nothing flickers.
+- Reasoning models show a live `thinking…` indicator (with a running token
+  estimate) while they produce hidden reasoning, so a long pre-answer pause
+  reads as active work rather than a frozen screen.
 - Resize recomputes every panel height; the viewport never collapses below
   three rows and the markdown renderer rebuilds only when the width changed.
 - Mouse support (wheel scrolling) is an enhancement only; `Ctrl+O` releases

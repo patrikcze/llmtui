@@ -15,12 +15,24 @@ Unknown backends get conservative defaults.
 
 - `network.connect_timeout` (default 10s) bounds connection attempts.
 - `network.timeout` (default 120s) is an **inactivity** timeout for streams:
-  it's the maximum wait for the *next* token and resets on every token, so a
-  slow local model is never cut off mid-answer as long as it keeps producing
-  output. Only a stalled server (no tokens for that long) trips it. For a
-  non-streaming request it acts as a whole-response cap. Raise it if your
-  model pauses a long time before the first token (e.g. heavy reasoning or a
-  cold model load).
+  the maximum wait for the *next* token. It resets on every token, so a slow
+  local model is never cut off mid-answer as long as it keeps producing
+  output, however long the full reply. For a non-streaming request it acts as
+  a whole-response cap.
+  - Set it without a config file via `LLMTUI_NETWORK_TIMEOUT=600s`, or in the
+    config's `network.timeout`.
+  - Only a genuine stall trips it — the message is
+    *"no response from &lt;provider&gt; for &lt;timeout&gt; — the model may be
+    stuck…"*, and any partial output is kept.
+  - Raise it when the model pauses a long time **before its first token** —
+    a cold model load, or thinking that emits nothing at all for that long.
+- **Reasoning models** (that "think" before answering) stream their thinking
+  separately (OpenAI `reasoning_content`, Ollama `thinking`). llmtui treats
+  that as activity: it resets the inactivity timer (so a long thinking phase
+  never times out) and shows a live `thinking…` indicator with a running
+  token estimate. The thinking is not part of the visible answer and is not
+  cached; if the model spends its whole budget thinking without answering,
+  the reasoning is surfaced with a note to raise `chat.max_tokens`.
 - Transient failures (connection refused/reset, timeouts) retry up to
   `network.retry.max_attempts` with `network.retry.backoff` — HTTP errors
   (wrong model, bad request) and user cancellations are never retried.
