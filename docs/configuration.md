@@ -20,7 +20,10 @@ Highest wins:
    `--no-stream`, `--debug`, `--config`)
 2. Environment variables, prefix `LLMTUI_` (`LLMTUI_PROVIDER`,
    `LLMTUI_MODEL`, `LLMTUI_BASE_URL`, `LLMTUI_API_KEY`,
-   `LLMTUI_CHAT_TEMPERATURE`, …; dots become underscores)
+   `LLMTUI_CHAT_TEMPERATURE`, `LLMTUI_CHAT_MAX_TOKENS`,
+   `LLMTUI_NETWORK_TIMEOUT`, …; dots become underscores). This lets you tune
+   the common knobs without a config file, e.g.
+   `LLMTUI_NETWORK_TIMEOUT=600s ./llmtui chat`.
 3. The YAML config file
 4. Built-in defaults
 

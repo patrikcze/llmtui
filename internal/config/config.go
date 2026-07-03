@@ -254,9 +254,15 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	// Override keys have no defaults, so Unmarshal only sees their env
-	// values (LLMTUI_PROVIDER, LLMTUI_MODEL, ...) with an explicit binding.
-	for _, key := range []string{"provider", "model", "base_url", "api_key", "no_stream", "debug"} {
+	// Explicit env bindings. Override keys (provider, model, …) have no
+	// defaults, so Unmarshal only sees them when bound. Nested keys are bound
+	// too so common tuning works without a config file, e.g.
+	// LLMTUI_NETWORK_TIMEOUT=600s or LLMTUI_CHAT_MAX_TOKENS=8192.
+	for _, key := range []string{
+		"provider", "model", "base_url", "api_key", "no_stream", "debug",
+		"network.timeout", "network.connect_timeout",
+		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
+	} {
 		if err := v.BindEnv(key); err != nil {
 			return nil, fmt.Errorf("bind env %s: %w", key, err)
 		}

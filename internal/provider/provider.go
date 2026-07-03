@@ -66,6 +66,11 @@ const (
 	EventDone
 	// EventError signals the stream failed; Err is set.
 	EventError
+	// EventReasoning carries a chunk of a reasoning model's "thinking"
+	// (e.g. OpenAI reasoning_content, Ollama thinking). It is progress, not
+	// part of the visible answer: consumers should treat it as activity
+	// (resetting inactivity timers) and may show it as a thinking indicator.
+	EventReasoning
 )
 
 // ChatEvent is one item on the streaming channel returned by Chat.

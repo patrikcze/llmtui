@@ -246,6 +246,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.session.AddUser(raw, images...)
 	m.thinking = true
 	m.streamBuf.Reset()
+	m.reasoningLen = 0
 	m.streamStart = time.Now()
 	m.errText = ""
 	m.refreshViewport()

@@ -91,6 +91,7 @@ type Model struct {
 	streamCtx     context.Context
 	idleWatchdog  *time.Timer
 	idleTimeout   time.Duration
+	reasoningLen  int // chars of "thinking" streamed before the visible answer
 	attachments   []provider.Image
 	frame         int
 	renderWidth   int
@@ -679,6 +680,17 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.event.Type {
+	case provider.EventReasoning:
+		// The model is thinking (reasoning_content). It produces no visible
+		// answer yet, but it is active — reset the idle deadline and show a
+		// live indicator so a long thinking phase never looks frozen or times
+		// out.
+		m.reasoningLen += len(msg.event.Delta)
+		if m.idleWatchdog != nil {
+			m.idleWatchdog.Reset(m.idleTimeout)
+		}
+		m.refreshViewport()
+		return m, waitForEvent(m.stream)
 	case provider.EventDelta:
 		m.streamBuf.WriteString(msg.event.Delta)
 		// A token arrived: the stream is healthy, so push the idle deadline out.
@@ -909,8 +921,15 @@ func (m *Model) refreshViewport() {
 	if m.thinking {
 		b.WriteString(m.theme.AssistantLabel.Render("assistant"))
 		b.WriteString("\n")
-		if m.streamBuf.Len() > 0 {
+		switch {
+		case m.streamBuf.Len() > 0:
 			b.WriteString(m.streamBuf.String())
+			b.WriteString("\n")
+		case m.reasoningLen > 0:
+			// Reasoning model is still thinking; show progress so the wait
+			// is visible rather than a frozen screen.
+			b.WriteString(m.theme.SystemNote.Render(
+				fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4))))
 			b.WriteString("\n")
 		}
 	}

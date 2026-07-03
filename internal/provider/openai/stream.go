@@ -72,6 +72,12 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		for _, choice := range chunk.Choices {
 			if choice.Delta.ReasoningContent != "" {
 				reasoning.WriteString(choice.Delta.ReasoningContent)
+				// Emit reasoning as activity so consumers know the model is
+				// working during a long thinking phase (and don't time out).
+				if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: choice.Delta.ReasoningContent}) {
+					provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
+					return
+				}
 			}
 			if choice.Delta.Content == "" {
 				continue

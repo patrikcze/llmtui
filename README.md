@@ -220,6 +220,19 @@ provider/model resolution, and pings every configured backend.
 - **"offline demo mode" banner in chat** — no backend answered the health
   check at startup; start Ollama/LM Studio or fix `base_url`, then run
   `/config reload` in the chat (or restart) to reconnect.
+- **Generation stops with "no response … the model may be stuck"** —
+  `network.timeout` is the maximum wait for the *next* token (it resets on
+  every token and on reasoning activity, so a steadily-streaming model is
+  never cut off). A genuinely slow first token — a cold model load or a very
+  long reasoning pause before any output — can still trip it. Raise it
+  without a config file via an env var:
+
+  ```bash
+  LLMTUI_NETWORK_TIMEOUT=600s ./llmtui chat
+  ```
+
+  Reasoning models (those that "think" before answering) show a live
+  `thinking…` indicator while they work.
 - **Fonts/symbols look wrong** — llmtui works with any monospace font, but
   looks best with a Nerd Font such as JetBrains Mono Nerd Font or MesloLGS NF.
 

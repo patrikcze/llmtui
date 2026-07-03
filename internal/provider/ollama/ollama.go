@@ -158,6 +158,8 @@ type chatOptions struct {
 type chatChunk struct {
 	Message struct {
 		Content string `json:"content"`
+		// Thinking is streamed separately by reasoning models.
+		Thinking string `json:"thinking"`
 	} `json:"message"`
 	Done            bool   `json:"done"`
 	Error           string `json:"error"`
@@ -230,6 +232,12 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		if chunk.Error != "" {
 			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: errors.New(chunk.Error)})
 			return
+		}
+		if chunk.Message.Thinking != "" {
+			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: chunk.Message.Thinking}) {
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
+				return
+			}
 		}
 		if chunk.Message.Content != "" {
 			completion.WriteString(chunk.Message.Content)

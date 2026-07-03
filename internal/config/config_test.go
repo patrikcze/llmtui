@@ -91,6 +91,26 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 	}
 }
 
+func TestNestedEnvOverrides(t *testing.T) {
+	t.Setenv("LLMTUI_NETWORK_TIMEOUT", "600s")
+	t.Setenv("LLMTUI_CHAT_MAX_TOKENS", "8192")
+
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Network.Timeout != "600s" {
+		t.Errorf("Network.Timeout = %q, want 600s from env", cfg.Network.Timeout)
+	}
+	if cfg.Chat.MaxTokens != 8192 {
+		t.Errorf("Chat.MaxTokens = %d, want 8192 from env", cfg.Chat.MaxTokens)
+	}
+}
+
 func TestFlagOverridesEnv(t *testing.T) {
 	t.Setenv("LLMTUI_PROVIDER", "from-env")
 

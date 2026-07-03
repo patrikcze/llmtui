@@ -103,12 +103,33 @@ func lastAssistant(m *Model) string {
 	return ""
 }
 
-// pacedProvider streams a fixed number of "chunk-N " tokens with a gap
-// between each, optionally stalling (blocking on ctx) after the last chunk.
+// A reasoning model that "thinks" for longer than the idle window before
+// producing any visible content must not be timed out — reasoning activity
+// keeps the stream alive. This reproduces the LM Studio reasoning-model hang.
+func TestReasoningKeepsStreamAlive(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Network.Timeout = "150ms"
+	// 40 reasoning chunks at 5ms (~200ms of pure thinking, well past the
+	// 150ms window) followed by visible content.
+	m.prov = &pacedProvider{gap: 5 * time.Millisecond, chunks: 5, reasoningChunks: 40}
+
+	runStream(t, m, m.dispatch("explain", nil))
+
+	if m.errText != "" {
+		t.Fatalf("reasoning model timed out during thinking: %q", m.errText)
+	}
+	if last := lastAssistant(m); !strings.Contains(last, "chunk-4") {
+		t.Fatalf("visible answer missing after reasoning: %q", last)
+	}
+}
+
+// pacedProvider streams reasoningChunks reasoning events, then chunks visible
+// "chunk-N " tokens with a gap between each, optionally stalling after.
 type pacedProvider struct {
-	gap        time.Duration
-	chunks     int
-	stallAfter bool
+	gap             time.Duration
+	chunks          int
+	reasoningChunks int
+	stallAfter      bool
 }
 
 func (p *pacedProvider) Name() string { return "paced" }
@@ -123,6 +144,17 @@ func (p *pacedProvider) Chat(ctx context.Context, _ provider.ChatRequest) (<-cha
 	events := make(chan provider.ChatEvent)
 	go func() {
 		defer close(events)
+		for i := 0; i < p.reasoningChunks; i++ {
+			select {
+			case <-ctx.Done():
+				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
+				return
+			case <-time.After(p.gap):
+			}
+			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: "think "}) {
+				return
+			}
+		}
 		for i := 0; i < p.chunks; i++ {
 			select {
 			case <-ctx.Done():
