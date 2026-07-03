@@ -129,6 +129,7 @@ type Model struct {
 	toolErr          int                 // failed or denied tool calls (exit summary)
 	webOn            bool                // web tools (web_search/web_fetch) enabled
 	webClient        *web.Client         // shared web client; nil if the runner is unavailable
+	statusLines      int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache      bool                // skip the response cache for the next dispatch
 	streamToolCalls  []provider.ToolCall // native calls from the finishing stream
 
@@ -1200,12 +1201,15 @@ func (m *Model) resize(w, h int) {
 
 	// Layout: viewport fills space above usage panel (4), suggestion popup,
 	// input (border + content rows, +1 when attachment chips are shown),
-	// status bar (1), and help footer (1).
+	// status bar (1 row, or 2 when wrapped), and help footer (1).
 	inputHeight := 2 + m.inputLines
 	if len(m.attachments) > 0 {
 		inputHeight++
 	}
-	vpHeight := h - 4 - len(m.sugs) - inputHeight - 1 - 1
+	if m.statusLines < 1 {
+		m.statusLines = 1
+	}
+	vpHeight := h - 4 - len(m.sugs) - inputHeight - m.statusLines - 1
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -1545,7 +1549,12 @@ func (m *Model) View() string {
 		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
 		SummaryOn:    m.summary != "",
 		ToolsOn:      m.toolsOn,
+		WebOn:        m.webOn,
 	}, m.width)
+	if lines := strings.Count(status, "\n") + 1; lines != m.statusLines {
+		m.statusLines = lines
+		m.relayout()
+	}
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
