@@ -75,6 +75,21 @@ section and [security.md](security.md)):
 | `max_file_kb` | `512` | Per-file read/write and command output size cap |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 
+### `tools.web`
+
+Optional web tools (`web_search` via DuckDuckGo — no API key — and
+`web_fetch`, which returns one page as readable Markdown). Off by default;
+toggle per session with `/web on`. `web_search` runs automatically;
+`web_fetch` asks for approval per URL. See the README's "Web tools" section
+and [security.md](security.md):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch (or `/web on` per session) |
+| `max_results` | `5` | Search hits returned per `web_search` call |
+| `max_page_kb` | `128` | Fetched page content cap sent to the model |
+| `timeout` | `20s` | Per-request limit for searches and fetches |
+
 ### `cache`, `memory`, `prompt`, `context`, `network`
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),

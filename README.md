@@ -175,6 +175,7 @@ Local-LLM experience helpers:
 | `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
 | `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
 | `/tools` | Opt-in agent mode — the model can create/read files and run commands in your current directory, with y/n approval |
+| `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
 | `/template` | Reusable conversation templates from the config |
 | `/doctor` | Provider, model, and network diagnostics |
 | `/keys` | Key inspector — verify what your terminal sends ([docs](docs/keyboard.md)) |
@@ -270,6 +271,35 @@ environments are stripped of secrets (`*_API_KEY`, tokens, passwords, all
 capped; and there is no delete tool. Works with any local model — models
 with native tool support interact most reliably; for the rest the fenced
 fallback needs an instruction-tuned model (≥7B recommended).
+
+## Web tools
+
+`/web on` (or `tools.web.enabled: true`) adds two more tools on top of
+agent mode:
+
+- `web_search` — DuckDuckGo search, **no API key needed**; returns titles,
+  URLs, and snippets. Runs automatically (only the model's query leaves
+  your machine).
+- `web_fetch` — downloads one page, extracts the readable article, and
+  hands it to the model as clean Markdown (capped at `max_page_kb`,
+  default 128 KB). **Asks for approval per URL** — a fetched URL can leak
+  data and fetched pages can carry prompt injection, so you stay in the
+  loop.
+
+```yaml
+tools:
+  web:
+    enabled: false    # off by default — llmtui stays local-first
+    max_results: 5
+    max_page_kb: 128
+    timeout: "20s"
+```
+
+Requests to private and local addresses (localhost, 10.x, 192.168.x,
+link-local, …) are blocked by design, including via redirects and DNS
+tricks, so a hostile page cannot use the model to probe your LAN. The
+system prompt tells the model to treat fetched content as untrusted data
+and to cite its sources.
 
 ## History & usage stats
 

@@ -67,6 +67,26 @@ add` reminds you).
     instruct the model to take actions (prompt injection). The approval
     gate exists precisely so *you* are the final check on every mutating
     action — prefer `ask` mode when working on untrusted repositories.
+- Web tools (`/web`) are off by default and add their own guardrails:
+  - **SSRF guard** — only `http`/`https` URLs; hosts resolving to loopback,
+    private (RFC 1918), link-local, unique-local, or unspecified addresses
+    are refused. The check happens inside the dialer (the vetted IP is what
+    gets connected, so DNS rebinding cannot bypass it) and re-runs on every
+    redirect hop (max 5). A hostile page cannot use the model to probe
+    `localhost` or your LAN.
+  - **Per-URL approval for fetches** — a model-chosen URL can encode data
+    in its query string (exfiltration), so `web_fetch` asks before every
+    request; `web_search` sends only the model's query to DuckDuckGo and
+    runs unprompted.
+  - **Bounded content** — response bodies are read up to 4 MB and reduced
+    to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
+    before reaching the model; binary content types are refused.
+  - **Prompt-injection posture** — fetched pages are untrusted input. The
+    system prompt says so explicitly, and the fetch approval plus the
+    write/command approvals mean injected instructions still cannot mutate
+    anything without you seeing it.
+  - **No API keys involved** — search uses DuckDuckGo's public HTML
+    endpoint; nothing identifies you beyond the request itself.
 - Debug output (`/debug last`) shows request shape, sections, and timings,
   never credentials.
 - The `privacy` config section documents intent (`local_first`,
