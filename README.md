@@ -234,8 +234,9 @@ go back as `role:"tool"` messages — the protocol tool-capable models
 multi-step tasks end naturally with a final answer instead of running into
 the round limit. Backends that reject tool declarations fall back
 automatically to a fenced-block prompt protocol that works with any model.
-If the round limit is ever reached, the model is asked to wrap up with a
-final answer rather than the turn dead-ending in an error.
+If the round limit is reached mid-task, you decide: a prompt asks whether
+to grant another round budget or have the model give its final answer with
+what it already has — the turn never dead-ends in an error.
 
 **You stay in control**, the same way Claude Code or Codex work:
 

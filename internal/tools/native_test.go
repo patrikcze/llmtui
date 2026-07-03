@@ -150,7 +150,7 @@ func TestCollapseResults(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("collapsed to %d lines, want 2: %q", len(lines), got)
 	}
-	if lines[0] != "⚒ list_dir → 3 lines of output" {
+	if lines[0] != "  ⎿ list_dir → 3 lines of output" {
 		t.Errorf("line 0 = %q", lines[0])
 	}
 	if !strings.Contains(lines[1], "read_file x.go") || !strings.Contains(lines[1], "denied by the user") {

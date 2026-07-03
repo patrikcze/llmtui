@@ -30,6 +30,10 @@ func TestWrapLinesCountsWordWrap(t *testing.T) {
 		// wrap fits only 2 words (14 cells) per row = 5 rows.
 		{"many medium words", strings.TrimSpace(strings.Repeat("worddd ", 10)), 20, 5},
 		{"long word hard-breaks", strings.Repeat("x", 25), 10, 3},
+		// The textarea's final wrap flush uses >=: text that exactly fills
+		// the last row spills onto a fresh one, where the cursor sits.
+		{"exactly full row adds a cursor row", "aaaa bbbb", 9, 2},
+		{"full width word adds a cursor row", strings.Repeat("x", 10), 10, 2},
 		{"cap at six rows", strings.Repeat("word ", 200), 10, 6},
 	}
 	for _, tc := range tests {

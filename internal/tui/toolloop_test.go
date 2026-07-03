@@ -148,7 +148,7 @@ func TestMaybeRunToolsDisabledOrNoCalls(t *testing.T) {
 	}
 }
 
-func TestMaybeRunToolsIterationCapNudgesThenStops(t *testing.T) {
+func TestIterationCapAsksUserToContinue(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
@@ -156,29 +156,53 @@ func TestMaybeRunToolsIterationCapNudgesThenStops(t *testing.T) {
 	m.toolDepth = 2
 	withToolReply(m, "```tool list_dir\n```")
 
-	// First over-budget batch: nothing executes, but the model is asked once
-	// to wrap up so the turn still ends with a real answer.
-	if m.maybeRunTools() == nil {
-		t.Fatal("expected a wrap-up dispatch when the budget is spent")
+	// Over budget: nothing executes and nothing errors — the user is asked.
+	if m.maybeRunTools() != nil {
+		t.Fatal("batch ran despite a spent budget")
 	}
-	if !m.toolNudged {
-		t.Error("toolNudged not set after the wrap-up request")
+	if !m.pendingBudget || len(m.pendingCalls) != 1 {
+		t.Fatalf("budget prompt not shown: pendingBudget=%v calls=%d", m.pendingBudget, len(m.pendingCalls))
+	}
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty (no dead-end error)", m.errText)
+	}
+
+	// "Yes, continue" renews the budget and executes the batch.
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("expected execution after granting more rounds")
+	}
+	if m.pendingBudget || len(m.pendingCalls) != 0 {
+		t.Error("budget prompt not cleared")
+	}
+	if m.toolDepth != 1 {
+		t.Errorf("toolDepth = %d, want 1 (reset to 0, then one executed round)", m.toolDepth)
+	}
+}
+
+func TestIterationCapDeclineAsksModelToWrapUp(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.cfg.Tools.MaxIterations = 2
+	m.toolDepth = 2
+	withToolReply(m, "```tool list_dir\n```")
+	m.maybeRunTools()
+
+	// "No" sends the wrap-up request instead of executing anything.
+	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatal("expected a wrap-up dispatch after declining")
 	}
 	last := m.session.Messages[len(m.session.Messages)-1]
 	if !strings.Contains(last.Content, "iteration limit") {
 		t.Errorf("wrap-up message missing the limit explanation: %q", last.Content)
 	}
+	if m.toolErr != 1 {
+		t.Errorf("toolErr = %d, want 1 (the unexecuted call)", m.toolErr)
+	}
 	if m.errText != "" {
-		t.Errorf("errText = %q, want empty on the wrap-up round", m.errText)
-	}
-
-	// The model insists on more tools anyway: now the loop hard-stops.
-	m.session.AddAssistant("```tool list_dir\n```")
-	if m.maybeRunTools() != nil {
-		t.Fatal("loop continued after the wrap-up request")
-	}
-	if !strings.Contains(m.errText, "tool loop stopped") {
-		t.Errorf("errText = %q", m.errText)
+		t.Errorf("errText = %q, want empty", m.errText)
 	}
 }
 

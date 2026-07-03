@@ -429,7 +429,7 @@ func CollapseResults(content string) string {
 	)
 	flush := func() {
 		if name != "" {
-			out = append(out, "⚒ "+name+" → "+SummarizeOutput(strings.Join(body, "\n")))
+			out = append(out, "  ⎿ "+name+" → "+SummarizeOutput(strings.Join(body, "\n")))
 		}
 	}
 	for _, l := range strings.Split(content, "\n") {

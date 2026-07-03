@@ -121,8 +121,8 @@ type Model struct {
 	toolsShowOutput  bool // show full tool output instead of one-line summaries
 	toolRunner       *tools.Runner
 	toolDepth        int                 // auto follow-up rounds for the current user turn
-	toolNudged       bool                // the budget-spent wrap-up request was already sent this turn
 	pendingCalls     []tools.Call        // parsed calls awaiting the user's approval
+	pendingBudget    bool                // the pending prompt is "budget spent — continue?", not an approval
 	approvalIdx      int                 // selected row in the approval menu (0 yes, 1 always, 2 no)
 	toolOK           int                 // executed tool calls (exit summary)
 	toolErr          int                 // failed or denied tool calls (exit summary)
@@ -560,7 +560,6 @@ func (m *Model) send() tea.Cmd {
 	m.relayout()
 	m.sentCount++
 	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
-	m.toolNudged = false
 	return m.dispatch(text, images)
 }
 
@@ -581,23 +580,19 @@ func (m *Model) maybeRunTools() tea.Cmd {
 // startToolBatch runs one batch of tool calls (native or parsed): read-only
 // calls run immediately; mutating calls (writes, non-read-only commands) wait
 // for the user's y/n unless approvals are set to auto. The loop is bounded by
-// tools.max_iterations per user turn; when the budget is spent the model is
-// told once to wrap up, so the turn still ends with a real answer.
+// tools.max_iterations per user turn; when the budget is spent the *user*
+// decides — grant more rounds or have the model wrap up — so a long task is
+// never dead-ended by an error.
 func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
 	if m.toolDepth >= m.toolMaxIter() {
-		if m.toolNudged {
-			// The model kept requesting tools even after being told to stop.
-			m.errText = fmt.Sprintf("tool loop stopped after %d rounds (tools.max_iterations)", m.toolMaxIter())
-			m.refreshViewport()
-			return nil
-		}
-		m.toolNudged = true
-		m.toolErr += len(calls)
-		m.notice = fmt.Sprintf("⚒ tool budget spent (%d rounds) — asking the model for its final answer", m.toolMaxIter())
-		return m.sendToolResults(tools.LimitResults(calls, m.toolMaxIter()))
+		m.pendingCalls = calls
+		m.pendingBudget = true
+		m.approvalIdx = 0
+		m.refreshViewport()
+		return nil
 	}
 	if !m.toolsAutoApprove {
 		for _, c := range calls {
@@ -676,25 +671,54 @@ const (
 	approvalCount
 )
 
-// updateToolApproval owns the keyboard while an approval prompt is showing.
-// Ctrl+C still quits; everything else is swallowed so stray typing cannot
-// approve anything by accident.
+// updateToolApproval owns the keyboard while an approval or budget prompt is
+// showing. Ctrl+C still quits; everything else is swallowed so stray typing
+// cannot approve anything by accident.
 func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rowCount := approvalCount
+	if m.pendingBudget {
+		rowCount = 2 // Yes, continue / No, wrap up
+	}
+	moveUp := func() {
+		m.approvalIdx = (m.approvalIdx + rowCount - 1) % rowCount
+		m.refreshViewport()
+	}
+	moveDown := func() {
+		m.approvalIdx = (m.approvalIdx + 1) % rowCount
+		m.refreshViewport()
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m.handleCtrlC()
 	case tea.KeyUp:
-		m.approvalIdx = (m.approvalIdx + approvalCount - 1) % approvalCount
-		m.refreshViewport()
+		moveUp()
 		return m, nil
 	case tea.KeyDown, tea.KeyTab:
-		m.approvalIdx = (m.approvalIdx + 1) % approvalCount
-		m.refreshViewport()
+		moveDown()
 		return m, nil
 	case tea.KeyEnter:
+		if m.pendingBudget {
+			return m, m.resolveBudget(m.approvalIdx)
+		}
 		return m, m.resolveApproval(m.approvalIdx)
 	case tea.KeyEsc:
+		if m.pendingBudget {
+			return m, m.resolveBudget(1)
+		}
 		return m, m.resolveApproval(approvalNo)
+	}
+	if m.pendingBudget {
+		switch msg.String() {
+		case "1", "y", "Y":
+			return m, m.resolveBudget(0)
+		case "2", "n", "N":
+			return m, m.resolveBudget(1)
+		case "k":
+			moveUp()
+		case "j":
+			moveDown()
+		}
+		return m, nil
 	}
 	switch msg.String() {
 	case "1", "y", "Y":
@@ -704,11 +728,9 @@ func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "3", "n", "N":
 		return m, m.resolveApproval(approvalNo)
 	case "k":
-		m.approvalIdx = (m.approvalIdx + approvalCount - 1) % approvalCount
-		m.refreshViewport()
+		moveUp()
 	case "j":
-		m.approvalIdx = (m.approvalIdx + 1) % approvalCount
-		m.refreshViewport()
+		moveDown()
 	}
 	return m, nil
 }
@@ -729,6 +751,23 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 	default:
 		return m.denyPendingTools()
 	}
+}
+
+// resolveBudget executes the chosen row of the budget prompt: 0 grants a
+// fresh round budget and continues, 1 asks the model to answer with what it
+// already has (the pending calls are not executed).
+func (m *Model) resolveBudget(choice int) tea.Cmd {
+	calls := m.pendingCalls
+	m.pendingCalls = nil
+	m.pendingBudget = false
+	if choice == 0 {
+		m.toolDepth = 0
+		m.notice = fmt.Sprintf("⚒ tool budget renewed — up to %d more rounds", m.toolMaxIter())
+		return m.startToolBatch(calls)
+	}
+	m.toolErr += len(calls)
+	m.notice = "⚒ asking the model for its final answer without tools"
+	return m.sendToolResults(tools.LimitResults(calls, m.toolMaxIter()))
 }
 
 // retryLast re-sends the last user message with current settings.
@@ -902,7 +941,11 @@ func wordWrappedRows(line string, width int) int {
 			lineW, wordW = width, 0
 		}
 	}
-	if wordW > 0 && lineW+wordW+spaces > width {
+	// Final flush matches the textarea's wrap exactly: it uses >= here, so
+	// content that exactly fills the last row spills onto a fresh one (the
+	// cursor needs somewhere to sit). Undercounting this row made the box
+	// scroll internally and hide the first line.
+	if lineW+wordW+spaces >= width {
 		rows++
 	}
 	return rows
@@ -1241,34 +1284,40 @@ func (m *Model) refreshViewport() {
 			}
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
-			b.WriteString(m.theme.AssistantLabel.Render("assistant"))
-			b.WriteString("\n")
-			content := msg.Content
-			if !m.toolsShowOutput {
-				// Compact mode: fenced tool blocks (file bodies, scripts)
-				// render as one-line actions instead of full payloads.
-				content = tools.CollapseBlocks(content)
-			}
-			if content != "" || len(msg.ToolCalls) == 0 {
+			// A tool-only turn renders as bare action lines (Claude-Code
+			// style), without an "assistant" label or empty markdown body;
+			// its results attach directly underneath.
+			toolOnly := msg.Content == "" && len(msg.ToolCalls) > 0
+			if !toolOnly {
+				b.WriteString(m.theme.AssistantLabel.Render("assistant"))
+				b.WriteString("\n")
+				content := msg.Content
+				if !m.toolsShowOutput {
+					// Compact mode: fenced tool blocks (file bodies,
+					// scripts) render as one-line actions instead of full
+					// payloads.
+					content = tools.CollapseBlocks(content)
+				}
 				b.WriteString(m.renderMarkdown(content))
 			}
-			// Native tool calls: show what the model asked for, so a
-			// tool-only turn never renders as an empty reply.
 			for _, c := range tools.CallsFromNative(msg.ToolCalls) {
 				b.WriteString(m.theme.SystemNote.Render("⚒ " + c.Describe()))
 				b.WriteString("\n")
 			}
-			b.WriteString("\n")
+			if len(msg.ToolCalls) == 0 {
+				b.WriteString("\n")
+			}
 		case provider.RoleTool:
-			// Native tool results: machinery, one line per call unless the
-			// user asked for full output with /tools output.
+			// Native tool results attach under their call, Claude-Code
+			// style, one summary line per call unless the user asked for
+			// full output with /tools output.
 			if m.toolsShowOutput {
-				b.WriteString(m.theme.SystemNote.Render("⚒ " + msg.ToolName))
+				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + msg.ToolName))
 				b.WriteString("\n")
 				b.WriteString(m.theme.SystemNote.Render(msg.Content))
 			} else {
 				b.WriteString(m.theme.SystemNote.Render(
-					"⚒ " + msg.ToolName + " → " + tools.SummarizeOutput(msg.Content)))
+					"  ⎿ " + tools.SummarizeOutput(msg.Content)))
 			}
 			b.WriteString("\n\n")
 		}
@@ -1307,10 +1356,41 @@ func (m *Model) refreshViewport() {
 
 // renderApprovalPrompt draws the confirmation block, Claude-Code style:
 // what the model wants to do (commands shown verbatim), then a selectable
-// Yes / Yes-always / No menu driven by ↑/↓ + Enter.
+// menu driven by ↑/↓ + Enter. The same block doubles as the budget prompt
+// when tools.max_iterations is spent.
 func (m *Model) renderApprovalPrompt() string {
 	var b strings.Builder
 	text := lipgloss.NewStyle().Foreground(m.theme.Text)
+
+	if m.pendingBudget {
+		b.WriteString(m.theme.BadgeWarn.Render(fmt.Sprintf(
+			"⚒ tool budget spent — %d round(s) used this turn (tools.max_iterations)", m.toolMaxIter())))
+		b.WriteString("\n")
+		b.WriteString(text.Render("  the model wants to keep going:"))
+		b.WriteString("\n")
+		for _, c := range m.pendingCalls {
+			b.WriteString(text.Render("    " + c.Describe()))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		b.WriteString(text.Render("Continue with more tool rounds?"))
+		b.WriteString("\n")
+		rows := []string{
+			fmt.Sprintf("1. Yes, allow up to %d more rounds", m.toolMaxIter()),
+			"2. No, ask for the final answer now",
+		}
+		for i, row := range rows {
+			if i == m.approvalIdx {
+				b.WriteString(m.theme.StatusValue.Render("❯ " + row))
+			} else {
+				b.WriteString(m.theme.SystemNote.Render("  " + row))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString(m.theme.HelpFooter.Render("↑/↓ select · enter confirm · esc = final answer · y/n shortcuts"))
+		b.WriteString("\n")
+		return b.String()
+	}
 
 	for _, c := range m.pendingCalls {
 		switch c.Tool {
@@ -1404,8 +1484,13 @@ func (m *Model) View() string {
 		help = m.theme.BadgeOK.Render(m.notice)
 	}
 	if len(m.pendingCalls) > 0 {
-		help = m.theme.BadgeWarn.Render(fmt.Sprintf("⚒ approve %d tool action(s)?", len(m.pendingCalls))) +
-			m.theme.HelpFooter.Render("  y allow · a always · n deny")
+		if m.pendingBudget {
+			help = m.theme.BadgeWarn.Render("⚒ tool budget spent — continue?") +
+				m.theme.HelpFooter.Render("  ↑/↓ + enter · y more rounds · n final answer")
+		} else {
+			help = m.theme.BadgeWarn.Render(fmt.Sprintf("⚒ approve %d tool action(s)?", len(m.pendingCalls))) +
+				m.theme.HelpFooter.Render("  ↑/↓ + enter · y allow · a always · n deny")
+		}
 	}
 	if m.thinking {
 		elapsed := fmt.Sprintf("%.1fs", time.Since(m.streamStart).Seconds())

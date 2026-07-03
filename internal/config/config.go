@@ -510,8 +510,8 @@ tools:
   enabled: false
   approve: ask # ask | auto
   native: auto # auto | off — off forces the fenced-block prompt protocol
-  max_iterations: 10 # tool rounds per user message; when spent, the model
-  #                    is asked to give its final answer without tools
+  max_iterations: 10 # tool rounds per user message; when spent, a prompt
+  #                    asks whether to grant more rounds or wrap up
   max_file_kb: 512 # per-file read/write and command output size cap
   command_timeout: "30s"
 
