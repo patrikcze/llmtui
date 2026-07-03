@@ -4,6 +4,9 @@ BINARY  := llmtui
 MODULE  := github.com/patrikcze/llmtui
 MAIN    := ./cmd/llmtui
 DIST    := dist
+PREFIX  ?= $(HOME)/.local
+BINDIR  ?= $(PREFIX)/bin
+INSTALL ?= install
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -32,10 +35,12 @@ build:
 run: build
 	./$(BINARY) chat
 
-## install: install into GOPATH/bin
+## install: build and install into BINDIR
 .PHONY: install
-install:
-	go install -ldflags '$(LDFLAGS)' $(MAIN)
+install: build
+	$(INSTALL) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 0755 $(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
+	@echo "installed $(BINARY) to $(DESTDIR)$(BINDIR)"
 
 ## fmt: format all Go sources
 .PHONY: fmt
