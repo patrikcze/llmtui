@@ -313,6 +313,34 @@ func TestEscClearsSlashInput(t *testing.T) {
 	}
 }
 
+func TestCtrlUClearsWholePrompt(t *testing.T) {
+	m := newTestModel(t)
+	// A multi-line prompt, the kind that is tedious to backspace away.
+	m.input.SetValue("first line\nsecond line\nthird line")
+	m.syncInputHeight()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+
+	if m.input.Value() != "" {
+		t.Errorf("ctrl+u left content in the box: %q", m.input.Value())
+	}
+	if m.inputLines != 1 {
+		t.Errorf("input box did not shrink back to 1 row: got %d", m.inputLines)
+	}
+}
+
+func TestCtrlUClearsSlashSuggestions(t *testing.T) {
+	m := newTestModel(t)
+	typeText(m, "/mod")
+	if len(m.sugs) == 0 {
+		t.Fatal("expected command suggestions after typing /mod")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.input.Value() != "" || len(m.sugs) != 0 {
+		t.Errorf("ctrl+u should clear input and suggestions: value=%q sugs=%d", m.input.Value(), len(m.sugs))
+	}
+}
+
 func TestWrapLines(t *testing.T) {
 	tests := []struct {
 		value string

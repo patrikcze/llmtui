@@ -419,6 +419,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.session.Clear()
 			m.refreshViewport()
 			return m, nil
+		case tea.KeyCtrlU:
+			// Clear the whole prompt box in one keystroke (readline-style line
+			// discard). Handy after pasting a large block you want to drop —
+			// far quicker than holding backspace. The textarea's own ctrl+u
+			// only kills the current line before the cursor; this clears all.
+			if m.input.Value() != "" {
+				m.input.Reset()
+				m.updateSuggestions()
+				m.syncInputHeight()
+			}
+			return m, nil
 		case tea.KeyCtrlV:
 			return m, m.pasteImage()
 		case tea.KeyCtrlX:

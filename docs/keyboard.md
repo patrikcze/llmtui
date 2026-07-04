@@ -7,6 +7,7 @@
 | `Alt/Option+Enter` | Newline — needs "Option as Meta" on macOS terminals |
 | `Ctrl+J` | Newline — works in **every** terminal |
 | `\` + `Enter` | Newline — trailing backslash continues the line, works everywhere |
+| `Ctrl+U` | Clear the whole prompt box in one keystroke |
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
 | `Esc` | Stop generation · close overlay |
 

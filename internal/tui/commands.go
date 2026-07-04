@@ -306,6 +306,7 @@ func (m *Model) helpOverlay(topic string) string {
 			{"ctrl+o", "toggle text-selection mode (release mouse)"},
 			{"ctrl+v", "paste image from clipboard (vision models)"},
 			{"ctrl+x", "remove last pasted image"},
+			{"ctrl+u", "clear the whole prompt box"},
 			{"esc", "stop generation · close this overlay"},
 			{"ctrl+l", "clear conversation"},
 			{"↑/↓", "navigate command suggestions · scroll"},
