@@ -26,6 +26,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
+	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
@@ -121,17 +122,26 @@ type Model struct {
 	toolsNative      bool // offer tools via native function calling
 	toolsShowOutput  bool // show full tool output instead of one-line summaries
 	toolRunner       *tools.Runner
-	toolDepth        int                 // auto follow-up rounds for the current user turn
-	pendingCalls     []tools.Call        // parsed calls awaiting the user's approval
-	pendingBudget    bool                // the pending prompt is "budget spent — continue?", not an approval
-	approvalIdx      int                 // selected row in the approval menu (0 yes, 1 always, 2 no)
-	toolOK           int                 // executed tool calls (exit summary)
-	toolErr          int                 // failed or denied tool calls (exit summary)
-	webOn            bool                // web tools (web_search/web_fetch) enabled
-	webClient        *web.Client         // shared web client; nil if the runner is unavailable
-	statusLines      int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
-	bypassCache      bool                // skip the response cache for the next dispatch
-	streamToolCalls  []provider.ToolCall // native calls from the finishing stream
+	toolDepth        int          // auto follow-up rounds for the current user turn
+	pendingCalls     []tools.Call // parsed calls awaiting the user's approval
+	pendingBudget    bool         // the pending prompt is "budget spent — continue?", not an approval
+	approvalIdx      int          // selected row in the approval menu (0 yes, 1 always, 2 no)
+	toolOK           int          // executed tool calls (exit summary)
+	toolErr          int          // failed or denied tool calls (exit summary)
+	webOn            bool         // web tools (web_search/web_fetch) enabled
+	webClient        *web.Client  // shared web client; nil if the runner is unavailable
+
+	// Optional local RAG (disabled by default).
+	ragOn      bool         // retrieval enabled for the current session
+	ragIndex   *rag.Index   // loaded/built workspace index; nil until indexed
+	ragStore   *rag.Store   // persistence for the index; nil if index_path unresolved
+	ragRoot    string       // workspace root the index was built from
+	ragBuiltAt time.Time    // when the loaded index was built
+	ragLast    []rag.Result // snippets retrieved for the last dispatch (/debug, /rag)
+
+	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
+	bypassCache     bool                // skip the response cache for the next dispatch
+	streamToolCalls []provider.ToolCall // native calls from the finishing stream
 
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
@@ -261,6 +271,19 @@ func (m *Model) rebuildFromConfig() {
 			m.toolRunner.Web = m.webClient
 		}
 	}
+
+	// Optional RAG: prepare the store and load any existing index. Nothing is
+	// indexed here; the user runs /rag index. Retrieval stays off unless both
+	// the feature and the workspace are enabled in config.
+	if dir, err := history.ExpandHome(cfg.RAG.IndexPath); err == nil && dir != "" {
+		m.ragStore = rag.NewStore(dir)
+		if idx, root, builtAt, lerr := m.ragStore.Load(); lerr == nil && idx != nil {
+			m.ragIndex = idx
+			m.ragRoot = root
+			m.ragBuiltAt = builtAt
+		}
+	}
+	m.ragOn = cfg.RAG.Enabled && cfg.RAG.Workspace.Enabled
 
 	// Config-defined profiles are matched before built-ins.
 	profiles := make([]modelprofile.Profile, 0, len(cfg.ModelProfiles)+4)
@@ -1286,6 +1309,12 @@ func (m *Model) refreshViewport() {
 		}
 		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
 			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, m.toolRunner.Root())))
+		b.WriteString("\n\n")
+	}
+
+	if m.ragOn && m.ragIndex != nil {
+		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
+			"🔎 RAG on — keyword-matched snippets from %d indexed files inform prompts as\n  labeled reference context — /rag off to disable", len(m.ragIndex.Sources()))))
 		b.WriteString("\n\n")
 	}
 

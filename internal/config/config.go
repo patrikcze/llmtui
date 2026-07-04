@@ -155,6 +155,34 @@ type ToolsWebConfig struct {
 	Timeout    string `mapstructure:"timeout" yaml:"timeout"`
 }
 
+// RAGConfig configures the optional local workspace index and keyword
+// retrieval. Disabled by default: llmtui indexes nothing and retrieves
+// nothing unless the user turns RAG on and indexes a workspace.
+type RAGConfig struct {
+	Enabled   bool               `mapstructure:"enabled" yaml:"enabled"`
+	IndexPath string             `mapstructure:"index_path" yaml:"index_path"`
+	Workspace RAGWorkspaceConfig `mapstructure:"workspace" yaml:"workspace"`
+	Retrieval RAGRetrievalConfig `mapstructure:"retrieval" yaml:"retrieval"`
+}
+
+// RAGWorkspaceConfig scopes what the indexer may read.
+type RAGWorkspaceConfig struct {
+	Enabled    bool     `mapstructure:"enabled" yaml:"enabled"`
+	Root       string   `mapstructure:"root" yaml:"root"`
+	Include    []string `mapstructure:"include" yaml:"include"`
+	Exclude    []string `mapstructure:"exclude" yaml:"exclude"`
+	MaxFileKB  int      `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	MaxTotalMB int      `mapstructure:"max_total_mb" yaml:"max_total_mb"`
+}
+
+// RAGRetrievalConfig tunes how many snippets are retrieved and how much
+// context they may contribute.
+type RAGRetrievalConfig struct {
+	TopK             int    `mapstructure:"top_k" yaml:"top_k"`
+	MaxContextTokens int    `mapstructure:"max_context_tokens" yaml:"max_context_tokens"`
+	Strategy         string `mapstructure:"strategy" yaml:"strategy"` // "keyword" (embeddings later)
+}
+
 // RetryConfig configures request retries.
 type RetryConfig struct {
 	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
@@ -200,6 +228,7 @@ type Config struct {
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
 	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
+	RAG             RAGConfig                     `mapstructure:"rag" yaml:"rag"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
 	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
 	ModelProfiles   map[string]ModelProfileConfig `mapstructure:"model_profiles" yaml:"model_profiles,omitempty"`
@@ -445,6 +474,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.guardrails.protect_shell_startup_files", true)
 	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
 
+	v.SetDefault("rag.enabled", false)
+	v.SetDefault("rag.index_path", "~/.local/share/llmtui/rag")
+	v.SetDefault("rag.workspace.enabled", false)
+	v.SetDefault("rag.workspace.root", ".")
+	v.SetDefault("rag.workspace.include", []string{"**/*.go", "**/*.md", "**/*.txt", "**/*.yaml", "**/*.yml", "**/*.json"})
+	v.SetDefault("rag.workspace.exclude", []string{".git/**", "node_modules/**", "vendor/**", "dist/**", "build/**", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.pdf", "**/*.zip"})
+	v.SetDefault("rag.workspace.max_file_kb", 512)
+	v.SetDefault("rag.workspace.max_total_mb", 256)
+	v.SetDefault("rag.retrieval.top_k", 6)
+	v.SetDefault("rag.retrieval.max_context_tokens", 3000)
+	v.SetDefault("rag.retrieval.strategy", "keyword")
+
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
 	v.SetDefault("network.retry.enabled", true)
@@ -569,6 +610,43 @@ tools:
     protect_secret_files: true # reject writes into .ssh, .gnupg
     protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
     require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
+
+# Optional local RAG: index the workspace and retrieve keyword-matched
+# snippets as labeled reference context. Disabled by default — nothing is
+# indexed or retrieved until you enable it and run /rag index. Retrieval is
+# pure local keyword scoring (BM25-lite); no embeddings, no vector database,
+# no external services. Retrieved context never replaces your message. See
+# docs/rag.md.
+rag:
+  enabled: false
+  index_path: "~/.local/share/llmtui/rag"
+  workspace:
+    enabled: false
+    root: "." # indexing never reads outside this root
+    include:
+      - "**/*.go"
+      - "**/*.md"
+      - "**/*.txt"
+      - "**/*.yaml"
+      - "**/*.yml"
+      - "**/*.json"
+    exclude:
+      - ".git/**"
+      - "node_modules/**"
+      - "vendor/**"
+      - "dist/**"
+      - "build/**"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.pdf"
+      - "**/*.zip"
+    max_file_kb: 512 # skip files larger than this
+    max_total_mb: 256 # stop indexing once this much content is read
+  retrieval:
+    top_k: 6 # snippets retrieved per query
+    max_context_tokens: 3000 # cap on retrieved context added to a prompt
+    strategy: "keyword" # keyword now; embeddings may come later
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token

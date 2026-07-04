@@ -103,6 +103,21 @@ add` reminds you).
     anything without you seeing it.
   - **No API keys involved** — search uses DuckDuckGo's public HTML
     endpoint; nothing identifies you beyond the request itself.
+- Local RAG (`/rag`) is off by default and stays fully local (see
+  [rag.md](rag.md)):
+  - **No network, no third parties** — retrieval is local keyword scoring
+    (BM25-lite). There are no embeddings, no vector database, and no external
+    calls; enabling RAG does not cause any data to leave your machine.
+  - **Indexing respects the same secret hygiene as the tools** — `.env`,
+    `*.pem`, `*.key`, `id_rsa`, `.netrc`, and `.ssh`/`.gnupg` contents are
+    never indexed; binary files are skipped; nothing outside the workspace
+    root is read, and symlinks resolving outside it are rejected.
+  - **Retrieved context cannot override you** — snippets are added as a
+    clearly-labeled reference section that instructs the model to prefer the
+    user request on any conflict; your raw message is never modified. What
+    was retrieved is visible in `/prompt preview` and `/debug last`.
+  - **The on-disk index** (`rag.index_path`) may contain workspace source
+    excerpts and is written owner-only; remove it with `/rag clear`.
 - Debug output (`/debug last`) shows request shape, sections, and timings,
   never credentials.
 - The `privacy` config section documents intent (`local_first`,

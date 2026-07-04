@@ -15,6 +15,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -191,18 +192,33 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 		}
 	}
 
+	// Optional RAG: retrieve keyword-matched workspace snippets for the raw
+	// message. Skipped on tool-loop continuations (omitRaw). The raw message
+	// is never modified; retrieved context is added as a labeled section.
+	retrieved := ""
+	if m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != "" {
+		results := m.ragIndex.Search(raw, m.ragTopK())
+		if len(results) > 0 {
+			retrieved = rag.FormatContext(results, m.ragMaxContextChars())
+			if !preview {
+				m.ragLast = results
+			}
+		}
+	}
+
 	out := prompt.Compose(prompt.Input{
-		RawMessage:     raw,
-		Images:         images,
-		SystemPrompt:   systemPrompt,
-		TemplateName:   m.template,
-		TemplatePrompt: templatePrompt,
-		Mode:           m.effectivePromptMode(),
-		HelperText:     m.cfg.Prompt.HelperText,
-		ModelHints:     prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
-		SessionSummary: m.summary,
-		MemorySnippets: memSnippets,
-		RecentMessages: recent,
+		RawMessage:       raw,
+		Images:           images,
+		SystemPrompt:     systemPrompt,
+		TemplateName:     m.template,
+		TemplatePrompt:   templatePrompt,
+		Mode:             m.effectivePromptMode(),
+		HelperText:       m.cfg.Prompt.HelperText,
+		ModelHints:       prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
+		SessionSummary:   m.summary,
+		MemorySnippets:   memSnippets,
+		RecentMessages:   recent,
+		RetrievedContext: retrieved,
 		Include: prompt.Include{
 			SessionSummary:  m.cfg.Prompt.IncludeSessionSummary,
 			LocalMemory:     m.cfg.Prompt.IncludeLocalMemory,

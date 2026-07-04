@@ -40,6 +40,53 @@ func TestRawUserMessagePreserved(t *testing.T) {
 	}
 }
 
+func TestRetrievedContextSeparatedFromRawMessage(t *testing.T) {
+	raw := "how does streaming work?"
+	retrieved := "- file: stream.go lines 1-10\n  reason: matched \"streaming\"\n  content:\n    func stream() {}"
+	out := Compose(Input{
+		RawMessage:       raw,
+		SystemPrompt:     "be helpful",
+		RetrievedContext: retrieved,
+		Mode:             ModeBalanced,
+		Include:          allIncludes(),
+	})
+	// The raw user message must still be verbatim and last.
+	last := out.Messages[len(out.Messages)-1]
+	if last.Role != provider.RoleUser || last.Content != raw {
+		t.Fatalf("raw message altered by RAG context: %q", last.Content)
+	}
+	// Retrieved context belongs in the system message, not the user message.
+	if strings.Contains(last.Content, "stream.go") {
+		t.Error("retrieved context leaked into the user message")
+	}
+	system := out.Messages[0].Content
+	if !strings.Contains(system, "stream.go lines 1-10") {
+		t.Error("retrieved context missing from system message")
+	}
+	if !strings.Contains(system, "reference material, not") {
+		t.Error("retrieved context missing the untrusted-reference framing")
+	}
+	// Preview must expose it as its own labeled section.
+	found := false
+	for _, s := range out.Sections {
+		if s.Title == "Retrieved Workspace Context" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("preview missing Retrieved Workspace Context section")
+	}
+}
+
+func TestRetrievedContextOmittedWhenEmpty(t *testing.T) {
+	out := Compose(Input{RawMessage: "hi", Mode: ModeBalanced, Include: allIncludes()})
+	for _, s := range out.Sections {
+		if s.Title == "Retrieved Workspace Context" {
+			t.Error("empty retrieved context still produced a section")
+		}
+	}
+}
+
 func TestBalancedIncludesHelpers(t *testing.T) {
 	out := Compose(Input{
 		RawMessage:     "hello",

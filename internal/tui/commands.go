@@ -57,7 +57,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Diagnostics", "Session",
+	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "RAG", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -131,6 +131,9 @@ func slashCommands() []slashCommand {
 		// --- Tools ---
 		{name: "tools", usage: "/tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]", desc: "workspace tools: enable/disable, list capabilities, inspect one tool, or classify a command", category: "Tools", blockWhileThinking: true, run: cmdTools},
 		{name: "web", usage: "/web [on|off|status]", desc: "let the model search the web and fetch pages (web_fetch asks per URL)", category: "Tools", blockWhileThinking: true, run: cmdWeb},
+
+		// --- RAG ---
+		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, run: cmdRag},
 
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]]", desc: "provider and model diagnostics", category: "Diagnostics", run: cmdDoctor},

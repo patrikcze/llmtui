@@ -20,6 +20,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
@@ -651,6 +652,19 @@ func (m *Model) debugOverlay() string {
 	}
 	m.kv(&b, "context", ctxLine)
 
+	if len(m.ragLast) > 0 {
+		b.WriteString("\n" + m.theme.UserLabel.Render("retrieved snippets (RAG)") + "\n")
+		for _, r := range m.ragLast {
+			reason := ""
+			if len(r.MatchedTerms) > 0 {
+				reason = " · matched " + strings.Join(r.MatchedTerms, ", ")
+			}
+			fmt.Fprintf(&b, "  %s%s\n",
+				m.theme.StatusValue.Render(fmt.Sprintf("%s:%d-%d", r.Chunk.Path, r.Chunk.StartLine, r.Chunk.EndLine)),
+				m.theme.StatusBar.Render(reason))
+		}
+	}
+
 	if len(d.Sections) > 0 {
 		b.WriteString("\n" + m.theme.UserLabel.Render("composed sections") + "\n")
 		for _, s := range d.Sections {
@@ -1039,6 +1053,196 @@ func cmdWeb(m *Model, args string) tea.Cmd {
 		return m.fail("usage: /web [on|off|status]")
 	}
 	return nil
+}
+
+// ragTopK returns the configured retrieval count, defaulting to 6.
+func (m *Model) ragTopK() int {
+	if k := m.cfg.RAG.Retrieval.TopK; k > 0 {
+		return k
+	}
+	return 6
+}
+
+// ragMaxContextChars converts the configured token budget into a rough
+// character cap (~4 chars/token), defaulting to 3000 tokens.
+func (m *Model) ragMaxContextChars() int {
+	tokens := m.cfg.RAG.Retrieval.MaxContextTokens
+	if tokens <= 0 {
+		tokens = 3000
+	}
+	return tokens * 4
+}
+
+// ragWorkspaceRoot resolves the configured RAG workspace root, defaulting to
+// the current directory.
+func (m *Model) ragWorkspaceRoot() string {
+	root := strings.TrimSpace(m.cfg.RAG.Workspace.Root)
+	if root == "" {
+		root = "."
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
+}
+
+func cmdRag(m *Model, args string) tea.Cmd {
+	sub, rest := splitArgs(args)
+	switch sub {
+	case "", "status":
+		m.openOverlay(m.ragOverlay())
+	case "on":
+		m.ragOn = true
+		if m.ragIndex == nil {
+			m.notice = "🔎 RAG on — no index yet; run /rag index to build one"
+		} else {
+			m.notice = fmt.Sprintf("🔎 RAG on — %d snippets from %d files will inform prompts", m.ragIndex.Len(), len(m.ragIndex.Sources()))
+		}
+	case "off":
+		m.ragOn = false
+		m.notice = "RAG off — retrieval will not run"
+	case "index":
+		return m.ragIndexCmd()
+	case "search":
+		if strings.TrimSpace(rest) == "" {
+			return m.fail("usage: /rag search <query>")
+		}
+		m.openOverlay(m.ragSearchOverlay(rest))
+	case "sources":
+		m.openOverlay(m.ragSourcesOverlay())
+	case "clear":
+		if m.ragStore != nil {
+			if err := m.ragStore.Clear(); err != nil {
+				return m.fail("rag clear: " + err.Error())
+			}
+		}
+		m.ragIndex = nil
+		m.ragLast = nil
+		m.ragRoot = ""
+		m.ragBuiltAt = time.Time{}
+		m.notice = "🔎 RAG index cleared"
+	default:
+		return m.fail("usage: /rag [status|index|search <q>|sources|clear|on|off]")
+	}
+	return nil
+}
+
+// ragIndexCmd rebuilds the workspace index synchronously and persists it.
+func (m *Model) ragIndexCmd() tea.Cmd {
+	root := m.ragWorkspaceRoot()
+	wcfg := m.cfg.RAG.Workspace
+	idx, skipped, err := rag.Build(rag.BuildConfig{
+		Root:       root,
+		Include:    wcfg.Include,
+		Exclude:    wcfg.Exclude,
+		MaxFileKB:  wcfg.MaxFileKB,
+		MaxTotalMB: wcfg.MaxTotalMB,
+	})
+	if err != nil {
+		return m.fail("rag index: " + err.Error())
+	}
+	m.ragIndex = idx
+	m.ragRoot = root
+	m.ragBuiltAt = time.Now()
+	if m.ragStore != nil {
+		if err := m.ragStore.Save(idx, root); err != nil {
+			return m.fail("rag index saved in memory but not persisted: " + err.Error())
+		}
+	}
+	m.notice = fmt.Sprintf("🔎 indexed %d snippets from %d files (%d skipped) in %s",
+		idx.Len(), len(idx.Sources()), skipped, root)
+	if !m.ragOn {
+		m.notice += " · /rag on to use it"
+	}
+	return nil
+}
+
+func (m *Model) ragOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("local RAG") + "\n\n")
+	m.kv(&b, "enabled", onOff(m.ragOn))
+	m.kv(&b, "strategy", orNone(m.cfg.RAG.Retrieval.Strategy))
+	if m.ragIndex != nil {
+		m.kv(&b, "indexed", fmt.Sprintf("%d snippets from %d files", m.ragIndex.Len(), len(m.ragIndex.Sources())))
+		m.kv(&b, "workspace", orNone(m.ragRoot))
+		if !m.ragBuiltAt.IsZero() {
+			m.kv(&b, "built", m.ragBuiltAt.Format("2006-01-02 15:04"))
+		}
+	} else {
+		m.kv(&b, "indexed", "no index yet (/rag index)")
+		m.kv(&b, "workspace", m.ragWorkspaceRoot())
+	}
+	m.kv(&b, "top_k", fmt.Sprintf("%d", m.ragTopK()))
+	m.kv(&b, "context budget", fmt.Sprintf("%d tokens", m.cfg.RAG.Retrieval.MaxContextTokens))
+	b.WriteString("\n")
+	b.WriteString(m.theme.SystemNote.Render("retrieval is local keyword scoring (BM25-lite); no embeddings, no\nexternal services. Retrieved snippets are added as labeled reference\ncontext and never replace your message — see them in /prompt preview") + "\n")
+	b.WriteString("\n" + m.theme.SystemNote.Render("/rag index · /rag search <q> · /rag sources · /rag on|off · /rag clear") + "\n")
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) ragSearchOverlay(query string) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("rag search") + "\n\n")
+	if m.ragIndex == nil {
+		b.WriteString("  no index yet — run /rag index first\n")
+		return m.overlayFooter(&b)
+	}
+	results := m.ragIndex.Search(query, m.ragTopK())
+	m.kv(&b, "query", query)
+	m.kv(&b, "matches", fmt.Sprintf("%d", len(results)))
+	b.WriteString("\n")
+	if len(results) == 0 {
+		b.WriteString(m.theme.SystemNote.Render("no matching snippets") + "\n")
+		return m.overlayFooter(&b)
+	}
+	for _, r := range results {
+		reason := ""
+		if len(r.MatchedTerms) > 0 {
+			reason = " · matched " + strings.Join(r.MatchedTerms, ", ")
+		}
+		b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%s:%d-%d", r.Chunk.Path, r.Chunk.StartLine, r.Chunk.EndLine)) +
+			m.theme.SystemNote.Render(fmt.Sprintf(" (score %.2f%s)", r.Score, reason)) + "\n")
+		b.WriteString(m.theme.StatusBar.Render("  "+firstLine(r.Chunk.Text)) + "\n")
+	}
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) ragSourcesOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("rag sources") + "\n\n")
+	if m.ragIndex == nil {
+		b.WriteString("  no index yet — run /rag index first\n")
+		return m.overlayFooter(&b)
+	}
+	srcs := m.ragIndex.Sources()
+	m.kv(&b, "files", fmt.Sprintf("%d", len(srcs)))
+	b.WriteString("\n")
+	for i, s := range srcs {
+		if i >= 60 {
+			b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf("… and %d more", len(srcs)-60)) + "\n")
+			break
+		}
+		b.WriteString("  " + s + "\n")
+	}
+	return m.overlayFooter(&b)
+}
+
+// firstLine returns the first non-blank line of s, trimmed, for compact rows.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			return truncateForRow(t)
+		}
+	}
+	return ""
+}
+
+func truncateForRow(s string) string {
+	r := []rune(s)
+	if len(r) <= 96 {
+		return s
+	}
+	return string(r[:96]) + "…"
 }
 
 func (m *Model) toolsOverlay() string {
