@@ -967,24 +967,27 @@ func (m *Model) quit() tea.Cmd {
 	return tea.Quit
 }
 
-// wrapLines counts how many rows value occupies at the given wrap width.
-// The bubbles textarea renders with greedy *word* wrapping, which produces
-// more rows than a plain character count — undercounting here left the box
-// too short, so it scrolled internally and hid all but the cursor row.
-func wrapLines(value string, width int) int {
+// wrapLines counts how many rows value occupies at the given wrap width,
+// clamped to [1, maxLines]. The bubbles textarea renders with greedy *word*
+// wrapping, which produces more rows than a plain character count —
+// undercounting here left the box too short, so it scrolled internally and
+// hid all but the cursor row.
+func wrapLines(value string, width, maxLines int) int {
 	if width < 1 {
 		width = 1
+	}
+	if maxLines < 1 {
+		maxLines = 1
 	}
 	lines := 0
 	for _, l := range strings.Split(value, "\n") {
 		lines += wordWrappedRows(l, width)
 	}
-	const maxInputLines = 6
 	if lines < 1 {
 		lines = 1
 	}
-	if lines > maxInputLines {
-		lines = maxInputLines
+	if lines > maxLines {
+		lines = maxLines
 	}
 	return lines
 }
@@ -1028,14 +1031,35 @@ func wordWrappedRows(line string, width int) int {
 }
 
 // syncInputHeight grows and shrinks the input box with its content,
-// Claude-Code style: 1 row when empty, up to 6 rows for long prompts.
+// Claude-Code style: 1 row when empty, growing with the prompt up to a cap
+// that scales with the terminal height (maxInputLines) so multi-line prompts
+// stay fully visible instead of scrolling internally and hiding the top.
 func (m *Model) syncInputHeight() {
-	lines := wrapLines(m.input.Value(), m.width-8)
+	lines := wrapLines(m.input.Value(), m.width-8, m.maxInputLines())
 	if lines != m.inputLines {
 		m.inputLines = lines
 		m.input.SetHeight(lines)
 		m.relayout()
 	}
+}
+
+// maxInputLines is the largest the input box may grow to. It mirrors the
+// layout budget in resize() so a tall prompt never starves the chat viewport
+// below minChatRows (which would overflow and break the layout). On a tall
+// terminal the box can grow generously; on a short one it stays modest.
+func (m *Model) maxInputLines() int {
+	const minChatRows = 4
+	attach := 0
+	if len(m.attachments) > 0 {
+		attach = 1
+	}
+	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help).
+	// Solve for the largest lines that keeps vpHeight >= minChatRows.
+	max := m.height - 7 - len(m.sugs) - m.statusLines - attach - minChatRows
+	if max < 1 {
+		max = 1
+	}
+	return max
 }
 
 // copyLastReply copies the most recent assistant text (or the in-flight

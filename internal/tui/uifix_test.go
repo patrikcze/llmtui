@@ -12,6 +12,37 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
+func TestMaxInputLinesScalesWithHeight(t *testing.T) {
+	m := newTestModel(t) // starts at 80x24
+	short := m.maxInputLines()
+	m.resize(80, 60)
+	tall := m.maxInputLines()
+	if tall <= short {
+		t.Errorf("maxInputLines did not grow with terminal height: 24→%d, 60→%d", short, tall)
+	}
+	// A tall terminal must let the input grow past the old fixed cap of 6, so
+	// multi-line prompts stay fully visible instead of scrolling internally.
+	m.input.SetValue(strings.Repeat("line\n", 15))
+	m.syncInputHeight()
+	if m.inputLines <= 6 {
+		t.Errorf("input capped at %d on a 60-row terminal, want >6", m.inputLines)
+	}
+}
+
+func TestInputGrowthNeverStarvesViewport(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	// Far more input lines than could ever fit on screen.
+	m.input.SetValue(strings.Repeat("x\n", 100))
+	m.syncInputHeight()
+	if m.viewport.Height < 3 {
+		t.Errorf("viewport starved to %d rows by a huge input", m.viewport.Height)
+	}
+	if m.inputLines > m.maxInputLines() {
+		t.Errorf("inputLines %d exceeds cap %d", m.inputLines, m.maxInputLines())
+	}
+}
+
 func TestWrapLinesCountsWordWrap(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -38,7 +69,7 @@ func TestWrapLinesCountsWordWrap(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := wrapLines(tc.value, tc.width); got != tc.want {
+			if got := wrapLines(tc.value, tc.width, 6); got != tc.want {
 				t.Errorf("wrapLines(%q, %d) = %d, want %d", tc.value, tc.width, got, tc.want)
 			}
 		})
