@@ -75,6 +75,22 @@ section and [security.md](security.md)):
 | `max_file_kb` | `512` | Per-file read/write and command output size cap |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 
+### `tools.guardrails`
+
+Hardens the workspace tools. Every protection defaults **on**; set one
+`false` only to loosen it. Use `/tools check "<command>"` to preview how a
+command line would be classified, and `/tools list` / `/tools inspect
+<name>` to review each capability's safety class and approval policy. See
+[security.md](security.md):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `block_git_dir_writes` | `true` | Reject `write_file` into `.git` (a written hook would run on your next git command) |
+| `block_symlink_escape` | `true` | Reject paths whose symlinks resolve outside the workspace root |
+| `protect_secret_files` | `true` | Reject writes into key-material directories (`.ssh`, `.gnupg`) |
+| `protect_shell_startup_files` | `true` | Reject writes to shell startup files (`.bashrc`, `.zshrc`, `.profile`, `config.fish`, …) |
+| `require_approval_for_secret_reads` | `true` | `read_file` of likely secret files (`.env`, `*.pem`, `*.key`, `id_rsa`, …) asks first |
+
 ### `tools.web`
 
 Optional web tools (`web_search` via DuckDuckGo — no API key — and

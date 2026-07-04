@@ -115,6 +115,11 @@ type Runner struct {
 	// search hits per call.
 	Web           WebClient
 	WebMaxResults int
+
+	// Guardrails governs write blocks (.git, key material, shell startup
+	// files), command classification, and secret-read approval. Defaults to
+	// DefaultGuardrails (everything on).
+	Guardrails GuardrailPolicy
 }
 
 // NewRunner confines execution to root; maxKB caps file reads and writes.
@@ -122,7 +127,12 @@ func NewRunner(root string, maxKB int) *Runner {
 	if maxKB <= 0 {
 		maxKB = 512
 	}
-	return &Runner{root: root, maxKB: maxKB, CommandTimeout: 30 * time.Second}
+	return &Runner{
+		root:           root,
+		maxKB:          maxKB,
+		CommandTimeout: 30 * time.Second,
+		Guardrails:     DefaultGuardrails(),
+	}
 }
 
 // Root returns the workspace directory.
@@ -141,11 +151,13 @@ func (r *Runner) resolve(rel string) (string, error) {
 	}
 	abs := filepath.Join(r.root, rel)
 	// A symlink inside the workspace must not smuggle access outside it.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		rootResolved, rerr := filepath.EvalSymlinks(r.root)
-		if rerr == nil && resolved != rootResolved &&
-			!strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
-			return "", fmt.Errorf("path %q resolves outside the workspace", rel)
+	if r.Guardrails.BlockSymlinkEscape {
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			rootResolved, rerr := filepath.EvalSymlinks(r.root)
+			if rerr == nil && resolved != rootResolved &&
+				!strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+				return "", fmt.Errorf("path %q resolves outside the workspace", rel)
+			}
 		}
 	}
 	return abs, nil
@@ -234,11 +246,10 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 	if rel == "" {
 		return "", "", fmt.Errorf("write_file needs a path")
 	}
-	// A written git hook would execute on the user's next git command.
-	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/") {
-		if part == ".git" {
-			return "", "", fmt.Errorf("writing inside .git is not allowed")
-		}
+	// Block writes into .git (a hook would execute on the next git command),
+	// key-material directories, and shell startup files.
+	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
+		return "", "", errors.New(msg)
 	}
 	if len(content) > r.maxKB*1024 {
 		return "", "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
@@ -348,13 +359,32 @@ func sanitizedEnv(environ []string) []string {
 
 // NeedsApproval reports whether a call mutates state or runs code and must
 // be confirmed by the user (unless approvals are set to auto). Read-only
-// calls and provably read-only commands run without asking.
+// calls and provably read-only commands run without asking. This is the
+// policy-free view; a Runner applies its GuardrailPolicy (secret-read
+// approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
 	case ToolListDir, ToolReadFile, ToolWebSearch:
 		return false
 	case ToolRunCommand:
-		return !SafeAutoCommand(c.Body)
+		return ClassifyCommand(c.Body).Verdict != VerdictAuto
+	default:
+		return true
+	}
+}
+
+// NeedsApproval reports whether a call must be confirmed under this runner's
+// guardrail policy. It matches the package-level NeedsApproval but adds
+// secret-read gating: read_file of a likely secret file (.env, *.pem,
+// id_rsa, …) asks first when RequireApprovalForSecretReads is on.
+func (r *Runner) NeedsApproval(c Call) bool {
+	switch c.Tool {
+	case ToolListDir, ToolWebSearch:
+		return false
+	case ToolReadFile:
+		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
+	case ToolRunCommand:
+		return r.Guardrails.ClassifyCommand(c.Body).Verdict != VerdictAuto
 	default:
 		return true
 	}

@@ -49,12 +49,28 @@ add` reminds you).
   - **Approval gate** — writes and non-read-only commands require an
     explicit `y`/`a` from the user before anything happens (`tools.approve:
     ask`, the default). Only reads, listings, and allowlisted read-only
-    commands without shell metacharacters run unprompted.
+    commands without shell metacharacters run unprompted. Run `/tools check
+    "<command>"` to preview how any command line would be classified and
+    why.
+  - **Command classifier** — a command is auto-approved only when it is an
+    allowlisted read-only program (`ls`, `cat`, `grep`, `rg`, `find`,
+    `git status/log/diff`, `go test/vet/fmt/list`, …) with no shell
+    metacharacters (pipes, redirects, chaining, substitution) and no
+    escalating arguments (`find -delete/-exec`). Known-dangerous programs
+    (`rm`, `mv`, `chmod`, `sudo`, `curl`, package managers, cloud/container
+    CLIs) always ask, as does anything unrecognized.
   - **Confinement** — absolute paths, `..`, and symlinks resolving outside
     the launch directory are rejected; commands run with the workspace as
     their working directory.
-  - **`.git` protection** — writes into `.git/` are blocked; a
-    model-written git hook would otherwise execute on your next git command.
+  - **Write guardrails** — writes into `.git/` (a model-written git hook
+    would otherwise execute on your next git command), key-material
+    directories (`.ssh`, `.gnupg`), and shell startup files (`.bashrc`,
+    `.zshrc`, `.profile`, `config.fish`, …) are blocked.
+  - **Secret-read approval** — reads of likely secret files (`.env`,
+    `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.netrc`, credential-named
+    files) require approval even though ordinary reads run unprompted.
+    Each protection can be relaxed individually under
+    `tools.guardrails.*` in config; all default on.
   - **Secret hygiene** — the environment passed to `run_command` is
     stripped of `LLMTUI_*` and anything matching key/token/secret/password
     patterns, so credentials cannot round-trip into model context via `env`.

@@ -241,6 +241,14 @@ func (m *Model) rebuildFromConfig() {
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
+		g := cfg.Tools.Guardrails
+		m.toolRunner.Guardrails = tools.GuardrailPolicy{
+			BlockGitDirWrites:             g.BlockGitDirWrites,
+			BlockSymlinkEscape:            g.BlockSymlinkEscape,
+			ProtectSecretFiles:            g.ProtectSecretFiles,
+			ProtectShellStartupFiles:      g.ProtectShellStartupFiles,
+			RequireApprovalForSecretReads: g.RequireApprovalForSecretReads,
+		}
 		wcfg := cfg.Tools.Web
 		wtimeout, err := time.ParseDuration(wcfg.Timeout)
 		if err != nil || wtimeout <= 0 {
@@ -611,7 +619,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	}
 	if !m.toolsAutoApprove {
 		for _, c := range calls {
-			if tools.NeedsApproval(c) {
+			if m.toolRunner.NeedsApproval(c) {
 				m.pendingCalls = calls
 				m.approvalIdx = 0
 				m.refreshViewport()

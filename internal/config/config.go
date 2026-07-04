@@ -126,6 +126,24 @@ type ToolsConfig struct {
 	Native string `mapstructure:"native" yaml:"native"`
 	// Web enables the optional web tools (web_search, web_fetch).
 	Web ToolsWebConfig `mapstructure:"web" yaml:"web"`
+	// Guardrails hardens the workspace tools (write blocks, command
+	// classification, secret-read approval). All protections default on.
+	Guardrails GuardrailsConfig `mapstructure:"guardrails" yaml:"guardrails"`
+}
+
+// GuardrailsConfig toggles the workspace-tool protections. Every field
+// defaults to true; set one false only to loosen a specific protection.
+type GuardrailsConfig struct {
+	// BlockGitDirWrites rejects write_file into .git.
+	BlockGitDirWrites bool `mapstructure:"block_git_dir_writes" yaml:"block_git_dir_writes"`
+	// BlockSymlinkEscape rejects paths whose symlinks resolve outside root.
+	BlockSymlinkEscape bool `mapstructure:"block_symlink_escape" yaml:"block_symlink_escape"`
+	// ProtectSecretFiles rejects writes into key-material directories.
+	ProtectSecretFiles bool `mapstructure:"protect_secret_files" yaml:"protect_secret_files"`
+	// ProtectShellStartupFiles rejects writes to shell startup files.
+	ProtectShellStartupFiles bool `mapstructure:"protect_shell_startup_files" yaml:"protect_shell_startup_files"`
+	// RequireApprovalForSecretReads makes read_file of likely secret files ask.
+	RequireApprovalForSecretReads bool `mapstructure:"require_approval_for_secret_reads" yaml:"require_approval_for_secret_reads"`
 }
 
 // ToolsWebConfig configures the optional web tools. Off by default:
@@ -421,6 +439,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.web.max_results", 5)
 	v.SetDefault("tools.web.max_page_kb", 128)
 	v.SetDefault("tools.web.timeout", "20s")
+	v.SetDefault("tools.guardrails.block_git_dir_writes", true)
+	v.SetDefault("tools.guardrails.block_symlink_escape", true)
+	v.SetDefault("tools.guardrails.protect_secret_files", true)
+	v.SetDefault("tools.guardrails.protect_shell_startup_files", true)
+	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
 
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
@@ -537,6 +560,15 @@ tools:
     max_results: 5 # search hits returned per web_search call
     max_page_kb: 128 # fetched page content cap sent to the model
     timeout: "20s"
+  # Guardrails harden the workspace tools. All protections default on; set
+  # one false only to loosen it. See /tools check to preview how a command
+  # would be classified.
+  guardrails:
+    block_git_dir_writes: true # reject write_file into .git
+    block_symlink_escape: true # reject paths whose symlinks resolve outside root
+    protect_secret_files: true # reject writes into .ssh, .gnupg
+    protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
+    require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token

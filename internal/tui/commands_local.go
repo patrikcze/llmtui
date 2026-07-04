@@ -998,8 +998,16 @@ func cmdTools(m *Model, args string) tea.Cmd {
 			m.notice = "⚒ tool output collapsed to one-line summaries"
 		}
 		m.refreshViewport()
+	case "list":
+		m.openOverlay(m.toolsListOverlay(args))
+	case "inspect":
+		_, name := splitArgs(args)
+		m.openOverlay(m.toolsInspectOverlay(name))
+	case "check":
+		_, cmdline := splitArgs(args)
+		m.openOverlay(m.toolsCheckOverlay(cmdline))
 	default:
-		return m.fail("usage: /tools [on|off|ask|auto|output|status]")
+		return m.fail("usage: /tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]")
 	}
 	return nil
 }
@@ -1066,9 +1074,105 @@ func (m *Model) toolsOverlay() string {
 	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")
 	m.kv(&b, tools.ToolWebFetch, "fetch one page as Markdown (approval per URL)")
 	b.WriteString("\n")
-	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nsymlink escapes, and writes into .git are rejected; command environments are\nstripped of secrets; every action is shown in the chat before and after") + "\n")
+	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nand symlink escapes are rejected; writes into .git, key-material dirs, and\nshell startup files are blocked; reads of likely secret files (.env, *.pem,\nid_rsa) ask first; command environments are stripped of secrets; every\naction is shown in the chat before and after (see /tools check <cmd>)") + "\n")
 	if !m.toolsOn {
 		b.WriteString("\n" + m.theme.SystemNote.Render("enable with /tools on (or tools.enabled in config)") + "\n")
+	}
+	return m.overlayFooter(&b)
+}
+
+// toolsListOverlay renders the /tools list output: one row per capability
+// with source, safety class, and approval policy.
+func (m *Model) toolsListOverlay(args string) string {
+	reg := tools.DefaultRegistry()
+	filter := strings.TrimSpace(args)
+	caps := reg.List()
+
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("capability registry") + "\n\n")
+	b.WriteString(m.theme.UserLabel.Render(
+		fmt.Sprintf("%-16s %-8s %-18s %-8s %s", "name", "source", "safety", "enabled", "approval"),
+	) + "\n")
+
+	enabledSources := map[string]bool{
+		"builtin": m.toolsOn,
+		"web":     m.toolsOn && m.webOn,
+	}
+
+	for _, c := range caps {
+		if filter != "" && !strings.Contains(c.Source, filter) {
+			continue
+		}
+		enabled := enabledSources[c.Source]
+		enabledStr := "no"
+		if enabled {
+			enabledStr = "yes"
+		}
+		row := fmt.Sprintf("%-16s %-8s %-18s %-8s %s",
+			c.Name, c.Source, string(c.Safety), enabledStr, c.Approval)
+		if enabled {
+			b.WriteString("  " + row + "\n")
+		} else {
+			b.WriteString("  " + m.theme.SystemNote.Render(row) + "\n")
+		}
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("/tools inspect <name>  /tools on  /web on") + "\n")
+	return m.overlayFooter(&b)
+}
+
+// toolsInspectOverlay renders detailed info for a single capability.
+func (m *Model) toolsInspectOverlay(name string) string {
+	var b strings.Builder
+	if name == "" {
+		b.WriteString(m.theme.Badge.Render("usage") + "\n\n")
+		b.WriteString("  /tools inspect <name>\n\n")
+		b.WriteString(m.theme.SystemNote.Render("run /tools list to see available names") + "\n")
+		return m.overlayFooter(&b)
+	}
+	reg := tools.DefaultRegistry()
+	info, ok := reg.Get(name)
+	if !ok {
+		b.WriteString(m.theme.Badge.Render("not found") + "\n\n")
+		b.WriteString(fmt.Sprintf("  no capability named %q\n\n", name))
+		b.WriteString(m.theme.SystemNote.Render("run /tools list to see available names") + "\n")
+		return m.overlayFooter(&b)
+	}
+	b.WriteString(m.theme.Badge.Render("tool: "+info.Name) + "\n\n")
+	m.kv(&b, "source", info.Source)
+	m.kv(&b, "safety", string(info.Safety))
+	m.kv(&b, "approval", info.Approval)
+	m.kv(&b, "description", "")
+	b.WriteString("    " + info.Description + "\n")
+	if len(info.Parameters) > 0 && string(info.Parameters) != "null" {
+		m.kv(&b, "parameters", "")
+		var pretty []byte
+		pretty, _ = json.MarshalIndent(json.RawMessage(info.Parameters), "    ", "  ")
+		b.WriteString("    " + string(pretty) + "\n")
+	}
+	return m.overlayFooter(&b)
+}
+
+// toolsCheckOverlay classifies a run_command line and explains the verdict.
+func (m *Model) toolsCheckOverlay(cmdline string) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("command classification") + "\n\n")
+	if strings.TrimSpace(cmdline) == "" {
+		b.WriteString("  usage: /tools check <command>\n\n")
+		b.WriteString("  " + m.theme.SystemNote.Render("examples:\n  /tools check \"go test ./...\"\n  /tools check \"rm -rf .\"\n  /tools check \"cat .env\"") + "\n")
+		return m.overlayFooter(&b)
+	}
+	class := tools.ClassifyCommand(cmdline)
+	verdictLabel := "ask (approval required)"
+	if class.Verdict == tools.VerdictAuto {
+		verdictLabel = "auto (no approval needed)"
+	}
+	m.kv(&b, "command", cmdline)
+	m.kv(&b, "verdict", verdictLabel)
+	m.kv(&b, "reason", class.Reason)
+	if class.Verdict == tools.VerdictAuto {
+		b.WriteString("\n  " + m.theme.SystemNote.Render("this command runs without asking when tools.approve = auto or when it is allowlisted as read-only") + "\n")
+	} else {
+		b.WriteString("\n  " + m.theme.SystemNote.Render("this command requires the user's approval before it runs") + "\n")
 	}
 	return m.overlayFooter(&b)
 }
