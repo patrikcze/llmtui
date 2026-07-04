@@ -106,6 +106,28 @@ and [security.md](security.md):
 | `max_page_kb` | `128` | Fetched page content cap sent to the model |
 | `timeout` | `20s` | Per-request limit for searches and fetches |
 
+### `rag`
+
+Optional local workspace index and keyword retrieval, off by default.
+Documented in detail in [rag.md](rag.md).
+
+### `mcp`
+
+Optional Model Context Protocol servers, off by default. This build ships
+config/interfaces only — servers can be declared, validated (`/doctor mcp`),
+inspected, and toggled, but not yet connected. Documented in
+[mcp.md](mcp.md).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch; a server runs only when this and its own `enabled` are true |
+| `servers.<name>.enabled` | `false` | Enable one declared server |
+| `servers.<name>.transport` | — | Wire protocol (`stdio`) |
+| `servers.<name>.command` / `args` | — | Command to launch the server |
+| `servers.<name>.env` | — | Environment for the server; values redacted in `/mcp inspect`, never logged |
+| `servers.<name>.approve` | `ask` | `ask` or `auto` for the server's tool calls |
+| `servers.<name>.timeout` | `30s` | Per-call timeout |
+
 ### `cache`, `memory`, `prompt`, `context`, `network`
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),

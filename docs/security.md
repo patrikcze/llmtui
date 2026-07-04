@@ -118,6 +118,18 @@ add` reminds you).
     was retrieved is visible in `/prompt preview` and `/debug last`.
   - **The on-disk index** (`rag.index_path`) may contain workspace source
     excerpts and is written owner-only; remove it with `/rag clear`.
+- MCP servers (`/mcp`) are off by default and, in this build, are
+  config/interfaces only (see [mcp.md](mcp.md)):
+  - **Nothing starts on its own** — declaring a server does not contact or
+    launch it. Starting a server would run its configured command, a
+    potentially dangerous action gated by the approval model (`approve: ask`
+    by default). A server runs only when both `mcp.enabled` and the server's
+    own `enabled` are true.
+  - **Invalid config never blocks startup** — `/doctor mcp` validates config,
+    but a malformed disabled server does not affect normal chat; command
+    existence is only probed for enabled servers while MCP is enabled.
+  - **Environments are redacted** — `/mcp inspect` shows only env variable
+    names, never their values, and env values are never logged.
 - Debug output (`/debug last`) shows request shape, sections, and timings,
   never credentials.
 - The `privacy` config section documents intent (`local_first`,

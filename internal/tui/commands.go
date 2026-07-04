@@ -57,7 +57,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "RAG", "Diagnostics", "Session",
+	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "RAG", "MCP", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -135,8 +135,11 @@ func slashCommands() []slashCommand {
 		// --- RAG ---
 		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, run: cmdRag},
 
+		// --- MCP ---
+		{name: "mcp", usage: "/mcp [status|list|tools|inspect <server>|enable <server>|disable <server>]", desc: "optional Model Context Protocol servers (config/interfaces; off by default)", category: "MCP", blockWhileThinking: true, run: cmdMcp},
+
 		// --- Diagnostics ---
-		{name: "doctor", usage: "/doctor [provider [name]]", desc: "provider and model diagnostics", category: "Diagnostics", run: cmdDoctor},
+		{name: "doctor", usage: "/doctor [provider [name]|mcp]", desc: "provider, model, and MCP diagnostics", category: "Diagnostics", run: cmdDoctor},
 		{name: "debug", usage: "/debug [on|off|last]", desc: "debug drawer for the last request", category: "Diagnostics", run: cmdDebug},
 		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", run: cmdKeys},
 		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", run: cmdConfig},

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
 	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/rag"
@@ -484,6 +486,10 @@ type doctorResultMsg struct{ report string }
 
 func cmdDoctor(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
+	if sub == "mcp" {
+		m.openOverlay(m.doctorMcpOverlay())
+		return nil
+	}
 	name := m.prov.Name()
 	if sub == "provider" && rest != "" {
 		name = rest
@@ -1243,6 +1249,179 @@ func truncateForRow(s string) string {
 		return s
 	}
 	return string(r[:96]) + "…"
+}
+
+// doctorMcpOverlay validates MCP config. Config-shape problems are always
+// reported; command-existence is only checked for servers that are enabled
+// while MCP itself is enabled (matching "don't fail startup unless enabled").
+func (m *Model) doctorMcpOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("doctor — mcp") + "\n\n")
+	m.kv(&b, "mcp enabled", onOff(m.cfg.MCP.Enabled))
+	m.kv(&b, "transport", "none wired in this build (config/interfaces only)")
+	servers := m.mcpRegistry.List()
+	if len(servers) == 0 {
+		b.WriteString("\n" + m.theme.SystemNote.Render("no servers configured — nothing to validate") + "\n")
+		return m.overlayFooter(&b)
+	}
+	b.WriteString("\n")
+	for _, s := range servers {
+		line := s.Config.Name + ": "
+		if err := s.Config.Validate(); err != nil {
+			b.WriteString("  " + m.theme.BadgeWarn.Render("✗ "+line+err.Error()) + "\n")
+			continue
+		}
+		detail := "config valid"
+		// Only probe the command when this server would actually run.
+		if m.cfg.MCP.Enabled && s.Config.Enabled {
+			if _, err := exec.LookPath(s.Config.Command); err != nil {
+				b.WriteString("  " + m.theme.BadgeWarn.Render(fmt.Sprintf("⚠ %scommand %q not found on PATH", line, s.Config.Command)) + "\n")
+				continue
+			}
+			detail = "config valid · command found on PATH"
+		}
+		b.WriteString("  " + m.theme.StatusValue.Render("✓ "+line) + m.theme.StatusBar.Render(detail) + "\n")
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("command existence is only checked for enabled servers while mcp.enabled\nis true; invalid disabled servers never block startup") + "\n")
+	return m.overlayFooter(&b)
+}
+
+// mcpServerConfigs converts the config's server map into ordered mcp
+// ServerConfigs, parsing the per-server timeout.
+func mcpServerConfigs(c config.MCPConfig) []mcp.ServerConfig {
+	names := make([]string, 0, len(c.Servers))
+	for name := range c.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]mcp.ServerConfig, 0, len(names))
+	for _, name := range names {
+		sc := c.Servers[name]
+		timeout := 30 * time.Second
+		if d, err := time.ParseDuration(sc.Timeout); err == nil && d > 0 {
+			timeout = d
+		}
+		out = append(out, mcp.ServerConfig{
+			Name:      name,
+			Enabled:   c.Enabled && sc.Enabled,
+			Transport: sc.Transport,
+			Command:   sc.Command,
+			Args:      sc.Args,
+			Env:       sc.Env,
+			Timeout:   timeout,
+			Approve:   sc.Approve,
+		})
+	}
+	return out
+}
+
+func cmdMcp(m *Model, args string) tea.Cmd {
+	sub, rest := splitArgs(args)
+	if m.mcpRegistry == nil {
+		return m.fail("mcp unavailable")
+	}
+	switch sub {
+	case "", "status", "list":
+		m.openOverlay(m.mcpOverlay())
+	case "tools":
+		m.openOverlay(m.mcpToolsOverlay())
+	case "inspect":
+		m.openOverlay(m.mcpInspectOverlay(strings.TrimSpace(rest)))
+	case "enable":
+		name := strings.TrimSpace(rest)
+		if name == "" {
+			return m.fail("usage: /mcp enable <server>")
+		}
+		if err := m.mcpRegistry.Enable(name); err != nil {
+			return m.fail(err.Error())
+		}
+		m.notice = fmt.Sprintf("🔌 MCP server %q enabled — no transport is wired yet, so it cannot connect in this build", name)
+	case "disable":
+		name := strings.TrimSpace(rest)
+		if name == "" {
+			return m.fail("usage: /mcp disable <server>")
+		}
+		if err := m.mcpRegistry.Disable(name); err != nil {
+			return m.fail(err.Error())
+		}
+		m.notice = fmt.Sprintf("🔌 MCP server %q disabled", name)
+	default:
+		return m.fail("usage: /mcp [status|list|tools|inspect <server>|enable <server>|disable <server>]")
+	}
+	return nil
+}
+
+func (m *Model) mcpOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("MCP servers") + "\n\n")
+	m.kv(&b, "mcp enabled", onOff(m.cfg.MCP.Enabled))
+	servers := m.mcpRegistry.List()
+	if len(servers) == 0 {
+		b.WriteString("\n" + m.theme.SystemNote.Render("no servers configured — add them under mcp.servers in config (see docs/mcp.md)") + "\n")
+		return m.overlayFooter(&b)
+	}
+	b.WriteString("\n" + m.theme.UserLabel.Render(fmt.Sprintf("%-14s %-9s %-13s %-8s %s", "server", "transport", "status", "approve", "command")) + "\n")
+	for _, s := range servers {
+		row := fmt.Sprintf("%-14s %-9s %-13s %-8s %s",
+			s.Config.Name, orNone(s.Config.Transport), string(s.Status), s.Config.ApproveMode(), orNone(s.Config.Command))
+		if s.Status == mcp.StatusConnected {
+			b.WriteString("  " + row + "\n")
+		} else {
+			b.WriteString("  " + m.theme.SystemNote.Render(row) + "\n")
+		}
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("no transport is wired in this build: servers can be inspected and\ntoggled, but not connected. Starting a server runs its command and\nfollows the approval model. /mcp inspect <server> · /doctor mcp") + "\n")
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) mcpToolsOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("MCP tools") + "\n\n")
+	tools := m.mcpRegistry.Tools()
+	if len(tools) == 0 {
+		b.WriteString(m.theme.SystemNote.Render("no MCP tools — servers must be connected to advertise tools, and no\ntransport is wired in this build") + "\n")
+		return m.overlayFooter(&b)
+	}
+	for _, t := range tools {
+		b.WriteString(m.theme.UserLabel.Render(t.Server+"/"+t.Name) + "\n")
+		b.WriteString("  " + m.theme.StatusBar.Render(t.Description) + "\n")
+	}
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) mcpInspectOverlay(name string) string {
+	var b strings.Builder
+	if name == "" {
+		b.WriteString(m.theme.Badge.Render("usage") + "\n\n  /mcp inspect <server>\n")
+		return m.overlayFooter(&b)
+	}
+	s, ok := m.mcpRegistry.Get(name)
+	if !ok {
+		b.WriteString(m.theme.Badge.Render("not found") + "\n\n  no MCP server named " + name + "\n")
+		return m.overlayFooter(&b)
+	}
+	b.WriteString(m.theme.Badge.Render("MCP server: "+s.Config.Name) + "\n\n")
+	m.kv(&b, "status", string(s.Status))
+	m.kv(&b, "enabled", onOff(s.Config.Enabled))
+	m.kv(&b, "transport", orNone(s.Config.Transport))
+	m.kv(&b, "command", orNone(s.Config.Command))
+	if len(s.Config.Args) > 0 {
+		m.kv(&b, "args", strings.Join(s.Config.Args, " "))
+	}
+	if red := s.Config.RedactedEnv(); len(red) > 0 {
+		keys := make([]string, 0, len(red))
+		for k := range red {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		m.kv(&b, "env", strings.Join(keys, ", ")+"  (values redacted)")
+	}
+	m.kv(&b, "approve", s.Config.ApproveMode())
+	m.kv(&b, "timeout", s.Config.Timeout.String())
+	if s.LastErr != nil {
+		m.kv(&b, "last error", s.LastErr.Error())
+	}
+	return m.overlayFooter(&b)
 }
 
 func (m *Model) toolsOverlay() string {

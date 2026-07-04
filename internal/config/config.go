@@ -183,6 +183,26 @@ type RAGRetrievalConfig struct {
 	Strategy         string `mapstructure:"strategy" yaml:"strategy"` // "keyword" (embeddings later)
 }
 
+// MCPConfig configures optional Model Context Protocol servers. Disabled by
+// default: no server is contacted or started unless the user enables MCP and
+// the specific server, then connects it explicitly.
+type MCPConfig struct {
+	Enabled bool                       `mapstructure:"enabled" yaml:"enabled"`
+	Servers map[string]MCPServerConfig `mapstructure:"servers" yaml:"servers,omitempty"`
+}
+
+// MCPServerConfig declares one MCP server. Starting it runs Command, so it is
+// treated as a potentially dangerous action under the approval model.
+type MCPServerConfig struct {
+	Enabled   bool              `mapstructure:"enabled" yaml:"enabled"`
+	Transport string            `mapstructure:"transport" yaml:"transport"`
+	Command   string            `mapstructure:"command" yaml:"command"`
+	Args      []string          `mapstructure:"args" yaml:"args,omitempty"`
+	Env       map[string]string `mapstructure:"env" yaml:"env,omitempty"`
+	Approve   string            `mapstructure:"approve" yaml:"approve"`
+	Timeout   string            `mapstructure:"timeout" yaml:"timeout"`
+}
+
 // RetryConfig configures request retries.
 type RetryConfig struct {
 	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
@@ -229,6 +249,7 @@ type Config struct {
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
 	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
 	RAG             RAGConfig                     `mapstructure:"rag" yaml:"rag"`
+	MCP             MCPConfig                     `mapstructure:"mcp" yaml:"mcp"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
 	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
 	ModelProfiles   map[string]ModelProfileConfig `mapstructure:"model_profiles" yaml:"model_profiles,omitempty"`
@@ -486,6 +507,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.retrieval.max_context_tokens", 3000)
 	v.SetDefault("rag.retrieval.strategy", "keyword")
 
+	v.SetDefault("mcp.enabled", false)
+
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
 	v.SetDefault("network.retry.enabled", true)
@@ -647,6 +670,29 @@ rag:
     top_k: 6 # snippets retrieved per query
     max_context_tokens: 3000 # cap on retrieved context added to a prompt
     strategy: "keyword" # keyword now; embeddings may come later
+
+# Optional Model Context Protocol (MCP) servers. Disabled by default. No
+# server is contacted or started unless you enable MCP and the specific
+# server, then connect it. Starting a server runs its command, so it follows
+# the same approval posture as the workspace tools. See docs/mcp.md.
+mcp:
+  enabled: false
+  # servers:
+  #   filesystem:
+  #     enabled: false
+  #     transport: stdio
+  #     command: "mcp-server-filesystem"
+  #     args: ["/path/to/workspace"]
+  #     approve: ask # ask | auto
+  #     timeout: "30s"
+  #   custom:
+  #     enabled: false
+  #     transport: stdio
+  #     command: "/path/to/server"
+  #     args: []
+  #     env: {} # values are redacted in /mcp inspect and never logged
+  #     approve: ask
+  #     timeout: "30s"
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token

@@ -177,6 +177,7 @@ Local-LLM experience helpers:
 | `/tools` | Opt-in agent mode — the model can create/read files and run commands in your current directory, with y/n approval |
 | `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
 | `/rag` | Opt-in local workspace retrieval — index files and add keyword-matched snippets as labeled reference context; fully local, no embeddings ([docs](docs/rag.md)) |
+| `/mcp` | Optional Model Context Protocol servers — declare, inspect, and toggle; off by default ([docs](docs/mcp.md)) |
 | `/template` | Reusable conversation templates from the config |
 | `/doctor` | Provider, model, and network diagnostics |
 | `/keys` | Key inspector — verify what your terminal sends ([docs](docs/keyboard.md)) |

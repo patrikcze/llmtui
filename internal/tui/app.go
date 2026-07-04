@@ -22,6 +22,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
 	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -138,6 +139,9 @@ type Model struct {
 	ragRoot    string       // workspace root the index was built from
 	ragBuiltAt time.Time    // when the loaded index was built
 	ragLast    []rag.Result // snippets retrieved for the last dispatch (/debug, /rag)
+
+	// Optional MCP servers (config/interfaces only; no transport wired yet).
+	mcpRegistry *mcp.Registry
 
 	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache     bool                // skip the response cache for the next dispatch
@@ -284,6 +288,11 @@ func (m *Model) rebuildFromConfig() {
 		}
 	}
 	m.ragOn = cfg.RAG.Enabled && cfg.RAG.Workspace.Enabled
+
+	// MCP: build the registry from config. The factory is nil — no transport
+	// is wired in this build, so servers can be inspected and toggled but not
+	// connected. Nothing is started here.
+	m.mcpRegistry = mcp.NewRegistry(mcpServerConfigs(cfg.MCP), nil)
 
 	// Config-defined profiles are matched before built-ins.
 	profiles := make([]modelprofile.Profile, 0, len(cfg.ModelProfiles)+4)
