@@ -594,7 +594,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 		return m, cmd
 	}
-	// Non-key events (mouse wheel, cursor blink, …) go to both components.
+	// Mouse events scroll the chat transcript only. The input's textarea
+	// embeds its own viewport that also scrolls on the wheel, so forwarding
+	// wheel events to both made the prompt and the chat scroll in lockstep.
+	// Route the mouse to the viewport alone; the input is navigated with the
+	// keyboard (arrows auto-scroll it to keep the cursor visible).
+	if _, isMouse := msg.(tea.MouseMsg); isMouse {
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	// Other non-key events (cursor blink, …) go to both components.
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
 	m.viewport, cmd = m.viewport.Update(msg)

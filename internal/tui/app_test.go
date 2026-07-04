@@ -313,6 +313,36 @@ func TestEscClearsSlashInput(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsChatNotPrompt(t *testing.T) {
+	m := newTestModel(t) // 80x24
+	// Enough transcript that the chat viewport is scrollable.
+	for i := 0; i < 60; i++ {
+		m.session.AddAssistant("assistant line of chat output")
+	}
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+
+	// A prompt taller than the input box, so the textarea's own internal
+	// viewport is scrollable — the thing that used to scroll along with the
+	// chat when the wheel was forwarded to both.
+	m.input.SetValue(strings.Repeat("prompt line\n", 20))
+	m.syncInputHeight()
+
+	inputBefore := m.input.View()
+	vpBefore := m.viewport.YOffset
+
+	for i := 0; i < 5; i++ {
+		m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	}
+
+	if m.viewport.YOffset == vpBefore {
+		t.Errorf("mouse wheel did not scroll the chat viewport (offset stayed %d)", vpBefore)
+	}
+	if m.input.View() != inputBefore {
+		t.Error("mouse wheel scrolled the prompt box; it should scroll only the chat")
+	}
+}
+
 func TestCtrlUClearsWholePrompt(t *testing.T) {
 	m := newTestModel(t)
 	// A multi-line prompt, the kind that is tedious to backspace away.
