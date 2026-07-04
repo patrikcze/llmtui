@@ -289,10 +289,10 @@ func (m *Model) rebuildFromConfig() {
 	}
 	m.ragOn = cfg.RAG.Enabled && cfg.RAG.Workspace.Enabled
 
-	// MCP: build the registry from config. The factory is nil — no transport
-	// is wired in this build, so servers can be inspected and toggled but not
-	// connected. Nothing is started here.
-	m.mcpRegistry = mcp.NewRegistry(mcpServerConfigs(cfg.MCP), nil)
+	// MCP: build the registry from config with the stdio transport. Nothing
+	// is started here — a server is only launched when the user connects it
+	// (/mcp connect), which runs the server's configured command.
+	m.mcpRegistry = mcp.NewRegistry(mcpServerConfigs(cfg.MCP), mcp.StdioFactory())
 
 	// Config-defined profiles are matched before built-ins.
 	profiles := make([]modelprofile.Profile, 0, len(cfg.ModelProfiles)+4)
@@ -529,6 +529,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doctorResultMsg:
 		m.notice = ""
 		m.openOverlay(m.doctorOverlay(msg.report))
+		return m, nil
+
+	case mcpConnectMsg:
+		m.notice = ""
+		if msg.err != nil {
+			m.errText = fmt.Sprintf("MCP %q: %s", msg.server, msg.err.Error())
+			m.refreshViewport()
+		} else {
+			m.notice = fmt.Sprintf("🔌 MCP server %q connected — %d tool(s) available (/mcp tools)", msg.server, msg.tools)
+		}
 		return m, nil
 
 	case modelsResultMsg:
@@ -945,6 +955,9 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 func (m *Model) quit() tea.Cmd {
 	if m.cancelStream != nil {
 		m.cancelStream()
+	}
+	if m.mcpRegistry != nil {
+		m.mcpRegistry.Close() // stop any MCP subprocesses
 	}
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(); err == nil { // best effort on exit

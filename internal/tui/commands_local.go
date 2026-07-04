@@ -484,6 +484,13 @@ func (m *Model) memoryOverlay() string {
 
 type doctorResultMsg struct{ report string }
 
+// mcpConnectMsg reports the outcome of an async /mcp connect.
+type mcpConnectMsg struct {
+	server string
+	tools  int
+	err    error
+}
+
 func cmdDoctor(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	if sub == "mcp" {
@@ -1258,7 +1265,7 @@ func (m *Model) doctorMcpOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("doctor — mcp") + "\n\n")
 	m.kv(&b, "mcp enabled", onOff(m.cfg.MCP.Enabled))
-	m.kv(&b, "transport", "none wired in this build (config/interfaces only)")
+	m.kv(&b, "transport", "stdio")
 	servers := m.mcpRegistry.List()
 	if len(servers) == 0 {
 		b.WriteString("\n" + m.theme.SystemNote.Render("no servers configured — nothing to validate") + "\n")
@@ -1335,7 +1342,7 @@ func cmdMcp(m *Model, args string) tea.Cmd {
 		if err := m.mcpRegistry.Enable(name); err != nil {
 			return m.fail(err.Error())
 		}
-		m.notice = fmt.Sprintf("🔌 MCP server %q enabled — no transport is wired yet, so it cannot connect in this build", name)
+		m.notice = fmt.Sprintf("🔌 MCP server %q enabled — /mcp connect %s to launch it", name, name)
 	case "disable":
 		name := strings.TrimSpace(rest)
 		if name == "" {
@@ -1345,8 +1352,46 @@ func cmdMcp(m *Model, args string) tea.Cmd {
 			return m.fail(err.Error())
 		}
 		m.notice = fmt.Sprintf("🔌 MCP server %q disabled", name)
+	case "connect":
+		name := strings.TrimSpace(rest)
+		if name == "" {
+			return m.fail("usage: /mcp connect <server>")
+		}
+		s, ok := m.mcpRegistry.Get(name)
+		if !ok {
+			return m.fail(fmt.Sprintf("no MCP server named %q", name))
+		}
+		if !s.Config.Enabled {
+			return m.fail(fmt.Sprintf("MCP server %q is disabled — /mcp enable %s first", name, name))
+		}
+		// Connecting launches the server's command; the explicit /mcp connect
+		// is the user's authorization for that. Run it off the UI thread.
+		reg := m.mcpRegistry
+		timeout := s.Config.Timeout
+		m.notice = fmt.Sprintf("🔌 connecting to MCP server %q…", name)
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			err := reg.Connect(ctx, name)
+			tools := 0
+			if srv, ok := reg.Get(name); ok {
+				tools = len(srv.Tools)
+			}
+			return mcpConnectMsg{server: name, tools: tools, err: err}
+		}
+	case "disconnect":
+		name := strings.TrimSpace(rest)
+		if name == "" {
+			return m.fail("usage: /mcp disconnect <server>")
+		}
+		// Disable closes the connection; re-enable to keep it available.
+		if err := m.mcpRegistry.Disable(name); err != nil {
+			return m.fail(err.Error())
+		}
+		_ = m.mcpRegistry.Enable(name)
+		m.notice = fmt.Sprintf("🔌 MCP server %q disconnected", name)
 	default:
-		return m.fail("usage: /mcp [status|list|tools|inspect <server>|enable <server>|disable <server>]")
+		return m.fail("usage: /mcp [status|list|tools|inspect <s>|enable <s>|disable <s>|connect <s>|disconnect <s>]")
 	}
 	return nil
 }
@@ -1370,7 +1415,7 @@ func (m *Model) mcpOverlay() string {
 			b.WriteString("  " + m.theme.SystemNote.Render(row) + "\n")
 		}
 	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("no transport is wired in this build: servers can be inspected and\ntoggled, but not connected. Starting a server runs its command and\nfollows the approval model. /mcp inspect <server> · /doctor mcp") + "\n")
+	b.WriteString("\n" + m.theme.SystemNote.Render("enable a server, then /mcp connect <server> to launch it over stdio and\nlist its tools. Connecting runs the server's command — that explicit\naction is your authorization. /mcp inspect <server> · /doctor mcp") + "\n")
 	return m.overlayFooter(&b)
 }
 
@@ -1379,7 +1424,7 @@ func (m *Model) mcpToolsOverlay() string {
 	b.WriteString(m.theme.Badge.Render("MCP tools") + "\n\n")
 	tools := m.mcpRegistry.Tools()
 	if len(tools) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no MCP tools — servers must be connected to advertise tools, and no\ntransport is wired in this build") + "\n")
+		b.WriteString(m.theme.SystemNote.Render("no MCP tools — enable a server and /mcp connect it to list its tools") + "\n")
 		return m.overlayFooter(&b)
 	}
 	for _, t := range tools {

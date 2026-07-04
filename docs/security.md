@@ -118,13 +118,16 @@ add` reminds you).
     was retrieved is visible in `/prompt preview` and `/debug last`.
   - **The on-disk index** (`rag.index_path`) may contain workspace source
     excerpts and is written owner-only; remove it with `/rag clear`.
-- MCP servers (`/mcp`) are off by default and, in this build, are
-  config/interfaces only (see [mcp.md](mcp.md)):
-  - **Nothing starts on its own** — declaring a server does not contact or
-    launch it. Starting a server would run its configured command, a
-    potentially dangerous action gated by the approval model (`approve: ask`
-    by default). A server runs only when both `mcp.enabled` and the server's
-    own `enabled` are true.
+- MCP servers (`/mcp`) are off by default and connect over stdio only on an
+  explicit user action (see [mcp.md](mcp.md)):
+  - **Nothing starts on its own** — declaring or enabling a server does not
+    launch it. A subprocess is spawned only by `/mcp connect <server>`, which
+    runs the server's configured command; that explicit command is the
+    authorization. A server can run only when both `mcp.enabled` and the
+    server's own `enabled` are true.
+  - **Controlled environment** — the server subprocess does not inherit your
+    full environment, only a small safe base plus the values you configure
+    under `env`; connected servers are stopped on disconnect/disable/quit.
   - **Invalid config never blocks startup** — `/doctor mcp` validates config,
     but a malformed disabled server does not affect normal chat; command
     existence is only probed for enabled servers while MCP is enabled.

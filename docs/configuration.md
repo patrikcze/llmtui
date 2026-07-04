@@ -113,9 +113,8 @@ Documented in detail in [rag.md](rag.md).
 
 ### `mcp`
 
-Optional Model Context Protocol servers, off by default. This build ships
-config/interfaces only — servers can be declared, validated (`/doctor mcp`),
-inspected, and toggled, but not yet connected. Documented in
+Optional Model Context Protocol servers, off by default. Servers connect
+over stdio only on an explicit `/mcp connect`. Documented in
 [mcp.md](mcp.md).
 
 | Key | Default | Meaning |

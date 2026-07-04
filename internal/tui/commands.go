@@ -136,7 +136,7 @@ func slashCommands() []slashCommand {
 		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, run: cmdRag},
 
 		// --- MCP ---
-		{name: "mcp", usage: "/mcp [status|list|tools|inspect <server>|enable <server>|disable <server>]", desc: "optional Model Context Protocol servers (config/interfaces; off by default)", category: "MCP", blockWhileThinking: true, run: cmdMcp},
+		{name: "mcp", usage: "/mcp [status|list|tools|inspect <s>|enable <s>|connect <s>|disconnect <s>|disable <s>]", desc: "optional Model Context Protocol servers over stdio (off by default; connect launches the server)", category: "MCP", blockWhileThinking: true, run: cmdMcp},
 
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]|mcp]", desc: "provider, model, and MCP diagnostics", category: "Diagnostics", run: cmdDoctor},

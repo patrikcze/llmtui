@@ -1,16 +1,12 @@
 # MCP servers (Model Context Protocol)
 
-llmtui has **MCP-ready** architecture: you can declare MCP servers in config,
-inspect them, and toggle them from the TUI. It is **optional and disabled by
-default**, and no server is ever contacted or started unless you explicitly
-enable it.
+llmtui can connect to MCP servers over stdio, list their tools, and call
+them. It is **optional and disabled by default**, and no server is ever
+contacted or started unless you explicitly enable **and** connect it.
 
-> **Status:** this build ships the MCP **configuration, interfaces, and
-> registry only**. No wire transport is wired in yet, so servers can be
-> declared, validated, inspected, and enabled/disabled, but they cannot
-> connect and advertise tools. Connecting over a real transport (stdio) is a
-> separate step. `/mcp status` shows each server as `no_transport` when
-> enabled.
+The transport is **JSON-RPC 2.0 over newline-delimited stdio**: llmtui runs
+the server's command as a subprocess, performs the MCP `initialize`
+handshake, then uses `tools/list` and `tools/call`.
 
 ## Commands
 
@@ -20,9 +16,13 @@ enable it.
 /mcp tools               # tools advertised by connected servers
 /mcp inspect <server>    # one server's config (env values redacted)
 /mcp enable <server>     # mark a server as intended-to-run
-/mcp disable <server>    # disable a server and drop any connection
+/mcp connect <server>    # launch the server and list its tools
+/mcp disconnect <server> # stop the server's subprocess (keep it enabled)
+/mcp disable <server>    # disconnect and disable a server
 /doctor mcp              # validate MCP config
 ```
+
+Typical flow: `/mcp enable files` → `/mcp connect files` → `/mcp tools`.
 
 ## Configuration
 
@@ -55,9 +55,15 @@ A server runs only when **both** `mcp.enabled` and the server's own
 ## Safety
 
 - **Nothing starts on its own.** Building the registry at startup does not
-  contact or launch any server. Starting a server runs its `command`, which
-  is treated as a potentially dangerous action under the same approval model
-  as the workspace tools (`approve: ask` by default).
+  contact or launch any server. A server subprocess is spawned only when you
+  run `/mcp connect <server>` — that explicit command is your authorization
+  for running its `command`.
+- **Controlled environment.** The server subprocess does not inherit your
+  full environment: it gets a small safe base (`PATH`, `HOME`, `USER`,
+  `SHELL`, `LANG`, `TMPDIR`, `TERM`) plus the values you configure under
+  `env`, so unrelated host secrets are not exposed to the server.
+- **Clean shutdown.** Connected servers are stopped when you disconnect,
+  disable them, or quit llmtui.
 - **Invalid config never blocks startup.** `/doctor mcp` reports config-shape
   problems for every server, but a malformed **disabled** server does not
   affect normal chat. Command existence on `PATH` is only checked for servers
