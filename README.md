@@ -97,7 +97,7 @@ The full reference for every section lives in
 
 | Command | Description |
 | --- | --- |
-| `llmtui chat` | Interactive full-screen chat |
+| `llmtui chat` | Interactive full-screen chat (`--resume <name>` / `--continue` to resume a saved session) |
 | `llmtui models` | List models on the active provider |
 | `llmtui providers` | List configured providers and their status |
 | `llmtui config init / show / path` | Manage configuration |
@@ -319,6 +319,22 @@ With `chat.save_history: true` (the default), llmtui keeps everything under
   content). View it with `llmtui stats` or `/stats` in chat.
 
 Set `chat.save_history: false` to disable both.
+
+### Resuming a session
+
+```bash
+./llmtui chat --resume session-20260702-163005   # resume that exact saved session
+./llmtui chat --continue                          # resume the most recently saved session
+./llmtui chat -c                                  # short form of --continue
+```
+
+Both read from `chat.history_dir` regardless of `chat.save_history` (like
+`llmtui history` does) — they only need the directory to contain saved
+sessions, not future saving to be enabled. Resuming restores the
+conversation's messages and token totals and adopts the session's name (so
+`/save` / `Ctrl+S` update the same file); it does not change which
+provider/model you're using — that still follows the normal
+`--provider`/`--model` precedence.
 
 ## Troubleshooting
 

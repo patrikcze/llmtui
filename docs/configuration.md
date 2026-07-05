@@ -60,6 +60,11 @@ as built-ins even with an empty config. `default_provider` and
 | `force_vision` | `false` | Allow image paste for unrecognized models |
 | `model_profile` | auto | Pin a model profile by name |
 
+`llmtui chat --resume <name>` and `--continue` read saved sessions from
+`history_dir` the same way `llmtui history` does — regardless of the current
+`save_history` value, since they only read existing files rather than write
+new ones.
+
 ### `tools`
 
 Workspace file tools let the model list, read, and write files under the
