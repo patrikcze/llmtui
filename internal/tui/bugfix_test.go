@@ -179,9 +179,13 @@ func TestResumeOptionAdoptsSession(t *testing.T) {
 		Network: config.NetworkConfig{Timeout: "120s", ConnectTimeout: "10s"},
 		Cache:   config.CacheConfig{TTL: "1h", MaxSizeMB: 16},
 	}
+	// The saved session's provider/model deliberately differ from the
+	// active Options.Model below, so this test can actually catch a future
+	// adoptSession regression that wrongly overwrites m.model/m.prov from
+	// the resumed session, instead of passing either way.
 	saved := history.Session{
-		Provider: "mock",
-		Model:    "demo-model",
+		Provider: "ollama",
+		Model:    "saved-model",
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "old question"},
 			{Role: provider.RoleAssistant, Content: "old answer"},
@@ -196,6 +200,9 @@ func TestResumeOptionAdoptsSession(t *testing.T) {
 		ResumeSession:     &saved,
 		ResumeSessionName: "session-old",
 	})
+	if m.model != "demo-model" {
+		t.Errorf("model = %q, want demo-model (resume must not override the active model)", m.model)
+	}
 	if m.sessionName != "session-old" {
 		t.Errorf("sessionName = %q, want session-old", m.sessionName)
 	}
