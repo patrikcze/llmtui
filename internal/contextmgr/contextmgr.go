@@ -185,7 +185,7 @@ func condenseMessage(m provider.Message) []string {
 				picked = append(picked, "  "+firstSentence(rest))
 			}
 		case inCode && codeLines < 5:
-			picked = append(picked, "  "+trimmed)
+			picked = append(picked, "  "+capLine(trimmed, 200))
 			codeLines++
 		case !inCode && importantLine.MatchString(trimmed) && len(picked) < 8:
 			picked = append(picked, "  "+firstSentence(trimmed))
@@ -213,4 +213,18 @@ func firstSentence(s string) string {
 		s = string(r[:159]) + "…"
 	}
 	return s
+}
+
+// capLine truncates s to at most n runes, marking truncation. Code-fence
+// lines are kept verbatim (no sentence-boundary cut like firstSentence),
+// so without this cap a single very long line — minified code, a base64
+// blob, a one-line JSON dump — could push a summary well past MaxTokens in
+// one line, since the budget in Summarize is only checked before appending
+// each line, not while building one.
+func capLine(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
