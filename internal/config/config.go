@@ -721,7 +721,18 @@ templates:
     prompt_mode: coding
     temperature: 0.3
 
-# Custom model profiles are matched before built-ins (/profile list).
+# Custom model profiles are matched before built-ins (/profile list). Add one
+# whenever a model's real context window differs from its family's built-in
+# guess (built-ins: coder/qwen 32768, gpt-oss 131072, llama/mistral/gemma
+# 8192, default 8192) — e.g. large-context MoE variants:
+# model_profiles:
+#   qwen3-a3b:
+#     match: ["qwen3.6-35b-a3b"]
+#     context_window: 262144
+#     preferred_temperature: 0.6
+#     supports_json_mode: true
+#     prompt_style: direct
+#     reasoning_hint: true
 model_profiles: {}
 `
 

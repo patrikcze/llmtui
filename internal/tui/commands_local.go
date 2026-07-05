@@ -341,6 +341,8 @@ func cmdContext(m *Model, args string) tea.Cmd {
 	switch sub {
 	case "":
 		m.openOverlay(m.contextOverlay())
+	case "compact":
+		return cmdContext(m, "rebuild")
 	case "summary":
 		var b strings.Builder
 		b.WriteString(m.theme.Badge.Render("session summary") + "\n\n")
@@ -379,7 +381,7 @@ func cmdContext(m *Model, args string) tea.Cmd {
 		m.ctxStrategy = rest
 		m.notice = "context strategy set to " + rest
 	default:
-		return m.fail("usage: /context [summary|rebuild|clear-summary|strategy <s>]")
+		return m.fail("usage: /context [summary|compact|clear-summary|strategy <s>]")
 	}
 	return nil
 }
@@ -414,7 +416,7 @@ func (m *Model) contextOverlay() string {
 	bar := m.theme.ChartBar.Render(strings.Repeat("█", filled)) + m.theme.StatusBar.Render(strings.Repeat("░", barWidth-filled))
 	fmt.Fprintf(&b, "\n  %s %.0f%%\n", bar, frac*100)
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("/context strategy <s> · /context rebuild · /context clear-summary"))
+	b.WriteString("\n" + m.theme.SystemNote.Render("/context strategy <s> · /compact · /context clear-summary"))
 	return m.overlayFooter(&b)
 }
 

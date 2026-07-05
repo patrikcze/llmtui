@@ -49,6 +49,17 @@ func BuiltIn() []Profile {
 			ReasoningHint:        true,
 		},
 		{
+			// gpt-oss-20b/120b: OpenAI's open-weight reasoning+tool-calling
+			// models, 131072-token native context.
+			Name:                 "gpt-oss",
+			Match:                []string{"gpt-oss"},
+			ContextWindow:        131072,
+			PreferredTemperature: 0.6,
+			SupportsJSONMode:     true,
+			PromptStyle:          "coding_assistant",
+			ReasoningHint:        true,
+		},
+		{
 			Name:                 "llama",
 			Match:                []string{"llama", "mistral", "mixtral"},
 			ContextWindow:        8192,
