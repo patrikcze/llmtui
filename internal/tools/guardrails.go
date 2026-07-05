@@ -137,18 +137,33 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 		if strings.HasPrefix(f, "-") {
 			continue // a flag, not a path argument
 		}
-		if looksLikePathEscape(f, root) {
+		if looksLikePathEscape(unquoteArg(f), root) {
 			return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
 		}
 	}
 	if p.RequireApprovalForSecretReads {
 		for _, f := range fields[1:] {
-			if IsSecretPath(f) {
+			if IsSecretPath(unquoteArg(f)) {
 				return CommandClass{VerdictAsk, "reads a likely secret file (" + f + ")"}
 			}
 		}
 	}
 	return CommandClass{VerdictAuto, "allowlisted read-only command"}
+}
+
+// unquoteArg strips one layer of matching straight quotes some shells accept
+// around a bare argument, so classification sees the logical path a quoted
+// argument like "\".env\"" or "'id_rsa'" actually refers to. Without this,
+// strings.Fields keeps the quote characters, so IsSecretPath(".env") is true
+// but IsSecretPath("\".env\"") is false — quoting a filename silently
+// dodges both the secret-read and workspace-escape checks.
+func unquoteArg(f string) string {
+	if len(f) >= 2 {
+		if (f[0] == '"' && f[len(f)-1] == '"') || (f[0] == '\'' && f[len(f)-1] == '\'') {
+			return f[1 : len(f)-1]
+		}
+	}
+	return f
 }
 
 // ClassifyCommand classifies with every protection enabled, using "." as the

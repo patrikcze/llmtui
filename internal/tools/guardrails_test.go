@@ -168,6 +168,25 @@ func TestSecretReadAutoWithPolicyOff(t *testing.T) {
 	}
 }
 
+func TestClassifyCommandQuotedSecretPathStillAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	for _, cmd := range []string{`cat ".env"`, `cat 'id_rsa'`} {
+		cl := p.ClassifyCommand(cmd, ".")
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%s = %v (%s), want ask (quoting must not bypass secret detection)", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+func TestClassifyCommandQuotedPathEscapeStillAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	cl := p.ClassifyCommand(`cat "/etc/hosts"`, root)
+	if cl.Verdict != VerdictAsk {
+		t.Errorf(`cat "/etc/hosts" = %v (%s), want ask (quoting must not bypass path confinement)`, cl.Verdict, cl.Reason)
+	}
+}
+
 // ---- run_command path confinement ------------------------------------------
 
 func TestClassifyCommandRejectsAbsolutePathArgument(t *testing.T) {
