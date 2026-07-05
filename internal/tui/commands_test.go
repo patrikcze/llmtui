@@ -76,7 +76,7 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	// that snapshot.
 	m.lastUserMsg = "what is Go?"
 	m.lastDebug = debugInfo{
-		CacheKey: m.cacheKey("what is Go?"),
+		CacheKey: m.cacheKey("what is Go?", nil),
 		Provider: m.prov.Name(),
 		Model:    m.model,
 		Stream:   m.cfg.StreamEnabled(),
@@ -87,6 +87,14 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	if m.lastDebug.CacheStatus != "write" {
 		t.Fatalf("CacheStatus = %q, want write", m.lastDebug.CacheStatus)
 	}
+
+	// The cache key includes a fingerprint of the prior conversation, so a
+	// repeat of the same message only hits cache under the same history this
+	// simulated write used (empty). finishStream appended the simulated
+	// assistant reply on its own (this test never called the real dispatch,
+	// which would have added a matching user turn first); clear it here so
+	// the repeat below sees the same empty history the write did.
+	m.session.Clear()
 
 	// The same message now answers from cache without a provider call.
 	before := len(m.session.Messages)
@@ -113,7 +121,7 @@ func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
 	m.responseCache = cache.New(t.TempDir(), time.Hour, 16, true)
 
 	m.model = "model-a"
-	keyA := m.cacheKey("hello")
+	keyA := m.cacheKey("hello", nil)
 	m.lastUserMsg = "hello"
 	m.lastDebug = debugInfo{CacheKey: keyA, Provider: m.prov.Name(), Model: "model-a", Stream: m.cfg.StreamEnabled()}
 	m.streamBuf.WriteString("answer from model-a")
@@ -134,7 +142,7 @@ func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
 	} else if entry.Model != "model-a" {
 		t.Errorf("cached entry attributed to %q, want model-a", entry.Model)
 	}
-	if _, ok := m.responseCache.Get(m.cacheKey("hello")); ok {
+	if _, ok := m.responseCache.Get(m.cacheKey("hello", nil)); ok {
 		t.Error("reply must not be cached under the new model's key")
 	}
 }

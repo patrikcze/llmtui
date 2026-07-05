@@ -118,6 +118,31 @@ func TestHeuristicSummarizerRespectsBudget(t *testing.T) {
 	}
 }
 
+// TestHeuristicSummarizerCapsLongCodeLines guards against a single very long
+// fenced-code line (minified code, a base64 blob, a one-line JSON dump)
+// blowing the summary past MaxTokens: the budget check in Summarize only
+// runs before appending each line, so an uncapped line can push the result
+// arbitrarily far over budget in one step.
+func TestHeuristicSummarizerCapsLongCodeLines(t *testing.T) {
+	longLine := strings.Repeat("x", 5000)
+	input := SummaryInput{
+		MaxTokens: 100,
+		Messages: []provider.Message{
+			{Role: provider.RoleAssistant, Content: "Here you go:\n```\n" + longLine + "\n```"},
+		},
+	}
+	out, err := HeuristicSummarizer{}.Summarize(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.Summary, longLine) {
+		t.Error("long code line was included verbatim, uncapped")
+	}
+	if got := provider.EstimateTokens(out.Summary); got > 150 {
+		t.Errorf("summary ≈ %d tokens, want capped near the ~100 budget even with one long code line", got)
+	}
+}
+
 func TestValidStrategy(t *testing.T) {
 	for _, s := range []string{StrategyNone, StrategyTruncate, StrategySummarize, StrategyAuto} {
 		if !ValidStrategy(s) {

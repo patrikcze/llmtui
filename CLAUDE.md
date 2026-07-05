@@ -334,6 +334,38 @@ providers:
     api_key_env: LLMTUI_API_KEY
 ```
 
+## Workspace Tool Safety Invariants
+
+`internal/tools` and `internal/mcp` let a model read/write files and run shell
+commands. These invariants are non-negotiable — any change that touches path
+resolution, command classification, or the approval flow must preserve all of
+them, and should add a regression test for the specific case it touches:
+
+* Path confinement must be enforced on the resolved, symlink-evaluated path,
+  not just checked-and-discarded when the target doesn't exist yet (a
+  not-yet-existing file inside a symlinked directory must still resolve
+  through the symlink before the workspace-boundary check runs).
+* `run_command` must confine file-system access to the workspace the same way
+  `read_file`/`write_file`/`list_dir` do. Setting `cmd.Dir` alone does not
+  stop an allowlisted read command (`cat`, `grep`, `find`, …) from taking an
+  absolute path or a `../` argument that reads outside the workspace.
+* Command classification must inspect enough of a command line that a
+  "read-only" verdict can't be produced by a destructive subcommand or flag
+  (e.g. a git subcommand allowlisted as read-only must not also cover its own
+  mutating flags/forms, like branch deletion or remote changes).
+* Secret-file detection (`IsSecretPath` and friends) must not be defeated by
+  shell quoting, escaping, or path normalization tricks — classify the
+  logical path, not the raw token.
+* A tool call awaiting approval must always be the thing the next keypress
+  resolves. If any other input-owning UI state (an overlay, a modal, a
+  picker) can be open at the same time a tool approval becomes pending, the
+  approval must take precedence in a way the user can actually see — never
+  let an unrelated "dismiss" keypress silently approve a pending tool call.
+* The cache key for a response must reflect everything that actually varies
+  the request sent to the provider (conversation history, the fully composed
+  system prompt including tool instructions, RAG/memory context) — never
+  key on a subset that can collide across materially different requests.
+
 ## Testing Requirements
 
 Implement useful tests from the beginning.
@@ -348,6 +380,9 @@ Required tests:
 * Usage statistics calculations
 * History save/load
 * Doctor command checks
+* Workspace tool guardrails (see Workspace Tool Safety Invariants above):
+  symlink escape via not-yet-existing paths, `run_command` path confinement,
+  command classification edge cases, cache-key completeness
 
 Use `httptest` for mock providers.
 

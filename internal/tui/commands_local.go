@@ -1591,7 +1591,13 @@ func (m *Model) toolsCheckOverlay(cmdline string) string {
 		b.WriteString("  " + m.theme.SystemNote.Render("examples:\n  /tools check \"go test ./...\"\n  /tools check \"rm -rf .\"\n  /tools check \"cat .env\"") + "\n")
 		return m.overlayFooter(&b)
 	}
-	class := tools.ClassifyCommand(cmdline)
+	root := "."
+	policy := tools.DefaultGuardrails()
+	if m.toolRunner != nil {
+		root = m.toolRunner.Root()
+		policy = m.toolRunner.Guardrails
+	}
+	class := policy.ClassifyCommand(cmdline, root)
 	verdictLabel := "ask (approval required)"
 	if class.Verdict == tools.VerdictAuto {
 		verdictLabel = "auto (no approval needed)"

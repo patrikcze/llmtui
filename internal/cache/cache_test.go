@@ -38,6 +38,7 @@ func TestKeyHashStability(t *testing.T) {
 		func(k *Key) { k.Template = "golang" },
 		func(k *Key) { k.Temperature = 0.1 },
 		func(k *Key) { k.MaxTokens = 100 },
+		func(k *Key) { k.HistoryHash = "different" },
 	}
 	for i, mutate := range variants {
 		k := testKey()
@@ -45,6 +46,33 @@ func TestKeyHashStability(t *testing.T) {
 		if k.Hash() == a.Hash() {
 			t.Errorf("variant %d did not change the hash", i)
 		}
+	}
+}
+
+// TestHistoryHashPreventsCrossConversationCollision guards against two
+// different conversations that happen to send the same short next message
+// (e.g. "yes") under identical settings colliding on the same cache entry
+// and getting served each other's out-of-context answer.
+func TestHistoryHashPreventsCrossConversationCollision(t *testing.T) {
+	c := New(t.TempDir(), time.Hour, 16, true)
+
+	convoA := testKey()
+	convoA.UserMessage = "yes"
+	convoA.HistoryHash = "conversation-a-prefix"
+
+	convoB := testKey()
+	convoB.UserMessage = "yes"
+	convoB.HistoryHash = "conversation-b-prefix"
+
+	if err := c.Put(convoA, Entry{Response: "answer for conversation A"}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, ok := c.Get(convoB); ok {
+		t.Fatal("a different conversation history must not hit conversation A's cache entry")
+	}
+	entry, ok := c.Get(convoA)
+	if !ok || entry.Response != "answer for conversation A" {
+		t.Fatalf("conversation A's own entry should still be retrievable, got %+v, ok=%v", entry, ok)
 	}
 }
 

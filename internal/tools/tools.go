@@ -152,15 +152,39 @@ func (r *Runner) resolve(rel string) (string, error) {
 	abs := filepath.Join(r.root, rel)
 	// A symlink inside the workspace must not smuggle access outside it.
 	if r.Guardrails.BlockSymlinkEscape {
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			rootResolved, rerr := filepath.EvalSymlinks(r.root)
-			if rerr == nil && resolved != rootResolved &&
-				!strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
-				return "", fmt.Errorf("path %q resolves outside the workspace", rel)
-			}
+		if err := r.checkSymlinkEscape(abs); err != nil {
+			return "", fmt.Errorf("path %q resolves outside the workspace", rel)
 		}
 	}
 	return abs, nil
+}
+
+// checkSymlinkEscape walks up from abs to the deepest ancestor that exists,
+// resolves any symlinks in that ancestor, and rejects the path if the
+// resolved ancestor falls outside the workspace root. Checking only abs
+// itself (via a single EvalSymlinks call) misses the common write_file case:
+// EvalSymlinks requires the final component to exist, so a not-yet-created
+// file inside a symlinked directory would skip the check entirely.
+func (r *Runner) checkSymlinkEscape(abs string) error {
+	rootResolved, err := filepath.EvalSymlinks(r.root)
+	if err != nil {
+		return nil // can't resolve the root itself; nothing to compare against
+	}
+	dir := abs
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			if resolved != rootResolved && !strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+				return fmt.Errorf("resolves outside the workspace")
+			}
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil // reached filesystem root without finding an existing ancestor
+		}
+		dir = parent
+	}
 }
 
 // Execute runs one call and never panics; errors land in Result.Err.
@@ -384,7 +408,7 @@ func (r *Runner) NeedsApproval(c Call) bool {
 	case ToolReadFile:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:
-		return r.Guardrails.ClassifyCommand(c.Body).Verdict != VerdictAuto
+		return r.Guardrails.ClassifyCommand(c.Body, r.root).Verdict != VerdictAuto
 	default:
 		return true
 	}
@@ -399,36 +423,32 @@ var autoAllowedCommands = map[string]bool{
 	"dir": true, // Windows
 }
 
-// autoAllowedGitSubcommands are the read-only git operations.
-var autoAllowedGitSubcommands = map[string]bool{
-	"status": true, "log": true, "diff": true, "show": true,
-	"branch": true, "remote": true, "blame": true,
+// readOnlyGitSubcommands never take a mutating form.
+var readOnlyGitSubcommands = map[string]bool{
+	"status": true, "log": true, "diff": true, "show": true, "blame": true,
 }
 
-// SafeAutoCommand reports whether a command line is a plain read-only
-// inspection command: an allowlisted program, no shell metacharacters that
-// could chain or redirect, and no argument that turns a reader into a writer.
-func SafeAutoCommand(body string) bool {
-	cmdline := strings.TrimSpace(body)
-	if cmdline == "" || strings.ContainsAny(cmdline, "|;&<>`$\\\n\r") {
+// gitSubcommandIsReadOnly reports whether a git invocation's subcommand and
+// arguments are provably read-only. "branch"/"remote" are only read-only
+// with no arguments or a bare listing flag; any other argument (a
+// branch/remote name, "-d/-D/-m/-M", "add", "set-url", "remove", "rename")
+// can mutate the repository or redirect where a later push sends code.
+func gitSubcommandIsReadOnly(fields []string) bool {
+	if len(fields) < 2 {
 		return false
 	}
-	fields := strings.Fields(cmdline)
-	prog := fields[0]
-	if prog == "git" {
-		return len(fields) > 1 && autoAllowedGitSubcommands[fields[1]]
+	sub := fields[1]
+	if readOnlyGitSubcommands[sub] {
+		return true
 	}
-	if !autoAllowedCommands[prog] {
-		return false
-	}
-	// find -delete / -exec / -ok escalate a read into a write or execution.
-	for _, f := range fields[1:] {
-		switch f {
-		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf":
-			return false
+	if sub == "branch" || sub == "remote" {
+		rest := fields[2:]
+		if len(rest) == 0 {
+			return true
 		}
+		return len(rest) == 1 && (rest[0] == "-v" || rest[0] == "--list" || rest[0] == "-a")
 	}
-	return true
+	return false
 }
 
 // FormatResults renders execution results as the follow-up message body.

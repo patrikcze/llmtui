@@ -82,8 +82,17 @@ func Save(dir, name string, s Session) (string, error) {
 		return "", fmt.Errorf("encode session: %w", err)
 	}
 	path := filepath.Join(dir, name+".json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	// Write to a temp file and rename into place so a crash mid-write can
+	// never leave a truncated or corrupted session at path — os.WriteFile
+	// truncates the destination before writing, which loses the previous
+	// save if the process dies partway through.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return "", fmt.Errorf("write session: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("finalize session: %w", err)
 	}
 	return path, nil
 }

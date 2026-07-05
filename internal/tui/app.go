@@ -673,6 +673,11 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		return nil
 	}
 	if m.toolDepth >= m.toolMaxIter() {
+		// A pending approval must own the next keypress and be visibly on
+		// screen — an overlay left open from an earlier, non-blocking
+		// command (e.g. /help) would otherwise still be "the thing on
+		// screen" while Enter silently resolves this prompt underneath it.
+		m.overlayOpen = false
 		m.pendingCalls = calls
 		m.pendingBudget = true
 		m.approvalIdx = 0
@@ -682,6 +687,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if !m.toolsAutoApprove {
 		for _, c := range calls {
 			if m.toolRunner.NeedsApproval(c) {
+				m.overlayOpen = false
 				m.pendingCalls = calls
 				m.approvalIdx = 0
 				m.refreshViewport()
@@ -883,6 +889,7 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.Messages = m.session.Messages[:n-1]
 		}
 	}
+	m.toolDepth = 0 // a retry is a fresh turn and gets a fresh tool budget
 	m.notice = "retrying last message"
 	m.sentCount++
 	return m.dispatch(m.lastUserMsg, m.lastImages)

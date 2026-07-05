@@ -123,6 +123,29 @@ func TestRunnerSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestRunnerSymlinkEscapeNewFile covers write_file targeting a path that
+// does not exist yet inside a symlinked directory. EvalSymlinks requires the
+// final component to exist, so checking only the full target path (rather
+// than walking up to the deepest existing ancestor) would let this through.
+func TestRunnerSymlinkEscapeNewFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test skipped on windows")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(root, 64)
+	res := r.Execute(Call{Tool: ToolWriteFile, Path: "evil/newfile.txt", Body: "leaked"})
+	if res.Err == nil {
+		t.Fatalf("symlink escape via new file allowed: %q", res.Output)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "newfile.txt")); err == nil {
+		t.Fatal("file was written outside the workspace")
+	}
+}
+
 func TestRunnerLimitsAndErrors(t *testing.T) {
 	r := NewRunner(t.TempDir(), 1) // 1 KB cap
 
@@ -235,28 +258,6 @@ func TestWriteFileBlocksGitInternals(t *testing.T) {
 	// A file merely named like git things is fine.
 	if res := r.Execute(Call{Tool: ToolWriteFile, Path: "gitnotes.md", Body: "ok"}); res.Err != nil {
 		t.Errorf("gitnotes.md rejected: %v", res.Err)
-	}
-}
-
-func TestSafeAutoCommand(t *testing.T) {
-	safe := []string{
-		"ls -la", "grep -rn TODO .", "cat main.go", "git status", "git log --oneline",
-		"find . -name '*.go'", "wc -l main.go", "pwd",
-	}
-	for _, c := range safe {
-		if !SafeAutoCommand(c) {
-			t.Errorf("SafeAutoCommand(%q) = false, want true", c)
-		}
-	}
-	unsafe := []string{
-		"rm -rf /", "ls; rm x", "cat a > b", "grep x | sh", "git push", "git commit -m x",
-		"find . -name '*.go' -delete", "find . -exec rm {} \\;", "curl http://x",
-		"ls `rm x`", "echo $(rm x)", "", "sh script.sh",
-	}
-	for _, c := range unsafe {
-		if SafeAutoCommand(c) {
-			t.Errorf("SafeAutoCommand(%q) = true, want false", c)
-		}
 	}
 }
 
