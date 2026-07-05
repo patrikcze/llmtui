@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -231,20 +233,46 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 }
 
 // cacheKey builds the cache key for a raw message under current settings.
-func (m *Model) cacheKey(raw string) cache.Key {
+// It uses the fully composed system prompt (tool/RAG/memory instructions
+// included) rather than the raw config value, and fingerprints the prior
+// conversation, so two requests that differ in either respect never share a
+// cache entry. compose is called in preview mode so building the key never
+// mutates context state (session summary, RAG-last-results) itself.
+func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 	_, pc, _ := m.cfg.ActiveProvider()
+	composed, _ := m.compose(raw, images, true)
+	systemPrompt := m.cfg.Chat.SystemPrompt
+	if len(composed.Messages) > 0 && composed.Messages[0].Role == provider.RoleSystem {
+		systemPrompt = composed.Messages[0].Content
+	}
 	return cache.Key{
 		Provider:     m.prov.Name(),
 		BaseURL:      pc.BaseURL,
 		Model:        m.model,
 		UserMessage:  raw,
-		SystemPrompt: m.cfg.Chat.SystemPrompt,
+		SystemPrompt: systemPrompt,
 		PromptMode:   m.effectivePromptMode(),
 		Template:     m.template,
 		Temperature:  m.effectiveTemperature(),
 		TopP:         m.cfg.Chat.TopP,
 		MaxTokens:    m.cfg.Chat.MaxTokens,
+		HistoryHash:  historyFingerprint(m.session.Messages),
 	}
+}
+
+// historyFingerprint hashes role+content of every prior message so a cache
+// hit can only happen for the same conversation prefix, not just the same
+// next message under coincidentally-identical settings (e.g. two different
+// conversations both sending "yes").
+func historyFingerprint(msgs []provider.Message) string {
+	h := sha256.New()
+	for _, msg := range msgs {
+		h.Write([]byte(msg.Role))
+		h.Write([]byte{0})
+		h.Write([]byte(msg.Content))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // dispatch sends a raw user message through composition, cache, and the
@@ -256,7 +284,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.bypassCache = false
 
 	// Cache lookup happens before composition mutates context state.
-	key := m.cacheKey(raw)
+	key := m.cacheKey(raw, images)
 	if !skipCache && m.responseCache != nil && m.responseCache.Enabled() && len(images) == 0 {
 		if entry, ok := m.responseCache.Get(key); ok {
 			m.session.AddUser(raw)

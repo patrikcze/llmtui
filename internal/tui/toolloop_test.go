@@ -364,3 +364,23 @@ func TestComposeInjectsToolInstructions(t *testing.T) {
 		t.Error("tool instructions leaked into the prompt while tools are off")
 	}
 }
+
+// TestCacheKeyChangesWithToolState guards against serving a tools-disabled
+// cached reply for a tools-enabled request (or vice versa): the actual
+// prompt sent to the provider differs (tool instructions are appended to
+// the system prompt), so the cache key must differ too, even though
+// chat.system_prompt itself and the user message are unchanged.
+func TestCacheKeyChangesWithToolState(t *testing.T) {
+	m := newTestModel(t)
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	m.toolsOn = false
+	keyOff := m.cacheKey("hi", nil)
+
+	m.toolsOn = true
+	keyOn := m.cacheKey("hi", nil)
+
+	if keyOff.Hash() == keyOn.Hash() {
+		t.Error("cache key must differ between tools-enabled and tools-disabled requests")
+	}
+}

@@ -18,6 +18,15 @@ import (
 
 // Key identifies one cacheable request. API keys and other secrets must
 // never be part of this struct.
+//
+// SystemPrompt must be the fully composed system prompt actually sent to the
+// provider (including tool/RAG/memory instructions), not just the raw
+// chat.system_prompt config value — two requests that differ only in, say,
+// whether tool instructions were appended produce different responses and
+// must not share a cache entry. HistoryHash must fingerprint the prior
+// conversation turns: without it, two different conversations that happen
+// to send the same short next message (e.g. "yes") under identical settings
+// would collide and one would get served the other's out-of-context answer.
 type Key struct {
 	Provider     string
 	BaseURL      string
@@ -29,6 +38,7 @@ type Key struct {
 	Temperature  float64
 	TopP         float64
 	MaxTokens    int
+	HistoryHash  string
 }
 
 // Hash returns a stable content hash for the key. Free-text fields are
@@ -36,7 +46,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v1|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d",
+	fmt.Fprintf(h, "v2|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -47,6 +57,7 @@ func (k Key) Hash() string {
 		k.Temperature,
 		k.TopP,
 		k.MaxTokens,
+		k.HistoryHash,
 	)
 	return hex.EncodeToString(h.Sum(nil))
 }
