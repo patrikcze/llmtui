@@ -88,9 +88,12 @@ var autoAllowedGoSubcommands = map[string]bool{
 }
 
 // ClassifyCommand classifies one run_command line conservatively: only an
-// allowlisted read-only program with no shell metacharacters and no
-// escalating arguments earns VerdictAuto. Everything unknown asks.
-func (p GuardrailPolicy) ClassifyCommand(body string) CommandClass {
+// allowlisted read-only program with no shell metacharacters, no escalating
+// arguments, and no path argument outside root earns VerdictAuto. Everything
+// unknown asks. root is the workspace directory the command will actually
+// run in (Runner.root); pass "." when there is no live workspace (e.g. a
+// preview with no runner yet).
+func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	cmdline := strings.TrimSpace(body)
 	if cmdline == "" {
 		return CommandClass{VerdictAsk, "empty command"}
@@ -130,6 +133,14 @@ func (p GuardrailPolicy) ClassifyCommand(body string) CommandClass {
 			return CommandClass{VerdictAsk, f + " escalates a read into a write or execution"}
 		}
 	}
+	for _, f := range fields[1:] {
+		if strings.HasPrefix(f, "-") {
+			continue // a flag, not a path argument
+		}
+		if looksLikePathEscape(f, root) {
+			return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
+		}
+	}
 	if p.RequireApprovalForSecretReads {
 		for _, f := range fields[1:] {
 			if IsSecretPath(f) {
@@ -140,9 +151,40 @@ func (p GuardrailPolicy) ClassifyCommand(body string) CommandClass {
 	return CommandClass{VerdictAuto, "allowlisted read-only command"}
 }
 
-// ClassifyCommand classifies with every protection enabled.
+// ClassifyCommand classifies with every protection enabled, using "." as the
+// workspace root for callers with no live runner (e.g. tests, or a preview
+// before a workspace exists). Runner-backed decisions go through
+// (*Runner).NeedsApproval, which passes the runner's real root instead.
 func ClassifyCommand(body string) CommandClass {
-	return DefaultGuardrails().ClassifyCommand(body)
+	return DefaultGuardrails().ClassifyCommand(body, ".")
+}
+
+// looksLikePathEscape reports whether argument f, treated as a path relative
+// to root (the directory the command actually runs in), would resolve
+// outside root. Bare filenames with no separator are never flagged — they
+// can only mean "inside root". A "~"-prefixed argument is always flagged:
+// home-relative paths are never inside an arbitrary workspace root.
+func looksLikePathEscape(f, root string) bool {
+	if f == "" {
+		return false
+	}
+	if strings.HasPrefix(f, "~") {
+		return true
+	}
+	if !strings.ContainsAny(f, "/\\") && !filepath.IsAbs(f) {
+		return false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	var abs string
+	if filepath.IsAbs(f) {
+		abs = filepath.Clean(f)
+	} else {
+		abs = filepath.Clean(filepath.Join(rootAbs, f))
+	}
+	return abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(filepath.Separator))
 }
 
 // secretNameWords are word-boundary–sensitive credential markers.

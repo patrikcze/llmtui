@@ -16,7 +16,7 @@ func TestSafeCommands(t *testing.T) {
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range safe {
-		cl := p.ClassifyCommand(cmd)
+		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAuto {
 			t.Errorf("ClassifyCommand(%q) = %v (%s), want auto", cmd, cl.Verdict, cl.Reason)
 		}
@@ -41,7 +41,7 @@ func TestRiskyCommands(t *testing.T) {
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range risky {
-		cl := p.ClassifyCommand(cmd)
+		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("ClassifyCommand(%q) = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
 		}
@@ -60,7 +60,7 @@ func TestShellMetacharactersAlwaysAsk(t *testing.T) {
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range meta {
-		cl := p.ClassifyCommand(cmd)
+		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("ClassifyCommand(%q) = %v, want ask (shell metacharacter)", cmd, cl.Verdict)
 		}
@@ -75,7 +75,7 @@ func TestFindEscalatingArgsAsk(t *testing.T) {
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range cases {
-		cl := p.ClassifyCommand(cmd)
+		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("ClassifyCommand(%q) = %v, want ask", cmd, cl.Verdict)
 		}
@@ -84,7 +84,7 @@ func TestFindEscalatingArgsAsk(t *testing.T) {
 
 func TestEmptyCommandAsks(t *testing.T) {
 	p := DefaultGuardrails()
-	cl := p.ClassifyCommand("")
+	cl := p.ClassifyCommand("", ".")
 	if cl.Verdict != VerdictAsk {
 		t.Errorf("empty command got %v, want ask", cl.Verdict)
 	}
@@ -153,7 +153,7 @@ func TestNonStartupPaths(t *testing.T) {
 func TestSecretReadAskWithPolicy(t *testing.T) {
 	p := DefaultGuardrails()
 	// cat .env should ask when RequireApprovalForSecretReads = true.
-	cl := p.ClassifyCommand("cat .env")
+	cl := p.ClassifyCommand("cat .env", ".")
 	if cl.Verdict != VerdictAsk {
 		t.Errorf("cat .env with RequireApprovalForSecretReads = %v, want ask", cl.Verdict)
 	}
@@ -162,8 +162,46 @@ func TestSecretReadAskWithPolicy(t *testing.T) {
 func TestSecretReadAutoWithPolicyOff(t *testing.T) {
 	p := DefaultGuardrails()
 	p.RequireApprovalForSecretReads = false
-	cl := p.ClassifyCommand("cat README.md")
+	cl := p.ClassifyCommand("cat README.md", ".")
 	if cl.Verdict != VerdictAuto {
 		t.Errorf("cat README.md = %v, want auto", cl.Verdict)
+	}
+}
+
+// ---- run_command path confinement ------------------------------------------
+
+func TestClassifyCommandRejectsAbsolutePathArgument(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	cl := p.ClassifyCommand("cat /etc/hosts", root)
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("cat /etc/hosts = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandRejectsParentEscape(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	cl := p.ClassifyCommand("cat ../../outside.txt", root)
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("cat ../../outside.txt = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandRejectsHomeRelativeArgument(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	cl := p.ClassifyCommand("cat ~/.docker/config.json", root)
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("cat ~/.docker/config.json = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandAllowsInWorkspacePath(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	cl := p.ClassifyCommand("cat sub/dir/file.go", root)
+	if cl.Verdict != VerdictAuto {
+		t.Errorf("cat sub/dir/file.go (inside workspace) = %v (%s), want auto", cl.Verdict, cl.Reason)
 	}
 }

@@ -261,28 +261,6 @@ func TestWriteFileBlocksGitInternals(t *testing.T) {
 	}
 }
 
-func TestSafeAutoCommand(t *testing.T) {
-	safe := []string{
-		"ls -la", "grep -rn TODO .", "cat main.go", "git status", "git log --oneline",
-		"find . -name '*.go'", "wc -l main.go", "pwd",
-	}
-	for _, c := range safe {
-		if !SafeAutoCommand(c) {
-			t.Errorf("SafeAutoCommand(%q) = false, want true", c)
-		}
-	}
-	unsafe := []string{
-		"rm -rf /", "ls; rm x", "cat a > b", "grep x | sh", "git push", "git commit -m x",
-		"find . -name '*.go' -delete", "find . -exec rm {} \\;", "curl http://x",
-		"ls `rm x`", "echo $(rm x)", "", "sh script.sh",
-	}
-	for _, c := range unsafe {
-		if SafeAutoCommand(c) {
-			t.Errorf("SafeAutoCommand(%q) = true, want false", c)
-		}
-	}
-}
-
 func TestNeedsApproval(t *testing.T) {
 	cases := []struct {
 		call Call

@@ -408,7 +408,7 @@ func (r *Runner) NeedsApproval(c Call) bool {
 	case ToolReadFile:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:
-		return r.Guardrails.ClassifyCommand(c.Body).Verdict != VerdictAuto
+		return r.Guardrails.ClassifyCommand(c.Body, r.root).Verdict != VerdictAuto
 	default:
 		return true
 	}
@@ -427,32 +427,6 @@ var autoAllowedCommands = map[string]bool{
 var autoAllowedGitSubcommands = map[string]bool{
 	"status": true, "log": true, "diff": true, "show": true,
 	"branch": true, "remote": true, "blame": true,
-}
-
-// SafeAutoCommand reports whether a command line is a plain read-only
-// inspection command: an allowlisted program, no shell metacharacters that
-// could chain or redirect, and no argument that turns a reader into a writer.
-func SafeAutoCommand(body string) bool {
-	cmdline := strings.TrimSpace(body)
-	if cmdline == "" || strings.ContainsAny(cmdline, "|;&<>`$\\\n\r") {
-		return false
-	}
-	fields := strings.Fields(cmdline)
-	prog := fields[0]
-	if prog == "git" {
-		return len(fields) > 1 && autoAllowedGitSubcommands[fields[1]]
-	}
-	if !autoAllowedCommands[prog] {
-		return false
-	}
-	// find -delete / -exec / -ok escalate a read into a write or execution.
-	for _, f := range fields[1:] {
-		switch f {
-		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf":
-			return false
-		}
-	}
-	return true
 }
 
 // FormatResults renders execution results as the follow-up message body.
