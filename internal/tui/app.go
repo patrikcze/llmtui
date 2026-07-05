@@ -889,6 +889,7 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.Messages = m.session.Messages[:n-1]
 		}
 	}
+	m.toolDepth = 0 // a retry is a fresh turn and gets a fresh tool budget
 	m.notice = "retrying last message"
 	m.sentCount++
 	return m.dispatch(m.lastUserMsg, m.lastImages)

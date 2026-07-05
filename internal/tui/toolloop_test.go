@@ -319,6 +319,23 @@ func TestSendResetsToolBudget(t *testing.T) {
 	}
 }
 
+// TestRetryResetsToolBudget guards against /retry inheriting a spent tool
+// budget from the turn it's retrying: retryLast used to skip the toolDepth
+// reset that send() applies, so retrying a turn that had used up (or nearly
+// used up) tools.max_iterations rounds could immediately hit "tool budget
+// spent" on the very first tool call of the retried turn.
+func TestRetryResetsToolBudget(t *testing.T) {
+	m := newTestModel(t)
+	m.lastUserMsg = "hello"
+	m.toolDepth = 3
+	if cmd := m.retryLast(); cmd == nil {
+		t.Fatal("retryLast returned nil")
+	}
+	if m.toolDepth != 0 {
+		t.Errorf("toolDepth = %d, want 0 after retry — a retry is a fresh turn", m.toolDepth)
+	}
+}
+
 func TestComposeInjectsToolInstructions(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
