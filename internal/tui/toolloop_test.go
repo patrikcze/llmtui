@@ -118,6 +118,35 @@ func TestDenyPendingToolsReportsToModel(t *testing.T) {
 	}
 }
 
+// TestPendingApprovalClosesOpenOverlay guards against a silent-approval bug:
+// an overlay opened by a non-blocking command (e.g. /help) could stay open
+// while a reply streams in. If that reply produces a tool call needing
+// approval, pendingCalls used to go non-empty without touching overlayOpen,
+// so the very next keypress — the user's attempt to dismiss the overlay —
+// was instead routed to updateToolApproval and, on Enter, silently approved
+// the pending call. startToolBatch must force the overlay closed so the
+// approval prompt is what the user actually sees.
+func TestPendingApprovalClosesOpenOverlay(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.overlayOpen = true // simulating /help (or similar) left open while thinking
+
+	withToolReply(m, "Saving it now:\n```tool write_file hello.sh\n#!/bin/sh\necho hi\n```")
+	m.maybeRunTools()
+
+	if len(m.pendingCalls) != 1 {
+		t.Fatalf("pendingCalls = %d, want 1", len(m.pendingCalls))
+	}
+	if m.overlayOpen {
+		t.Fatal("overlay must be closed once a tool approval is pending")
+	}
+	if _, err := os.Stat(filepath.Join(root, "hello.sh")); err == nil {
+		t.Fatal("file must not be written before the user approves")
+	}
+}
+
 func TestApprovalSwallowsOtherKeys(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
