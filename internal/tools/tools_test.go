@@ -123,6 +123,29 @@ func TestRunnerSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestRunnerSymlinkEscapeNewFile covers write_file targeting a path that
+// does not exist yet inside a symlinked directory. EvalSymlinks requires the
+// final component to exist, so checking only the full target path (rather
+// than walking up to the deepest existing ancestor) would let this through.
+func TestRunnerSymlinkEscapeNewFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test skipped on windows")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(root, 64)
+	res := r.Execute(Call{Tool: ToolWriteFile, Path: "evil/newfile.txt", Body: "leaked"})
+	if res.Err == nil {
+		t.Fatalf("symlink escape via new file allowed: %q", res.Output)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "newfile.txt")); err == nil {
+		t.Fatal("file was written outside the workspace")
+	}
+}
+
 func TestRunnerLimitsAndErrors(t *testing.T) {
 	r := NewRunner(t.TempDir(), 1) // 1 KB cap
 

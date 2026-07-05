@@ -152,15 +152,39 @@ func (r *Runner) resolve(rel string) (string, error) {
 	abs := filepath.Join(r.root, rel)
 	// A symlink inside the workspace must not smuggle access outside it.
 	if r.Guardrails.BlockSymlinkEscape {
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			rootResolved, rerr := filepath.EvalSymlinks(r.root)
-			if rerr == nil && resolved != rootResolved &&
-				!strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
-				return "", fmt.Errorf("path %q resolves outside the workspace", rel)
-			}
+		if err := r.checkSymlinkEscape(abs); err != nil {
+			return "", fmt.Errorf("path %q resolves outside the workspace", rel)
 		}
 	}
 	return abs, nil
+}
+
+// checkSymlinkEscape walks up from abs to the deepest ancestor that exists,
+// resolves any symlinks in that ancestor, and rejects the path if the
+// resolved ancestor falls outside the workspace root. Checking only abs
+// itself (via a single EvalSymlinks call) misses the common write_file case:
+// EvalSymlinks requires the final component to exist, so a not-yet-created
+// file inside a symlinked directory would skip the check entirely.
+func (r *Runner) checkSymlinkEscape(abs string) error {
+	rootResolved, err := filepath.EvalSymlinks(r.root)
+	if err != nil {
+		return nil // can't resolve the root itself; nothing to compare against
+	}
+	dir := abs
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			if resolved != rootResolved && !strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+				return fmt.Errorf("resolves outside the workspace")
+			}
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil // reached filesystem root without finding an existing ancestor
+		}
+		dir = parent
+	}
 }
 
 // Execute runs one call and never panics; errors land in Result.Err.
