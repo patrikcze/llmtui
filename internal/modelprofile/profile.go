@@ -76,19 +76,49 @@ func BuiltIn() []Profile {
 	}
 }
 
-// Match finds the first profile whose patterns match the model ID.
-// Profiles are checked in slice order, so callers should place
-// config-defined profiles before built-ins.
+// Match finds the first profile whose patterns match the model ID as a
+// whole segment, not an arbitrary substring. Profiles are checked in slice
+// order, so callers should place config-defined profiles before built-ins.
 func Match(profiles []Profile, modelID string) (Profile, bool) {
 	id := strings.ToLower(modelID)
 	for _, p := range profiles {
 		for _, pat := range p.Match {
-			if pat != "" && strings.Contains(id, strings.ToLower(pat)) {
+			if pat != "" && matchesSegment(id, strings.ToLower(pat)) {
 				return p, true
 			}
 		}
 	}
 	return Default(), false
+}
+
+// matchesSegment reports whether pat occurs in id with a letter not
+// directly attached on either side. Plain strings.Contains would let
+// "coder" match "encoder" or "decoder" (both literally contain "coder" as a
+// substring of a longer word), silently assigning the coding-assistant
+// profile — 32768-token window, low temperature, coding prompt style — to
+// unrelated models. Digits are deliberately allowed to sit directly against
+// the pattern: model IDs routinely attach a version number with no
+// separator ("qwen3", "llama3.1", "gemma3"), and that must keep matching.
+func matchesSegment(id, pat string) bool {
+	idx := 0
+	for {
+		i := strings.Index(id[idx:], pat)
+		if i < 0 {
+			return false
+		}
+		start := idx + i
+		end := start + len(pat)
+		beforeOK := start == 0 || !isLetter(id[start-1])
+		afterOK := end == len(id) || !isLetter(id[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		idx = start + 1
+	}
+}
+
+func isLetter(b byte) bool {
+	return b >= 'a' && b <= 'z'
 }
 
 // ByName finds a profile by exact name, for `/profile set <name>`.

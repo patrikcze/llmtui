@@ -23,6 +23,42 @@ func TestMatchBuiltIns(t *testing.T) {
 	}
 }
 
+// TestMatchDoesNotMatchSubstringInsideAWord guards against the unanchored
+// strings.Contains bug: "coder" is a literal substring of "encoder" and
+// "decoder", so those model IDs must not silently get the coding-assistant
+// profile (32768-token window, temp 0.25, coding prompt style) meant for
+// actual coding models.
+func TestMatchDoesNotMatchSubstringInsideAWord(t *testing.T) {
+	for _, model := range []string{"nomic-embed-text-encoder", "whisper-decoder"} {
+		p, ok := Match(BuiltIn(), model)
+		if ok && p.Name == "coder" {
+			t.Errorf("Match(%q) = %s, want default (not coder)", model, p.Name)
+		}
+	}
+}
+
+// TestMatchStillHandlesAttachedVersionNumbers guards against an overcorrection:
+// model IDs routinely attach a version number directly with no separator
+// ("qwen3", "llama3.1", "gemma3"), and the boundary check must keep matching
+// those rather than only accepting a separator/end-of-string.
+func TestMatchStillHandlesAttachedVersionNumbers(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"qwen3:8b", "qwen"},
+		{"llama3.1:70b", "llama"},
+		{"gemma3:12b", "gemma"},
+		{"qwen2.5-coder:14b", "coder"},
+	}
+	for _, tt := range tests {
+		p, ok := Match(BuiltIn(), tt.model)
+		if !ok || p.Name != tt.want {
+			t.Errorf("Match(%q) = (%s, %v), want %s", tt.model, p.Name, ok, tt.want)
+		}
+	}
+}
+
 func TestMatchFallsBackToDefault(t *testing.T) {
 	p, ok := Match(BuiltIn(), "totally-unknown-model")
 	if ok {
