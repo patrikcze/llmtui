@@ -40,6 +40,13 @@ type Options struct {
 	Provider   provider.Provider
 	Model      string
 	ConfigPath string // path of the loaded config file, for /config
+
+	// ResumeSession, when non-nil, seeds the new Model with a previously
+	// saved session (messages, stats, name) instead of starting empty.
+	// ResumeSessionName is the on-disk name it was loaded from. Set by
+	// `llmtui chat --resume <name>` / `--continue`.
+	ResumeSession     *history.Session
+	ResumeSessionName string
 }
 
 // errStreamIdle is the cancellation cause when the inactivity watchdog fires:
@@ -221,7 +228,28 @@ func New(opts Options) *Model {
 		toolsNative:      cfg.Tools.Native != "off",
 	}
 	m.rebuildFromConfig()
+	if opts.ResumeSession != nil {
+		m.adoptSession(opts.ResumeSessionName, *opts.ResumeSession)
+		m.notice = fmt.Sprintf("resumed %s (%d messages, %s/%s)",
+			opts.ResumeSessionName, len(opts.ResumeSession.Messages),
+			opts.ResumeSession.Provider, opts.ResumeSession.Model)
+	}
 	return m
+}
+
+// adoptSession replaces the running conversation with a previously saved
+// one: its messages, token totals, and name (so subsequent saves update the
+// same file instead of creating a new one), and clears the session summary
+// since it described the old conversation. Used by /history load and by
+// --resume/--continue at startup.
+func (m *Model) adoptSession(name string, s history.Session) {
+	m.session.Messages = s.Messages
+	m.session.Stats = nil
+	m.session.TotalPromptTokens = s.Prompt
+	m.session.TotalCompletionTokens = s.Reply
+	m.session.AnyEstimated = s.Estimated
+	m.sessionName = name
+	m.summary = ""
 }
 
 // rebuildFromConfig (re)derives the components that mirror the config:

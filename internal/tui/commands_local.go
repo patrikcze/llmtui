@@ -855,15 +855,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail(err.Error())
 		}
-		// Adopt the loaded session wholesale: its name (so saves update the
-		// same file instead of duplicating it) and its token totals.
-		m.session.Messages = s.Messages
-		m.session.Stats = nil
-		m.session.TotalPromptTokens = s.Prompt
-		m.session.TotalCompletionTokens = s.Reply
-		m.session.AnyEstimated = s.Estimated
-		m.sessionName = rest
-		m.summary = ""
+		m.adoptSession(rest, s)
 		m.refreshViewport()
 		m.notice = fmt.Sprintf("loaded %s (%d messages, %s/%s)", rest, len(s.Messages), s.Provider, s.Model)
 	case "search":

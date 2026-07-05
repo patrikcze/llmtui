@@ -12,6 +12,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/mock"
 )
 
 // Typing "/model" exactly must run /model, not the earlier-registered
@@ -166,5 +167,57 @@ func TestHistoryLoadAdoptsSession(t *testing.T) {
 	runCommand(m, "/history load ../escape")
 	if m.errText == "" || !strings.Contains(m.errText, "invalid session name") {
 		t.Errorf("path traversal should be rejected, errText = %q", m.errText)
+	}
+}
+
+// --resume/--continue (llmtui chat flags) seed a fresh Model with a saved
+// session via Options.ResumeSession, using the same adoption logic as
+// /history load above (TestHistoryLoadAdoptsSession).
+func TestResumeOptionAdoptsSession(t *testing.T) {
+	cfg := &config.Config{
+		Chat:    config.ChatConfig{Stream: true, MaxTokens: 128, SystemPrompt: "You are a helpful local assistant."},
+		Network: config.NetworkConfig{Timeout: "120s", ConnectTimeout: "10s"},
+		Cache:   config.CacheConfig{TTL: "1h", MaxSizeMB: 16},
+	}
+	saved := history.Session{
+		Provider: "mock",
+		Model:    "demo-model",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "old question"},
+			{Role: provider.RoleAssistant, Content: "old answer"},
+		},
+		Prompt: 11,
+		Reply:  22,
+	}
+	m := New(Options{
+		Config:            cfg,
+		Provider:          mock.New(),
+		Model:             "demo-model",
+		ResumeSession:     &saved,
+		ResumeSessionName: "session-old",
+	})
+	if m.sessionName != "session-old" {
+		t.Errorf("sessionName = %q, want session-old", m.sessionName)
+	}
+	if len(m.session.Messages) != 2 {
+		t.Fatalf("Messages = %d, want 2", len(m.session.Messages))
+	}
+	if m.session.TotalPromptTokens != 11 || m.session.TotalCompletionTokens != 22 {
+		t.Errorf("totals = %d/%d, want 11/22", m.session.TotalPromptTokens, m.session.TotalCompletionTokens)
+	}
+	if m.notice == "" || !strings.Contains(m.notice, "session-old") {
+		t.Errorf("notice = %q, want a resume confirmation mentioning session-old", m.notice)
+	}
+}
+
+// A fresh Model with no ResumeSession must be unaffected: it starts with
+// just the configured system prompt and no leftover notice.
+func TestNoResumeOptionStartsFreshSession(t *testing.T) {
+	m := newTestModel(t)
+	if len(m.session.Messages) != 1 || m.session.Messages[0].Role != provider.RoleSystem {
+		t.Errorf("Messages = %+v, want just the configured system prompt", m.session.Messages)
+	}
+	if m.notice != "" {
+		t.Errorf("notice = %q, want empty when nothing was resumed", m.notice)
 	}
 }
