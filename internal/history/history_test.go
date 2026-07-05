@@ -125,6 +125,48 @@ func TestListNewestFirstAndSkipsForeignFiles(t *testing.T) {
 	}
 }
 
+func TestLatestReturnsNewestSession(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Save(dir, "old", Session{Model: "m", Prompt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := Save(dir, "new", Session{Model: "m", Prompt: 2}); err != nil {
+		t.Fatal(err)
+	}
+	name, s, err := Latest(dir)
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if name != "new" {
+		t.Errorf("name = %q, want new", name)
+	}
+	if s.Prompt != 2 {
+		t.Errorf("loaded session = %+v, want the newest save", s)
+	}
+}
+
+func TestLatestSingleSession(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Save(dir, "only", Session{Model: "solo"}); err != nil {
+		t.Fatal(err)
+	}
+	name, s, err := Latest(dir)
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if name != "only" || s.Model != "solo" {
+		t.Errorf("Latest = (%q, %+v), want only/solo", name, s)
+	}
+}
+
+func TestLatestNoSessionsErrors(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := Latest(dir); err == nil {
+		t.Fatal("Latest should error when no sessions are saved")
+	}
+}
+
 func TestListMissingDir(t *testing.T) {
 	metas, err := List(filepath.Join(t.TempDir(), "nope"))
 	if err != nil || metas != nil {

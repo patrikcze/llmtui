@@ -145,3 +145,19 @@ func List(dir string) ([]Meta, error) {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].SavedAt.After(metas[j].SavedAt) })
 	return metas, nil
 }
+
+// Latest returns the most recently saved session (by SavedAt) and the name
+// it was saved under, for --continue. Returns an error if dir has no saved
+// sessions.
+func Latest(dir string) (name string, s Session, err error) {
+	metas, err := List(dir)
+	if err != nil {
+		return "", Session{}, err
+	}
+	if len(metas) == 0 {
+		return "", Session{}, fmt.Errorf("no saved sessions in %s", dir)
+	}
+	name = metas[0].Name
+	s, err = Load(dir, name)
+	return name, s, err
+}
