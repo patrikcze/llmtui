@@ -423,10 +423,32 @@ var autoAllowedCommands = map[string]bool{
 	"dir": true, // Windows
 }
 
-// autoAllowedGitSubcommands are the read-only git operations.
-var autoAllowedGitSubcommands = map[string]bool{
-	"status": true, "log": true, "diff": true, "show": true,
-	"branch": true, "remote": true, "blame": true,
+// readOnlyGitSubcommands never take a mutating form.
+var readOnlyGitSubcommands = map[string]bool{
+	"status": true, "log": true, "diff": true, "show": true, "blame": true,
+}
+
+// gitSubcommandIsReadOnly reports whether a git invocation's subcommand and
+// arguments are provably read-only. "branch"/"remote" are only read-only
+// with no arguments or a bare listing flag; any other argument (a
+// branch/remote name, "-d/-D/-m/-M", "add", "set-url", "remove", "rename")
+// can mutate the repository or redirect where a later push sends code.
+func gitSubcommandIsReadOnly(fields []string) bool {
+	if len(fields) < 2 {
+		return false
+	}
+	sub := fields[1]
+	if readOnlyGitSubcommands[sub] {
+		return true
+	}
+	if sub == "branch" || sub == "remote" {
+		rest := fields[2:]
+		if len(rest) == 0 {
+			return true
+		}
+		return len(rest) == 1 && (rest[0] == "-v" || rest[0] == "--list" || rest[0] == "-a")
+	}
+	return false
 }
 
 // FormatResults renders execution results as the follow-up message body.

@@ -114,7 +114,7 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	}
 	switch prog {
 	case "git":
-		if len(fields) > 1 && autoAllowedGitSubcommands[fields[1]] {
+		if gitSubcommandIsReadOnly(fields) {
 			return CommandClass{VerdictAuto, "read-only git subcommand"}
 		}
 		return CommandClass{VerdictAsk, "git subcommand can modify the repository"}

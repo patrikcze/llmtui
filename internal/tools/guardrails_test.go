@@ -205,3 +205,45 @@ func TestClassifyCommandAllowsInWorkspacePath(t *testing.T) {
 		t.Errorf("cat sub/dir/file.go (inside workspace) = %v (%s), want auto", cl.Verdict, cl.Reason)
 	}
 }
+
+// ---- git subcommand classification -----------------------------------------
+
+func TestClassifyCommandGitBranchDeleteAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("git branch -D main", ".")
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("git branch -D main = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandGitRemoteAddAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("git remote add evil http://attacker.example/repo.git", ".")
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("git remote add ... = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandGitRemoteSetURLAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("git remote set-url origin http://attacker.example/repo.git", ".")
+	if cl.Verdict != VerdictAsk {
+		t.Errorf("git remote set-url ... = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandGitBranchBareIsAuto(t *testing.T) {
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("git branch", ".")
+	if cl.Verdict != VerdictAuto {
+		t.Errorf("git branch = %v (%s), want auto", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandGitRemoteListIsAuto(t *testing.T) {
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("git remote -v", ".")
+	if cl.Verdict != VerdictAuto {
+		t.Errorf("git remote -v = %v (%s), want auto", cl.Verdict, cl.Reason)
+	}
+}
