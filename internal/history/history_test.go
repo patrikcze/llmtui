@@ -69,6 +69,33 @@ func TestSaveOverwritesSameName(t *testing.T) {
 	}
 }
 
+// TestSaveIsAtomic guards against a truncate-in-place write: Save must not
+// leave a .tmp file behind, and a second save under the same name must fully
+// replace the first save's content rather than leaving any of it mixed in.
+func TestSaveIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Save(dir, "s1", Session{Model: "a", Messages: []provider.Message{
+		{Role: provider.RoleUser, Content: "first save, long content that would show partial-write corruption"},
+	}}); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if _, err := Save(dir, "s1", Session{Model: "b", Messages: []provider.Message{
+		{Role: provider.RoleUser, Content: "second"},
+	}}); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s1.json.tmp")); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind: err = %v", err)
+	}
+	got, err := Load(dir, "s1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Model != "b" || len(got.Messages) != 1 || got.Messages[0].Content != "second" {
+		t.Errorf("loaded session = %+v, want fully replaced by the second save", got)
+	}
+}
+
 func TestListNewestFirstAndSkipsForeignFiles(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Save(dir, "old", Session{Model: "m"}); err != nil {
