@@ -128,7 +128,7 @@ over stdio only on an explicit `/mcp connect`. Documented in
 | `servers.<name>.enabled` | `false` | Enable one declared server |
 | `servers.<name>.transport` | — | Wire protocol (`stdio`) |
 | `servers.<name>.command` / `args` | — | Command to launch the server |
-| `servers.<name>.env` | — | Environment for the server; values redacted in `/mcp inspect`, never logged |
+| `servers.<name>.env` | — | Environment for the server; supports secure `env:NAME` and `file:/path` references; values redacted in `/mcp inspect`, never logged |
 | `servers.<name>.approve` | `ask` | `ask` or `auto` for the server's tool calls |
 | `servers.<name>.timeout` | `30s` | Per-call timeout |
 

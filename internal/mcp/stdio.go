@@ -85,7 +85,11 @@ func (e *rpcError) Error() string { return fmt.Sprintf("mcp error %d: %s", e.Cod
 func (c *StdioClient) Connect(ctx context.Context) error {
 	if c.cmd == nil && c.w == nil { // real process (tests inject w/r directly)
 		cmd := exec.Command(c.cfg.Command, c.cfg.Args...)
-		cmd.Env = serverEnv(c.cfg.Env)
+		env, err := serverEnv(c.cfg.Env)
+		if err != nil {
+			return fmt.Errorf("mcp: resolve environment: %w", err)
+		}
+		cmd.Env = env
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("mcp: stdin pipe: %w", err)
@@ -291,19 +295,60 @@ func (c *StdioClient) readLoop() {
 // serverEnv builds the subprocess environment: a small safe base plus the
 // user-configured overrides. The full host environment is not inherited, so
 // unrelated host secrets do not leak into the server.
-func serverEnv(overrides map[string]string) []string {
+func serverEnv(overrides map[string]string) ([]string, error) {
 	base := map[string]string{}
 	for _, key := range []string{"PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TERM"} {
 		if v, ok := os.LookupEnv(key); ok {
 			base[key] = v
 		}
 	}
-	for k, v := range overrides {
-		base[k] = v
+	for k, ref := range overrides {
+		v, err := resolveEnvValue(ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", k, err)
+		}
+		// Viper normalizes map keys to lowercase while unmarshalling. For the
+		// common pass-through form FOO: env:FOO, recover the exact (and on Unix,
+		// case-sensitive) destination name from the reference.
+		destination := k
+		if name, ok := strings.CutPrefix(ref, "env:"); ok && strings.EqualFold(k, name) {
+			destination = name
+		}
+		base[destination] = v
 	}
 	out := make([]string, 0, len(base))
 	for k, v := range base {
 		out = append(out, k+"="+v)
 	}
-	return out
+	return out, nil
+}
+
+// resolveEnvValue lets MCP configuration refer to a secret without storing it
+// in llmtui's YAML. Plain values remain supported for backwards compatibility.
+func resolveEnvValue(ref string) (string, error) {
+	if name, ok := strings.CutPrefix(ref, "env:"); ok {
+		if name == "" {
+			return "", fmt.Errorf("empty env reference")
+		}
+		v, ok := os.LookupEnv(name)
+		if !ok || v == "" {
+			return "", fmt.Errorf("environment variable %q is not set", name)
+		}
+		return v, nil
+	}
+	if path, ok := strings.CutPrefix(ref, "file:"); ok {
+		if path == "" {
+			return "", fmt.Errorf("empty file reference")
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read secret file: %w", err)
+		}
+		v := strings.TrimRight(string(b), "\r\n")
+		if v == "" {
+			return "", fmt.Errorf("secret file is empty")
+		}
+		return v, nil
+	}
+	return ref, nil
 }

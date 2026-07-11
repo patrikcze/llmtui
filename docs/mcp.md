@@ -52,6 +52,23 @@ mcp:
 A server runs only when **both** `mcp.enabled` and the server's own
 `enabled` are true.
 
+Environment values may be literals, but credentials should use a reference so
+the secret is not stored in llmtui's YAML:
+
+```yaml
+env:
+  JIRA_PERSONAL_TOKEN: "env:JIRA_PERSONAL_TOKEN" # inherit this one variable
+  OTHER_TOKEN: "file:/Users/me/.config/llmtui/secrets/other-token"
+```
+
+`env:NAME` reads `NAME` from llmtui's launch environment at connect time;
+`file:/path` reads a secret file and removes its final newline. A missing or
+empty reference makes `/mcp connect` fail without exposing the value. Literal
+values remain supported for non-secret settings and backwards compatibility.
+For a direct pass-through, use the same spelling on both sides as shown above;
+llmtui preserves the reference's case-sensitive environment name even though
+the YAML configuration loader normalizes map keys internally.
+
 ## Tool calling
 
 Once a server is connected (`/mcp connect <server>`), its tools are offered

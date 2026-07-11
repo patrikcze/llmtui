@@ -123,7 +123,10 @@ func TestStdioFactoryRejectsNonStdio(t *testing.T) {
 
 func TestServerEnvIsMinimalPlusOverrides(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
-	env := serverEnv(map[string]string{"MY_TOKEN": "abc"})
+	env, err := serverEnv(map[string]string{"MY_TOKEN": "abc"})
+	if err != nil {
+		t.Fatalf("serverEnv: %v", err)
+	}
 	var hasPath, hasToken bool
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "PATH=") {
@@ -138,5 +141,50 @@ func TestServerEnvIsMinimalPlusOverrides(t *testing.T) {
 	}
 	if !hasToken {
 		t.Error("serverEnv dropped the configured override")
+	}
+}
+
+func TestServerEnvResolvesSecretReferences(t *testing.T) {
+	t.Setenv("JIRA_PERSONAL_TOKEN", "from-env")
+	secretFile := t.TempDir() + "/token"
+	if err := os.WriteFile(secretFile, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := serverEnv(map[string]string{
+		"ENV_TOKEN":  "env:JIRA_PERSONAL_TOKEN",
+		"FILE_TOKEN": "file:" + secretFile,
+	})
+	if err != nil {
+		t.Fatalf("serverEnv: %v", err)
+	}
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	for _, want := range []string{"\nENV_TOKEN=from-env\n", "\nFILE_TOKEN=from-file\n"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("serverEnv missing resolved value for %q", want)
+		}
+	}
+}
+
+func TestServerEnvRestoresCaseForViperNormalizedPassThrough(t *testing.T) {
+	t.Setenv("JIRA_PERSONAL_TOKEN", "secret")
+	env, err := serverEnv(map[string]string{
+		"jira_personal_token": "env:JIRA_PERSONAL_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("serverEnv: %v", err)
+	}
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	if !strings.Contains(joined, "\nJIRA_PERSONAL_TOKEN=secret\n") {
+		t.Fatalf("serverEnv did not restore case-sensitive destination name")
+	}
+	if strings.Contains(joined, "\njira_personal_token=") {
+		t.Fatalf("serverEnv retained Viper-normalized environment name")
+	}
+}
+
+func TestServerEnvRejectsMissingSecretReference(t *testing.T) {
+	if _, err := serverEnv(map[string]string{"TOKEN": "env:LLMTUI_TEST_DEFINITELY_MISSING"}); err == nil {
+		t.Fatal("serverEnv accepted an unset secret reference")
 	}
 }

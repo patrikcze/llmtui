@@ -690,7 +690,9 @@ mcp:
   #     transport: stdio
   #     command: "/path/to/server"
   #     args: []
-  #     env: {} # values are redacted in /mcp inspect and never logged
+  #     # Secret values can reference env:NAME or file:/path instead of being
+  #     # stored here. Values are redacted in /mcp inspect and never logged.
+  #     env: {}
   #     approve: ask
   #     timeout: "30s"
 
