@@ -154,7 +154,8 @@ type Model struct {
 	ragLast    []rag.Result // snippets retrieved for the last dispatch (/debug, /rag)
 
 	// Optional MCP servers (config/interfaces only; no transport wired yet).
-	mcpRegistry *mcp.Registry
+	mcpRegistry    *mcp.Registry
+	mcpBatchCancel context.CancelFunc // cancels an in-flight async MCP tool batch, if any
 
 	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache     bool                // skip the response cache for the next dispatch
@@ -491,6 +492,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.finishStream(nil)
 				m.errText = "generation stopped"
 				m.refreshViewport()
+			} else if m.mcpBatchCancel != nil {
+				m.mcpBatchCancel()
+				m.mcpBatchCancel = nil
+				m.errText = "mcp tool batch cancelled"
+				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
 				m.input.Reset()
 				m.updateSuggestions()
@@ -585,6 +591,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = fmt.Sprintf("🔌 MCP server %q connected — %d tool(s) available (/mcp tools)", msg.server, msg.tools)
 		}
 		return m, nil
+
+	case mcpToolResultsMsg:
+		m.mcpBatchCancel = nil
+		for _, res := range msg.results {
+			if res.Err != nil {
+				m.toolErr++
+			} else {
+				m.toolOK++
+			}
+		}
+		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.results), m.toolDepth, m.toolMaxIter())
+		return m, m.sendToolResults(msg.results)
 
 	case modelsResultMsg:
 		if msg.err != nil {
@@ -764,20 +782,31 @@ func (m *Model) useNativeTools() bool {
 }
 
 // runToolCalls executes an approved batch and feeds the results back.
+// Pure-native batches run synchronously, exactly as before. A batch
+// containing any MCP call runs asynchronously instead: an MCP call is a
+// subprocess round-trip that can itself block on a network service (unlike
+// a local file op), so it must not freeze the UI for however long that
+// takes.
 func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.toolDepth++
-	results := make([]tools.Result, 0, len(calls))
-	for _, c := range calls {
-		res := m.toolRunner.Execute(c)
-		if res.Err != nil {
-			m.toolErr++
-		} else {
-			m.toolOK++
+	if !containsMCPCall(calls) {
+		results := make([]tools.Result, 0, len(calls))
+		for _, c := range calls {
+			res := m.toolRunner.Execute(c)
+			if res.Err != nil {
+				m.toolErr++
+			} else {
+				m.toolOK++
+			}
+			results = append(results, res)
 		}
-		results = append(results, res)
+		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, m.toolMaxIter())
+		return m.sendToolResults(results)
 	}
-	m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, m.toolMaxIter())
-	return m.sendToolResults(results)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mcpBatchCancel = cancel
+	m.notice = mcpBatchNotice(calls)
+	return runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls)
 }
 
 // denyPendingTools rejects the pending batch and tells the model, so it can
@@ -1033,6 +1062,12 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.cancelStream()
 		m.finishStream(nil)
 		m.errText = "generation stopped"
+		m.notice = "press ctrl+c again to exit"
+		m.refreshViewport()
+	case m.mcpBatchCancel != nil:
+		m.mcpBatchCancel()
+		m.mcpBatchCancel = nil
+		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
 	case m.input.Value() != "":

@@ -479,6 +479,116 @@ func TestMCPCallNeedsApprovalPerServerConfig(t *testing.T) {
 	}
 }
 
+func TestPureNativeBatchStaysSynchronous(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	withToolReply(m, "```tool write_file a.txt\ndata\n```")
+
+	// Unchanged behavior: the write already happened by the time
+	// maybeRunTools returns, before its returned cmd is ever invoked.
+	cmd := m.maybeRunTools()
+	if cmd == nil {
+		t.Fatal("expected a follow-up dispatch command")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Fatalf("pure-native batch must still execute synchronously: %v", err)
+	}
+}
+
+func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.mcpAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
+			return mcp.Result{Content: "session started"}, nil
+		}}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: time.Second,
+	}}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.session.AddUser("start a session")
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{ID: "call_1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
+	}}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+	if cmd == nil {
+		t.Fatal("expected an async command for the MCP call")
+	}
+	// Nothing has executed yet — this is the async path.
+	if m.toolOK != 0 {
+		t.Fatalf("toolOK = %d before the async command ran, want 0", m.toolOK)
+	}
+
+	msg := cmd()
+	resultsMsg, ok := msg.(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", msg)
+	}
+	_, cmd2 := m.Update(resultsMsg)
+	if cmd2 == nil {
+		t.Fatal("expected a continuation command after the results arrive")
+	}
+	if m.toolOK != 1 {
+		t.Errorf("toolOK = %d, want 1", m.toolOK)
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleTool || last.Content != "session started" {
+		t.Errorf("tool result message = %+v", last)
+	}
+}
+
+func TestMCPBatchCancelViaEsc(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.mcpAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+	}}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	cmd := m.startToolBatch([]tools.Call{{ID: "c1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: "{}"}})
+	if cmd == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected an in-flight async batch with a cancel func set")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mcpBatchCancel != nil {
+		t.Error("Esc should have cleared mcpBatchCancel")
+	}
+	if m.errText == "" {
+		t.Error("Esc should report the cancellation")
+	}
+
+	// The already-dispatched command still completes (the goroutine isn't
+	// killed, just its context) and reports the cancellation as an error.
+	msg := cmd()
+	resultsMsg, ok := msg.(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", msg)
+	}
+	if len(resultsMsg.results) != 1 || resultsMsg.results[0].Err == nil {
+		t.Fatalf("results = %+v, want one cancelled result", resultsMsg.results)
+	}
+}
+
 func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
