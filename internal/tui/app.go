@@ -522,7 +522,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
 				return m, m.runSlashCommand()
 			}
-			if !m.thinking {
+			if !m.busy() {
 				return m, m.send()
 			}
 			return m, nil
@@ -683,7 +683,23 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// busy reports whether the model is currently occupied by a streaming
+// response or an in-flight async MCP tool batch — either way, starting a
+// second, concurrent dispatch would corrupt session.Messages ordering and
+// the in-flight request's own state (m.stream, m.cancelStream, m.toolDepth).
+func (m *Model) busy() bool {
+	return m.thinking || m.mcpBatchCancel != nil
+}
+
 func (m *Model) send() tea.Cmd {
+	if m.busy() {
+		// Belt-and-suspenders: the Enter-key handler in Update already gates
+		// on m.busy(), but send() must refuse on its own too so a concurrent
+		// dispatch can never slip in and corrupt session.Messages ordering
+		// (or the in-flight batch's own m.stream/m.cancelStream/m.toolDepth)
+		// no matter how it gets called.
+		return nil
+	}
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" && len(m.attachments) == 0 {
 		return nil
@@ -973,7 +989,7 @@ func (m *Model) retryLast() tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
-	if m.thinking {
+	if m.busy() {
 		m.errText = "a request is already running (esc to stop it first)"
 		m.refreshViewport()
 		return nil

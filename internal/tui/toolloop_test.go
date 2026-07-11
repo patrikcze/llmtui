@@ -624,3 +624,93 @@ func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
 		t.Error("mcp Always did not set mcpAutoApprove")
 	}
 }
+
+// TestSendBlockedDuringAsyncMCPBatch guards against a second, concurrent
+// dispatch corrupting session.Messages ordering while an async MCP tool
+// batch is outstanding. finishStream (called before startToolBatch ever
+// runs) clears m.thinking, so the Enter-key guard used to read m.thinking
+// alone and let a new send() through mid-batch; send() would then append a
+// user message ahead of the batch's eventual tool-result messages and stomp
+// m.toolDepth/m.stream/m.cancelStream out from under the in-flight request.
+func TestSendBlockedDuringAsyncMCPBatch(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.mcpAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+	}}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	cmd := m.startToolBatch([]tools.Call{{ID: "c1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: "{}"}})
+	if cmd == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected an in-flight async batch with a cancel func set")
+	}
+
+	// finishStream (via handleStreamEvent, before startToolBatch runs) has
+	// already reset m.thinking to false by the time the batch is outstanding
+	// — that's the whole bug. Assert that precondition explicitly so this
+	// test fails for the right reason if that ever changes.
+	if m.thinking {
+		t.Fatal("test setup: m.thinking should be false while the async batch runs")
+	}
+	if !m.busy() {
+		t.Fatal("m.busy() must report true while mcpBatchCancel is set")
+	}
+
+	messagesBefore := len(m.session.Messages)
+	toolDepthBefore := m.toolDepth
+
+	m.input.SetValue("a second message typed mid-batch")
+	if got := m.send(); got != nil {
+		t.Error("send() during an in-flight async MCP batch must return nil, not start a new dispatch")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("session.Messages grew from %d to %d — send() dispatched despite the outstanding batch",
+			messagesBefore, len(m.session.Messages))
+	}
+	if m.toolDepth != toolDepthBefore {
+		t.Errorf("toolDepth changed from %d to %d — send() must not touch the in-flight batch's budget",
+			toolDepthBefore, m.toolDepth)
+	}
+	if m.input.Value() == "" {
+		t.Error("send() should leave the typed text in the input box when it refuses to dispatch")
+	}
+}
+
+// TestBusy directly covers the four states of the busy() guard used to gate
+// send() and retryLast() against a concurrent dispatch.
+func TestBusy(t *testing.T) {
+	m := newTestModel(t)
+	cancel := func() {}
+
+	cases := []struct {
+		name           string
+		thinking       bool
+		mcpBatchCancel bool
+		want           bool
+	}{
+		{"neither", false, false, false},
+		{"thinking only", true, false, true},
+		{"mcpBatchCancel only", false, true, true},
+		{"both", true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m.thinking = c.thinking
+			if c.mcpBatchCancel {
+				m.mcpBatchCancel = cancel
+			} else {
+				m.mcpBatchCancel = nil
+			}
+			if got := m.busy(); got != c.want {
+				t.Errorf("busy() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
