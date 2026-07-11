@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
@@ -382,5 +384,41 @@ func TestCacheKeyChangesWithToolState(t *testing.T) {
 
 	if keyOff.Hash() == keyOn.Hash() {
 		t.Error("cache key must differ between tools-enabled and tools-disabled requests")
+	}
+}
+
+func TestBuildRequestIncludesConnectedMCPTools(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.mcpRegistry = newConnectedMCPRegistry(t, "jiraWorklog", []mcp.Tool{
+		{Server: "jiraWorklog", Name: "session_start", Description: "start a session", Schema: json.RawMessage(`{"type":"object"}`)},
+	}, nil)
+
+	req := m.buildRequest(nil)
+	found := false
+	for _, spec := range req.Tools {
+		if spec.Name == "mcp__jiraWorklog__session_start" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("req.Tools = %+v, missing the connected MCP server's tool", req.Tools)
+	}
+}
+
+func TestBuildRequestOmitsMCPToolsWhenToolsOff(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = false
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.mcpRegistry = newConnectedMCPRegistry(t, "jiraWorklog", []mcp.Tool{
+		{Server: "jiraWorklog", Name: "session_start", Schema: json.RawMessage(`{"type":"object"}`)},
+	}, nil)
+
+	req := m.buildRequest(nil)
+	if len(req.Tools) != 0 {
+		t.Errorf("req.Tools = %+v, want empty when /tools is off", req.Tools)
 	}
 }

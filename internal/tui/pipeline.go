@@ -346,24 +346,35 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	return m.startRequest(req)
 }
 
+// activeToolSpecs assembles every tool spec offered to the model under
+// current settings: native workspace tools, web tools, and connected MCP
+// servers' tools. buildRequest and cacheKey (Task 5) both call this so a
+// request and its cache key can never disagree about which tools were
+// actually offered.
+func (m *Model) activeToolSpecs() []provider.ToolSpec {
+	if !m.useNativeTools() {
+		return nil
+	}
+	specs := tools.Specs()
+	if m.webOn {
+		specs = append(specs, tools.WebSpecs()...)
+	}
+	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
+	return specs
+}
+
 // buildRequest assembles a ChatRequest for the given messages under the
 // current settings, offering native tool specs when enabled.
 func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
-	req := provider.ChatRequest{
+	return provider.ChatRequest{
 		Model:       m.model,
 		Messages:    messages,
 		Temperature: m.effectiveTemperature(),
 		TopP:        m.cfg.Chat.TopP,
 		MaxTokens:   m.cfg.Chat.MaxTokens,
 		Stream:      m.cfg.StreamEnabled(),
+		Tools:       m.activeToolSpecs(),
 	}
-	if m.useNativeTools() {
-		req.Tools = tools.Specs()
-		if m.webOn {
-			req.Tools = append(req.Tools, tools.WebSpecs()...)
-		}
-	}
-	return req
 }
 
 // continueChat re-invokes the model after tool results were appended to the
