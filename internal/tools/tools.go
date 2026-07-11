@@ -50,6 +50,15 @@ type Call struct {
 	Body string
 	// Max caps web_search results (native max_results argument).
 	Max int
+
+	// MCPServer, when non-empty, marks this as a call to an MCP server's
+	// tool rather than a built-in one. MCPTool is the tool's name on that
+	// server, and MCPArgs is the raw JSON arguments to pass through
+	// unparsed — MCP tool schemas are arbitrary and unknown to this
+	// package, unlike the built-in tools' hand-mapped Path/Body/Max.
+	MCPServer string
+	MCPTool   string
+	MCPArgs   string
 }
 
 // Result is the outcome of executing one call. Diff is a display-only
@@ -575,6 +584,9 @@ func truncateLine(s string, max int) string {
 
 // Describe renders one call for the approval prompt.
 func (c Call) Describe() string {
+	if c.MCPServer != "" {
+		return fmt.Sprintf("%s: %s(%s)", c.MCPServer, c.MCPTool, truncateLine(c.MCPArgs, 80))
+	}
 	switch c.Tool {
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)

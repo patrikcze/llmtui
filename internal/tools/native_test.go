@@ -189,3 +189,81 @@ func TestNativeInstructionsMentionRootAndRules(t *testing.T) {
 		t.Error("native instructions must not teach the fenced protocol")
 	}
 }
+
+func TestSplitMCPToolName(t *testing.T) {
+	tests := []struct {
+		name       string
+		in         string
+		wantServer string
+		wantTool   string
+		wantOK     bool
+	}{
+		{"valid", "mcp__jiraWorklog__session_start", "jiraWorklog", "session_start", true},
+		{"tool name itself contains underscores", "mcp__jiraWorklog__jira_get_issue", "jiraWorklog", "jira_get_issue", true},
+		{"no prefix", "session_start", "", "", false},
+		{"empty tool part", "mcp__jiraWorklog__", "", "", false},
+		{"empty server part", "mcp____session_start", "", "", false},
+		{"native tool name", "write_file", "", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, tool, ok := SplitMCPToolName(tc.in)
+			if server != tc.wantServer || tool != tc.wantTool || ok != tc.wantOK {
+				t.Errorf("SplitMCPToolName(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.in, server, tool, ok, tc.wantServer, tc.wantTool, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestJoinMCPToolName(t *testing.T) {
+	got := JoinMCPToolName("jiraWorklog", "session_start")
+	want := "mcp__jiraWorklog__session_start"
+	if got != want {
+		t.Errorf("JoinMCPToolName = %q, want %q", got, want)
+	}
+	server, tool, ok := SplitMCPToolName(got)
+	if !ok || server != "jiraWorklog" || tool != "session_start" {
+		t.Errorf("round-trip failed: SplitMCPToolName(JoinMCPToolName(...)) = (%q,%q,%v)", server, tool, ok)
+	}
+}
+
+func TestCallsFromNativeMCP(t *testing.T) {
+	tests := []struct {
+		name string
+		in   provider.ToolCall
+		want Call
+	}{
+		{
+			name: "mcp call splits server and tool, keeps raw arguments",
+			in:   provider.ToolCall{ID: "c1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
+			want: Call{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`},
+		},
+		{
+			name: "empty arguments default to an empty object",
+			in:   provider.ToolCall{ID: "c2", Name: "mcp__jiraWorklog__session_list", Arguments: ""},
+			want: Call{ID: "c2", Tool: "mcp__jiraWorklog__session_list", MCPServer: "jiraWorklog", MCPTool: "session_list", MCPArgs: "{}"},
+		},
+		{
+			name: "malformed prefix (no tool part) is not treated as an MCP call",
+			in:   provider.ToolCall{ID: "c3", Name: "mcp__jiraWorklog__", Arguments: `{}`},
+			want: Call{ID: "c3", Tool: "mcp__jiraWorklog__"},
+		},
+		{
+			name: "name without the mcp__ prefix is not treated as an MCP call",
+			in:   provider.ToolCall{ID: "c4", Name: "session_start", Arguments: `{}`},
+			want: Call{ID: "c4", Tool: "session_start"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CallsFromNative([]provider.ToolCall{tc.in})
+			if len(got) != 1 {
+				t.Fatalf("calls = %d, want 1", len(got))
+			}
+			if got[0] != tc.want {
+				t.Errorf("call = %+v, want %+v", got[0], tc.want)
+			}
+		})
+	}
+}

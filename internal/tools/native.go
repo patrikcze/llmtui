@@ -71,6 +71,34 @@ type nativeArgs struct {
 	MaxResults int    `json:"max_results"`
 }
 
+// mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
+// "mcp__<server>__<tool>". internal/tui builds names in this shape when
+// assembling tool specs for a connected server; SplitMCPToolName splits them
+// back out on the way in.
+const mcpToolPrefix = "mcp__"
+
+// JoinMCPToolName builds the native tool name that exposes one MCP server's
+// tool to the model, matching SplitMCPToolName.
+func JoinMCPToolName(server, tool string) string {
+	return mcpToolPrefix + server + "__" + tool
+}
+
+// SplitMCPToolName splits a native tool name of the form
+// "mcp__<server>__<tool>" into its server and tool parts. ok is false if the
+// name doesn't have the prefix, or either part would be empty — the caller
+// falls back to treating it as an ordinary tool name.
+func SplitMCPToolName(name string) (server, tool string, ok bool) {
+	rest, found := strings.CutPrefix(name, mcpToolPrefix)
+	if !found {
+		return "", "", false
+	}
+	server, tool, found = strings.Cut(rest, "__")
+	if !found || server == "" || tool == "" {
+		return "", "", false
+	}
+	return server, tool, true
+}
+
 // CallsFromNative converts native function calls into runnable Calls.
 // Malformed arguments still produce a Call so the runner can report the
 // problem back to the model instead of the batch silently vanishing. Missing
@@ -81,6 +109,15 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		c := Call{ID: tc.ID, Tool: tc.Name}
 		if c.ID == "" {
 			c.ID = fmt.Sprintf("call_%d", i)
+		}
+		if server, tool, ok := SplitMCPToolName(tc.Name); ok {
+			c.MCPServer, c.MCPTool = server, tool
+			c.MCPArgs = tc.Arguments
+			if strings.TrimSpace(c.MCPArgs) == "" {
+				c.MCPArgs = "{}"
+			}
+			out = append(out, c)
+			continue
 		}
 		var args nativeArgs
 		if strings.TrimSpace(tc.Arguments) != "" {
