@@ -148,3 +148,21 @@ func TestConnectErrorRecorded(t *testing.T) {
 		t.Errorf("error not recorded: status=%q err=%v", s.Status, s.LastErr)
 	}
 }
+
+func TestMockClientCallToolRespectsContextTimeout(t *testing.T) {
+	c := &MockClient{ServerName: "slow", Delay: 50 * time.Millisecond}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.CallTool(ctx, "slow_echo", json.RawMessage(`{}`))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected an error from a call that outlives its context")
+	}
+	if elapsed > 40*time.Millisecond {
+		t.Errorf("CallTool took %s, want it to return promptly once ctx expires (well under the 50ms Delay)", elapsed)
+	}
+}

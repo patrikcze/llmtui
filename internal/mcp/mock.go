@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // MockClient is an in-memory Client for tests and for exercising the registry
@@ -18,6 +19,11 @@ type MockClient struct {
 	CallFunc func(name string, input json.RawMessage) (Result, error)
 	// ConnectErr, if set, makes Connect fail (to test error paths).
 	ConnectErr error
+	// Delay, if set, makes CallTool block for this long (or until ctx is
+	// done, whichever comes first) before producing its result — lets tests
+	// exercise real timeout/cancellation behavior instead of asserting it
+	// structurally.
+	Delay time.Duration
 
 	mu        sync.Mutex
 	connected bool
@@ -61,13 +67,22 @@ func (m *MockClient) ListTools(ctx context.Context) ([]Tool, error) {
 	return m.CannedTools, nil
 }
 
-// CallTool returns CallFunc's result or an echo.
+// CallTool returns CallFunc's result or an echo, after respecting Delay
+// against ctx.
 func (m *MockClient) CallTool(ctx context.Context, name string, input json.RawMessage) (Result, error) {
 	m.mu.Lock()
 	connected := m.connected
+	delay := m.Delay
 	m.mu.Unlock()
 	if !connected {
 		return Result{}, fmt.Errorf("mock client not connected")
+	}
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
 	if m.CallFunc != nil {
 		return m.CallFunc(name, input)
