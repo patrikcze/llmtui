@@ -156,6 +156,13 @@ type Model struct {
 	// Optional MCP servers (config/interfaces only; no transport wired yet).
 	mcpRegistry    *mcp.Registry
 	mcpBatchCancel context.CancelFunc // cancels an in-flight async MCP tool batch, if any
+	// mcpBatchGen is a monotonic generation counter, incremented whenever a
+	// batch starts OR is cancelled. Each dispatched batch's eventual
+	// mcpToolResultsMsg is stamped with the generation active when it was
+	// launched, so a message from a batch that was later cancelled or
+	// superseded by a newer one can be recognized as stale and dropped
+	// instead of driving the loop (see the mcpToolResultsMsg handler).
+	mcpBatchGen int
 
 	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache     bool                // skip the response cache for the next dispatch
@@ -495,6 +502,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.mcpBatchCancel != nil {
 				m.mcpBatchCancel()
 				m.mcpBatchCancel = nil
+				m.mcpBatchGen++
 				m.errText = "mcp tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
@@ -593,6 +601,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mcpToolResultsMsg:
+		if msg.gen != m.mcpBatchGen {
+			// A stale batch: it was cancelled (plain Esc/Ctrl+C, no resend)
+			// or superseded by a newer one (cancel-then-resend). Either way,
+			// its results must never tally, set notice/errText, or feed back
+			// into the model — that would poison or corrupt the turn that's
+			// actually still running (or silently continue a turn the user
+			// already stopped).
+			return m, nil
+		}
 		m.mcpBatchCancel = nil
 		for _, res := range msg.results {
 			if res.Err != nil {
@@ -821,8 +838,18 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mcpBatchCancel = cancel
+	m.mcpBatchGen++
+	gen := m.mcpBatchGen
 	m.notice = mcpBatchNotice(calls)
-	return runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls)
+	cmd := runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls)
+	return func() tea.Msg {
+		res := cmd()
+		if resultsMsg, ok := res.(mcpToolResultsMsg); ok {
+			resultsMsg.gen = gen
+			return resultsMsg
+		}
+		return res
+	}
 }
 
 // denyPendingTools rejects the pending batch and tells the model, so it can
@@ -1083,6 +1110,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	case m.mcpBatchCancel != nil:
 		m.mcpBatchCancel()
 		m.mcpBatchCancel = nil
+		m.mcpBatchGen++
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()

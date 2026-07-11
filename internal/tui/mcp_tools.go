@@ -21,6 +21,14 @@ const defaultMCPTimeout = 30 * time.Second
 // contained at least one MCP call (see runMixedToolBatch).
 type mcpToolResultsMsg struct {
 	results []tools.Result
+	// gen is the mcpBatchGen value active when the batch that produced this
+	// message was dispatched. app.go's mcpToolResultsMsg handler compares it
+	// against the model's current mcpBatchGen and drops the message if they
+	// differ — it's a result from a batch that was cancelled or superseded
+	// by a newer one. runMixedToolBatch itself does not set this field; the
+	// dispatching code in app.go wraps its returned tea.Cmd to stamp it, so
+	// this file stays unaware of the cancellation/generation state machine.
+	gen int
 }
 
 // mcpToolSpecs converts every connected, enabled MCP server's tools into

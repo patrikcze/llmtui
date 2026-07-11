@@ -589,6 +589,148 @@ func TestMCPBatchCancelViaEsc(t *testing.T) {
 	}
 }
 
+// TestMCPStaleResultsDroppedAfterPlainEsc guards the "worse than originally
+// suspected" manifestation of the missing-generation-token bug: a *plain*
+// Esc with no resend must actually stop the turn. Before the fix, the
+// already-launched goroutine's tea.Cmd still delivered its mcpToolResultsMsg
+// after Esc, and the handler was unconditional — it tallied the (usually
+// cancelled-error) results and dispatched sendToolResults/continueChat
+// anyway, so Esc looked like it worked but the turn silently continued.
+func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.mcpAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+	}}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	cmd := m.startToolBatch([]tools.Call{{ID: "c1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: "{}"}})
+	if cmd == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected an in-flight async batch with a cancel func set")
+	}
+
+	messagesBefore := len(m.session.Messages)
+	toolOKBefore, toolErrBefore := m.toolOK, m.toolErr
+
+	// Plain Esc — no resend follows.
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mcpBatchCancel != nil {
+		t.Fatal("Esc should have cleared mcpBatchCancel")
+	}
+
+	// The already-launched goroutine's tea.Cmd still completes (only its
+	// context was cancelled) and delivers its now-stale mcpToolResultsMsg.
+	msg := cmd()
+	resultsMsg, ok := msg.(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", msg)
+	}
+	_, cmd2 := m.Update(resultsMsg)
+	if cmd2 != nil {
+		t.Error("a stale mcpToolResultsMsg must not trigger a new dispatch (sendToolResults/continueChat)")
+	}
+	if m.thinking {
+		t.Error("m.thinking must stay false — the stale message must not start a new turn")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("session.Messages grew from %d to %d — the stale results were fed back to the model",
+			messagesBefore, len(m.session.Messages))
+	}
+	if m.toolOK != toolOKBefore || m.toolErr != toolErrBefore {
+		t.Errorf("toolOK/toolErr changed (%d/%d -> %d/%d) — a dropped stale message must not be tallied",
+			toolOKBefore, toolErrBefore, m.toolOK, m.toolErr)
+	}
+}
+
+// TestMCPStaleBatchDoesNotClobberResendBatch guards the cancel-then-resend
+// manifestation: after Esc cancels batch A, m.busy() is false again (async
+// batches don't set m.thinking), so a fresh batch B can start with its own
+// live cancel handle. Before the fix, A's stale mcpToolResultsMsg — arriving
+// after B started — unconditionally nil'd m.mcpBatchCancel (destroying B's
+// handle) and dispatched sendToolResults for A's stale results, a second,
+// concurrent turn that corrupts session.Messages ordering.
+func TestMCPStaleBatchDoesNotClobberResendBatch(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.mcpAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, Delay: 50 * time.Millisecond, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
+			return mcp.Result{Content: "ok:" + name}, nil
+		}}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+	}}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	// Batch A starts (turn 1).
+	cmdA := m.startToolBatch([]tools.Call{{ID: "cA", MCPServer: "jiraWorklog", MCPTool: "tool_a", MCPArgs: "{}"}})
+	if cmdA == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected batch A in flight with a cancel func set")
+	}
+
+	// Cancel A via Esc — no resend has happened yet.
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mcpBatchCancel != nil {
+		t.Fatal("Esc should have cleared mcpBatchCancel")
+	}
+
+	// Batch B starts independently (turn 2, the resend), getting its own
+	// live cancel handle.
+	cmdB := m.startToolBatch([]tools.Call{{ID: "cB", MCPServer: "jiraWorklog", MCPTool: "tool_b", MCPArgs: "{}"}})
+	if cmdB == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected batch B in flight with its own cancel func")
+	}
+	messagesAfterBStart := len(m.session.Messages)
+
+	// A's stale goroutine finally delivers its result while B is in flight.
+	msgA := cmdA()
+	resultsA, ok := msgA.(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmdA() = %T, want mcpToolResultsMsg", msgA)
+	}
+	_, cmd2 := m.Update(resultsA)
+	if cmd2 != nil {
+		t.Error("A's stale result must not trigger a dispatch")
+	}
+	if m.mcpBatchCancel == nil {
+		t.Fatal("B's live cancel handle must not be clobbered by A's stale message")
+	}
+	if len(m.session.Messages) != messagesAfterBStart {
+		t.Errorf("session.Messages grew from %d to %d — A's stale results were appended while B is in flight",
+			messagesAfterBStart, len(m.session.Messages))
+	}
+
+	// B's own result resolves normally — the generation check must not
+	// false-negative on a batch's own legitimate result.
+	msgB := cmdB()
+	resultsB, ok := msgB.(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmdB() = %T, want mcpToolResultsMsg", msgB)
+	}
+	_, cmd3 := m.Update(resultsB)
+	if cmd3 == nil {
+		t.Fatal("expected a continuation dispatch after B's own results arrive")
+	}
+	if m.mcpBatchCancel != nil {
+		t.Error("mcpBatchCancel should be cleared once B's own results are processed")
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleTool || !strings.Contains(last.Content, "tool_b") {
+		t.Errorf("last message = %+v, want B's tool result", last)
+	}
+}
+
 func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
