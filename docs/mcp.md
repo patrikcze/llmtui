@@ -52,6 +52,37 @@ mcp:
 A server runs only when **both** `mcp.enabled` and the server's own
 `enabled` are true.
 
+## Tool calling
+
+Once a server is connected (`/mcp connect <server>`), its tools are offered
+to the model automatically whenever `/tools on` — the same switch native
+workspace tools use. There is no separate toggle: `/mcp connect` plus
+`/tools on` is enough.
+
+Each tool is exposed to the model as `mcp__<server>__<tool>` (e.g.
+`mcp__jiraWorklog__session_start`), so tools from different servers can
+never collide by name. This is **native function-calling only** — a model
+without native tool-calling support won't see MCP tools, the same as today.
+
+**Approval.** MCP calls have their own "always approve" state, kept
+separate from the workspace-tools one: accepting "Always" on a file write
+never silently starts auto-approving an MCP call with real external side
+effects (e.g. submitting a Jira worklog), and vice versa. Per-call approval
+is otherwise governed by each server's own `approve: ask | auto` config.
+
+**Execution.** Unlike native tools (which run synchronously), a batch
+containing any MCP call runs asynchronously and is bounded by that server's
+`timeout` (default 30s) — an MCP call is a subprocess round-trip that can
+itself block on a real network service, and must not freeze the UI. Press
+Esc or Ctrl+C to cancel an in-flight batch, the same as an in-flight
+streaming response.
+
+A timeout means *llmtui* gave up waiting — it does not mean the server
+rolled anything back. A slow `session_start` may still have created a
+session on the server's side even though the timeout fired locally; check
+the server's own state (e.g. `/mcp inspect <server>`, or the server's own
+tools) if that matters for what you're doing.
+
 ## Safety
 
 - **Nothing starts on its own.** Building the registry at startup does not
