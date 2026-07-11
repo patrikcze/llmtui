@@ -166,3 +166,45 @@ func TestRegisterMCPCapabilities(t *testing.T) {
 		t.Errorf("capability = %+v", info)
 	}
 }
+
+func TestToolsListShowsConnectedMCPServer(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.mcpRegistry = newConnectedMCPRegistry(t, "jiraWorklog", []mcp.Tool{
+		{Server: "jiraWorklog", Name: "session_start", Description: "start a session", Schema: json.RawMessage(`{"type":"object"}`)},
+	}, nil)
+
+	out := m.toolsListOverlay("")
+	if !strings.Contains(out, "mcp__jiraWorklog__session_start") {
+		t.Errorf("connected MCP server's tool missing from /tools list:\n%s", out)
+	}
+	if !strings.Contains(out, "mcp:jiraWorklog") {
+		t.Errorf("mcp:jiraWorklog source column missing:\n%s", out)
+	}
+}
+
+func TestToolsListOmitsUnconnectedMCPServer(t *testing.T) {
+	m := newTestModel(t)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) { return &mcp.MockClient{ServerName: c.Name}, nil }
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: time.Second,
+	}}, factory) // configured, never connected
+
+	out := m.toolsListOverlay("")
+	if strings.Contains(out, "jiraWorklog") {
+		t.Errorf("unconnected MCP server should not appear in /tools list:\n%s", out)
+	}
+}
+
+func TestToolsInspectShowsMCPToolParameters(t *testing.T) {
+	m := newTestModel(t)
+	m.mcpRegistry = newConnectedMCPRegistry(t, "jiraWorklog", []mcp.Tool{
+		{Server: "jiraWorklog", Name: "session_start", Description: "start a session", Schema: json.RawMessage(`{"type":"object","properties":{"issue_key":{"type":"string"}}}`)},
+	}, nil)
+
+	out := m.toolsInspectOverlay("mcp__jiraWorklog__session_start")
+	if !strings.Contains(out, "start a session") || !strings.Contains(out, "issue_key") {
+		t.Errorf("/tools inspect missing MCP tool detail:\n%s", out)
+	}
+}

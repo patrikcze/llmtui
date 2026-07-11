@@ -1507,6 +1507,7 @@ func (m *Model) toolsOverlay() string {
 // with source, safety class, and approval policy.
 func (m *Model) toolsListOverlay(args string) string {
 	reg := tools.DefaultRegistry()
+	registerMCPCapabilities(reg, m.mcpRegistry)
 	filter := strings.TrimSpace(args)
 	caps := reg.List()
 
@@ -1519,6 +1520,13 @@ func (m *Model) toolsListOverlay(args string) string {
 	enabledSources := map[string]bool{
 		"builtin": m.toolsOn,
 		"web":     m.toolsOn && m.webOn,
+	}
+	if m.mcpRegistry != nil {
+		for _, srv := range m.mcpRegistry.List() {
+			if srv.Status == mcp.StatusConnected {
+				enabledSources["mcp:"+srv.Config.Name] = m.toolsOn && m.useNativeTools()
+			}
+		}
 	}
 
 	for _, c := range caps {
@@ -1552,6 +1560,7 @@ func (m *Model) toolsInspectOverlay(name string) string {
 		return m.overlayFooter(&b)
 	}
 	reg := tools.DefaultRegistry()
+	registerMCPCapabilities(reg, m.mcpRegistry)
 	info, ok := reg.Get(name)
 	if !ok {
 		b.WriteString(m.theme.Badge.Render("not found") + "\n\n")
