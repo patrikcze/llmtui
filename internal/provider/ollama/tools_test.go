@@ -46,6 +46,13 @@ func TestChatRequestEncodesToolsAndToolMessages(t *testing.T) {
 	if len(got.Tools) != 1 || got.Tools[0].Type != "function" || got.Tools[0].Function.Name != "list_dir" {
 		t.Errorf("tools = %+v", got.Tools)
 	}
+	var parameters map[string]any
+	if err := json.Unmarshal(got.Tools[0].Function.Parameters, &parameters); err != nil {
+		t.Fatalf("decode tool parameters: %v", err)
+	}
+	if _, ok := parameters["properties"].(map[string]any); !ok {
+		t.Fatalf("tool parameters lack an object properties field: %s", got.Tools[0].Function.Parameters)
+	}
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want 3", len(got.Messages))
 	}

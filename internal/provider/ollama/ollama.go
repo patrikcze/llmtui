@@ -166,7 +166,7 @@ func toWireTools(specs []provider.ToolSpec) []wireTool {
 		out = append(out, wireTool{Type: "function", Function: wireFunction{
 			Name:        s.Name,
 			Description: s.Description,
-			Parameters:  s.Parameters,
+			Parameters:  provider.NormalizeToolParameters(s.Parameters),
 		}})
 	}
 	return out
