@@ -459,3 +459,58 @@ func TestCacheKeyChangesWithConnectedMCPServer(t *testing.T) {
 		t.Error("cache key must differ once an MCP server connects, even with the same message, history, and tools-on state")
 	}
 }
+
+func TestMCPCallNeedsApprovalPerServerConfig(t *testing.T) {
+	m := newTestModel(t)
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) { return &mcp.MockClient{ServerName: c.Name}, nil }
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{
+		{Name: "ask-server", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "ask", Timeout: time.Second},
+		{Name: "auto-server", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: time.Second},
+	}, factory)
+
+	askCall := tools.Call{MCPServer: "ask-server", MCPTool: "t"}
+	autoCall := tools.Call{MCPServer: "auto-server", MCPTool: "t"}
+	if !m.callNeedsApproval(askCall) {
+		t.Error("ask-server call should need approval")
+	}
+	if m.callNeedsApproval(autoCall) {
+		t.Error("auto-server call should not need approval")
+	}
+}
+
+func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) { return &mcp.MockClient{ServerName: c.Name}, nil }
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{
+		{Name: "srv", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "ask", Timeout: time.Second},
+	}, factory)
+	if err := m.mcpRegistry.Connect(context.Background(), "srv"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	// A pure-native batch: "Always" must not grant mcpAutoApprove.
+	m.pendingCalls = []tools.Call{{ID: "c1", Tool: tools.ToolWriteFile, Path: "a.txt", Body: "x"}}
+	m.resolveApproval(approvalAlways)
+	if !m.toolsAutoApprove {
+		t.Error("native Always did not set toolsAutoApprove")
+	}
+	if m.mcpAutoApprove {
+		t.Error("native-only Always must not also grant mcpAutoApprove")
+	}
+
+	// Reset and check the reverse: a pure-MCP batch must not grant toolsAutoApprove.
+	m.toolsAutoApprove = false
+	m.mcpAutoApprove = false
+	m.pendingCalls = []tools.Call{{ID: "c2", MCPServer: "srv", MCPTool: "t", MCPArgs: "{}"}}
+	m.resolveApproval(approvalAlways)
+	if m.toolsAutoApprove {
+		t.Error("mcp-only Always must not also grant toolsAutoApprove")
+	}
+	if !m.mcpAutoApprove {
+		t.Error("mcp Always did not set mcpAutoApprove")
+	}
+}

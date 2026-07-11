@@ -127,17 +127,23 @@ type Model struct {
 	// Workspace tools (list/read/write/run under the launch directory).
 	toolsOn          bool
 	toolsAutoApprove bool // "auto" approval mode: skip the y/n prompt
-	toolsNative      bool // offer tools via native function calling
-	toolsShowOutput  bool // show full tool output instead of one-line summaries
-	toolRunner       *tools.Runner
-	toolDepth        int          // auto follow-up rounds for the current user turn
-	pendingCalls     []tools.Call // parsed calls awaiting the user's approval
-	pendingBudget    bool         // the pending prompt is "budget spent — continue?", not an approval
-	approvalIdx      int          // selected row in the approval menu (0 yes, 1 always, 2 no)
-	toolOK           int          // executed tool calls (exit summary)
-	toolErr          int          // failed or denied tool calls (exit summary)
-	webOn            bool         // web tools (web_search/web_fetch) enabled
-	webClient        *web.Client  // shared web client; nil if the runner is unavailable
+	// mcpAutoApprove is a separate "always" state for MCP calls, kept apart
+	// from toolsAutoApprove: choosing "Always" on a workspace-tool prompt
+	// (e.g. write_file) must never silently start auto-approving an MCP
+	// call with real external side effects (e.g. jiraWorklog's
+	// worklog_submit), and vice versa.
+	mcpAutoApprove  bool
+	toolsNative     bool // offer tools via native function calling
+	toolsShowOutput bool // show full tool output instead of one-line summaries
+	toolRunner      *tools.Runner
+	toolDepth       int          // auto follow-up rounds for the current user turn
+	pendingCalls    []tools.Call // parsed calls awaiting the user's approval
+	pendingBudget   bool         // the pending prompt is "budget spent — continue?", not an approval
+	approvalIdx     int          // selected row in the approval menu (0 yes, 1 always, 2 no)
+	toolOK          int          // executed tool calls (exit summary)
+	toolErr         int          // failed or denied tool calls (exit summary)
+	webOn           bool         // web tools (web_search/web_fetch) enabled
+	webClient       *web.Client  // shared web client; nil if the runner is unavailable
 
 	// Optional local RAG (disabled by default).
 	ragOn      bool         // retrieval enabled for the current session
@@ -690,6 +696,26 @@ func (m *Model) maybeRunTools() tea.Cmd {
 	return m.startToolBatch(tools.Parse(m.session.Messages[n-1].Content))
 }
 
+// callNeedsApproval reports whether one call must be confirmed before it
+// runs. Native calls keep the workspace Runner's existing policy exactly
+// (including toolsAutoApprove). MCP calls are gated per-server by
+// ServerConfig.Approve ("ask"|"auto"), or skip entirely once mcpAutoApprove
+// has been granted for this session — a state kept separate from
+// toolsAutoApprove (see the Model.mcpAutoApprove comment).
+func (m *Model) callNeedsApproval(c tools.Call) bool {
+	if c.MCPServer == "" {
+		if m.toolsAutoApprove {
+			return false
+		}
+		return m.toolRunner.NeedsApproval(c)
+	}
+	if m.mcpAutoApprove {
+		return false
+	}
+	srv, ok := m.mcpRegistry.Get(c.MCPServer)
+	return !ok || srv.Config.ApproveMode() != mcp.ApproveAuto
+}
+
 // startToolBatch runs one batch of tool calls (native or parsed): read-only
 // calls run immediately; mutating calls (writes, non-read-only commands) wait
 // for the user's y/n unless approvals are set to auto. The loop is bounded by
@@ -712,15 +738,13 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
-	if !m.toolsAutoApprove {
-		for _, c := range calls {
-			if m.toolRunner.NeedsApproval(c) {
-				m.overlayOpen = false
-				m.pendingCalls = calls
-				m.approvalIdx = 0
-				m.refreshViewport()
-				return nil
-			}
+	for _, c := range calls {
+		if m.callNeedsApproval(c) {
+			m.overlayOpen = false
+			m.pendingCalls = calls
+			m.approvalIdx = 0
+			m.refreshViewport()
+			return nil
 		}
 	}
 	return m.runToolCalls(calls)
@@ -870,10 +894,26 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		m.pendingCalls = nil
 		return m.runToolCalls(calls)
 	case approvalAlways:
-		m.toolsAutoApprove = true
+		hasNative, hasMCP := false, false
+		for _, c := range m.pendingCalls {
+			if c.MCPServer == "" {
+				hasNative = true
+			} else {
+				hasMCP = true
+			}
+		}
+		var granted []string
+		if hasNative {
+			m.toolsAutoApprove = true
+			granted = append(granted, "workspace")
+		}
+		if hasMCP {
+			m.mcpAutoApprove = true
+			granted = append(granted, "mcp")
+		}
 		calls := m.pendingCalls
 		m.pendingCalls = nil
-		m.notice = "⚒ tool approvals set to auto for this session (/tools ask to revert)"
+		m.notice = fmt.Sprintf("⚒ tool approvals set to auto (%s) for this session (/tools ask to revert)", strings.Join(granted, " + "))
 		return m.runToolCalls(calls)
 	default:
 		return m.denyPendingTools()
