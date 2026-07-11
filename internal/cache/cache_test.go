@@ -39,6 +39,7 @@ func TestKeyHashStability(t *testing.T) {
 		func(k *Key) { k.Temperature = 0.1 },
 		func(k *Key) { k.MaxTokens = 100 },
 		func(k *Key) { k.HistoryHash = "different" },
+		func(k *Key) { k.ToolsHash = "different" },
 	}
 	for i, mutate := range variants {
 		k := testKey()

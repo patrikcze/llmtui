@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -257,6 +258,7 @@ func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 		TopP:         m.cfg.Chat.TopP,
 		MaxTokens:    m.cfg.Chat.MaxTokens,
 		HistoryHash:  historyFingerprint(m.session.Messages),
+		ToolsHash:    toolSpecsFingerprint(m.activeToolSpecs()),
 	}
 }
 
@@ -270,6 +272,27 @@ func historyFingerprint(msgs []provider.Message) string {
 		h.Write([]byte(msg.Role))
 		h.Write([]byte{0})
 		h.Write([]byte(msg.Content))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// toolSpecsFingerprint hashes the active tool set so the cache key changes
+// whenever which tools are actually offered to the model changes — e.g.
+// connecting or disconnecting an MCP server — even though nothing else
+// about the request changed. Specs are sorted by name first: server/tool
+// listing order isn't guaranteed to be stable across connects.
+func toolSpecsFingerprint(specs []provider.ToolSpec) string {
+	sorted := make([]provider.ToolSpec, len(specs))
+	copy(sorted, specs)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	h := sha256.New()
+	for _, s := range sorted {
+		h.Write([]byte(s.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(s.Description))
+		h.Write([]byte{0})
+		h.Write(s.Parameters)
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))

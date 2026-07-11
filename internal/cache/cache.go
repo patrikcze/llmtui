@@ -39,6 +39,11 @@ type Key struct {
 	TopP         float64
 	MaxTokens    int
 	HistoryHash  string
+	// ToolsHash fingerprints the tool specs actually offered to the model
+	// (native, web, and MCP) — connecting or disconnecting an MCP server
+	// changes what's sent to the provider even when nothing else about the
+	// request changes, and a cache hit must not straddle that difference.
+	ToolsHash string
 }
 
 // Hash returns a stable content hash for the key. Free-text fields are
@@ -46,7 +51,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v2|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s",
+	fmt.Fprintf(h, "v3|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -58,6 +63,7 @@ func (k Key) Hash() string {
 		k.TopP,
 		k.MaxTokens,
 		k.HistoryHash,
+		k.ToolsHash,
 	)
 	return hex.EncodeToString(h.Sum(nil))
 }

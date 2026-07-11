@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -420,5 +422,40 @@ func TestBuildRequestOmitsMCPToolsWhenToolsOff(t *testing.T) {
 	req := m.buildRequest(nil)
 	if len(req.Tools) != 0 {
 		t.Errorf("req.Tools = %+v, want empty when /tools is off", req.Tools)
+	}
+}
+
+// TestCacheKeyChangesWithConnectedMCPServer guards the specific gap this
+// project's cache-key-completeness invariant calls out: connecting an MCP
+// server changes what's actually sent to the provider (req.Tools grows) even
+// though the user message, history, and toolsOn/native state are unchanged
+// — a request built before connecting must not be served the response
+// cached for a request built after.
+func TestCacheKeyChangesWithConnectedMCPServer(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	// The mock must actually advertise a tool once connected — without
+	// CannedTools, ListTools returns nothing either way and the hashes
+	// could never differ, defeating the point of this test.
+	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
+		return &mcp.MockClient{ServerName: c.Name, CannedTools: []mcp.Tool{
+			{Server: c.Name, Name: "session_start", Description: "start a session", Schema: json.RawMessage(`{"type":"object"}`)},
+		}}, nil
+	}
+	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: time.Second,
+	}}, factory)
+	keyDisconnected := m.cacheKey("hi", nil)
+
+	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	keyConnected := m.cacheKey("hi", nil)
+
+	if keyDisconnected.Hash() == keyConnected.Hash() {
+		t.Error("cache key must differ once an MCP server connects, even with the same message, history, and tools-on state")
 	}
 }
