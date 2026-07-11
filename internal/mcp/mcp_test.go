@@ -90,6 +90,25 @@ func TestConnectWithMockFactory(t *testing.T) {
 	}
 }
 
+func TestRegistryServerNamesAreCaseInsensitive(t *testing.T) {
+	r := NewRegistry([]ServerConfig{{
+		Name:      "jiraworklog",
+		Enabled:   true,
+		Transport: TransportStdio,
+		Command:   "jira-mcp",
+	}}, NewMockFactory())
+
+	if _, ok := r.Get("jiraWorklog"); !ok {
+		t.Fatal("Get did not match server name case-insensitively")
+	}
+	if err := r.Connect(context.Background(), "jiraWorklog"); err != nil {
+		t.Fatalf("Connect with original YAML casing: %v", err)
+	}
+	if _, err := r.CallTool(context.Background(), "JIRAWORKLOG", "jiraworklog_echo", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("CallTool with uppercase server name: %v", err)
+	}
+}
+
 func TestConnectDisabledServerFails(t *testing.T) {
 	r := NewRegistry(sampleConfigs(), NewMockFactory())
 	if err := r.Connect(context.Background(), "disabled"); err == nil {

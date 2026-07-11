@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -27,6 +28,18 @@ type Server struct {
 	LastErr error
 
 	client Client
+}
+
+func (r *Registry) serverLocked(name string) (*Server, bool) {
+	if s, ok := r.servers[name]; ok {
+		return s, true
+	}
+	for configured, s := range r.servers {
+		if strings.EqualFold(configured, name) {
+			return s, true
+		}
+	}
+	return nil, false
 }
 
 // Registry tracks configured MCP servers and their state. It is safe for
@@ -77,7 +90,7 @@ func (r *Registry) List() []*Server {
 func (r *Registry) Get(name string) (*Server, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s, ok := r.servers[name]
+	s, ok := r.serverLocked(name)
 	return s, ok
 }
 
@@ -86,7 +99,7 @@ func (r *Registry) Get(name string) (*Server, bool) {
 func (r *Registry) Enable(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s, ok := r.servers[name]
+	s, ok := r.serverLocked(name)
 	if !ok {
 		return fmt.Errorf("no MCP server named %q", name)
 	}
@@ -101,7 +114,7 @@ func (r *Registry) Enable(name string) error {
 func (r *Registry) Disable(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s, ok := r.servers[name]
+	s, ok := r.serverLocked(name)
 	if !ok {
 		return fmt.Errorf("no MCP server named %q", name)
 	}
@@ -121,7 +134,7 @@ func (r *Registry) Disable(name string) error {
 // returns an error and leaves the server StatusNoTransport.
 func (r *Registry) Connect(ctx context.Context, name string) error {
 	r.mu.Lock()
-	s, ok := r.servers[name]
+	s, ok := r.serverLocked(name)
 	factory := r.factory
 	r.mu.Unlock()
 	if !ok {
@@ -180,7 +193,7 @@ func (r *Registry) Tools() []Tool {
 // CallTool routes a tool call to the server that advertised it.
 func (r *Registry) CallTool(ctx context.Context, server, tool string, input json.RawMessage) (Result, error) {
 	r.mu.Lock()
-	s, ok := r.servers[server]
+	s, ok := r.serverLocked(server)
 	r.mu.Unlock()
 	if !ok {
 		return Result{}, fmt.Errorf("no MCP server named %q", server)

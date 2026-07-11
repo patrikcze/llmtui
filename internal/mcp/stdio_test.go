@@ -188,3 +188,17 @@ func TestServerEnvRejectsMissingSecretReference(t *testing.T) {
 		t.Fatal("serverEnv accepted an unset secret reference")
 	}
 }
+
+func TestServerStderrIsBoundedAndRedacted(t *testing.T) {
+	c := &StdioClient{}
+	_, _ = c.stderr.Write([]byte(strings.Repeat("x", 5000) + "\nstartup failed token=supersecret"))
+
+	err := c.withServerStderr(context.DeadlineExceeded)
+	msg := err.Error()
+	if strings.Contains(msg, "supersecret") {
+		t.Fatal("server stderr leaked a secret")
+	}
+	if len(msg) > 4200 {
+		t.Fatalf("server stderr error was not bounded: %d bytes", len(msg))
+	}
+}

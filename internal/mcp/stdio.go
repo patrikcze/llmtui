@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -38,6 +40,24 @@ type StdioClient struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	readErr   error
+	stderr    lockedBuffer
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
 
 // StdioFactory returns a ClientFactory that builds stdio MCP clients. It is
@@ -98,10 +118,9 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("mcp: stdout pipe: %w", err)
 		}
-		// Keep the server's own logging off our TUI; MCP data travels on stdout.
-		if f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
-			cmd.Stderr = f
-		}
+		// MCP data travels on stdout. Capture stderr for bounded, redacted startup
+		// diagnostics instead of discarding the cause when a child exits early.
+		cmd.Stderr = &c.stderr
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("mcp: start %q: %w", c.cfg.Command, err)
 		}
@@ -113,9 +132,24 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 
 	if err := c.handshake(ctx); err != nil {
 		_ = c.Close()
-		return err
+		return c.withServerStderr(err)
 	}
 	return nil
+}
+
+var stderrSecretPattern = regexp.MustCompile(`(?i)((?:token|secret|password|authorization|api[_-]?key)[^=:\s]*\s*[=:]\s*)\S+`)
+
+func (c *StdioClient) withServerStderr(err error) error {
+	msg := strings.TrimSpace(c.stderr.String())
+	if msg == "" {
+		return err
+	}
+	msg = stderrSecretPattern.ReplaceAllString(msg, `${1}***REDACTED***`)
+	const max = 4096
+	if len(msg) > max {
+		msg = msg[len(msg)-max:]
+	}
+	return fmt.Errorf("%w; server stderr: %s", err, msg)
 }
 
 // handshake performs initialize + notifications/initialized.
