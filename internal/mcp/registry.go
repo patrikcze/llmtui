@@ -30,6 +30,7 @@ type Server struct {
 
 	client        Client
 	connectCancel context.CancelFunc // set while Connect is dialing; guarded by Registry.mu
+	connectGen    int                // bumped per connect attempt; a stale attempt must not touch state
 }
 
 func (r *Registry) serverLocked(name string) (*Server, bool) {
@@ -149,29 +150,33 @@ func (r *Registry) Disable(name string) error {
 }
 
 // beginConnect validates and registers a connection attempt under one lock.
-func (r *Registry) beginConnect(ctx context.Context, name string) (context.Context, *Server, ServerConfig, ClientFactory, error) {
+// The returned generation identifies this attempt: after a disable→enable
+// cycle a newer attempt may own the server, and this (now stale) attempt must
+// not commit a client, record an error, or cancel the newer attempt's context.
+func (r *Registry) beginConnect(ctx context.Context, name string) (context.Context, *Server, int, ServerConfig, ClientFactory, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return nil, nil, ServerConfig{}, nil, fmt.Errorf("mcp: registry is closed")
+		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("mcp: registry is closed")
 	}
 	s, ok := r.serverLocked(name)
 	if !ok {
-		return nil, nil, ServerConfig{}, nil, fmt.Errorf("no MCP server named %q", name)
+		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("no MCP server named %q", name)
 	}
 	switch {
 	case s.client != nil:
-		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q is already connected", name)
+		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("MCP server %q is already connected", name)
 	case s.Status == StatusConnecting:
-		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q: connect already in progress", name)
+		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("MCP server %q: connect already in progress", name)
 	case !s.Config.Enabled:
-		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q is disabled", name)
+		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("MCP server %q is disabled", name)
 	}
 	connectCtx, cancel := context.WithCancel(ctx)
 	s.Status = StatusConnecting
 	s.connectCancel = cancel
+	s.connectGen++
 	r.inflight.Add(1)
-	return connectCtx, s, s.Config, r.factory, nil
+	return connectCtx, s, s.connectGen, s.Config, r.factory, nil
 }
 
 // Connect establishes the transport for one enabled server and lists its
@@ -183,13 +188,15 @@ func (r *Registry) beginConnect(ctx context.Context, name string) (context.Conte
 // leak the first client's subprocess (overwritten, never closed) or race a
 // concurrent Disable, which could be clobbered by this call's success path.
 func (r *Registry) Connect(ctx context.Context, name string) error {
-	ctx, s, config, factory, err := r.beginConnect(ctx, name)
+	ctx, s, gen, config, factory, err := r.beginConnect(ctx, name)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		r.mu.Lock()
-		if s.connectCancel != nil {
+		// After disable→enable→connect, connectCancel belongs to the newer
+		// attempt; cancelling it here would abort that attempt spuriously.
+		if s.connectGen == gen && s.connectCancel != nil {
 			s.connectCancel()
 			s.connectCancel = nil
 		}
@@ -199,27 +206,34 @@ func (r *Registry) Connect(ctx context.Context, name string) error {
 
 	if factory == nil {
 		err := fmt.Errorf("no MCP transport is available in this build")
-		r.setError(s, StatusNoTransport, err)
+		r.setError(s, gen, StatusNoTransport, err)
 		return err
 	}
 	client, err := factory(config)
 	if err != nil {
-		r.setError(s, StatusError, err)
+		r.setError(s, gen, StatusError, err)
 		return err
 	}
 	if err := client.Connect(ctx); err != nil {
 		_ = client.Close()
-		r.setError(s, StatusError, err)
+		r.setError(s, gen, StatusError, err)
 		return err
 	}
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		_ = client.Close()
-		r.setError(s, StatusError, err)
+		r.setError(s, gen, StatusError, err)
 		return err
 	}
 
 	r.mu.Lock()
+	if s.connectGen != gen {
+		// A newer attempt owns the server now; committing here would
+		// overwrite (and leak) its client. Leave all state to it.
+		r.mu.Unlock()
+		_ = client.Close()
+		return fmt.Errorf("MCP server %q: connect superseded by a newer attempt", name)
+	}
 	if r.closed || !s.Config.Enabled {
 		reason := "was disabled during connect"
 		if r.closed {
@@ -240,9 +254,12 @@ func (r *Registry) Connect(ctx context.Context, name string) error {
 	return nil
 }
 
-func (r *Registry) setError(s *Server, status Status, err error) {
+func (r *Registry) setError(s *Server, gen int, status Status, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if s.connectGen != gen {
+		return // a newer attempt owns the server's status now
+	}
 	if !s.Config.Enabled {
 		s.Status = StatusDisabled
 		s.LastErr = nil

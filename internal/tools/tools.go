@@ -361,12 +361,15 @@ func (r *Runner) runCommand(body string) (string, error) {
 	cmd.WaitDelay = time.Second
 
 	out, err := cmd.CombinedOutput()
+	// Commands are synchronous by contract (one command per block), so any
+	// process still in the group — a backgrounded `cmd &`, a timed-out tree —
+	// must not outlive the tool call.
+	procutil.KillGroup(cmd)
 	output := strings.TrimRight(string(out), "\n")
 	if limit := r.maxKB * 1024; len(output) > limit {
 		output = output[:limit] + "\n… output truncated"
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		procutil.KillGroup(cmd)
 		return output, fmt.Errorf("command timed out after %s", timeout)
 	}
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/patrikcze/llmtui/internal/procutil"
 )
@@ -113,6 +114,10 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 		}
 		cmd.Env = env
 		procutil.SetupProcAttr(cmd)
+		// A descendant that leaves the process group (setsid) survives the
+		// group kill and can hold the inherited stderr pipe open forever;
+		// without this bound cmd.Wait — and therefore Close — never returns.
+		cmd.WaitDelay = 3 * time.Second
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("mcp: stdin pipe: %w", err)

@@ -31,6 +31,13 @@ type MockClient struct {
 	ConnectGate <-chan struct{}
 	// CloseGate, if set, makes Close block until the channel is closed.
 	CloseGate <-chan struct{}
+	// ListGate, if set, makes ListTools block until the channel is closed,
+	// deliberately ignoring ctx: a real in-flight response can win the race
+	// against cancellation, which is how a stale connect attempt reaches the
+	// registry's commit step after the server was disabled and re-enabled.
+	ListGate <-chan struct{}
+	// ListErr, if set, makes ListTools fail (after ListGate, if both are set).
+	ListErr error
 
 	mu        sync.Mutex
 	connected bool
@@ -72,14 +79,27 @@ func (m *MockClient) Connect(ctx context.Context) error {
 	return nil
 }
 
-// ListTools returns the canned tools.
+// ListTools returns the canned tools, after waiting on ListGate (if set).
 func (m *MockClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if m.ListGate != nil {
+		<-m.ListGate
+	}
+	if m.ListErr != nil {
+		return nil, m.ListErr
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.connected {
 		return nil, fmt.Errorf("mock client not connected")
 	}
 	return m.CannedTools, nil
+}
+
+// Connected reports whether Connect completed (for tests).
+func (m *MockClient) Connected() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.connected
 }
 
 // CallTool returns CallFunc's result or an echo, after respecting Delay

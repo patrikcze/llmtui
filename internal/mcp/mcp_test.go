@@ -472,3 +472,92 @@ func TestRegistryCloseIsNilSafe(t *testing.T) {
 	var r *Registry
 	r.Close() // must not panic
 }
+
+// A connect attempt can survive past a disable→enable→connect cycle: its
+// in-flight response can win the race against its cancelled context. Such a
+// stale attempt must not commit its client over the newer attempt's (that
+// leaks the newer subprocess) and must not cancel the newer attempt's dial.
+func TestStaleConnectCannotClobberNewerAttempt(t *testing.T) {
+	gate := make(chan struct{})
+	var gateMu sync.Mutex
+	gateArmed := true
+	factory, clients := trackingFactory(func(c *MockClient) {
+		gateMu.Lock()
+		if gateArmed {
+			c.ListGate = gate
+			gateArmed = false
+		}
+		gateMu.Unlock()
+	})
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	done := make(chan error, 1)
+	go func() { done <- r.Connect(context.Background(), "s") }()
+
+	waitForStatus(t, r, "s", StatusConnecting)
+	if err := r.Disable("s"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if err := r.Enable("s"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if err := r.Connect(context.Background(), "s"); err != nil {
+		t.Fatalf("second connect: %v", err)
+	}
+	close(gate)
+	if err := <-done; err == nil {
+		t.Fatal("stale connect attempt must be refused, not committed")
+	}
+	built := clients()
+	if len(built) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(built))
+	}
+	if !built[0].Closed() {
+		t.Fatal("stale attempt's client must be closed")
+	}
+	if built[1].Closed() {
+		t.Fatal("the newer attempt's live client must not be closed")
+	}
+	s, _ := r.Get("s")
+	if s.Status != StatusConnected || s.LastErr != nil {
+		t.Fatalf("connected state clobbered by stale attempt: status=%q err=%v", s.Status, s.LastErr)
+	}
+}
+
+// The stale attempt's failure path must be inert too: its error must not
+// overwrite the Connected status the newer attempt committed.
+func TestStaleConnectErrorPreservesNewerAttempt(t *testing.T) {
+	gate := make(chan struct{})
+	var gateMu sync.Mutex
+	gateArmed := true
+	factory, _ := trackingFactory(func(c *MockClient) {
+		gateMu.Lock()
+		if gateArmed {
+			c.ListGate = gate
+			c.ListErr = fmt.Errorf("boom")
+			gateArmed = false
+		}
+		gateMu.Unlock()
+	})
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	done := make(chan error, 1)
+	go func() { done <- r.Connect(context.Background(), "s") }()
+
+	waitForStatus(t, r, "s", StatusConnecting)
+	if err := r.Disable("s"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if err := r.Enable("s"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if err := r.Connect(context.Background(), "s"); err != nil {
+		t.Fatalf("second connect: %v", err)
+	}
+	close(gate)
+	if err := <-done; err == nil {
+		t.Fatal("stale connect attempt should report its failure")
+	}
+	s, _ := r.Get("s")
+	if s.Status != StatusConnected || s.LastErr != nil {
+		t.Fatalf("stale error clobbered connected state: status=%q err=%v", s.Status, s.LastErr)
+	}
+}
