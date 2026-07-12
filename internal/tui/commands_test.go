@@ -29,7 +29,7 @@ func TestCommandAliases(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("/exit should resolve via alias to /quit")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
+	if _, ok := cmd().(quitDoneMsg); !ok {
 		t.Error("/exit should quit")
 	}
 }

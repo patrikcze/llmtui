@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/procutil"
 )
 
 // ResultsPrefix marks the follow-up message that carries tool output back to
@@ -353,6 +355,10 @@ func (r *Runner) runCommand(body string) (string, error) {
 	}
 	cmd.Dir = r.root
 	cmd.Env = sanitizedEnv(os.Environ())
+	procutil.SetupProcAttr(cmd)
+	// A descendant retaining stdout/stderr must not keep CombinedOutput
+	// blocked indefinitely after the context kills the direct shell.
+	cmd.WaitDelay = time.Second
 
 	out, err := cmd.CombinedOutput()
 	output := strings.TrimRight(string(out), "\n")
@@ -360,6 +366,7 @@ func (r *Runner) runCommand(body string) (string, error) {
 		output = output[:limit] + "\n… output truncated"
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		procutil.KillGroup(cmd)
 		return output, fmt.Errorf("command timed out after %s", timeout)
 	}
 	if err != nil {

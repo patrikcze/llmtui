@@ -29,6 +29,8 @@ type MockClient struct {
 	// call open to exercise concurrent-Connect and disable-during-connect
 	// races deterministically instead of relying on timing.
 	ConnectGate <-chan struct{}
+	// CloseGate, if set, makes Close block until the channel is closed.
+	CloseGate <-chan struct{}
 
 	mu        sync.Mutex
 	connected bool
@@ -105,6 +107,9 @@ func (m *MockClient) CallTool(ctx context.Context, name string, input json.RawMe
 
 // Close marks the client closed; safe to call repeatedly.
 func (m *MockClient) Close() error {
+	if m.CloseGate != nil {
+		<-m.CloseGate
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true

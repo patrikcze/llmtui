@@ -470,6 +470,17 @@ func TestQuitAutoSaves(t *testing.T) {
 	}
 }
 
+func TestSigQuitMsgTriggersGracefulQuit(t *testing.T) {
+	m := newTestModel(t)
+	_, cmd := m.Update(sigQuitMsg{})
+	if !m.quitting {
+		t.Fatal("sigQuitMsg did not start the quit flow")
+	}
+	if cmd == nil {
+		t.Fatal("sigQuitMsg must return the shutdown command")
+	}
+}
+
 func TestFinishStreamAppendsUsageRecord(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()
@@ -539,8 +550,8 @@ func TestDoubleCtrlCQuits(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("second ctrl+c should quit")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Errorf("second ctrl+c returned %T, want tea.QuitMsg", cmd())
+	if _, ok := cmd().(quitDoneMsg); !ok {
+		t.Errorf("second ctrl+c returned %T, want quitDoneMsg", cmd())
 	}
 	// Quit auto-saved the session.
 	metas, _ := history.List(m.historyDir)

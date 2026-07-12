@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/patrikcze/llmtui/internal/procutil"
 )
 
 // protocolVersion is the MCP revision llmtui speaks during initialize.
@@ -110,7 +112,7 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 			return fmt.Errorf("mcp: resolve environment: %w", err)
 		}
 		cmd.Env = env
-		setupProcAttr(cmd) // own process group on Unix so Close can reap wrapper grandchildren
+		procutil.SetupProcAttr(cmd)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("mcp: stdin pipe: %w", err)
@@ -237,7 +239,7 @@ func (c *StdioClient) Close() error {
 			_ = c.w.Close()
 		}
 		if c.cmd != nil && c.cmd.Process != nil {
-			terminateProcess(c.cmd)
+			procutil.Terminate(c.cmd)
 		}
 	})
 	return nil

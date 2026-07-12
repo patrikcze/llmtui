@@ -67,7 +67,11 @@ func TestCmdMcpEnableDisable(t *testing.T) {
 	if !s.Config.Enabled {
 		t.Error("enable did not set the server enabled")
 	}
-	cmdMcp(m, "disable files")
+	cmd := cmdMcp(m, "disable files")
+	if cmd == nil {
+		t.Fatal("disable did not return an async command")
+	}
+	m.Update(cmd())
 	s, _ = m.mcpRegistry.Get("files")
 	if s.Config.Enabled {
 		t.Error("disable did not clear the server enabled")

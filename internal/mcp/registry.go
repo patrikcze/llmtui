@@ -15,6 +15,7 @@ type Status string
 const (
 	StatusDisabled    Status = "disabled"     // not enabled in config/session
 	StatusConfigured  Status = "configured"   // enabled but not connected
+	StatusConnecting  Status = "connecting"   // dial/handshake in flight
 	StatusConnected   Status = "connected"    // handshake complete, tools listed
 	StatusError       Status = "error"        // last connect/list attempt failed
 	StatusNoTransport Status = "no_transport" // enabled, but no transport implemented
@@ -27,8 +28,8 @@ type Server struct {
 	Tools   []Tool
 	LastErr error
 
-	client     Client
-	connecting bool // true while a Connect call is dialing/handshaking, guarded by Registry.mu
+	client        Client
+	connectCancel context.CancelFunc // set while Connect is dialing; guarded by Registry.mu
 }
 
 func (r *Registry) serverLocked(name string) (*Server, bool) {
@@ -46,10 +47,12 @@ func (r *Registry) serverLocked(name string) (*Server, bool) {
 // Registry tracks configured MCP servers and their state. It is safe for
 // concurrent use. With a nil factory it is config-only (no connections).
 type Registry struct {
-	mu      sync.Mutex
-	factory ClientFactory
-	servers map[string]*Server
-	order   []string
+	mu       sync.Mutex
+	factory  ClientFactory
+	servers  map[string]*Server
+	order    []string
+	closed   bool
+	inflight sync.WaitGroup
 }
 
 // NewRegistry builds a registry from server configs. Servers start
@@ -82,7 +85,7 @@ func (r *Registry) List() []*Server {
 	defer r.mu.Unlock()
 	out := make([]*Server, 0, len(r.order))
 	for _, name := range r.order {
-		out = append(out, r.servers[name])
+		out = append(out, cloneServer(r.servers[name]))
 	}
 	return out
 }
@@ -92,7 +95,16 @@ func (r *Registry) Get(name string) (*Server, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.serverLocked(name)
-	return s, ok
+	if !ok {
+		return nil, false
+	}
+	return cloneServer(s), true
+}
+
+func cloneServer(s *Server) *Server {
+	clone := *s
+	clone.Tools = append([]Tool(nil), s.Tools...)
+	return &clone
 }
 
 // Enable marks a server as intended-to-run. It does not connect; call
@@ -111,23 +123,55 @@ func (r *Registry) Enable(name string) error {
 	return nil
 }
 
-// Disable closes any connection and marks the server disabled.
+// Disable closes any connection and marks the server disabled. The client is
+// closed outside the registry lock because process teardown may block.
 func (r *Registry) Disable(name string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	s, ok := r.serverLocked(name)
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("no MCP server named %q", name)
 	}
-	if s.client != nil {
-		_ = s.client.Close()
-		s.client = nil
-	}
+	client := s.client
+	s.client = nil
 	s.Config.Enabled = false
 	s.Status = StatusDisabled
 	s.Tools = nil
 	s.LastErr = nil
+	if s.connectCancel != nil {
+		s.connectCancel()
+	}
+	r.mu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
 	return nil
+}
+
+// beginConnect validates and registers a connection attempt under one lock.
+func (r *Registry) beginConnect(ctx context.Context, name string) (context.Context, *Server, ServerConfig, ClientFactory, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil, nil, ServerConfig{}, nil, fmt.Errorf("mcp: registry is closed")
+	}
+	s, ok := r.serverLocked(name)
+	if !ok {
+		return nil, nil, ServerConfig{}, nil, fmt.Errorf("no MCP server named %q", name)
+	}
+	switch {
+	case s.client != nil:
+		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q is already connected", name)
+	case s.Status == StatusConnecting:
+		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q: connect already in progress", name)
+	case !s.Config.Enabled:
+		return nil, nil, ServerConfig{}, nil, fmt.Errorf("MCP server %q is disabled", name)
+	}
+	connectCtx, cancel := context.WithCancel(ctx)
+	s.Status = StatusConnecting
+	s.connectCancel = cancel
+	r.inflight.Add(1)
+	return connectCtx, s, s.Config, r.factory, nil
 }
 
 // Connect establishes the transport for one enabled server and lists its
@@ -139,38 +183,26 @@ func (r *Registry) Disable(name string) error {
 // leak the first client's subprocess (overwritten, never closed) or race a
 // concurrent Disable, which could be clobbered by this call's success path.
 func (r *Registry) Connect(ctx context.Context, name string) error {
-	r.mu.Lock()
-	s, ok := r.serverLocked(name)
-	if !ok {
-		r.mu.Unlock()
-		return fmt.Errorf("no MCP server named %q", name)
+	ctx, s, config, factory, err := r.beginConnect(ctx, name)
+	if err != nil {
+		return err
 	}
-	if s.client != nil {
-		r.mu.Unlock()
-		return fmt.Errorf("MCP server %q is already connected", name)
-	}
-	if s.connecting {
-		r.mu.Unlock()
-		return fmt.Errorf("MCP server %q: connect already in progress", name)
-	}
-	if !s.Config.Enabled {
-		r.mu.Unlock()
-		return fmt.Errorf("MCP server %q is disabled", name)
-	}
-	factory := r.factory
-	s.connecting = true
-	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
-		s.connecting = false
+		if s.connectCancel != nil {
+			s.connectCancel()
+			s.connectCancel = nil
+		}
 		r.mu.Unlock()
+		r.inflight.Done()
 	}()
 
 	if factory == nil {
-		r.setError(s, StatusNoTransport, fmt.Errorf("no MCP transport is available in this build"))
-		return s.LastErr
+		err := fmt.Errorf("no MCP transport is available in this build")
+		r.setError(s, StatusNoTransport, err)
+		return err
 	}
-	client, err := factory(s.Config)
+	client, err := factory(config)
 	if err != nil {
 		r.setError(s, StatusError, err)
 		return err
@@ -188,18 +220,17 @@ func (r *Registry) Connect(ctx context.Context, name string) error {
 	}
 
 	r.mu.Lock()
-	if !s.Config.Enabled {
-		// Disabled while we were dialing/handshaking: don't resurrect the
-		// server as connected out from under Disable. Close the fresh
-		// client and keep the disabled state Disable already put in place.
+	if r.closed || !s.Config.Enabled {
+		reason := "was disabled during connect"
+		if r.closed {
+			reason = "registry closed during connect"
+			s.Status = StatusConfigured
+		} else {
+			s.Status = StatusDisabled
+		}
 		r.mu.Unlock()
 		_ = client.Close()
-		return fmt.Errorf("MCP server %q was disabled during connect", name)
-	}
-	if s.client != nil {
-		// Belt and braces: shouldn't happen given the connecting guard
-		// above, but never leak a client we're about to replace.
-		_ = s.client.Close()
+		return fmt.Errorf("MCP server %q %s", name, reason)
 	}
 	s.client = client
 	s.Tools = tools
@@ -211,9 +242,14 @@ func (r *Registry) Connect(ctx context.Context, name string) error {
 
 func (r *Registry) setError(s *Server, status Status, err error) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !s.Config.Enabled {
+		s.Status = StatusDisabled
+		s.LastErr = nil
+		return
+	}
 	s.Status = status
 	s.LastErr = err
-	r.mu.Unlock()
 }
 
 // Tools returns all tools across connected servers.
@@ -231,28 +267,41 @@ func (r *Registry) Tools() []Tool {
 func (r *Registry) CallTool(ctx context.Context, server, tool string, input json.RawMessage) (Result, error) {
 	r.mu.Lock()
 	s, ok := r.serverLocked(server)
+	var client Client
+	if ok {
+		client = s.client
+	}
 	r.mu.Unlock()
 	if !ok {
 		return Result{}, fmt.Errorf("no MCP server named %q", server)
 	}
-	if s.client == nil {
+	if client == nil {
 		return Result{}, fmt.Errorf("MCP server %q is not connected", server)
 	}
-	return s.client.CallTool(ctx, tool, input)
+	return client.CallTool(ctx, tool, input)
 }
 
-// Close tears down every open connection. It is safe to call on a nil
-// Registry (a no-op) and safe to call more than once.
+// Close refuses future connects, cancels in-flight ones, tears down every
+// open connection, and waits for all connection attempts to unwind.
 func (r *Registry) Close() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.closed = true
+	var clients []Client
 	for _, s := range r.servers {
+		if s.connectCancel != nil {
+			s.connectCancel()
+		}
 		if s.client != nil {
-			_ = s.client.Close()
+			clients = append(clients, s.client)
 			s.client = nil
 		}
 	}
+	r.mu.Unlock()
+	for _, client := range clients {
+		_ = client.Close()
+	}
+	r.inflight.Wait()
 }

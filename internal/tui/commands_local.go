@@ -493,6 +493,12 @@ type mcpConnectMsg struct {
 	err    error
 }
 
+type mcpDisconnectMsg struct {
+	server   string
+	reenable bool
+	err      error
+}
+
 func cmdDoctor(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	if sub == "mcp" {
@@ -1342,10 +1348,11 @@ func cmdMcp(m *Model, args string) tea.Cmd {
 		if name == "" {
 			return m.fail("usage: /mcp disable <server>")
 		}
-		if err := m.mcpRegistry.Disable(name); err != nil {
-			return m.fail(err.Error())
+		reg := m.mcpRegistry
+		m.notice = fmt.Sprintf("🔌 disabling MCP server %q…", name)
+		return func() tea.Msg {
+			return mcpDisconnectMsg{server: name, err: reg.Disable(name)}
 		}
-		m.notice = fmt.Sprintf("🔌 MCP server %q disabled", name)
 	case "connect":
 		name := strings.TrimSpace(rest)
 		if name == "" {
@@ -1378,12 +1385,15 @@ func cmdMcp(m *Model, args string) tea.Cmd {
 		if name == "" {
 			return m.fail("usage: /mcp disconnect <server>")
 		}
-		// Disable closes the connection; re-enable to keep it available.
-		if err := m.mcpRegistry.Disable(name); err != nil {
-			return m.fail(err.Error())
+		reg := m.mcpRegistry
+		m.notice = fmt.Sprintf("🔌 disconnecting MCP server %q…", name)
+		return func() tea.Msg {
+			err := reg.Disable(name)
+			if err == nil {
+				err = reg.Enable(name)
+			}
+			return mcpDisconnectMsg{server: name, reenable: true, err: err}
 		}
-		_ = m.mcpRegistry.Enable(name)
-		m.notice = fmt.Sprintf("🔌 MCP server %q disconnected", name)
 	default:
 		return m.fail("usage: /mcp [status|list|tools|inspect <s>|enable <s>|disable <s>|connect <s>|disconnect <s>]")
 	}

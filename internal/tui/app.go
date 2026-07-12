@@ -117,6 +117,7 @@ type Model struct {
 	sessionName   string
 	inputLines    int
 	ctrlCAt       time.Time
+	quitting      bool
 
 	// Exit summary bookkeeping, reported after the TUI closes.
 	startedAt  time.Time
@@ -601,6 +602,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = fmt.Sprintf("🔌 MCP server %q connected — %d tool(s) available (/mcp tools)", msg.server, msg.tools)
 		}
 		return m, nil
+
+	case mcpDisconnectMsg:
+		m.notice = ""
+		if msg.err != nil {
+			m.errText = fmt.Sprintf("MCP %q: %s", msg.server, msg.err.Error())
+			m.refreshViewport()
+		} else if msg.reenable {
+			m.notice = fmt.Sprintf("🔌 MCP server %q disconnected", msg.server)
+		} else {
+			m.notice = fmt.Sprintf("🔌 MCP server %q disabled", msg.server)
+		}
+		return m, nil
+
+	case sigQuitMsg:
+		return m, m.quit()
+
+	case quitDoneMsg:
+		return m, tea.Quit
 
 	case mcpToolResultsMsg:
 		if msg.gen != m.mcpBatchGen {
@@ -1127,20 +1146,30 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// quit stops any stream, auto-saves the session, and exits.
+type sigQuitMsg struct{}
+type quitDoneMsg struct{}
+
+// quit stops any stream and starts potentially blocking teardown off the
+// Update goroutine. Model-owned session state is saved synchronously first.
 func (m *Model) quit() tea.Cmd {
+	if m.quitting {
+		return nil
+	}
+	m.quitting = true
 	if m.cancelStream != nil {
 		m.cancelStream()
-	}
-	if m.mcpRegistry != nil {
-		m.mcpRegistry.Close() // stop any MCP subprocesses
 	}
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(); err == nil { // best effort on exit
 			m.savedPath = path
 		}
 	}
-	return tea.Quit
+	m.notice = "shutting down…"
+	reg := m.mcpRegistry
+	return func() tea.Msg {
+		reg.Close()
+		return quitDoneMsg{}
+	}
 }
 
 // wrapLines counts how many rows value occupies at the given wrap width,
@@ -1862,12 +1891,8 @@ func Run(opts Options) error {
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	// SIGTERM/SIGHUP (e.g. a terminal closing, or a process manager stopping
-	// us) bypass Bubble Tea's own key-driven quit path entirely. Without
-	// this, MCP subprocesses started by the session are orphaned and the
-	// terminal is never restored from the alt screen. Ctrl+C (SIGINT) is
-	// already handled by Bubble Tea's normal Update loop, so it isn't
-	// listened for here.
+	// Route terminal/process-manager shutdown through the same graceful path
+	// as Ctrl+C. A second signal or a wedged shutdown escalates after a grace.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
 	done := make(chan struct{})
@@ -1875,15 +1900,26 @@ func Run(opts Options) error {
 	go func() {
 		select {
 		case <-sigCh:
-			m.mcpRegistry.Close()
-			p.Kill() // restores the terminal without running further TUI updates
+			p.Send(sigQuitMsg{})
 		case <-done:
+			return
 		}
+		select {
+		case <-sigCh:
+		case <-time.After(10 * time.Second):
+		case <-done:
+			return
+		}
+		m.mcpRegistry.Close()
+		p.Kill()
 	}()
 	defer signal.Stop(sigCh)
 
 	final, err := p.Run()
 	if err != nil {
+		if errors.Is(err, tea.ErrProgramKilled) {
+			return nil
+		}
 		return fmt.Errorf("run TUI: %w", err)
 	}
 	// The alt screen is gone now; leave the session report in the scrollback,

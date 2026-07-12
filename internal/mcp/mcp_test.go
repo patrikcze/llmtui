@@ -3,8 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -170,6 +170,105 @@ func TestConnectErrorRecorded(t *testing.T) {
 	}
 }
 
+func TestStatusConnectingDuringDial(t *testing.T) {
+	gate := make(chan struct{})
+	factory, _ := trackingFactory(func(c *MockClient) { c.ConnectGate = gate })
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	done := make(chan error, 1)
+	go func() { done <- r.Connect(context.Background(), "s") }()
+
+	waitForStatus(t, r, "s", StatusConnecting)
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if s, _ := r.Get("s"); s.Status != StatusConnected {
+		t.Fatalf("status after connect = %q, want %q", s.Status, StatusConnected)
+	}
+}
+
+func TestDisableDuringFailingConnect(t *testing.T) {
+	gate := make(chan struct{})
+	factory, _ := trackingFactory(func(c *MockClient) {
+		c.ConnectGate = gate
+		c.ConnectErr = fmt.Errorf("boom")
+	})
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	done := make(chan error, 1)
+	go func() { done <- r.Connect(context.Background(), "s") }()
+
+	waitForStatus(t, r, "s", StatusConnecting)
+	if err := r.Disable("s"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	close(gate)
+	if err := <-done; err == nil {
+		t.Fatal("connect should report failure")
+	}
+	s, _ := r.Get("s")
+	if s.Status != StatusDisabled || s.LastErr != nil {
+		t.Fatalf("disabled state overwritten: status=%q err=%v", s.Status, s.LastErr)
+	}
+}
+
+func TestCloseCancelsInflightConnect(t *testing.T) {
+	gate := make(chan struct{})
+	factory, clients := trackingFactory(func(c *MockClient) { c.ConnectGate = gate })
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	done := make(chan error, 1)
+	go func() { done <- r.Connect(context.Background(), "s") }()
+
+	waitForStatus(t, r, "s", StatusConnecting)
+	r.Close()
+	if err := <-done; err == nil {
+		t.Fatal("connect should fail once the registry is closed")
+	}
+	built := clients()
+	if len(built) != 1 || !built[0].Closed() {
+		t.Fatal("the in-flight client was not closed by shutdown")
+	}
+	s, _ := r.Get("s")
+	if s.client != nil || s.Status == StatusConnecting {
+		t.Fatalf("connect state survived Close: client=%v status=%q", s.client, s.Status)
+	}
+	if err := r.Connect(context.Background(), "s"); err == nil {
+		t.Fatal("Connect after Close must fail")
+	}
+}
+
+func TestDisableClosesOutsideLock(t *testing.T) {
+	blockClose := make(chan struct{})
+	factory, _ := trackingFactory(func(c *MockClient) { c.CloseGate = blockClose })
+	r := NewRegistry([]ServerConfig{{Name: "s", Enabled: true, Transport: TransportStdio, Command: "x"}}, factory)
+	if err := r.Connect(context.Background(), "s"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	done := make(chan struct{})
+	go func() { _ = r.Disable("s"); close(done) }()
+	got := make(chan struct{})
+	go func() { _, _ = r.Get("s"); close(got) }()
+	select {
+	case <-got:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Registry.Get blocked while Disable was closing a client")
+	}
+	close(blockClose)
+	<-done
+}
+
+func waitForStatus(t *testing.T, r *Registry, name string, want Status) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s, _ := r.Get(name); s.Status == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s, _ := r.Get(name)
+	t.Fatalf("status never became %q (got %q)", want, s.Status)
+}
+
 func TestMockClientCallToolRespectsContextTimeout(t *testing.T) {
 	c := &MockClient{ServerName: "slow", Delay: 50 * time.Millisecond}
 	if err := c.Connect(context.Background()); err != nil {
@@ -188,15 +287,10 @@ func TestMockClientCallToolRespectsContextTimeout(t *testing.T) {
 	}
 }
 
-// countingFactory wraps NewMockFactory but counts how many clients it builds
-// and records every client it hands out, so tests can assert exactly one
-// client was created (no leaked duplicate) and check each one's Closed().
-func countingFactory() (ClientFactory, *int32, func() []*MockClient) {
-	var n int32
+func trackingFactory(configure func(*MockClient)) (ClientFactory, func() []*MockClient) {
 	var mu sync.Mutex
-	var clients []*MockClient
+	var built []*MockClient
 	f := func(c ServerConfig) (Client, error) {
-		atomic.AddInt32(&n, 1)
 		mc := &MockClient{
 			ServerName: c.Name,
 			CannedTools: []Tool{{
@@ -204,17 +298,18 @@ func countingFactory() (ClientFactory, *int32, func() []*MockClient) {
 				Name:   c.Name + "_echo",
 			}},
 		}
+		if configure != nil {
+			configure(mc)
+		}
 		mu.Lock()
-		clients = append(clients, mc)
+		built = append(built, mc)
 		mu.Unlock()
 		return mc, nil
 	}
-	return f, &n, func() []*MockClient {
+	return f, func() []*MockClient {
 		mu.Lock()
 		defer mu.Unlock()
-		out := make([]*MockClient, len(clients))
-		copy(out, clients)
-		return out
+		return append([]*MockClient(nil), built...)
 	}
 }
 
@@ -223,7 +318,7 @@ func countingFactory() (ClientFactory, *int32, func() []*MockClient) {
 // subprocess. The second Connect should fail, exactly one client should ever
 // be created, and that client must still be open (owned by the registry).
 func TestDoubleConnectRejected(t *testing.T) {
-	factory, n, clients := countingFactory()
+	factory, clients := trackingFactory(nil)
 	r := NewRegistry(sampleConfigs(), factory)
 
 	if err := r.Connect(context.Background(), "files"); err != nil {
@@ -232,7 +327,7 @@ func TestDoubleConnectRejected(t *testing.T) {
 	if err := r.Connect(context.Background(), "files"); err == nil {
 		t.Fatal("second Connect on an already-connected server succeeded, want error")
 	}
-	if got := atomic.LoadInt32(n); got != 1 {
+	if got := len(clients()); got != 1 {
 		t.Fatalf("clients created = %d, want 1 (second Connect must not spawn another)", got)
 	}
 	all := clients()
@@ -252,17 +347,7 @@ func TestDoubleConnectRejected(t *testing.T) {
 // could apply) must have been closed rather than left dangling.
 func TestConcurrentConnectOnlyOneWins(t *testing.T) {
 	release := make(chan struct{})
-	var n int32
-	var mu sync.Mutex
-	var clients []*MockClient
-	factory := func(c ServerConfig) (Client, error) {
-		atomic.AddInt32(&n, 1)
-		mc := &MockClient{ServerName: c.Name, ConnectGate: release}
-		mu.Lock()
-		clients = append(clients, mc)
-		mu.Unlock()
-		return mc, nil
-	}
+	factory, clients := trackingFactory(func(c *MockClient) { c.ConnectGate = release })
 	r := NewRegistry(sampleConfigs(), factory)
 
 	var wg sync.WaitGroup
@@ -296,10 +381,8 @@ func TestConcurrentConnectOnlyOneWins(t *testing.T) {
 	}
 	// Whichever client lost the race (if the factory ran for both before the
 	// in-progress guard kicked in) must not be left open.
-	mu.Lock()
-	defer mu.Unlock()
 	open := 0
-	for _, c := range clients {
+	for _, c := range clients() {
 		if !c.Closed() {
 			open++
 		}
@@ -316,15 +399,7 @@ func TestConcurrentConnectOnlyOneWins(t *testing.T) {
 // client attached.
 func TestDisableDuringConnect(t *testing.T) {
 	gate := make(chan struct{})
-	var built *MockClient
-	var mu sync.Mutex
-	factory := func(c ServerConfig) (Client, error) {
-		mc := &MockClient{ServerName: c.Name, ConnectGate: gate}
-		mu.Lock()
-		built = mc
-		mu.Unlock()
-		return mc, nil
-	}
+	factory, clients := trackingFactory(func(c *MockClient) { c.ConnectGate = gate })
 	r := NewRegistry(sampleConfigs(), factory)
 
 	connectErr := make(chan error, 1)
@@ -336,9 +411,7 @@ func TestDisableDuringConnect(t *testing.T) {
 	// blocked inside client.Connect on the gate) before disabling.
 	deadline := time.After(time.Second)
 	for {
-		mu.Lock()
-		ready := built != nil
-		mu.Unlock()
+		ready := len(clients()) == 1
 		if ready {
 			break
 		}
@@ -358,8 +431,7 @@ func TestDisableDuringConnect(t *testing.T) {
 		t.Fatal("Connect that raced a Disable succeeded, want error")
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	built := clients()[0]
 	if !built.Closed() {
 		t.Error("the client built during the disabled connect was not closed")
 	}
@@ -377,7 +449,7 @@ func TestDisableDuringConnect(t *testing.T) {
 // actually close it (not just forget it), or a subsequent connect/close is
 // the only place a leaked subprocess would ever get reaped.
 func TestRegistryCloseClosesCommittedClient(t *testing.T) {
-	factory, _, clients := countingFactory()
+	factory, clients := trackingFactory(nil)
 	r := NewRegistry(sampleConfigs(), factory)
 	if err := r.Connect(context.Background(), "files"); err != nil {
 		t.Fatalf("Connect: %v", err)

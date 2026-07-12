@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -227,6 +229,30 @@ func TestRunCommandTimeout(t *testing.T) {
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "timed out") {
 		t.Errorf("timeout not enforced: %v", res.Err)
 	}
+}
+
+func TestRunCommandTimeoutReapsGrandchild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are unix-only")
+	}
+	r := NewRunner(t.TempDir(), 64)
+	r.CommandTimeout = 100 * time.Millisecond
+	out, err := r.runCommand(`sleep 30 & echo $!; wait`)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(strings.Split(out, "\n")[0]))
+	if parseErr != nil {
+		t.Fatalf("no grandchild pid in output %q: %v", out, parseErr)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %d survived the run_command timeout", pid)
 }
 
 func TestSanitizedEnv(t *testing.T) {
