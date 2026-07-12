@@ -65,6 +65,14 @@ type modelsResultMsg struct {
 	err    error
 }
 
+type pickerKind uint8
+
+const (
+	pickerNone pickerKind = iota
+	pickerModel
+	pickerProvider
+)
+
 func slashCommands() []slashCommand {
 	return []slashCommand{
 		// --- Chat ---
@@ -91,7 +99,7 @@ func slashCommands() []slashCommand {
 		// --- Provider ---
 		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, run: cmdProvider},
 		{name: "providers", usage: "/providers", desc: "list configured providers", category: "Provider", run: func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.providersOverlay())
+			m.openProvidersPicker()
 			return nil
 		}},
 
@@ -109,8 +117,7 @@ func slashCommands() []slashCommand {
 				m.refreshViewport()
 				return nil
 			}
-			m.model = args
-			m.notice = "model set to " + args
+			m.setModel(args)
 			return nil
 		}},
 		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", run: cmdProfile},
@@ -278,6 +285,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 
 // openOverlay shows scrollable content in the viewport area until Esc.
 func (m *Model) openOverlay(content string) {
+	m.clearPicker()
 	m.overlayOpen = true
 	m.viewport.SetContent(content)
 	m.viewport.GotoTop()
@@ -285,7 +293,64 @@ func (m *Model) openOverlay(content string) {
 
 func (m *Model) closeOverlay() {
 	m.overlayOpen = false
+	m.clearPicker()
 	m.refreshViewport()
+}
+
+func (m *Model) clearPicker() {
+	m.pickerKind = pickerNone
+	m.pickerItems = []string{}
+	m.pickerModels = []provider.ModelInfo{}
+	m.pickerIdx = 0
+}
+
+func (m *Model) setModel(id string) {
+	m.model = id
+	m.notice = "model set to " + id
+}
+
+func (m *Model) openModelsPicker(models []provider.ModelInfo) {
+	m.pickerKind = pickerModel
+	m.pickerModels = append([]provider.ModelInfo{}, models...)
+	m.pickerItems = make([]string, 0, len(models))
+	for _, model := range models {
+		m.pickerItems = append(m.pickerItems, model.ID)
+	}
+	m.pickerIdx = selectedIndex(m.pickerItems, m.model)
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+func (m *Model) openProvidersPicker() {
+	m.pickerKind = pickerProvider
+	m.pickerItems = make([]string, 0, len(m.cfg.Providers))
+	for name := range m.cfg.Providers {
+		m.pickerItems = append(m.pickerItems, name)
+	}
+	sort.Strings(m.pickerItems)
+	m.pickerIdx = selectedIndex(m.pickerItems, m.prov.Name())
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+func selectedIndex(items []string, selected string) int {
+	for i, item := range items {
+		if item == selected {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) renderPicker() {
+	var content string
+	if m.pickerKind == pickerModel {
+		content = m.modelsOverlay(m.pickerModels)
+	} else {
+		content = m.providersOverlay()
+	}
+	m.viewport.SetContent(content)
+	m.viewport.GotoTop()
 }
 
 func (m *Model) helpOverlay(topic string) string {
@@ -365,10 +430,10 @@ func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
 	if len(models) == 0 {
 		b.WriteString(m.theme.SystemNote.Render("no models found") + "\n")
 	}
-	for _, mi := range models {
+	for i, mi := range models {
 		marker := "  "
 		label := m.theme.StatusValue.Render(mi.ID)
-		if mi.ID == m.model {
+		if m.pickerKind == pickerModel && i == m.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(mi.ID)
 		}
@@ -379,7 +444,7 @@ func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
 		b.WriteString(line + "\n")
 	}
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("switch with /model <id> · esc to close"))
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
 	return b.String()
 }
 
@@ -393,11 +458,11 @@ func (m *Model) providersOverlay() string {
 	}
 	sort.Strings(names)
 
-	for _, name := range names {
+	for i, name := range names {
 		pc := m.cfg.Providers[name]
 		marker := "  "
 		label := m.theme.StatusValue.Render(fmt.Sprintf("%-20s", name))
-		if name == m.prov.Name() {
+		if m.pickerKind == pickerProvider && i == m.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-20s", name))
 		}
@@ -405,7 +470,7 @@ func (m *Model) providersOverlay() string {
 			m.theme.StatusBar.Render(pc.Type+"  "+pc.BaseURL))
 	}
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("switch with /provider <name> · esc to close"))
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
 	return b.String()
 }
 

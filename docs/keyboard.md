@@ -10,6 +10,8 @@
 | `Ctrl+U` | Clear the whole prompt box in one keystroke |
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
 | `Esc` | Stop generation · close overlay |
+| `↑` / `↓` | Choose an item in `/models` and `/providers` |
+| `Enter` in picker | Switch to the selected model or provider |
 
 ## The Shift+Enter reality
 

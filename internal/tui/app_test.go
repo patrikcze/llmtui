@@ -293,6 +293,72 @@ func TestProviderCommandSwitchesProvider(t *testing.T) {
 	}
 }
 
+func TestModelsPickerNavigatesAndSelects(t *testing.T) {
+	m := newTestModel(t)
+	models := []provider.ModelInfo{
+		{ID: "alpha"},
+		{ID: "demo-model"},
+		{ID: "omega"},
+	}
+
+	m.openModelsPicker(models)
+	if m.pickerIdx != 1 {
+		t.Fatalf("initial picker index = %d, want active model at 1", m.pickerIdx)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.pickerIdx != 2 || !strings.Contains(m.viewport.View(), "▸ omega") {
+		t.Fatalf("down did not select omega:\n%s", m.viewport.View())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.model != "omega" {
+		t.Errorf("model = %q, want omega", m.model)
+	}
+	if m.overlayOpen {
+		t.Error("selecting a model should close the picker")
+	}
+}
+
+func TestProvidersPickerNavigatesAndSelects(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Providers = map[string]config.ProviderConfig{
+		"alpha": {Type: "mock", DefaultModel: "alpha-model"},
+		"mock":  {Type: "mock", DefaultModel: "demo-model"},
+	}
+
+	m.openProvidersPicker()
+	if m.pickerIdx != 1 {
+		t.Fatalf("initial picker index = %d, want active provider at 1", m.pickerIdx)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.pickerIdx != 0 {
+		t.Fatalf("up picker index = %d, want 0", m.pickerIdx)
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.prov.Name() != "mock" || m.cfg.Provider != "alpha" {
+		t.Errorf("selected provider = %q (config %q), want alpha", m.prov.Name(), m.cfg.Provider)
+	}
+	if m.model != "alpha-model" {
+		t.Errorf("model = %q, want alpha-model", m.model)
+	}
+	if cmd == nil {
+		t.Error("selecting a provider should trigger a health check")
+	}
+}
+
+func TestPickerEscapeCancelsSelection(t *testing.T) {
+	m := newTestModel(t)
+	m.openModelsPicker([]provider.ModelInfo{{ID: "demo-model"}, {ID: "other"}})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.model != "demo-model" {
+		t.Errorf("model = %q after cancel, want demo-model", m.model)
+	}
+	if m.overlayOpen || m.pickerKind != pickerNone {
+		t.Error("escape should close and clear the picker")
+	}
+}
+
 func TestUnknownCommandShowsError(t *testing.T) {
 	m := newTestModel(t)
 

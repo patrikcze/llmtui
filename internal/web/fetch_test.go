@@ -60,7 +60,9 @@ func TestFetchPlainTextAndJSONPassThrough(t *testing.T) {
 func TestFetchRejectsBinaryContentType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		w.Write([]byte{0x89, 'P', 'N', 'G'})
+		if _, err := w.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer srv.Close()
 	if _, err := testClient(64).Fetch(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), "image/png") {

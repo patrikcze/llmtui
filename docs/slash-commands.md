@@ -22,14 +22,14 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 ## Provider
 | Command | Description |
 | --- | --- |
-| `/provider` · `/provider list` | Show configured providers |
+| `/provider` · `/provider list` | Choose a configured provider |
 | `/provider switch <name>` (or `/provider <name>`) | Switch provider |
-| `/providers` | List providers with status |
+| `/providers` | Choose a configured provider with `↑`/`↓` and `Enter` |
 
 ## Model
 | Command | Description |
 | --- | --- |
-| `/models` | List models on the current provider |
+| `/models` | Choose a model with `↑`/`↓` and `Enter` |
 | `/model <id>` | Switch model |
 | `/profile [list\|auto\|set <name>\|inspect]` | Model profiles |
 

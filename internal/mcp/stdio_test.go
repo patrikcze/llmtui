@@ -77,7 +77,11 @@ func TestStdioHandshakeListAndCall(t *testing.T) {
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	defer c.Close()
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
 
 	tools, err := c.ListTools(ctx)
 	if err != nil {
@@ -105,7 +109,9 @@ func TestStdioCallAfterCloseFails(t *testing.T) {
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	c.Close()
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if _, err := c.ListTools(ctx); err == nil {
 		t.Error("ListTools succeeded after Close")
 	}

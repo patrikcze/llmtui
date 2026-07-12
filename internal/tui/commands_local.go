@@ -50,7 +50,7 @@ func cmdProvider(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "list":
-		m.openOverlay(m.providersOverlay())
+		m.openProvidersPicker()
 		return nil
 	case "switch":
 		return m.switchProvider(rest)
@@ -1574,7 +1574,7 @@ func (m *Model) toolsInspectOverlay(name string) string {
 	info, ok := reg.Get(name)
 	if !ok {
 		b.WriteString(m.theme.Badge.Render("not found") + "\n\n")
-		b.WriteString(fmt.Sprintf("  no capability named %q\n\n", name))
+		fmt.Fprintf(&b, "  no capability named %q\n\n", name)
 		b.WriteString(m.theme.SystemNote.Render("run /tools list to see available names") + "\n")
 		return m.overlayFooter(&b)
 	}

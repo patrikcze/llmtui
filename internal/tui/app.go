@@ -111,6 +111,10 @@ type Model struct {
 	mouseEnabled  bool
 	notice        string
 	overlayOpen   bool
+	pickerKind    pickerKind
+	pickerItems   []string
+	pickerIdx     int
+	pickerModels  []provider.ModelInfo
 	sugs          []slashCommand
 	sugIdx        int
 	historyDir    string
@@ -662,7 +666,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = "list models: " + msg.err.Error()
 			m.refreshViewport()
 		} else {
-			m.openOverlay(m.modelsOverlay(msg.models))
+			m.openModelsPicker(msg.models)
 		}
 		return m, nil
 
@@ -716,9 +720,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// updateOverlay handles keys while an overlay (/help, /models, …) is open:
-// esc/enter/q close it, arrows scroll it, everything else is swallowed.
+// updateOverlay handles keys while an overlay is open. Picker overlays use
+// arrows to choose an item and Enter to apply it; regular overlays retain
+// their scroll-and-close behavior.
 func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.pickerKind != pickerNone {
+		return m.updatePicker(msg)
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m.handleCtrlC()
@@ -729,6 +737,50 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
+	}
+	if msg.String() == "q" {
+		m.closeOverlay()
+	}
+	return m, nil
+}
+
+func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m.handleCtrlC()
+	case tea.KeyEsc:
+		m.closeOverlay()
+		return m, nil
+	case tea.KeyUp:
+		if len(m.pickerItems) > 0 {
+			m.pickerIdx = (m.pickerIdx - 1 + len(m.pickerItems)) % len(m.pickerItems)
+			m.renderPicker()
+		}
+		return m, nil
+	case tea.KeyDown:
+		if len(m.pickerItems) > 0 {
+			m.pickerIdx = (m.pickerIdx + 1) % len(m.pickerItems)
+			m.renderPicker()
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if len(m.pickerItems) == 0 {
+			m.closeOverlay()
+			return m, nil
+		}
+		selection := m.pickerItems[m.pickerIdx]
+		kind := m.pickerKind
+		m.closeOverlay()
+		if m.busy() {
+			m.errText = "switching providers or models is unavailable while a reply is running — esc to stop it first"
+			m.refreshViewport()
+			return m, nil
+		}
+		if kind == pickerProvider {
+			return m, m.switchProvider(selection)
+		}
+		m.setModel(selection)
+		return m, nil
 	}
 	if msg.String() == "q" {
 		m.closeOverlay()

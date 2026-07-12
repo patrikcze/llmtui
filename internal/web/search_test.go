@@ -30,7 +30,9 @@ func TestSearchParsesResultsAndDecodesRedirects(t *testing.T) {
 			t.Errorf("unexpected request: %s q=%q", r.Method, r.FormValue("q"))
 		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Write(fixture)
+		if _, err := w.Write(fixture); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	})
 	results, err := c.Search(context.Background(), "ollama truncated", 5)
 	if err != nil {
@@ -51,8 +53,15 @@ func TestSearchParsesResultsAndDecodesRedirects(t *testing.T) {
 }
 
 func TestSearchHonorsMax(t *testing.T) {
-	fixture, _ := os.ReadFile("testdata/ddg_results.html")
-	c := searchClient(t, func(w http.ResponseWriter, r *http.Request) { w.Write(fixture) })
+	fixture, err := os.ReadFile("testdata/ddg_results.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := searchClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write(fixture); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	})
 	results, err := c.Search(context.Background(), "q", 1)
 	if err != nil || len(results) != 1 {
 		t.Fatalf("got %d results (err %v), want 1", len(results), err)
@@ -61,7 +70,9 @@ func TestSearchHonorsMax(t *testing.T) {
 
 func TestSearchNoResults(t *testing.T) {
 	c := searchClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("<html><body><div class='no-results'>No results.</div></body></html>"))
+		if _, err := w.Write([]byte("<html><body><div class='no-results'>No results.</div></body></html>")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	})
 	results, err := c.Search(context.Background(), "zxqj", 5)
 	if err != nil || len(results) != 0 {

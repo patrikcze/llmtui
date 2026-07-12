@@ -21,8 +21,10 @@ Top to bottom, always full-screen (alt-screen mode):
 
 Overlays (`/help`, `/usage`, `/doctor`, pickers, …) render inside the
 viewport area, scroll with `↑`/`↓`/`PgUp`/`PgDn`, and close with `Esc`,
-`Enter`, or `q`. While an overlay is open, async events (stream progress,
-health results) never overwrite it; the chat re-renders on close.
+`Enter`, or `q`. The `/models` and `/providers` pickers instead use `↑`/`↓`
+to move the selection, `Enter` to switch, and `Esc` to cancel. While an
+overlay is open, async events (stream progress, health results) never
+overwrite it; the chat re-renders on close.
 
 ## Components
 

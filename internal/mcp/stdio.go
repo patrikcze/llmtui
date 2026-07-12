@@ -23,7 +23,7 @@ const protocolVersion = "2024-11-05"
 // clientName / clientVersion identify llmtui to servers in the handshake.
 const (
 	clientName    = "llmtui"
-	clientVersion = "0.8.0"
+	clientVersion = "0.8.1"
 )
 
 // StdioClient speaks MCP (JSON-RPC 2.0 over newline-delimited stdio) to a
@@ -329,7 +329,13 @@ func (c *StdioClient) readLoop() {
 				c.readErr = fmt.Errorf("mcp: read: %w", err)
 			}
 			c.mu.Unlock()
-			c.Close()
+			if closeErr := c.Close(); closeErr != nil {
+				c.mu.Lock()
+				if c.readErr == nil {
+					c.readErr = fmt.Errorf("mcp: close after read failure: %w", closeErr)
+				}
+				c.mu.Unlock()
+			}
 			return
 		}
 	}
