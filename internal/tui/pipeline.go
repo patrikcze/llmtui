@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -336,6 +337,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
 	m.streamStart = time.Now()
+	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
 	m.errText = ""
 	m.refreshViewport()
 
@@ -410,6 +412,7 @@ func (m *Model) continueChat() tea.Cmd {
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
 	m.streamStart = time.Now()
+	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
 	m.errText = ""
 	m.refreshViewport()
 

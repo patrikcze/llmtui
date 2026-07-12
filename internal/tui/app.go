@@ -166,6 +166,11 @@ type Model struct {
 	// superseded by a newer one can be recognized as stale and dropped
 	// instead of driving the loop (see the mcpToolResultsMsg handler).
 	mcpBatchGen int
+	// activity is the live view of the in-flight async tool batch, rendered
+	// (and animated) between the viewport and the usage panel. UI-only state:
+	// it never enters m.session, so saved history is unaffected.
+	activity    *toolActivity
+	workingVerb string // footer verb for the current request ("Ideating", …)
 
 	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache     bool                // skip the response cache for the next dispatch
@@ -371,9 +376,15 @@ func (m *Model) sessionRecord() history.Session {
 	}
 }
 
-// Init starts the spinner and kicks off the provider health check.
+// Init starts the spinner (unless animations are disabled — then nothing
+// ticks and idle re-renders cost exactly zero) and kicks off the provider
+// health check.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, textarea.Blink, m.checkHealth(true))
+	cmds := []tea.Cmd{textarea.Blink, m.checkHealth(true)}
+	if m.cfg.UI.Animations {
+		cmds = append(cmds, m.spinner.Tick)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) checkHealth(initial bool) tea.Cmd {
@@ -506,6 +517,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mcpBatchCancel()
 				m.mcpBatchCancel = nil
 				m.mcpBatchGen++
+				m.activity = nil
+				m.relayout()
 				m.errText = "mcp tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
@@ -632,6 +645,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mcpBatchCancel = nil
+		m.activity = nil
+		m.relayout()
 		for _, res := range msg.results {
 			if res.Err != nil {
 				m.toolErr++
@@ -861,6 +876,9 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.mcpBatchCancel = cancel
 	m.mcpBatchGen++
 	gen := m.mcpBatchGen
+	m.activity = newToolActivity(calls, gen)
+	m.relayout()
+	m.refreshViewport() // suppress the batch's static ⚒ lines while it runs live
 	m.notice = mcpBatchNotice(calls)
 	cmd := runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls)
 	return func() tea.Msg {
@@ -1132,6 +1150,8 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.mcpBatchCancel()
 		m.mcpBatchCancel = nil
 		m.mcpBatchGen++
+		m.activity = nil
+		m.relayout()
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1258,9 +1278,9 @@ func (m *Model) maxInputLines() int {
 	if len(m.attachments) > 0 {
 		attach = 1
 	}
-	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help).
-	// Solve for the largest lines that keeps vpHeight >= minChatRows.
-	max := m.height - 7 - len(m.sugs) - m.statusLines - attach - minChatRows
+	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help)
+	// - activity. Solve for the largest lines keeping vpHeight >= minChatRows.
+	max := m.height - 7 - len(m.sugs) - m.statusLines - attach - minChatRows - m.activityHeight()
 	if max < 1 {
 		max = 1
 	}
@@ -1487,9 +1507,10 @@ func (m *Model) resize(w, h int) {
 
 	m.input.SetWidth(w - 6)
 
-	// Layout: viewport fills space above usage panel (4), suggestion popup,
-	// input (border + content rows, +1 when attachment chips are shown),
-	// status bar (1 row, or 2 when wrapped), and help footer (1).
+	// Layout: viewport fills space above the live activity region, usage
+	// panel (4), suggestion popup, input (border + content rows, +1 when
+	// attachment chips are shown), status bar (1 row, or 2 when wrapped),
+	// and help footer (1).
 	inputHeight := 2 + m.inputLines
 	if len(m.attachments) > 0 {
 		inputHeight++
@@ -1497,7 +1518,7 @@ func (m *Model) resize(w, h int) {
 	if m.statusLines < 1 {
 		m.statusLines = 1
 	}
-	vpHeight := h - 4 - len(m.sugs) - inputHeight - m.statusLines - 1
+	vpHeight := h - 4 - len(m.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -1575,7 +1596,19 @@ func (m *Model) refreshViewport() {
 		b.WriteString("\n\n")
 	}
 
+	// Settled tool-call glyphs: map each call id to whether its result (a
+	// RoleTool message) reported an error, so completed calls render ●/✗
+	// instead of the neutral ⚒.
+	toolCallErr := map[string]bool{}
 	for _, msg := range m.session.Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID != "" {
+			toolCallErr[msg.ToolCallID] = strings.HasPrefix(msg.Content, "error:")
+		}
+	}
+	okGlyph := lipgloss.NewStyle().Foreground(m.theme.Good)
+	errGlyph := lipgloss.NewStyle().Foreground(m.theme.Bad)
+
+	for i, msg := range m.session.Messages {
 		switch msg.Role {
 		case provider.RoleUser:
 			// Tool results travel as user messages; style them as machinery,
@@ -1625,9 +1658,23 @@ func (m *Model) refreshViewport() {
 				}
 				b.WriteString(m.renderMarkdown(content))
 			}
-			for _, c := range tools.CallsFromNative(msg.ToolCalls) {
-				b.WriteString(m.theme.SystemNote.Render("⚒ " + c.Describe()))
-				b.WriteString("\n")
+			// While an async batch runs, its parent message is the last one
+			// and its calls render as live animated lines below the viewport
+			// (renderActivity) — rendering them here too would duplicate them.
+			liveBatch := m.activity != nil && i == len(m.session.Messages)-1
+			if !liveBatch {
+				for _, c := range tools.CallsFromNative(msg.ToolCalls) {
+					line, style := "⚒ "+c.Describe(), m.theme.SystemNote
+					if hasErr, ok := toolCallErr[c.ID]; ok {
+						if hasErr {
+							line, style = "✗ "+c.Describe(), errGlyph
+						} else {
+							line, style = "● "+c.Describe(), okGlyph
+						}
+					}
+					b.WriteString(style.Render(line))
+					b.WriteString("\n")
+				}
 			}
 			if len(msg.ToolCalls) == 0 {
 				b.WriteString("\n")
@@ -1863,15 +1910,31 @@ func (m *Model) View() string {
 				m.theme.HelpFooter.Render("  ↑/↓ + enter · y allow · a always · n deny")
 		}
 	}
-	if m.thinking {
-		elapsed := fmt.Sprintf("%.1fs", time.Since(m.streamStart).Seconds())
-		help = m.spinner.View() + " " +
-			components.WorkingButton(m.theme, m.frame, elapsed) + " " +
-			components.StopButton(m.theme, m.frame) + "  " +
-			m.theme.HelpFooter.Render("ctrl+c quit")
+	// A pending approval owns the footer; otherwise any busy state (streaming
+	// or an async tool batch) shows the live working line.
+	if m.busy() && len(m.pendingCalls) == 0 {
+		verb, start := m.workingVerb, m.streamStart
+		if verb == "" {
+			verb = "Working"
+		}
+		tokens := ""
+		if m.thinking {
+			if n := (m.streamBuf.Len() + m.reasoningLen) / 4; n > 0 {
+				tokens = "↓ " + components.FormatTokens(n) + " tokens"
+			}
+		} else if m.activity != nil {
+			verb, start = "Running tools", m.activity.startedAt
+		}
+		help = components.WorkingLine(m.theme, m.frame, verb,
+			components.FormatElapsed(time.Since(start)), tokens, false, m.cfg.UI.Animations) +
+			"  " + components.StopButton(m.theme, m.frame)
 	}
 
-	sections := []string{m.viewport.View(), usage}
+	sections := []string{m.viewport.View()}
+	if m.activity != nil {
+		sections = append(sections, m.renderActivity())
+	}
+	sections = append(sections, usage)
 	if len(m.sugs) > 0 {
 		sections = append(sections, m.suggestionsView())
 	}

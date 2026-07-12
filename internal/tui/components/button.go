@@ -35,13 +35,3 @@ func PulseButton(t styles.Theme, icon, label string, palette []lipgloss.Adaptive
 func StopButton(t styles.Theme, frame int) string {
 	return PulseButton(t, "▣", "stop · esc", stopPulse, frame)
 }
-
-// WorkingButton renders the pulsing progress chip with animated dots.
-func WorkingButton(t styles.Theme, frame int, elapsed string) string {
-	dots := []string{"·  ", "·· ", "···", " ··", "  ·", "   "}
-	label := "working" + dots[frame%len(dots)]
-	if elapsed != "" {
-		label += " " + elapsed
-	}
-	return PulseButton(t, "◈", label, workPulse, frame)
-}
