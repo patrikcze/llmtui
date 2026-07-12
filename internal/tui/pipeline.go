@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"math/rand/v2"
 	"sort"
 	"strings"
@@ -34,7 +35,7 @@ type debugInfo struct {
 	Template    string
 	Sections    []prompt.Section
 	CtxDecision contextmgr.Decision
-	CacheStatus string    // hit | miss | disabled | write
+	CacheStatus string    // hit | miss | disabled | bypass | error | write
 	CacheKey    cache.Key // snapshotted at dispatch so mid-stream /model or /provider changes cannot poison the cache
 	Temperature float64
 	MaxTokens   int
@@ -263,19 +264,38 @@ func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 	}
 }
 
-// historyFingerprint hashes role+content of every prior message so a cache
-// hit can only happen for the same conversation prefix, not just the same
-// next message under coincidentally-identical settings (e.g. two different
-// conversations both sending "yes").
+// historyFingerprint hashes every provider-visible field of every prior
+// message. Display is deliberately omitted because it is UI-only and never
+// sent to a backend.
 func historyFingerprint(msgs []provider.Message) string {
 	h := sha256.New()
 	for _, msg := range msgs {
-		h.Write([]byte(msg.Role))
-		h.Write([]byte{0})
-		h.Write([]byte(msg.Content))
-		h.Write([]byte{0})
+		writeFingerprintField(h, []byte(msg.Role))
+		writeFingerprintField(h, []byte(msg.Content))
+		for _, image := range msg.Images {
+			writeFingerprintField(h, []byte(image.MIME))
+			writeFingerprintField(h, image.Data)
+		}
+		writeFingerprintField(h, []byte("images-end"))
+		for _, call := range msg.ToolCalls {
+			writeFingerprintField(h, []byte(call.ID))
+			writeFingerprintField(h, []byte(call.Name))
+			writeFingerprintField(h, []byte(call.Arguments))
+		}
+		writeFingerprintField(h, []byte("tool-calls-end"))
+		writeFingerprintField(h, []byte(msg.ToolCallID))
+		writeFingerprintField(h, []byte(msg.ToolName))
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeFingerprintField(h hash.Hash, field []byte) {
+	if _, err := fmt.Fprintf(h, "%d:", len(field)); err != nil {
+		panic(fmt.Sprintf("write fingerprint length to SHA-256 hash: %v", err))
+	}
+	if _, err := h.Write(field); err != nil {
+		panic(fmt.Sprintf("write fingerprint field to SHA-256 hash: %v", err))
+	}
 }
 
 // toolSpecsFingerprint hashes the active tool set so the cache key changes
@@ -309,8 +329,13 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 
 	// Cache lookup happens before composition mutates context state.
 	key := m.cacheKey(raw, images)
+	var cacheErr error
 	if !skipCache && m.responseCache != nil && m.responseCache.Enabled() && len(images) == 0 {
-		if entry, ok := m.responseCache.Get(key); ok {
+		entry, ok, err := m.responseCache.Get(key)
+		if err != nil {
+			cacheErr = err
+		}
+		if ok {
 			m.session.AddUser(raw)
 			m.session.AddAssistant(entry.Response)
 			m.replyCount++
@@ -339,6 +364,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.streamStart = time.Now()
 	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
 	m.errText = ""
+	if cacheErr != nil {
+		m.errText = "cache read failed; provider request continued: " + cacheErr.Error()
+	}
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
@@ -350,6 +378,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	}
 	if skipCache {
 		cacheStatus = "bypass"
+	}
+	if cacheErr != nil {
+		cacheStatus = "error"
 	}
 	m.lastDebug = debugInfo{
 		When:        time.Now(),

@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,10 +70,13 @@ func TestHistoryHashPreventsCrossConversationCollision(t *testing.T) {
 	if err := c.Put(convoA, Entry{Response: "answer for conversation A"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if _, ok := c.Get(convoB); ok {
+	if _, ok, err := c.Get(convoB); err != nil || ok {
 		t.Fatal("a different conversation history must not hit conversation A's cache entry")
 	}
-	entry, ok := c.Get(convoA)
+	entry, ok, err := c.Get(convoA)
+	if err != nil {
+		t.Fatalf("get conversation A: %v", err)
+	}
 	if !ok || entry.Response != "answer for conversation A" {
 		t.Fatalf("conversation A's own entry should still be retrievable, got %+v, ok=%v", entry, ok)
 	}
@@ -97,13 +102,16 @@ func TestPutGetRoundTrip(t *testing.T) {
 	c := New(t.TempDir(), time.Hour, 16, true)
 	k := testKey()
 
-	if _, ok := c.Get(k); ok {
+	if _, ok, err := c.Get(k); err != nil || ok {
 		t.Fatal("empty cache should miss")
 	}
 	if err := c.Put(k, Entry{Response: "a goroutine is…", CompletionTokens: 10}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	e, ok := c.Get(k)
+	e, ok, err := c.Get(k)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if !ok || e.Response != "a goroutine is…" {
 		t.Fatalf("Get = (%+v, %v), want stored entry", e, ok)
 	}
@@ -120,11 +128,11 @@ func TestTTLExpiration(t *testing.T) {
 	if err := c.Put(k, Entry{Response: "r"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.Get(k); !ok {
+	if _, ok, err := c.Get(k); err != nil || !ok {
 		t.Fatal("fresh entry should hit")
 	}
 	time.Sleep(80 * time.Millisecond)
-	if _, ok := c.Get(k); ok {
+	if _, ok, err := c.Get(k); err != nil || ok {
 		t.Error("expired entry should miss")
 	}
 	if s := c.Stats(); s.Entries != 0 {
@@ -138,7 +146,7 @@ func TestDisabledCache(t *testing.T) {
 	if err := c.Put(k, Entry{Response: "r"}); err != nil {
 		t.Fatalf("Put on disabled cache: %v", err)
 	}
-	if _, ok := c.Get(k); ok {
+	if _, ok, err := c.Get(k); err != nil || ok {
 		t.Error("disabled cache must never hit")
 	}
 	if s := c.Stats(); s.Entries != 0 {
@@ -148,6 +156,50 @@ func TestDisabledCache(t *testing.T) {
 	c.SetEnabled(true)
 	if !c.Enabled() {
 		t.Error("SetEnabled(true) should enable")
+	}
+}
+
+func TestPutUsesAtomicOwnerOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	c := New(dir, time.Hour, 16, true)
+	k := testKey()
+	if err := c.Put(k, Entry{Response: "complete response"}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != k.Hash()+".json" {
+		t.Fatalf("cache files = %v, want only final entry", entries)
+	}
+	info, err := os.Stat(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("entry permissions = %o, want 600", got)
+	}
+	entry, ok, err := c.Get(k)
+	if err != nil || !ok || entry.Response != "complete response" {
+		t.Fatalf("Get = (%+v, %v, %v), want complete response", entry, ok, err)
+	}
+}
+
+func TestGetReportsCorruptEntry(t *testing.T) {
+	dir := t.TempDir()
+	c := New(dir, time.Hour, 16, true)
+	k := testKey()
+	if err := os.WriteFile(filepath.Join(dir, k.Hash()+".json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write corrupt entry: %v", err)
+	}
+
+	if _, ok, err := c.Get(k); err == nil || ok {
+		t.Fatalf("Get corrupt entry = ok %v, err %v; want visible error", ok, err)
+	}
+	if got := c.Stats().LastError; !strings.Contains(got, "decode cache entry") {
+		t.Errorf("LastError = %q, want decode error", got)
 	}
 }
 

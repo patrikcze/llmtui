@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -429,6 +430,91 @@ func TestCacheKeyChangesWithToolState(t *testing.T) {
 
 	if keyOff.Hash() == keyOn.Hash() {
 		t.Error("cache key must differ between tools-enabled and tools-disabled requests")
+	}
+}
+
+func TestHistoryFingerprintIncludesProviderVisibleFields(t *testing.T) {
+	base := provider.Message{Role: provider.RoleUser, Content: "same text"}
+	tests := []struct {
+		name    string
+		message provider.Message
+	}{
+		{
+			name: "image data",
+			message: provider.Message{
+				Role: provider.RoleUser, Content: "same text",
+				Images: []provider.Image{{MIME: "image/png", Data: []byte("pixels")}},
+			},
+		},
+		{
+			name: "image MIME",
+			message: provider.Message{
+				Role: provider.RoleUser, Content: "same text",
+				Images: []provider.Image{{MIME: "image/jpeg", Data: []byte("pixels")}},
+			},
+		},
+		{
+			name: "assistant tool call",
+			message: provider.Message{
+				Role: provider.RoleUser, Content: "same text",
+				ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "read_file", Arguments: `{"path":"a"}`}},
+			},
+		},
+		{
+			name: "tool result identity",
+			message: provider.Message{
+				Role: provider.RoleUser, Content: "same text", ToolCallID: "call-1", ToolName: "read_file",
+			},
+		},
+	}
+
+	baseHash := historyFingerprint([]provider.Message{base})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := historyFingerprint([]provider.Message{tt.message}); got == baseHash {
+				t.Error("provider-visible history change did not change fingerprint")
+			}
+		})
+	}
+
+	withDisplay := base
+	withDisplay.Display = "UI-only rendered diff"
+	if got := historyFingerprint([]provider.Message{withDisplay}); got != baseHash {
+		t.Error("UI-only Display field must not affect the provider history fingerprint")
+	}
+}
+
+func TestNativeToolFallbackBypassesCacheWrite(t *testing.T) {
+	m := newTestModel(t)
+	m.responseCache = cache.New(t.TempDir(), time.Hour, 16, true)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	key := m.cacheKey("hello", nil)
+	m.lastDebug = debugInfo{
+		CacheKey:    key,
+		CacheStatus: "miss",
+		Provider:    m.prov.Name(),
+		Model:       m.model,
+		Stream:      true,
+	}
+	m.streamBuf.WriteString("answer produced after dropping native tools")
+	m.thinking = true
+	stream := make(chan provider.ChatEvent)
+	close(stream)
+
+	m.Update(firstStreamMsg{
+		stream:        stream,
+		event:         provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{PromptTokens: 2, CompletionTokens: 3}},
+		ok:            true,
+		toolsFellBack: true,
+	})
+
+	if m.lastDebug.CacheStatus != "bypass" {
+		t.Errorf("CacheStatus = %q, want bypass", m.lastDebug.CacheStatus)
+	}
+	if _, ok, err := m.responseCache.Get(key); err != nil || ok {
+		t.Fatalf("fallback response was cached under pre-fallback key: ok=%v err=%v", ok, err)
 	}
 }
 

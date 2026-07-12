@@ -33,6 +33,17 @@ func TestStatusBarShowsWebIndicator(t *testing.T) {
 	}
 }
 
+func TestStatusBarRendersCacheOnAsHealthy(t *testing.T) {
+	theme := styles.ByName("mono")
+	// Transform makes the semantic style observable even when the test
+	// environment has colors disabled.
+	theme.BadgeOK = lipgloss.NewStyle().Transform(strings.ToUpper)
+	out := StatusBar(theme, statusData(), 300)
+	if !strings.Contains(out, "cache ON") {
+		t.Errorf("cache on did not use the healthy status style:\n%s", out)
+	}
+}
+
 func TestStatusBarSingleLineWhenItFits(t *testing.T) {
 	out := StatusBar(styles.ByName("mono"), statusData(), 300)
 	if strings.Contains(out, "\n") {

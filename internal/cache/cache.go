@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v3|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s",
+	fmt.Fprintf(h, "v4|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -91,6 +92,7 @@ type Stats struct {
 	Hits      int
 	Misses    int
 	Enabled   bool
+	LastError string
 }
 
 // Cache is a directory of JSON entries with TTL and size pruning.
@@ -102,6 +104,7 @@ type Cache struct {
 	enabled  bool
 	hits     int
 	misses   int
+	lastErr  error
 }
 
 // New creates a cache rooted at dir. A zero ttl means entries never expire.
@@ -133,30 +136,41 @@ func (c *Cache) path(k Key) string {
 }
 
 // Get returns the cached entry for k, honoring TTL. Expired entries are
-// removed. Misses and disabled lookups are counted.
-func (c *Cache) Get(k Key) (Entry, bool) {
+// removed. Missing entries are ordinary misses; malformed or inaccessible
+// entries return an error so callers can make degraded cache health visible.
+func (c *Cache) Get(k Key) (Entry, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.enabled {
-		return Entry{}, false
+		return Entry{}, false, nil
 	}
-	data, err := os.ReadFile(c.path(k))
+	path := c.path(k)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		c.misses++
-		return Entry{}, false
+		if os.IsNotExist(err) {
+			return Entry{}, false, nil
+		}
+		return Entry{}, false, c.remember(fmt.Errorf("read cache entry: %w", err))
 	}
 	var e Entry
 	if err := json.Unmarshal(data, &e); err != nil {
 		c.misses++
-		return Entry{}, false
+		decodeErr := fmt.Errorf("decode cache entry: %w", err)
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			decodeErr = errors.Join(decodeErr, fmt.Errorf("remove corrupt cache entry: %w", removeErr))
+		}
+		return Entry{}, false, c.remember(decodeErr)
 	}
 	if c.ttl > 0 && time.Since(e.CreatedAt) > c.ttl {
-		os.Remove(c.path(k))
 		c.misses++
-		return Entry{}, false
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return Entry{}, false, c.remember(fmt.Errorf("remove expired cache entry: %w", err))
+		}
+		return Entry{}, false, nil
 	}
 	c.hits++
-	return e, true
+	return e, true, nil
 }
 
 // Put stores an entry, then prunes oldest entries when over the size limit.
@@ -167,17 +181,61 @@ func (c *Cache) Put(k Key, e Entry) error {
 		return nil
 	}
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
-		return fmt.Errorf("create cache directory: %w", err)
+		return c.remember(fmt.Errorf("create cache directory: %w", err))
 	}
 	e.CreatedAt = time.Now()
 	data, err := json.Marshal(e)
 	if err != nil {
-		return fmt.Errorf("encode cache entry: %w", err)
+		return c.remember(fmt.Errorf("encode cache entry: %w", err))
 	}
-	if err := os.WriteFile(c.path(k), data, 0o600); err != nil {
-		return fmt.Errorf("write cache entry: %w", err)
+	if err := writeAtomic(c.path(k), data); err != nil {
+		return c.remember(fmt.Errorf("write cache entry: %w", err))
 	}
-	return c.prune()
+	if err := c.prune(); err != nil {
+		return c.remember(err)
+	}
+	return nil
+}
+
+func writeAtomic(path string, data []byte) (retErr error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".llmtui-cache-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			retErr = errors.Join(retErr, tmp.Close())
+		}
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove temporary file: %w", err))
+		}
+	}()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("set temporary file permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write temporary file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+	closed = true
+	if err := os.Rename(tmpPath, path); err != nil {
+		// Another process may have won an immutable-key race. Preserve its
+		// complete entry rather than replacing it non-atomically on platforms
+		// where Rename cannot overwrite an existing file.
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+			return nil
+		}
+		return fmt.Errorf("rename temporary file: %w", err)
+	}
+	return nil
 }
 
 // prune removes oldest entries until total size fits maxBytes.
@@ -187,7 +245,7 @@ func (c *Cache) prune() error {
 	}
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
-		return nil
+		return fmt.Errorf("read cache directory for pruning: %w", err)
 	}
 	type fileInfo struct {
 		name string
@@ -202,7 +260,7 @@ func (c *Cache) prune() error {
 		}
 		info, err := e.Info()
 		if err != nil {
-			continue
+			return fmt.Errorf("inspect cache entry for pruning: %w", err)
 		}
 		files = append(files, fileInfo{e.Name(), info.ModTime(), info.Size()})
 		total += info.Size()
@@ -215,9 +273,10 @@ func (c *Cache) prune() error {
 		if total <= c.maxBytes {
 			break
 		}
-		if err := os.Remove(filepath.Join(c.dir, f.name)); err == nil {
-			total -= f.size
+		if err := os.Remove(filepath.Join(c.dir, f.name)); err != nil {
+			return fmt.Errorf("remove cache entry during pruning: %w", err)
 		}
+		total -= f.size
 	}
 	return nil
 }
@@ -231,14 +290,16 @@ func (c *Cache) Clear() (removed int, err error) {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
-		return 0, err
+		return 0, c.remember(fmt.Errorf("read cache directory: %w", err))
 	}
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-			if os.Remove(filepath.Join(c.dir, e.Name())) == nil {
-				removed++
-			}
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
 		}
+		if err := os.Remove(filepath.Join(c.dir, e.Name())); err != nil {
+			return removed, c.remember(fmt.Errorf("remove cache entry: %w", err))
+		}
+		removed++
 	}
 	return removed, nil
 }
@@ -248,18 +309,34 @@ func (c *Cache) Stats() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Stats{Hits: c.hits, Misses: c.misses, Enabled: c.enabled}
+	if c.lastErr != nil {
+		s.LastError = c.lastErr.Error()
+	}
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			s.LastError = c.remember(fmt.Errorf("read cache statistics: %w", err)).Error()
+		}
 		return s
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		if info, err := e.Info(); err == nil {
-			s.Entries++
-			s.SizeBytes += info.Size()
+		info, err := e.Info()
+		if err != nil {
+			s.LastError = c.remember(fmt.Errorf("inspect cache statistics: %w", err)).Error()
+			continue
 		}
+		s.Entries++
+		s.SizeBytes += info.Size()
 	}
 	return s
+}
+
+// remember retains the most recent operational failure for /cache status.
+// Callers must hold c.mu.
+func (c *Cache) remember(err error) error {
+	c.lastErr = err
+	return err
 }

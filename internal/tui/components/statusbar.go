@@ -94,7 +94,7 @@ func statusParts(t styles.Theme, d StatusBarData) []string {
 		parts = append(parts, t.StatusKey.Render("ctx ")+t.StatusValue.Render(ctx))
 	}
 	if d.CacheOn {
-		parts = append(parts, t.StatusKey.Render("cache ")+t.StatusValue.Render("on"))
+		parts = append(parts, t.StatusKey.Render("cache ")+t.BadgeOK.Render("on"))
 	}
 	if d.ToolsOn {
 		parts = append(parts, t.StatusKey.Render("tools ")+t.BadgeOK.Render("on"))

@@ -102,6 +102,9 @@ func (m *Model) cacheOverlay() string {
 	m.kv(&b, "ttl", m.cfg.Cache.TTL)
 	m.kv(&b, "hits / misses", fmt.Sprintf("%d / %d (this session)", s.Hits, s.Misses))
 	m.kv(&b, "streamed", fmt.Sprintf("%v (cache.cache_streamed_responses)", m.cfg.Cache.CacheStreamedResponses))
+	if s.LastError != "" {
+		m.kv(&b, "last error", s.LastError)
+	}
 	b.WriteString("\n" + m.theme.StatusBar.Render("  keyed by provider, base URL, model, message, system prompt,\n  prompt mode, template, temperature — never by API keys") + "\n")
 	b.WriteString("\n" + m.theme.SystemNote.Render("/cache clear · /cache on|off"))
 	return m.overlayFooter(&b)

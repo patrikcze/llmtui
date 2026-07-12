@@ -587,6 +587,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The backend rejected native tool calling; use the fenced-block
 			// prompt protocol from the next request on.
 			m.toolsNative = false
+			m.lastDebug.CacheStatus = "bypass"
 			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
 		}
 		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok})
@@ -1510,7 +1511,10 @@ func (m *Model) finishStream(usage *provider.Usage) {
 			Estimated:        usage.Estimated,
 			Provider:         m.lastDebug.Provider,
 			Model:            m.lastDebug.Model,
-		}); err == nil {
+		}); err != nil {
+			m.lastDebug.CacheStatus = "write error"
+			m.errText = "cache write failed; response was kept: " + err.Error()
+		} else {
 			m.lastDebug.CacheStatus = "write"
 		}
 	}

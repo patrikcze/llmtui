@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +116,59 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCacheReadFailureIsVisibleAndFallsBackToProvider(t *testing.T) {
+	m := newTestModel(t)
+	dir := t.TempDir()
+	m.responseCache = cache.New(dir, time.Hour, 16, true)
+	key := m.cacheKey("hello", nil)
+	if err := os.WriteFile(filepath.Join(dir, key.Hash()+".json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write corrupt cache entry: %v", err)
+	}
+
+	cmd := m.dispatch("hello", nil)
+	if cmd == nil {
+		t.Fatal("cache corruption must fall back to a provider request")
+	}
+	if !strings.Contains(m.errText, "cache read failed") {
+		t.Errorf("errText = %q, want visible cache read failure", m.errText)
+	}
+	if m.lastDebug.CacheStatus != "error" {
+		t.Errorf("CacheStatus = %q, want error", m.lastDebug.CacheStatus)
+	}
+	if m.cancelStream != nil {
+		m.cancelStream()
+	}
+}
+
+func TestCacheWriteFailureIsVisible(t *testing.T) {
+	m := newTestModel(t)
+	cachePath := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(cachePath, []byte("file"), 0o600); err != nil {
+		t.Fatalf("write cache path fixture: %v", err)
+	}
+	m.responseCache = cache.New(cachePath, time.Hour, 16, true)
+	m.lastDebug = debugInfo{
+		CacheKey:    m.cacheKey("hello", nil),
+		CacheStatus: "miss",
+		Provider:    m.prov.Name(),
+		Model:       m.model,
+		Stream:      true,
+	}
+	m.streamBuf.WriteString("successful provider response")
+	m.thinking = true
+	m.finishStream(&provider.Usage{PromptTokens: 2, CompletionTokens: 3})
+
+	if !strings.Contains(m.errText, "cache write failed") {
+		t.Errorf("errText = %q, want visible cache write failure", m.errText)
+	}
+	if m.lastDebug.CacheStatus != "write error" {
+		t.Errorf("CacheStatus = %q, want write error", m.lastDebug.CacheStatus)
+	}
+	if got := m.responseCache.Stats().LastError; got == "" {
+		t.Error("/cache statistics should retain the last write error")
+	}
+}
+
 // Switching the model while a reply streams must not store that reply under
 // the new model's cache key (cache poisoning) or misattribute it.
 func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
@@ -137,12 +192,12 @@ func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
 
 	m.finishStream(&provider.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3})
 
-	if entry, ok := m.responseCache.Get(keyA); !ok {
+	if entry, ok, err := m.responseCache.Get(keyA); err != nil || !ok {
 		t.Fatal("reply should be cached under the dispatch-time key")
 	} else if entry.Model != "model-a" {
 		t.Errorf("cached entry attributed to %q, want model-a", entry.Model)
 	}
-	if _, ok := m.responseCache.Get(m.cacheKey("hello", nil)); ok {
+	if _, ok, err := m.responseCache.Get(m.cacheKey("hello", nil)); err != nil || ok {
 		t.Error("reply must not be cached under the new model's key")
 	}
 }
