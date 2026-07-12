@@ -273,6 +273,49 @@ func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
 	}
 }
 
+func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.toolDepth = 1
+	messagesBefore := len(m.session.Messages)
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone},
+		ok:    true,
+	})
+
+	if cmd != nil {
+		t.Fatal("empty completion must not start another command")
+	}
+	const want = "Model returned an empty completion after tool execution."
+	if m.errText != want {
+		t.Errorf("errText = %q, want %q", m.errText, want)
+	}
+	if m.thinking {
+		t.Error("empty completion must finish the stream")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("messages = %d, want %d (no empty assistant message)", len(m.session.Messages), messagesBefore)
+	}
+}
+
+func TestEmptyCompletionBeforeToolExecutionRemainsClean(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone},
+		ok:    true,
+	})
+
+	if cmd != nil {
+		t.Fatal("empty completion must not start another command")
+	}
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty", m.errText)
+	}
+}
+
 func TestNativeToolCallsRespectApproval(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()

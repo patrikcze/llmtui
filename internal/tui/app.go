@@ -1327,8 +1327,14 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream)
 	case provider.EventDone:
+		emptyToolContinuation := m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
 		m.streamToolCalls = msg.event.ToolCalls
 		m.finishStream(msg.event.Usage)
+		if emptyToolContinuation {
+			m.errText = "Model returned an empty completion after tool execution."
+			m.refreshViewport()
+			return m, nil
+		}
 		// Tools only run on a clean finish, never on Esc/Ctrl+C partials.
 		// Native calls arrive structured on the Done event; otherwise fall
 		// back to parsing fenced blocks out of the reply text.
