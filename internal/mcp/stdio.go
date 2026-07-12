@@ -110,6 +110,7 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 			return fmt.Errorf("mcp: resolve environment: %w", err)
 		}
 		cmd.Env = env
+		setupProcAttr(cmd) // own process group on Unix so Close can reap wrapper grandchildren
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("mcp: stdin pipe: %w", err)
@@ -226,7 +227,9 @@ func (c *StdioClient) CallTool(ctx context.Context, name string, input json.RawM
 	return Result{Content: b.String(), IsError: payload.IsError}, nil
 }
 
-// Close closes stdin, waits for (or kills) the process, and unblocks callers.
+// Close closes stdin, then terminates the process (and, on Unix, its process
+// group, so wrapper commands like npx/uvx/sh -c don't leave grandchildren
+// running), and unblocks callers.
 func (c *StdioClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
@@ -234,8 +237,7 @@ func (c *StdioClient) Close() error {
 			_ = c.w.Close()
 		}
 		if c.cmd != nil && c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
-			_ = c.cmd.Wait()
+			terminateProcess(c.cmd)
 		}
 	})
 	return nil

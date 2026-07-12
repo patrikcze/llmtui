@@ -27,7 +27,8 @@ type Server struct {
 	Tools   []Tool
 	LastErr error
 
-	client Client
+	client     Client
+	connecting bool // true while a Connect call is dialing/handshaking, guarded by Registry.mu
 }
 
 func (r *Registry) serverLocked(name string) (*Server, bool) {
@@ -132,17 +133,39 @@ func (r *Registry) Disable(name string) error {
 // Connect establishes the transport for one enabled server and lists its
 // tools. It requires a factory (a transport implementation); without one it
 // returns an error and leaves the server StatusNoTransport.
+//
+// Connect refuses to run twice concurrently (or on top of an already-live
+// client) for the same server: without that guard a second call would either
+// leak the first client's subprocess (overwritten, never closed) or race a
+// concurrent Disable, which could be clobbered by this call's success path.
 func (r *Registry) Connect(ctx context.Context, name string) error {
 	r.mu.Lock()
 	s, ok := r.serverLocked(name)
-	factory := r.factory
-	r.mu.Unlock()
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("no MCP server named %q", name)
 	}
+	if s.client != nil {
+		r.mu.Unlock()
+		return fmt.Errorf("MCP server %q is already connected", name)
+	}
+	if s.connecting {
+		r.mu.Unlock()
+		return fmt.Errorf("MCP server %q: connect already in progress", name)
+	}
 	if !s.Config.Enabled {
+		r.mu.Unlock()
 		return fmt.Errorf("MCP server %q is disabled", name)
 	}
+	factory := r.factory
+	s.connecting = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		s.connecting = false
+		r.mu.Unlock()
+	}()
+
 	if factory == nil {
 		r.setError(s, StatusNoTransport, fmt.Errorf("no MCP transport is available in this build"))
 		return s.LastErr
@@ -163,7 +186,21 @@ func (r *Registry) Connect(ctx context.Context, name string) error {
 		r.setError(s, StatusError, err)
 		return err
 	}
+
 	r.mu.Lock()
+	if !s.Config.Enabled {
+		// Disabled while we were dialing/handshaking: don't resurrect the
+		// server as connected out from under Disable. Close the fresh
+		// client and keep the disabled state Disable already put in place.
+		r.mu.Unlock()
+		_ = client.Close()
+		return fmt.Errorf("MCP server %q was disabled during connect", name)
+	}
+	if s.client != nil {
+		// Belt and braces: shouldn't happen given the connecting guard
+		// above, but never leak a client we're about to replace.
+		_ = s.client.Close()
+	}
 	s.client = client
 	s.Tools = tools
 	s.Status = StatusConnected
@@ -204,8 +241,12 @@ func (r *Registry) CallTool(ctx context.Context, server, tool string, input json
 	return s.client.CallTool(ctx, tool, input)
 }
 
-// Close tears down every open connection.
+// Close tears down every open connection. It is safe to call on a nil
+// Registry (a no-op) and safe to call more than once.
 func (r *Registry) Close() {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.servers {

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -1846,6 +1848,12 @@ func (m *Model) View() string {
 // Run starts the chat TUI and blocks until it exits.
 func Run(opts Options) error {
 	m := New(opts)
+	// Belt and braces against every exit path (normal return, error, panic
+	// unwinding through here, or the signal handler below): whatever happens,
+	// don't leave MCP subprocesses running past the TUI's lifetime. Close is
+	// nil-safe and idempotent, so this is harmless alongside quit()'s own
+	// m.mcpRegistry.Close() on the happy path.
+	defer m.mcpRegistry.Close()
 
 	// Ask the terminal to report modified Enter (Shift+Enter, Ctrl+Enter)
 	// via modifyOtherKeys; unsupported terminals ignore this sequence.
@@ -1853,6 +1861,27 @@ func Run(opts Options) error {
 	defer fmt.Print(disableModifyOtherKeys)
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// SIGTERM/SIGHUP (e.g. a terminal closing, or a process manager stopping
+	// us) bypass Bubble Tea's own key-driven quit path entirely. Without
+	// this, MCP subprocesses started by the session are orphaned and the
+	// terminal is never restored from the alt screen. Ctrl+C (SIGINT) is
+	// already handled by Bubble Tea's normal Update loop, so it isn't
+	// listened for here.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigCh:
+			m.mcpRegistry.Close()
+			p.Kill() // restores the terminal without running further TUI updates
+		case <-done:
+		}
+	}()
+	defer signal.Stop(sigCh)
+
 	final, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run TUI: %w", err)

@@ -24,6 +24,11 @@ type MockClient struct {
 	// exercise real timeout/cancellation behavior instead of asserting it
 	// structurally.
 	Delay time.Duration
+	// ConnectGate, if set, makes Connect block until the channel is closed
+	// (or ctx is done, whichever comes first) — lets tests hold a Connect
+	// call open to exercise concurrent-Connect and disable-during-connect
+	// races deterministically instead of relying on timing.
+	ConnectGate <-chan struct{}
 
 	mu        sync.Mutex
 	connected bool
@@ -46,8 +51,16 @@ func NewMockFactory() ClientFactory {
 	}
 }
 
-// Connect marks the client connected.
+// Connect marks the client connected, after first waiting on ConnectGate (if
+// set) to let tests hold the call open.
 func (m *MockClient) Connect(ctx context.Context) error {
+	if m.ConnectGate != nil {
+		select {
+		case <-m.ConnectGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if m.ConnectErr != nil {
 		return m.ConnectErr
 	}
