@@ -331,9 +331,9 @@ func TestInstructionsMentionEveryTool(t *testing.T) {
 }
 
 func TestDescribeMCPCall(t *testing.T) {
-	c := Call{MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`}
+	c := Call{MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`}
 	got := c.Describe()
-	want := `jiraWorklog: session_start({"issue_key":"AIPO-82"})`
+	want := `jiraWorklog: session_start({"issue_key":"DEMO-1"})`
 	if got != want {
 		t.Errorf("Describe = %q, want %q", got, want)
 	}

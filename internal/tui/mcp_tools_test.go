@@ -59,7 +59,7 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 	}, func(name string, input json.RawMessage) (mcp.Result, error) {
 		return mcp.Result{Content: `{"session":{"id":"ses_1"}}`}, nil
 	})
-	c := tools.Call{ID: "call_1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`}
+	c := tools.Call{ID: "call_1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`}
 	res := executeMCPCall(context.Background(), reg, c)
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)

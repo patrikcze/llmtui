@@ -79,8 +79,8 @@ func TestCallsFromNativeMCP(t *testing.T) {
 	}{
 		{
 			name: "mcp call splits server and tool, keeps raw arguments",
-			in:   provider.ToolCall{ID: "c1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
-			want: Call{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`},
+			in:   provider.ToolCall{ID: "c1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"DEMO-1"}`},
+			want: Call{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`},
 		},
 		{
 			name: "empty arguments default to an empty object",
@@ -116,9 +116,9 @@ Add to `internal/tools/tools_test.go`:
 
 ```go
 func TestDescribeMCPCall(t *testing.T) {
-	c := Call{MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`}
+	c := Call{MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`}
 	got := c.Describe()
-	want := `jiraWorklog: session_start({"issue_key":"AIPO-82"})`
+	want := `jiraWorklog: session_start({"issue_key":"DEMO-1"})`
 	if got != want {
 		t.Errorf("Describe = %q, want %q", got, want)
 	}
@@ -480,7 +480,7 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 	}, func(name string, input json.RawMessage) (mcp.Result, error) {
 		return mcp.Result{Content: `{"session":{"id":"ses_1"}}`}, nil
 	})
-	c := tools.Call{ID: "call_1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`}
+	c := tools.Call{ID: "call_1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`}
 	res := executeMCPCall(context.Background(), reg, c)
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
@@ -1346,7 +1346,7 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 	m.thinking = true
 
 	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
-		{ID: "call_1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
+		{ID: "call_1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"DEMO-1"}`},
 	}}
 	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
 	if cmd == nil {

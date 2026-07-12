@@ -563,7 +563,7 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 	m.thinking = true
 
 	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
-		{ID: "call_1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
+		{ID: "call_1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"DEMO-1"}`},
 	}}
 	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
 	if cmd == nil {

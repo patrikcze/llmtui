@@ -236,8 +236,8 @@ func TestCallsFromNativeMCP(t *testing.T) {
 	}{
 		{
 			name: "mcp call splits server and tool, keeps raw arguments",
-			in:   provider.ToolCall{ID: "c1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"AIPO-82"}`},
-			want: Call{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"AIPO-82"}`},
+			in:   provider.ToolCall{ID: "c1", Name: "mcp__jiraWorklog__session_start", Arguments: `{"issue_key":"DEMO-1"}`},
+			want: Call{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`},
 		},
 		{
 			name: "empty arguments default to an empty object",
