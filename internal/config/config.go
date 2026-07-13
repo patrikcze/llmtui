@@ -55,6 +55,11 @@ type ChatConfig struct {
 	// in history, re-sent, or cached. Safe for non-reasoning models: it only
 	// triggers on a literal <think> opening the reply.
 	StripLeakedThinking bool `mapstructure:"strip_leaked_thinking" yaml:"strip_leaked_thinking"`
+	// Reasoning controls the thinking mode of reasoning models (Qwen,
+	// DeepSeek-R1, …): "auto" sends nothing and leaves it to the backend;
+	// "on"/"off" request or suppress thinking explicitly (OpenAI-compatible
+	// chat_template_kwargs.enable_thinking, Ollama think).
+	Reasoning string `mapstructure:"reasoning" yaml:"reasoning"`
 }
 
 // UIConfig holds appearance settings.
@@ -447,6 +452,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("chat.save_history", true)
 	v.SetDefault("chat.history_dir", "~/.local/share/llmtui/history")
 	v.SetDefault("chat.strip_leaked_thinking", true)
+	v.SetDefault("chat.reasoning", "auto")
 
 	v.SetDefault("ui.theme", "claude_inspired")
 	v.SetDefault("ui.use_nerd_font", "auto")

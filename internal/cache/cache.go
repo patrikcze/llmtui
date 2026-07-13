@@ -45,6 +45,10 @@ type Key struct {
 	// changes what's sent to the provider even when nothing else about the
 	// request changes, and a cache hit must not straddle that difference.
 	ToolsHash string
+	// Reasoning is the effective thinking-mode toggle ("", "on", "off") sent
+	// on the wire — it changes what the backend is asked to do, so it must
+	// vary the cache key.
+	Reasoning string
 }
 
 // Hash returns a stable content hash for the key. Free-text fields are
@@ -52,7 +56,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v4|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s",
+	fmt.Fprintf(h, "v5|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -65,6 +69,7 @@ func (k Key) Hash() string {
 		k.MaxTokens,
 		k.HistoryHash,
 		k.ToolsHash,
+		k.Reasoning,
 	)
 	return hex.EncodeToString(h.Sum(nil))
 }

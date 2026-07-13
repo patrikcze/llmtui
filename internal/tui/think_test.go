@@ -59,3 +59,36 @@ func TestStripLeakedThinkingCanBeDisabled(t *testing.T) {
 		t.Fatalf("content = %q", last.Content)
 	}
 }
+
+func TestEffectiveReasoningPrecedence(t *testing.T) {
+	m := newTestModel(t)
+	if got := m.effectiveReasoning(); got != "auto" {
+		t.Fatalf("default = %q, want auto", got)
+	}
+	m.cfg.Chat.Reasoning = "off"
+	if got := m.effectiveReasoning(); got != "off" {
+		t.Fatalf("config = %q, want off", got)
+	}
+	m.reasoningMode = "on" // session override wins
+	if got := m.effectiveReasoning(); got != "on" {
+		t.Fatalf("override = %q, want on", got)
+	}
+	m.cfg.Chat.Reasoning = "bogus"
+	m.reasoningMode = ""
+	if got := m.effectiveReasoning(); got != "auto" {
+		t.Fatalf("invalid config value = %q, want auto", got)
+	}
+}
+
+func TestBuildRequestCarriesReasoning(t *testing.T) {
+	m := newTestModel(t)
+	m.reasoningMode = "off"
+	req := m.buildRequest(nil)
+	if req.Reasoning != "off" {
+		t.Fatalf("req.Reasoning = %q", req.Reasoning)
+	}
+	m.reasoningMode = "auto"
+	if req := m.buildRequest(nil); req.Reasoning != "" {
+		t.Fatalf("auto must map to empty, got %q", req.Reasoning)
+	}
+}

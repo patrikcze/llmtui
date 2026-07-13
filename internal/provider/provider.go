@@ -85,6 +85,10 @@ type ChatRequest struct {
 	// sent to the backend and the model may answer with ToolCalls instead of
 	// (or in addition to) text.
 	Tools []ToolSpec
+	// Reasoning, when "on" or "off", explicitly requests or suppresses a
+	// reasoning model's thinking phase. Empty means backend default: the
+	// provider must omit the corresponding wire field entirely.
+	Reasoning string
 }
 
 // Usage reports token accounting for a completed request. Estimated is set

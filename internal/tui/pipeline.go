@@ -261,6 +261,7 @@ func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 		MaxTokens:    m.cfg.Chat.MaxTokens,
 		HistoryHash:  historyFingerprint(m.session.Messages),
 		ToolsHash:    toolSpecsFingerprint(m.activeToolSpecs()),
+		Reasoning:    m.effectiveReasoning(),
 	}
 }
 
@@ -420,9 +421,27 @@ func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	return specs
 }
 
+// effectiveReasoning resolves the reasoning mode: session override first,
+// then config, normalizing anything unknown to "auto".
+func (m *Model) effectiveReasoning() string {
+	v := m.reasoningMode
+	if v == "" {
+		v = m.cfg.Chat.Reasoning
+	}
+	switch v {
+	case "on", "off":
+		return v
+	}
+	return "auto"
+}
+
 // buildRequest assembles a ChatRequest for the given messages under the
 // current settings, offering native tool specs when enabled.
 func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
+	reasoning := m.effectiveReasoning()
+	if reasoning == "auto" {
+		reasoning = ""
+	}
 	return provider.ChatRequest{
 		Model:       m.model,
 		Messages:    messages,
@@ -431,6 +450,7 @@ func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
 		MaxTokens:   m.cfg.Chat.MaxTokens,
 		Stream:      m.cfg.StreamEnabled(),
 		Tools:       m.activeToolSpecs(),
+		Reasoning:   reasoning,
 	}
 }
 

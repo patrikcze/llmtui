@@ -42,6 +42,7 @@ func TestKeyHashStability(t *testing.T) {
 		func(k *Key) { k.MaxTokens = 100 },
 		func(k *Key) { k.HistoryHash = "different" },
 		func(k *Key) { k.ToolsHash = "different" },
+		func(k *Key) { k.Reasoning = "off" },
 	}
 	for i, mutate := range variants {
 		k := testKey()
@@ -49,6 +50,15 @@ func TestKeyHashStability(t *testing.T) {
 		if k.Hash() == a.Hash() {
 			t.Errorf("variant %d did not change the hash", i)
 		}
+	}
+}
+
+func TestKeyHashVariesWithReasoning(t *testing.T) {
+	a := Key{Provider: "p", Model: "m", UserMessage: "hi"}
+	b := a
+	b.Reasoning = "off"
+	if a.Hash() == b.Hash() {
+		t.Fatal("Reasoning must vary the cache key")
 	}
 }
 

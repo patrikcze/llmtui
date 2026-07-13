@@ -195,6 +195,7 @@ type Model struct {
 	profileMode   string // "auto" or a profile name
 	profiles      []modelprofile.Profile
 	template      string
+	reasoningMode string // session override for chat.reasoning: "", "auto", "on", "off"
 	summary       string
 	ctxStrategy   string
 	ctxUsed       int
