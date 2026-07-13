@@ -105,6 +105,7 @@ type Model struct {
 	idleWatchdog  *time.Timer
 	idleTimeout   time.Duration
 	reasoningLen  int // chars of "thinking" streamed before the visible answer
+	thinkFilter   *provider.ThinkFilter
 	attachments   []provider.Image
 	frame         int
 	renderWidth   int
@@ -1395,6 +1396,33 @@ func (m *Model) copyLastReply() tea.Cmd {
 	}
 }
 
+// resetThinkFilter arms a fresh filter for the next stream (nil when the
+// user disabled stripping).
+func (m *Model) resetThinkFilter() {
+	if m.cfg.Chat.StripLeakedThinking {
+		m.thinkFilter = &provider.ThinkFilter{}
+	} else {
+		m.thinkFilter = nil
+	}
+}
+
+// flushThinkFilter drains the filter into streamBuf at end of stream. An
+// unclosed think block is salvaged as the visible reply rather than dropped.
+func (m *Model) flushThinkFilter() {
+	if m.thinkFilter == nil {
+		return
+	}
+	answer, unclosed := m.thinkFilter.Flush()
+	m.thinkFilter = nil
+	if answer != "" {
+		m.streamBuf.WriteString(answer)
+	}
+	if m.streamBuf.Len() == 0 && unclosed != "" {
+		m.streamBuf.WriteString("_(the model spent its reply inside an unclosed <think> block — showing it as-is)_\n\n")
+		m.streamBuf.WriteString(unclosed)
+	}
+}
+
 func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 	if !m.thinking {
 		// Stream already finalized (e.g. stopped with Esc); drop late events.
@@ -1423,7 +1451,17 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream)
 	case provider.EventDelta:
-		m.streamBuf.WriteString(msg.event.Delta)
+		delta := msg.event.Delta
+		if m.thinkFilter != nil {
+			answer, reasoning := m.thinkFilter.Feed(delta)
+			if reasoning != "" {
+				m.reasoningLen += len(reasoning)
+			}
+			delta = answer
+		}
+		if delta != "" {
+			m.streamBuf.WriteString(delta)
+		}
 		// A token arrived: the stream is healthy, so push the idle deadline out.
 		if m.idleWatchdog != nil {
 			m.idleWatchdog.Reset(m.idleTimeout)
@@ -1479,6 +1517,7 @@ func (m *Model) idleError() error {
 // streamFailed finalizes a failed stream, preserving partial output.
 func (m *Model) streamFailed(err error) {
 	m.thinking = false
+	m.flushThinkFilter()
 	m.errText = err.Error()
 	// Preserve partial streamed output instead of discarding it.
 	if partial := m.streamBuf.String(); partial != "" {
@@ -1512,6 +1551,7 @@ func (m *Model) drainStream() {
 
 func (m *Model) finishStream(usage *provider.Usage) {
 	m.thinking = false
+	m.flushThinkFilter()
 	reply := m.streamBuf.String()
 	m.streamBuf.Reset()
 	toolCalls := m.streamToolCalls

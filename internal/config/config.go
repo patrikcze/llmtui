@@ -50,6 +50,11 @@ type ChatConfig struct {
 	ForceVision bool `mapstructure:"force_vision" yaml:"force_vision"`
 	// ModelProfile pins a model profile ("auto" matches by model ID).
 	ModelProfile string `mapstructure:"model_profile" yaml:"model_profile"`
+	// StripLeakedThinking reroutes a leading <think>…</think> block that a
+	// misconfigured backend leaks into content, so reasoning is never stored
+	// in history, re-sent, or cached. Safe for non-reasoning models: it only
+	// triggers on a literal <think> opening the reply.
+	StripLeakedThinking bool `mapstructure:"strip_leaked_thinking" yaml:"strip_leaked_thinking"`
 }
 
 // UIConfig holds appearance settings.
@@ -441,6 +446,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("chat.force_vision", false)
 	v.SetDefault("chat.save_history", true)
 	v.SetDefault("chat.history_dir", "~/.local/share/llmtui/history")
+	v.SetDefault("chat.strip_leaked_thinking", true)
 
 	v.SetDefault("ui.theme", "claude_inspired")
 	v.SetDefault("ui.use_nerd_font", "auto")
