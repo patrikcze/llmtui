@@ -33,3 +33,23 @@ func TestSupportsVision(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveVisionPrefersBackendData(t *testing.T) {
+	yes, no := true, false
+
+	// Backend-reported data wins even when it disagrees with the heuristic.
+	if !ResolveVision(ModelInfo{ID: "qwen/qwen3.6-27b", Vision: &yes}) {
+		t.Error("ResolveVision with Vision=true should be true even though the ID heuristic misses this model")
+	}
+	if ResolveVision(ModelInfo{ID: "gpt-4o", Vision: &no}) {
+		t.Error("ResolveVision with Vision=false should override a heuristic false-positive")
+	}
+
+	// No backend data: falls back to the ID heuristic.
+	if !ResolveVision(ModelInfo{ID: "llava:13b"}) {
+		t.Error("ResolveVision with nil Vision should fall back to SupportsVision")
+	}
+	if ResolveVision(ModelInfo{ID: "qwen3:8b"}) {
+		t.Error("ResolveVision with nil Vision should fall back to SupportsVision")
+	}
+}

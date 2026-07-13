@@ -175,12 +175,18 @@ func TestChatMalformedStreamChunk(t *testing.T) {
 
 func TestListModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			t.Errorf("path = %s, want /v1/models", r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "model-a"}, {"id": "model-b"}},
+			})
+		case "/api/v0/models":
+			// Generic OpenAI-compatible servers (vLLM, llama.cpp, ...) don't
+			// implement LM Studio's native models endpoint.
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]string{{"id": "model-a"}, {"id": "model-b"}},
-		})
 	}))
 	defer srv.Close()
 
@@ -191,6 +197,46 @@ func TestListModels(t *testing.T) {
 	}
 	if len(models) != 2 || models[0].ID != "model-a" {
 		t.Errorf("models = %+v, want model-a and model-b", models)
+	}
+	if models[0].Vision != nil || models[1].Vision != nil {
+		t.Errorf("Vision = %+v, want nil (no LM Studio endpoint) so callers fall back to the heuristic", models)
+	}
+}
+
+func TestListModelsUsesLMStudioVisionCapability(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "qwen/qwen3.6-27b"}, {"id": "openai/gpt-oss-20b"}},
+			})
+		case "/api/v0/models":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{
+					{"id": "qwen/qwen3.6-27b", "type": "vlm"},
+					{"id": "openai/gpt-oss-20b", "type": "llm"},
+				},
+			})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL+"/v1", "")
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	byID := map[string]*bool{}
+	for _, m := range models {
+		byID[m.ID] = m.Vision
+	}
+	if v := byID["qwen/qwen3.6-27b"]; v == nil || !*v {
+		t.Errorf("qwen/qwen3.6-27b Vision = %v, want true (heuristic alone would miss this model)", v)
+	}
+	if v := byID["openai/gpt-oss-20b"]; v == nil || *v {
+		t.Errorf("openai/gpt-oss-20b Vision = %v, want false", v)
 	}
 }
 

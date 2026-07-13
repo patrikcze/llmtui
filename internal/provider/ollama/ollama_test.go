@@ -131,6 +131,37 @@ func TestListModels(t *testing.T) {
 	if len(models) != 1 || models[0].ID != "qwen3:latest" || models[0].Description != "8B" {
 		t.Errorf("models = %+v", models)
 	}
+	if models[0].Vision != nil {
+		t.Errorf("Vision = %v, want nil when the server omits capabilities (older Ollama)", models[0].Vision)
+	}
+}
+
+func TestListModelsUsesCapabilities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"models": []map[string]any{
+				{"name": "qwythos-9b", "capabilities": []string{"completion", "vision"}},
+				{"name": "qwen3:8b", "capabilities": []string{"completion", "tools"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	byID := map[string]*bool{}
+	for _, m := range models {
+		byID[m.ID] = m.Vision
+	}
+	if v := byID["qwythos-9b"]; v == nil || !*v {
+		t.Errorf("qwythos-9b Vision = %v, want true", v)
+	}
+	if v := byID["qwen3:8b"]; v == nil || *v {
+		t.Errorf("qwen3:8b Vision = %v, want false", v)
+	}
 }
 
 func TestHealthCheck(t *testing.T) {

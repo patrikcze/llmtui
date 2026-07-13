@@ -87,6 +87,35 @@ func TestCtrlVAllowedWithForceVision(t *testing.T) {
 	}
 }
 
+func TestCtrlVUsesCachedBackendVisionCapability(t *testing.T) {
+	yes := true
+	m := newTestModel(t)
+	// "qwen/qwen3.6-27b" matches no heuristic pattern, but a prior ListModels
+	// call reported real vision support for it (e.g. LM Studio's
+	// /api/v0/models "type": "vlm"); that cached data must win.
+	m.model = "qwen/qwen3.6-27b"
+	m.cacheVisionInfo([]provider.ModelInfo{{ID: "qwen/qwen3.6-27b", Vision: &yes}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd == nil {
+		t.Fatal("cached backend vision capability should allow image paste even though the ID heuristic misses this model")
+	}
+}
+
+func TestCtrlVRefusedWhenCachedBackendDataSaysNoVision(t *testing.T) {
+	no := false
+	m := newTestModel(t)
+	// "gpt-4o" matches the heuristic, but real backend data (when available)
+	// must take precedence over the guess.
+	m.model = "gpt-4o"
+	m.cacheVisionInfo([]provider.ModelInfo{{ID: "gpt-4o", Vision: &no}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		t.Fatal("cached backend vision capability should refuse image paste even though the ID heuristic matches")
+	}
+}
+
 func TestCtrlXRemovesAttachment(t *testing.T) {
 	m := newTestModel(t)
 	m.attachments = []provider.Image{{Data: []byte("a")}, {Data: []byte("b")}}

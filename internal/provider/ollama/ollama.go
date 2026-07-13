@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,6 +87,10 @@ type tagsResponse struct {
 		Details struct {
 			ParameterSize string `json:"parameter_size"`
 		} `json:"details"`
+		// Capabilities is Ollama's own model-capability list (e.g.
+		// "completion", "vision", "tools", "embedding"). It's authoritative:
+		// prefer it over the model-ID heuristic in provider.SupportsVision.
+		Capabilities []string `json:"capabilities"`
 	} `json:"models"`
 }
 
@@ -110,11 +115,19 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 	}
 	models := make([]provider.ModelInfo, 0, len(out.Models))
 	for _, m := range out.Models {
-		models = append(models, provider.ModelInfo{
+		info := provider.ModelInfo{
 			ID:          m.Name,
 			Name:        m.Name,
 			Description: m.Details.ParameterSize,
-		})
+		}
+		// Older Ollama servers omit "capabilities" entirely; leave Vision nil
+		// (unknown) so callers fall back to the model-ID heuristic instead of
+		// concluding "no vision" from an empty list.
+		if m.Capabilities != nil {
+			v := slices.Contains(m.Capabilities, "vision")
+			info.Vision = &v
+		}
+		models = append(models, info)
 	}
 	return models, nil
 }

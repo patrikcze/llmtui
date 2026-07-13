@@ -115,13 +115,19 @@ type Model struct {
 	pickerItems   []string
 	pickerIdx     int
 	pickerModels  []provider.ModelInfo
-	sugs          []slashCommand
-	sugIdx        int
-	historyDir    string
-	sessionName   string
-	inputLines    int
-	ctrlCAt       time.Time
-	quitting      bool
+	// visionByID caches backend-reported vision capability (model ID ->
+	// supports images) from the last successful ListModels call, so the
+	// paste-image gate can use real data instead of the SupportsVision
+	// heuristic even after the model picker overlay closes and clears
+	// pickerModels.
+	visionByID  map[string]bool
+	sugs        []slashCommand
+	sugIdx      int
+	historyDir  string
+	sessionName string
+	inputLines  int
+	ctrlCAt     time.Time
+	quitting    bool
 
 	// Exit summary bookkeeping, reported after the TUI closes.
 	startedAt  time.Time
@@ -667,6 +673,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = "list models: " + msg.err.Error()
 			m.refreshViewport()
 		} else {
+			m.cacheVisionInfo(msg.models)
 			m.openModelsPicker(msg.models)
 		}
 		return m, nil
@@ -1137,8 +1144,32 @@ type firstStreamMsg struct {
 	toolsFellBack bool
 }
 
+// cacheVisionInfo remembers backend-reported vision capability from a
+// ListModels call so it survives after pickerModels is cleared.
+func (m *Model) cacheVisionInfo(models []provider.ModelInfo) {
+	for _, mi := range models {
+		if mi.Vision == nil {
+			continue
+		}
+		if m.visionByID == nil {
+			m.visionByID = make(map[string]bool, len(models))
+		}
+		m.visionByID[mi.ID] = *mi.Vision
+	}
+}
+
+// supportsVision reports whether the currently selected model accepts image
+// input, preferring backend-reported capability data over the model-ID
+// heuristic when we have it cached.
+func (m *Model) supportsVision() bool {
+	if v, ok := m.visionByID[m.model]; ok {
+		return v
+	}
+	return provider.SupportsVision(m.model)
+}
+
 func (m *Model) pasteImage() tea.Cmd {
-	if !provider.SupportsVision(m.model) && !m.cfg.Chat.ForceVision {
+	if !m.supportsVision() && !m.cfg.Chat.ForceVision {
 		m.errText = fmt.Sprintf("model %q does not appear to support images (set chat.force_vision: true to override)", m.model)
 		m.refreshViewport()
 		return nil

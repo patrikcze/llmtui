@@ -105,11 +105,65 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode models: %w", err)
 	}
+	vision := p.lmStudioVisionByID(ctx)
 	models := make([]provider.ModelInfo, 0, len(out.Data))
 	for _, m := range out.Data {
-		models = append(models, provider.ModelInfo{ID: m.ID, Name: m.ID})
+		info := provider.ModelInfo{ID: m.ID, Name: m.ID}
+		if v, ok := vision[m.ID]; ok {
+			info.Vision = &v
+		}
+		models = append(models, info)
 	}
 	return models, nil
+}
+
+// lmStudioModelsResponse is LM Studio's native model listing (distinct from
+// the plain OpenAI-compatible /models endpoint), which reports each model's
+// real type: "vlm" for vision-capable, "llm" for text-only, "embeddings" for
+// embedding models.
+type lmStudioModelsResponse struct {
+	Data []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"data"`
+}
+
+// lmStudioVisionByID queries LM Studio's native /api/v0/models endpoint for
+// authoritative per-model vision capability. It returns nil when the
+// endpoint isn't available — any other OpenAI-compatible backend (vLLM,
+// llama.cpp, Unsloth, generic servers) — so callers fall back to the
+// model-ID heuristic via provider.ResolveVision.
+func (p *Provider) lmStudioVisionByID(ctx context.Context) map[string]bool {
+	root := strings.TrimSuffix(p.baseURL, "/v1")
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, root+"/api/v0/models", nil)
+	if err != nil {
+		return nil
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var out lmStudioModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil
+	}
+	result := make(map[string]bool, len(out.Data))
+	for _, m := range out.Data {
+		if m.Type == "" {
+			continue
+		}
+		result[m.ID] = m.Type == "vlm"
+	}
+	return result
 }
 
 type chatCompletionRequest struct {

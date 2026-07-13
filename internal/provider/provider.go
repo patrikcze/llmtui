@@ -65,6 +65,12 @@ type ModelInfo struct {
 	Name        string
 	Description string
 	ContextLen  int
+	// Vision, when non-nil, is authoritative capability data reported by the
+	// backend itself (e.g. LM Studio's native /api/v0/models endpoint, which
+	// reports "type": "vlm" for vision-capable models). nil means the
+	// backend exposes no such data and callers should fall back to the
+	// model-ID heuristic in SupportsVision.
+	Vision *bool
 }
 
 // ChatRequest carries everything a provider needs to run one completion.
