@@ -32,6 +32,7 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | `/models` | Choose a model with `↑`/`↓` and `Enter` |
 | `/model <id>` | Switch model |
 | `/profile [list\|auto\|set <name>\|inspect]` | Model profiles |
+| `/think [on\|off\|auto\|status]` | Reasoning models: request, suppress, or default the thinking phase |
 
 ## Prompt
 | Command | Description |

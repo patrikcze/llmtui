@@ -59,6 +59,8 @@ as built-ins even with an empty config. `default_provider` and
 | `history_dir` | `~/.local/share/llmtui/history` | Where history lives |
 | `force_vision` | `false` | Allow image paste for unrecognized models |
 | `model_profile` | auto | Pin a model profile by name |
+| `reasoning` | `auto` | `auto` \| `on` \| `off` — explicit thinking toggle for reasoning models; `auto` sends nothing |
+| `strip_leaked_thinking` | `true` | Reroute a leading `<think>…</think>` block leaked into content by a misconfigured backend template out of the visible answer, history, and cache |
 
 `llmtui chat --resume <name>` and `--continue` read saved sessions from
 `history_dir` the same way `llmtui history` does — regardless of the current

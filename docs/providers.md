@@ -40,3 +40,36 @@ Unknown backends get conservative defaults.
 
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
+
+## Reasoning models (Qwen 3.5 / 3.6, DeepSeek-R1)
+
+llmtui talks to every backend through structured chat APIs
+(`/v1/chat/completions`, Ollama `/api/chat`). The **chat template — the
+Jinja program that turns messages into the model's token stream — is
+applied by the backend, never by llmtui.** If a Qwen 3.5/3.6 model is slow
+or unstable (degenerate reasoning loops, stalled tool calls, KV-cache
+thrash making every turn slower), fix the template in the backend:
+
+The official Qwen 3.5/3.6 templates have known bugs; the community-fixed
+drop-in replacement is
+[froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates):
+
+- **LM Studio**: My Models → model settings → Prompt tab → replace the
+  template with the contents of `chat_template.jinja` → Save.
+- **llama.cpp / koboldcpp**: `--jinja --chat-template-file chat_template.jinja`
+- **vLLM**: replace `chat_template` in `tokenizer_config.json`; serve with
+  `--tool-call-parser qwen3_coder`.
+- **Ollama**: not supported — Ollama uses Go templates, not Jinja. Rely on
+  Ollama's own model templates and keep them updated (`ollama pull`).
+
+What llmtui does client-side, for any reasoning model:
+
+- Strips a leaked leading `<think>…</think>` block out of the answer
+  (`chat.strip_leaked_thinking`, default `true`), so broken-template
+  reasoning is never stored in history, re-sent each turn, or cached.
+- `/think on|off|auto` (or `chat.reasoning`) requests or suppresses the
+  thinking phase explicitly: OpenAI-compatible backends receive
+  `chat_template_kwargs: {"enable_thinking": …}` (honored by vLLM and
+  llama.cpp server, ignored elsewhere), Ollama receives `think`. `auto`
+  sends nothing. Note: Ollama returns an error if `think` is set for a
+  model without thinking support — use `auto` there.
