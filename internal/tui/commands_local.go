@@ -193,6 +193,24 @@ func modelprofileByName(m *Model, name string) (any, bool) {
 	return nil, false
 }
 
+// --- /think ------------------------------------------------------------------
+
+func cmdThink(m *Model, args string) tea.Cmd {
+	mode := strings.TrimSpace(strings.ToLower(args))
+	switch mode {
+	case "", "status":
+		m.notice = fmt.Sprintf("reasoning mode: %s (session %q, config %q) — auto sends nothing and leaves it to the backend",
+			m.effectiveReasoning(), m.reasoningMode, m.cfg.Chat.Reasoning)
+		return nil
+	case "on", "off", "auto":
+		m.reasoningMode = mode
+		m.notice = "reasoning mode set to " + mode + " for this session"
+		return nil
+	default:
+		return m.fail("usage: /think [on|off|auto|status]")
+	}
+}
+
 // --- /prompt -----------------------------------------------------------------
 
 func cmdPrompt(m *Model, args string) tea.Cmd {

@@ -415,3 +415,19 @@ func TestDebugCommands(t *testing.T) {
 		t.Error("empty debug overlay should say so")
 	}
 }
+
+func TestThinkCommand(t *testing.T) {
+	m := newTestModel(t)
+	runCommand(m, "/think off")
+	if m.reasoningMode != "off" {
+		t.Fatalf("reasoningMode = %q", m.reasoningMode)
+	}
+	runCommand(m, "/think auto")
+	if m.reasoningMode != "auto" {
+		t.Fatalf("reasoningMode = %q", m.reasoningMode)
+	}
+	runCommand(m, "/think banana")
+	if m.errText == "" {
+		t.Fatal("invalid mode must set an error")
+	}
+}
