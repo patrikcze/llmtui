@@ -178,6 +178,11 @@ type chatCompletionRequest struct {
 	Stream      bool           `json:"stream"`
 	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
 	Tools       []wireTool     `json:"tools,omitempty"`
+	// ChatTemplateKwargs passes template variables to backends that support
+	// them (vLLM, llama.cpp server). Only enable_thinking is set, and only
+	// when the user chose an explicit reasoning mode; backends that don't
+	// know the field ignore it.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 type streamOptions struct {
@@ -311,6 +316,12 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	}
 	if req.Stream {
 		body.StreamOpts = &streamOptions{IncludeUsage: true}
+	}
+	switch req.Reasoning {
+	case "on":
+		body.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
+	case "off":
+		body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

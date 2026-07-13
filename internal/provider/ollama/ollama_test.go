@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -182,5 +183,52 @@ func TestDefaultBaseURL(t *testing.T) {
 	p := New("")
 	if p.baseURL != "http://localhost:11434" {
 		t.Errorf("baseURL = %q, want default", p.baseURL)
+	}
+}
+
+// captureChatBody sends req through a Chat call to a stub server and returns
+// the raw JSON request body, so tests can assert on exact wire shape
+// (presence or absence of a field) rather than a decoded struct's zero value.
+func captureChatBody(t *testing.T, req provider.ChatRequest) string {
+	t.Helper()
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		body = string(raw)
+		fmt.Fprint(w, `{"done":true}`)
+	}))
+	defer srv.Close()
+
+	events, err := New(srv.URL).Chat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	for range events {
+	}
+	return body
+}
+
+func TestChatSendsThinkWhenReasoningSet(t *testing.T) {
+	for _, tc := range []struct {
+		reasoning string
+		want      string // substring of the raw body, or "" for absent
+	}{
+		{"", ""},
+		{"on", `"think":true`},
+		{"off", `"think":false`},
+	} {
+		body := captureChatBody(t, provider.ChatRequest{Model: "m", Reasoning: tc.reasoning})
+		if tc.want == "" {
+			if strings.Contains(body, `"think"`) {
+				t.Fatalf("reasoning=%q: body must omit think: %s", tc.reasoning, body)
+			}
+			continue
+		}
+		if !strings.Contains(body, tc.want) {
+			t.Fatalf("reasoning=%q: body missing %s: %s", tc.reasoning, tc.want, body)
+		}
 	}
 }

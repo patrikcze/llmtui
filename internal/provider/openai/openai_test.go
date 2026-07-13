@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -244,5 +245,54 @@ func TestHealthCheckUnreachable(t *testing.T) {
 	p := New("test", "http://127.0.0.1:1", "")
 	if err := p.HealthCheck(context.Background()); err == nil {
 		t.Error("expected health check failure for unreachable server")
+	}
+}
+
+// captureChatBody sends req through a Chat call to a stub server and returns
+// the raw JSON request body, so tests can assert on exact wire shape
+// (presence or absence of a field) rather than a decoded struct's zero value.
+func captureChatBody(t *testing.T, req provider.ChatRequest) string {
+	t.Helper()
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		body = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL+"/v1", "")
+	events, err := p.Chat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	for range events {
+	}
+	return body
+}
+
+func TestChatSendsEnableThinkingWhenReasoningSet(t *testing.T) {
+	for _, tc := range []struct {
+		reasoning string
+		want      string // substring of the raw body, or "" for absent
+	}{
+		{"", ""},
+		{"on", `"chat_template_kwargs":{"enable_thinking":true}`},
+		{"off", `"chat_template_kwargs":{"enable_thinking":false}`},
+	} {
+		body := captureChatBody(t, provider.ChatRequest{Model: "m", Reasoning: tc.reasoning})
+		if tc.want == "" {
+			if strings.Contains(body, "chat_template_kwargs") {
+				t.Fatalf("reasoning=%q: body must omit chat_template_kwargs: %s", tc.reasoning, body)
+			}
+			continue
+		}
+		if !strings.Contains(body, tc.want) {
+			t.Fatalf("reasoning=%q: body missing %s: %s", tc.reasoning, tc.want, body)
+		}
 	}
 }

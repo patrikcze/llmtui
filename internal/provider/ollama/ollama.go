@@ -138,6 +138,9 @@ type chatRequest struct {
 	Stream   bool          `json:"stream"`
 	Options  chatOptions   `json:"options"`
 	Tools    []wireTool    `json:"tools,omitempty"`
+	// Think toggles a reasoning model's thinking phase (Ollama native
+	// field). nil omits it so non-reasoning models are unaffected.
+	Think *bool `json:"think,omitempty"`
 }
 
 // wireTool declares one callable function (same shape as the OpenAI format).
@@ -263,6 +266,14 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 			TopP:        req.TopP,
 			NumPredict:  req.MaxTokens,
 		},
+	}
+	switch req.Reasoning {
+	case "on":
+		think := true
+		body.Think = &think
+	case "off":
+		think := false
+		body.Think = &think
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
