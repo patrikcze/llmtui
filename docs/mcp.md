@@ -101,6 +101,14 @@ MCP results share the workspace tools' output cap (`tools.max_file_kb`,
 default 512 KB): an oversized reply is truncated with a marker rather than
 flooding the model's context.
 
+**Small-model name mangling.** Some smaller local models reproduce
+`mcp__server__tool` names imperfectly (e.g. collapsing the double
+underscores to `mcp_server_tool`). Such a call cannot be routed, but the
+error returned to the model lists the connected MCP tools' exact names, so
+tool-capable models correct themselves on the next round. If a model keeps
+mangling names, that is a model limitation — try a stronger tool-calling
+model.
+
 A timeout means *llmtui* gave up waiting — it does not mean the server
 rolled anything back. A slow `session_start` may still have created a
 session on the server's side even though the timeout fired locally; check

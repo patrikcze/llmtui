@@ -950,7 +950,7 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	if !containsMCPCall(calls) {
 		results := make([]tools.Result, 0, len(calls))
 		for _, c := range calls {
-			res := m.toolRunner.Execute(c)
+			res := annotateUnknownTool(m.toolRunner.Execute(c), m.mcpRegistry)
 			if res.Err != nil {
 				m.toolErr++
 			} else {

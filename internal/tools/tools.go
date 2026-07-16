@@ -220,11 +220,19 @@ func (r *Runner) Execute(c Call) Result {
 	case ToolWebFetch:
 		res.Output, res.Err = r.webFetch(c)
 	default:
-		res.Err = fmt.Errorf("unknown tool %q (available: %s, %s, %s, %s, %s, %s)",
-			c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
+		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
 	}
 	return res
 }
+
+// ErrUnknownTool marks a call whose tool name matched nothing. Callers that
+// know about additional tools (the TUI's MCP integration) detect it with
+// errors.Is and append their own tool names, so the model is never told the
+// built-ins are the complete set when they aren't — a model that mangles an
+// MCP name (e.g. "mcp_srv_tool" for "mcp__srv__tool") must see the correct
+// names to self-correct instead of concluding the tools don't exist.
+var ErrUnknownTool = errors.New("unknown tool")
 
 const maxDirEntries = 200
 

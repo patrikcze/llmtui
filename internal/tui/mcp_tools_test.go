@@ -254,3 +254,66 @@ func TestToolsInspectShowsMCPToolParameters(t *testing.T) {
 		t.Errorf("/tools inspect missing MCP tool detail:\n%s", out)
 	}
 }
+
+// Regression for the "Gemma can't reach MCP tools" incident: a small model
+// mangled an MCP tool name ("mcp_jiraworklog_get_my_worklogs" instead of
+// "mcp__jiraworklog__jira_get_my_worklogs"), and the unknown-tool error
+// listed only the six built-ins — telling the model (and every later model
+// in the session) that MCP tools don't exist. The error must include the
+// connected MCP tool names so the model can self-correct next round.
+func TestUnknownToolErrorListsConnectedMCPTools(t *testing.T) {
+	reg := newConnectedMCPRegistry(t, "jiraworklog", []mcp.Tool{
+		{Server: "jiraworklog", Name: "jira_get_my_worklogs", Description: "get worklogs", Schema: json.RawMessage(`{"type":"object"}`)},
+	}, nil)
+	runner := tools.NewRunner(t.TempDir(), 64)
+
+	// The mangled name has single underscores, so SplitMCPToolName does not
+	// recognize it and it executes as an (unknown) built-in.
+	res := annotateUnknownTool(runner.Execute(tools.Call{Tool: "mcp_jiraworklog_get_my_worklogs"}), reg)
+	if res.Err == nil {
+		t.Fatal("unknown tool succeeded")
+	}
+	msg := res.Err.Error()
+	if !strings.Contains(msg, "mcp__jiraworklog__jira_get_my_worklogs") {
+		t.Errorf("error does not teach the correct MCP name:\n%s", msg)
+	}
+	if !strings.Contains(msg, "double underscore") {
+		t.Errorf("error does not call out the __ naming rule:\n%s", msg)
+	}
+
+	// No connected servers → the plain built-in error passes through.
+	plain := annotateUnknownTool(runner.Execute(tools.Call{Tool: "mcp_jiraworklog_get_my_worklogs"}), mcp.NewRegistry(nil, nil))
+	if plain.Err == nil || strings.Contains(plain.Err.Error(), "mcp__") {
+		t.Errorf("annotation applied without connected servers: %v", plain.Err)
+	}
+
+	// Successful and non-unknown-tool errors are untouched.
+	ok := annotateUnknownTool(tools.Result{Output: "fine"}, reg)
+	if ok.Err != nil || ok.Output != "fine" {
+		t.Errorf("successful result modified: %+v", ok)
+	}
+}
+
+// The same annotation must reach the async mixed-batch path.
+func TestRunMixedToolBatchAnnotatesUnknownTool(t *testing.T) {
+	reg := newConnectedMCPRegistry(t, "jiraworklog", []mcp.Tool{
+		{Server: "jiraworklog", Name: "session_start", Schema: json.RawMessage(`{"type":"object"}`)},
+	}, func(name string, input json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: "ok"}, nil
+	})
+	runner := tools.NewRunner(t.TempDir(), 64)
+	cmd := runMixedToolBatch(context.Background(), runner, reg, []tools.Call{
+		{ID: "c1", Tool: "mcp_jiraworklog_session_start"}, // mangled: not an MCP call
+		{ID: "c2", MCPServer: "jiraworklog", MCPTool: "session_start", MCPArgs: `{}`},
+	})
+	msg, ok := cmd().(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T", cmd())
+	}
+	if msg.results[0].Err == nil || !strings.Contains(msg.results[0].Err.Error(), "mcp__jiraworklog__session_start") {
+		t.Errorf("mixed-batch unknown-tool error not annotated: %v", msg.results[0].Err)
+	}
+	if msg.results[1].Err != nil {
+		t.Errorf("valid MCP call failed: %v", msg.results[1].Err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -114,6 +115,29 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	return res
 }
 
+// annotateUnknownTool extends an unknown-tool error with the connected MCP
+// servers' tool names. The Runner's own error lists only the built-in tools
+// (that package is MCP-unaware), which would tell the model the built-ins are
+// everything — so a model that mangled an MCP name ("mcp_srv_tool" instead of
+// "mcp__srv__tool", common with small local models) would conclude MCP tools
+// don't exist and never retry, instead of correcting itself from the list.
+func annotateUnknownTool(res tools.Result, mcpReg *mcp.Registry) tools.Result {
+	if res.Err == nil || !errors.Is(res.Err, tools.ErrUnknownTool) {
+		return res
+	}
+	specs := mcpToolSpecs(mcpReg)
+	if len(specs) == 0 {
+		return res
+	}
+	names := make([]string, 0, len(specs))
+	for _, s := range specs {
+		names = append(names, s.Name)
+	}
+	res.Err = fmt.Errorf("%w; connected MCP tools (use these exact names, including the double underscores): %s",
+		res.Err, strings.Join(names, ", "))
+	return res
+}
+
 // containsMCPCall reports whether any call in the batch targets an MCP
 // server — the signal runToolCalls (Task 7) uses to decide between the
 // unchanged synchronous native path and the new async path.
@@ -159,7 +183,7 @@ func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Re
 				results = append(results, executeMCPCall(ctx, mcpReg, c, maxBytes))
 				continue
 			}
-			results = append(results, runner.Execute(c))
+			results = append(results, annotateUnknownTool(runner.Execute(c), mcpReg))
 		}
 		return mcpToolResultsMsg{results: results}
 	}

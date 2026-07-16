@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -336,5 +337,19 @@ func TestDescribeMCPCall(t *testing.T) {
 	want := `jiraWorklog: session_start({"issue_key":"DEMO-1"})`
 	if got != want {
 		t.Errorf("Describe = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteUnknownToolWrapsSentinel(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	res := r.Execute(Call{Tool: "mcp_srv_do_thing"})
+	if res.Err == nil {
+		t.Fatal("unknown tool succeeded")
+	}
+	if !errors.Is(res.Err, ErrUnknownTool) {
+		t.Errorf("err = %v, want it to wrap ErrUnknownTool", res.Err)
+	}
+	if !strings.Contains(res.Err.Error(), "mcp_srv_do_thing") {
+		t.Errorf("err = %v, want it to name the unknown tool", res.Err)
 	}
 }
