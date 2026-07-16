@@ -71,6 +71,7 @@ const (
 	pickerNone pickerKind = iota
 	pickerModel
 	pickerProvider
+	pickerSkill
 )
 
 func slashCommands() []slashCommand {
@@ -351,10 +352,13 @@ func selectedIndex(items []string, selected string) int {
 
 func (m *Model) renderPicker() {
 	var content string
-	if m.pickerKind == pickerModel {
+	switch m.pickerKind {
+	case pickerModel:
 		content = m.modelsOverlay(m.pickerModels)
-	} else {
+	case pickerProvider:
 		content = m.providersOverlay()
+	case pickerSkill:
+		content = m.skillsPickerOverlay()
 	}
 	m.viewport.SetContent(content)
 	m.viewport.GotoTop()

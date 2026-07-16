@@ -26,7 +26,7 @@ mkdir -p .llmtui/skills/go-agent-loop-review
 $EDITOR .llmtui/skills/go-agent-loop-review/SKILL.md   # format below
 llmtui chat
 /skills list
-/skills use go-agent-loop-review
+# choose with ↑/↓, then Enter to activate for this session
 ```
 
 The skill's instructions are now part of every request in this session

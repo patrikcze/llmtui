@@ -78,7 +78,7 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | Command | Description |
 | --- | --- |
 | `/skills` · `/skills status` | Skills overlay: discovered, active, limits, model-driven load state |
-| `/skills list` | Every discovered skill: id, version, source, active scope |
+| `/skills list` | Arrow-key picker of discovered skills; `Enter` activates/deactivates the selected skill for the session |
 | `/skills active` | Active skills in deterministic prompt order |
 | `/skills inspect <id>` | Metadata, provenance, hash, recommended tools, content preview |
 | `/skills use <id> [--scope run\|session]` | Activate a skill (default: session; model-driven loads are always run-scoped) |

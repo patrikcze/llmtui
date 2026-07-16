@@ -842,15 +842,18 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		kind := m.pickerKind
 		m.closeOverlay()
 		if m.busy() {
-			m.errText = "switching providers or models is unavailable while a reply is running — esc to stop it first"
+			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"
 			m.refreshViewport()
 			return m, nil
 		}
 		if kind == pickerProvider {
 			return m, m.switchProvider(selection)
 		}
-		m.setModel(selection)
-		return m, nil
+		if kind == pickerModel {
+			m.setModel(selection)
+			return m, nil
+		}
+		return m, m.toggleSkillPicker(selection)
 	}
 	if msg.String() == "q" {
 		m.closeOverlay()

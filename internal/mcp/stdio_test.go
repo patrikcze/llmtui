@@ -103,6 +103,12 @@ func TestStdioHandshakeListAndCall(t *testing.T) {
 	}
 }
 
+func TestStdioClientVersion(t *testing.T) {
+	if clientVersion != "0.9.3" {
+		t.Errorf("clientVersion = %q, want release version 0.9.3", clientVersion)
+	}
+}
+
 func TestStdioCallAfterCloseFails(t *testing.T) {
 	c := newPipedClient(t)
 	ctx := context.Background()

@@ -23,7 +23,7 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 	case "", "status":
 		m.openOverlay(m.skillsStatusOverlay())
 	case "list":
-		m.openOverlay(m.skillsListOverlay())
+		m.openSkillsPicker()
 	case "active":
 		m.openOverlay(m.skillsActiveOverlay())
 	case "inspect":
@@ -59,6 +59,39 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 		return m.fail("usage: /skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]")
 	}
 	return nil
+}
+
+// openSkillsPicker presents discovered skills as an arrow-key picker. It
+// stores qualified IDs so duplicate IDs from different sources remain safe
+// and unambiguous when the selected skill is activated.
+func (m *Model) openSkillsPicker() {
+	skills := m.skillMgr.Skills()
+	m.pickerKind = pickerSkill
+	m.pickerItems = make([]string, 0, len(skills))
+	m.pickerIdx = 0
+	for i, s := range skills {
+		m.pickerItems = append(m.pickerItems, s.QualifiedID())
+		if _, active := m.skillMgr.IsActive(s.QualifiedID()); active {
+			m.pickerIdx = i
+			break
+		}
+	}
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+// toggleSkillPicker activates an inactive skill for the session and removes
+// an active one. This matches /skills use's default scope while preserving
+// /skills use --scope run for deliberate one-run activation.
+func (m *Model) toggleSkillPicker(id string) tea.Cmd {
+	if _, active := m.skillMgr.IsActive(id); active {
+		if err := m.skillMgr.Deactivate(id); err != nil {
+			return m.fail(err.Error())
+		}
+		m.notice = "◈ skill " + id + " deactivated"
+		return nil
+	}
+	return m.skillsUse(id)
 }
 
 // skillsUse parses "<id> [--scope run|session]" and activates the skill.
@@ -178,6 +211,44 @@ func (m *Model) skillsListOverlay() string {
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("/skills inspect <id> · /skills use <id> [--scope run|session]"))
 	return m.overlayFooter(&b)
+}
+
+func (m *Model) skillsPickerOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("skills") + "\n\n")
+	skills := m.skillMgr.Skills()
+	if len(skills) == 0 {
+		b.WriteString(m.theme.SystemNote.Render("no skills found — add one under a search path (/skills paths) or enable a plugin") + "\n")
+		b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
+		return b.String()
+	}
+
+	b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%-26s %-9s %-22s %-8s %s", "id", "version", "source", "active", "description")) + "\n")
+	for i, s := range skills {
+		scope, isActive := m.skillMgr.IsActive(s.QualifiedID())
+		activeStr := "-"
+		if isActive {
+			activeStr = string(scope)
+		}
+		source := string(s.Source)
+		if s.Source == skill.SourcePlugin {
+			source = "plugin:" + s.PluginID
+		}
+		row := fmt.Sprintf("%-26s %-9s %-22s %-8s %s",
+			s.Meta.ID, orNone(s.Meta.Version), source, activeStr, truncateForRow(s.Meta.Description))
+		marker := "  "
+		label := m.theme.SystemNote.Render(row)
+		if isActive {
+			label = m.theme.StatusValue.Render(row)
+		}
+		if m.pickerKind == pickerSkill && i == m.pickerIdx {
+			marker = m.theme.BadgeOK.Render("▸ ")
+			label = m.theme.BadgeOK.Render(row)
+		}
+		b.WriteString(marker + label + "\n")
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter activate/deactivate (session) · esc cancel"))
+	return b.String()
 }
 
 func (m *Model) skillsActiveOverlay() string {

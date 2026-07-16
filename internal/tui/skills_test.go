@@ -452,6 +452,41 @@ func TestSkillsUseCommandScopes(t *testing.T) {
 	}
 }
 
+func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
+	m := newTestModel(t)
+	setupSkills(t, m, map[string]string{
+		"alpha": "Alpha instructions.",
+		"beta":  "Beta instructions.",
+	})
+
+	cmdSkills(m, "list")
+	if !m.overlayOpen || m.pickerKind != pickerSkill {
+		t.Fatal("/skills list should open the skills picker")
+	}
+	if len(m.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter activate/deactivate") {
+		t.Fatalf("skills picker = items %v, view:\n%s", m.pickerItems, m.viewport.View())
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	selected := m.pickerItems[m.pickerIdx]
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlayOpen {
+		t.Error("activating a skill should close the picker")
+	}
+	if scope, active := m.skillMgr.IsActive(selected); !active || scope != skill.ScopeSession {
+		t.Fatalf("selected skill %q scope = %q, active = %v; want active session scope", selected, scope, active)
+	}
+
+	cmdSkills(m, "list")
+	if m.pickerItems[m.pickerIdx] != selected {
+		t.Errorf("picker index = %d, want active skill %q", m.pickerIdx, selected)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if _, active := m.skillMgr.IsActive(selected); active {
+		t.Errorf("selected skill %q remained active after toggling", selected)
+	}
+}
+
 func TestSkillsWorkWithoutToolSupport(t *testing.T) {
 	m := newTestModel(t) // tools stay off: no native calling, no fenced protocol
 	setupSkills(t, m, map[string]string{"secure-powershell": "Always set StrictMode."})
