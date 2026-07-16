@@ -60,7 +60,7 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 		return mcp.Result{Content: `{"session":{"id":"ses_1"}}`}, nil
 	})
 	c := tools.Call{ID: "call_1", MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{"issue_key":"DEMO-1"}`}
-	res := executeMCPCall(context.Background(), reg, c)
+	res := executeMCPCall(context.Background(), reg, c, 0)
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
@@ -74,15 +74,61 @@ func TestExecuteMCPCallServerReportsIsError(t *testing.T) {
 		return mcp.Result{Content: "issue key not found", IsError: true}, nil
 	})
 	c := tools.Call{MCPServer: "jiraWorklog", MCPTool: "session_start", MCPArgs: `{}`}
-	res := executeMCPCall(context.Background(), reg, c)
+	res := executeMCPCall(context.Background(), reg, c, 0)
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "issue key not found") {
 		t.Errorf("err = %v, want it to surface the server's error content", res.Err)
 	}
 }
 
+func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
+	huge := strings.Repeat("x", 4096)
+	reg := newConnectedMCPRegistry(t, "big", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: huge}, nil
+	})
+	c := tools.Call{MCPServer: "big", MCPTool: "dump", MCPArgs: `{}`}
+
+	res := executeMCPCall(context.Background(), reg, c, 1024)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	if len(res.Output) > 1024+128 {
+		t.Fatalf("output not capped: %d bytes", len(res.Output))
+	}
+	if !strings.Contains(res.Output, "truncated (1024 of 4096 bytes shown)") {
+		t.Errorf("missing truncation marker: %q", res.Output[len(res.Output)-80:])
+	}
+
+	// Uncapped (0) keeps the full content.
+	res = executeMCPCall(context.Background(), reg, c, 0)
+	if res.Output != huge {
+		t.Errorf("maxBytes=0 should not truncate (got %d bytes)", len(res.Output))
+	}
+}
+
+func TestRunMixedToolBatchCapsMCPResultAtRunnerLimit(t *testing.T) {
+	huge := strings.Repeat("y", 128*1024)
+	reg := newConnectedMCPRegistry(t, "big", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: huge}, nil
+	})
+	runner := tools.NewRunner(t.TempDir(), 64) // 64 KB cap
+	cmd := runMixedToolBatch(context.Background(), runner, reg, []tools.Call{
+		{ID: "c1", MCPServer: "big", MCPTool: "dump", MCPArgs: `{}`},
+	})
+	msg, ok := cmd().(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", cmd())
+	}
+	if got := len(msg.results[0].Output); got > 64*1024+128 {
+		t.Errorf("MCP result not capped at the runner's limit: %d bytes", got)
+	}
+	if !strings.Contains(msg.results[0].Output, "truncated") {
+		t.Error("missing truncation marker")
+	}
+}
+
 func TestExecuteMCPCallUnknownServer(t *testing.T) {
 	reg := mcp.NewRegistry(nil, nil)
-	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "ghost", MCPTool: "x", MCPArgs: `{}`})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "ghost", MCPTool: "x", MCPArgs: `{}`}, 0)
 	if res.Err == nil {
 		t.Fatal("expected an error for an unknown server")
 	}
@@ -91,7 +137,7 @@ func TestExecuteMCPCallUnknownServer(t *testing.T) {
 func TestExecuteMCPCallDisconnectedServer(t *testing.T) {
 	// Configured but never connected: Get succeeds, CallTool must still fail.
 	reg := mcp.NewRegistry([]mcp.ServerConfig{{Name: "srv", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: time.Second}}, nil)
-	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "srv", MCPTool: "x", MCPArgs: `{}`})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "srv", MCPTool: "x", MCPArgs: `{}`}, 0)
 	if res.Err == nil {
 		t.Fatal("expected an error for a disconnected server")
 	}
@@ -108,7 +154,7 @@ func TestExecuteMCPCallTimeout(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	start := time.Now()
-	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "slow", MCPTool: "x", MCPArgs: `{}`})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "slow", MCPTool: "x", MCPArgs: `{}`}, 0)
 	elapsed := time.Since(start)
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "timed out") {
 		t.Errorf("err = %v, want a timeout error", res.Err)

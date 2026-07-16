@@ -985,3 +985,105 @@ func TestBusy(t *testing.T) {
 		})
 	}
 }
+
+// A backend that omits tool-call IDs (Ollama's native API always does) must
+// still produce a session where the stored assistant message and the
+// role:"tool" results agree on IDs — a result answering an ID the assistant
+// message doesn't carry is protocol-invalid for strict OpenAI-compatible
+// backends if the session is later replayed against one.
+func TestToolCallIDsBackfilledConsistently(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.session.AddUser("list the files")
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{Name: "list_dir", Arguments: `{"path":""}`}, // no ID, like Ollama
+	}}
+	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true}); cmd == nil {
+		t.Fatal("native tool call did not trigger execution")
+	}
+
+	n := len(m.session.Messages)
+	assistant, result := m.session.Messages[n-2], m.session.Messages[n-1]
+	if assistant.Role != provider.RoleAssistant || len(assistant.ToolCalls) != 1 {
+		t.Fatalf("assistant message = %+v", assistant)
+	}
+	if assistant.ToolCalls[0].ID == "" {
+		t.Fatal("assistant tool call left without an ID")
+	}
+	if result.Role != provider.RoleTool || result.ToolCallID != assistant.ToolCalls[0].ID {
+		t.Fatalf("tool result ID %q does not answer assistant call ID %q",
+			result.ToolCallID, assistant.ToolCalls[0].ID)
+	}
+	firstID := assistant.ToolCalls[0].ID
+
+	// A second round must generate a different ID (no collisions across
+	// rounds). Fresh event (EnsureToolCallIDs fills the slice in place) and
+	// the current generation (the continuation bumped streamGen).
+	m.thinking = true
+	done2 := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
+		{Name: "list_dir", Arguments: `{"path":""}`},
+	}}
+	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done2, ok: true, gen: m.streamGen}); cmd == nil {
+		t.Fatal("second native tool call did not trigger execution")
+	}
+	n = len(m.session.Messages)
+	second := m.session.Messages[n-2]
+	if second.ToolCalls[0].ID == firstID {
+		t.Errorf("tool-call ID %q reused across rounds", firstID)
+	}
+}
+
+// Events stamped with an older stream generation must be ignored: after an
+// Esc-cancel, the abandoned stream's final message races the drain goroutine
+// and can arrive while the *next* request is already streaming. Without the
+// guard, a stale ok=false would finish the live stream prematurely.
+func TestStaleStreamEventIsDropped(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.streamGen = 2
+	m.streamBuf.WriteString("live partial")
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{ok: false, gen: 1})
+	if cmd != nil {
+		t.Fatal("stale event must not schedule work")
+	}
+	if !m.thinking {
+		t.Fatal("stale channel-close finished the live stream")
+	}
+	if m.streamBuf.String() != "live partial" {
+		t.Errorf("stale event touched the live stream buffer: %q", m.streamBuf.String())
+	}
+}
+
+// A firstStreamMsg from a request the user already cancelled (Esc before its
+// first event arrived) must not be adopted as the current stream, and its
+// side effects (native-tools fallback) must not fire.
+func TestStaleFirstStreamMsgNotAdopted(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsNative = true
+	m.streamGen = 2 // a newer request owns the loop
+
+	stale := make(chan provider.ChatEvent)
+	close(stale)
+	m.Update(firstStreamMsg{
+		stream:        stale,
+		event:         provider.ChatEvent{Type: provider.EventDelta, Delta: "ghost"},
+		ok:            true,
+		gen:           1,
+		toolsFellBack: true,
+	})
+
+	if m.stream != nil {
+		t.Fatal("stale stream adopted as the current one")
+	}
+	if !m.toolsNative {
+		t.Error("stale toolsFellBack flipped the native-tools protocol")
+	}
+	if m.streamBuf.Len() != 0 {
+		t.Errorf("stale delta reached the stream buffer: %q", m.streamBuf.String())
+	}
+}

@@ -507,6 +507,8 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 		watchdog.Stop()
 		cancel(context.Canceled)
 	}
+	m.streamGen++
+	gen := m.streamGen
 	prov := m.prov
 	netCfg := m.cfg.Network
 	baseURL := m.cfg.ActiveBaseURL()
@@ -522,7 +524,7 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			stream, err := prov.Chat(ctx, req)
 			if err == nil {
 				ev, ok := <-stream
-				return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1, toolsFellBack: fellBack}
+				return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1, toolsFellBack: fellBack, gen: gen}
 			}
 			// A backend without native tool support rejects the whole request;
 			// retry immediately without the specs (the TUI then switches to
@@ -543,7 +545,7 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			case <-time.After(app.RetryBackoff(netCfg)):
 			}
 		}
-		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true}
+		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true, gen: gen}
 	}
 }
 

@@ -267,3 +267,29 @@ func TestCallsFromNativeMCP(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureToolCallIDs(t *testing.T) {
+	seq := 0
+	batch1 := []provider.ToolCall{
+		{Name: "read_file"},             // Ollama-style: no ID
+		{ID: "srv_9", Name: "list_dir"}, // backend-supplied: kept
+		{Name: "run_command"},
+	}
+	EnsureToolCallIDs(batch1, &seq)
+	if batch1[0].ID == "" || batch1[2].ID == "" {
+		t.Fatalf("empty IDs not filled: %+v", batch1)
+	}
+	if batch1[1].ID != "srv_9" {
+		t.Errorf("backend-supplied ID overwritten: %q", batch1[1].ID)
+	}
+	if batch1[0].ID == batch1[2].ID {
+		t.Errorf("generated IDs collide within a batch: %q", batch1[0].ID)
+	}
+
+	// A later round must not reuse IDs from an earlier one.
+	batch2 := []provider.ToolCall{{Name: "write_file"}}
+	EnsureToolCallIDs(batch2, &seq)
+	if batch2[0].ID == batch1[0].ID || batch2[0].ID == batch1[2].ID {
+		t.Errorf("generated ID %q collides across rounds", batch2[0].ID)
+	}
+}

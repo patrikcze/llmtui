@@ -17,6 +17,12 @@ The window size is resolved in this order: `context.max_context_tokens`
   messages: condense older messages into a session summary
 - `auto` (default) — summarize long conversations, truncate short ones
 
+Whatever the strategy, the kept window never opens on a tool result: if the
+`keep_last_messages` boundary would separate a tool result from the
+assistant message that requested it, the window widens backwards to include
+the request, keeping the tool-call/result pair intact (a lone `tool` message
+is protocol-invalid for OpenAI-compatible backends).
+
 ## The summary
 
 Built by a **heuristic summarizer** (no extra LLM call): it keeps lead

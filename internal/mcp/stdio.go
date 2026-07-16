@@ -23,7 +23,7 @@ const protocolVersion = "2024-11-05"
 // clientName / clientVersion identify llmtui to servers in the handshake.
 const (
 	clientName    = "llmtui"
-	clientVersion = "0.9.0"
+	clientVersion = "0.9.1"
 )
 
 // StdioClient speaks MCP (JSON-RPC 2.0 over newline-delimited stdio) to a

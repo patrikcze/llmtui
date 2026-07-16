@@ -223,7 +223,7 @@ tools:
   approve: ask # ask | auto
   native: auto # auto | off — tool-calling protocol (see below)
   max_iterations: 10 # tool rounds per user message
-  max_file_kb: 512   # per-file read/write and command output cap
+  max_file_kb: 512   # per-file read/write, command output, and MCP result cap
   command_timeout: "30s"
 ```
 

@@ -73,7 +73,11 @@ func mcpServerTimeout(mcpReg *mcp.Registry, server string) time.Duration {
 // server, a disconnected server, malformed arguments, a timeout, or a
 // cancellation all land in Result.Err so the model can see what happened
 // and retry, matching the native tools' "the model sees the problem" style.
-func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call) tools.Result {
+// maxBytes, when positive, caps the result content the same way the native
+// tools cap file reads and command output — an MCP server is an external
+// process and must not be able to flood the context (or memory) with an
+// arbitrarily large reply. 0 means uncapped.
+func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, maxBytes int) tools.Result {
 	res := tools.Result{Call: c}
 	if mcpReg == nil {
 		res.Err = fmt.Errorf("mcp server %q: MCP is not available", c.MCPServer)
@@ -99,9 +103,13 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call) too
 		}
 		return res
 	}
-	res.Output = out.Content
+	content := out.Content
+	if maxBytes > 0 && len(content) > maxBytes {
+		content = content[:maxBytes] + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", maxBytes, len(out.Content))
+	}
+	res.Output = content
 	if out.IsError {
-		res.Err = fmt.Errorf("%s", out.Content)
+		res.Err = fmt.Errorf("%s", content)
 	}
 	return res
 }
@@ -137,11 +145,18 @@ func mcpBatchNotice(calls []tools.Call) string {
 // sequential execution is negligible next to model-inference time for the
 // handful of calls a typical turn makes.
 func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Registry, calls []tools.Call) tea.Cmd {
+	// MCP results share the native tools' output cap so an external server
+	// can't flood the context. Falls back to the NewRunner default when no
+	// runner is available.
+	maxBytes := 512 * 1024
+	if runner != nil {
+		maxBytes = runner.MaxResultBytes()
+	}
 	return func() tea.Msg {
 		results := make([]tools.Result, 0, len(calls))
 		for _, c := range calls {
 			if c.MCPServer != "" {
-				results = append(results, executeMCPCall(ctx, mcpReg, c))
+				results = append(results, executeMCPCall(ctx, mcpReg, c, maxBytes))
 				continue
 			}
 			results = append(results, runner.Execute(c))

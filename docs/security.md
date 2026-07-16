@@ -128,6 +128,13 @@ add` reminds you).
   - **Controlled environment** — the server subprocess does not inherit your
     full environment, only a small safe base plus the values you configure
     under `env`; connected servers are stopped on disconnect/disable/quit.
+  - **Bounded results** — every MCP call is time-limited (per-server
+    `timeout`, default 30s) and its result is size-capped at
+    `tools.max_file_kb` with a visible truncation marker, so an external
+    server cannot flood the model's context or block the app indefinitely.
+    Server names may not contain `__` (the tool-name separator), so a tool
+    call can never be routed to a different server than the one that
+    advertised it.
   - **Invalid config never blocks startup** — `/doctor mcp` validates config,
     but a malformed disabled server does not affect normal chat; command
     existence is only probed for enabled servers while MCP is enabled.

@@ -163,6 +163,12 @@ func (r *Registry) beginConnect(ctx context.Context, name string) (context.Conte
 	if !ok {
 		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("no MCP server named %q", name)
 	}
+	if err := s.Config.Validate(); err != nil {
+		// Refuse to connect a misconfigured server (e.g. a name containing
+		// "__", which would make tool-call routing ambiguous) instead of
+		// leaving the problem to surface as a misrouted call later.
+		return nil, nil, 0, ServerConfig{}, nil, err
+	}
 	switch {
 	case s.client != nil:
 		return nil, nil, 0, ServerConfig{}, nil, fmt.Errorf("MCP server %q is already connected", name)

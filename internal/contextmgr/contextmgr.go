@@ -96,7 +96,8 @@ func countConversational(msgs []provider.Message) int {
 
 // Split divides conversational messages into (older, recent) keeping the
 // last keepLast messages intact. System messages are excluded entirely —
-// the prompt composer re-adds the system section itself.
+// the prompt composer re-adds the system section itself. The window may be
+// widened past keepLast so it never severs a tool-call/result pair.
 func Split(msgs []provider.Message, keepLast int) (older, recent []provider.Message) {
 	var conv []provider.Message
 	for _, m := range msgs {
@@ -110,7 +111,16 @@ func Split(msgs []provider.Message, keepLast int) (older, recent []provider.Mess
 	if len(conv) <= keepLast {
 		return nil, conv
 	}
-	return conv[:len(conv)-keepLast], conv[len(conv)-keepLast:]
+	start := len(conv) - keepLast
+	// The kept window must never open on a tool result: a role:"tool" message
+	// whose assistant tool-call message was trimmed away is protocol-invalid
+	// (OpenAI-compatible backends reject the request outright). Widen the
+	// window backwards until it starts at the assistant message that carries
+	// the calls, keeping call/result pairs intact.
+	for start > 0 && conv[start].Role == provider.RoleTool {
+		start--
+	}
+	return conv[:start], conv[start:]
 }
 
 // SummaryInput feeds a Summarizer.

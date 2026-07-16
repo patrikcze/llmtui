@@ -78,8 +78,11 @@ workspace tools use. There is no separate toggle: `/mcp connect` plus
 
 Each tool is exposed to the model as `mcp__<server>__<tool>` (e.g.
 `mcp__jiraWorklog__session_start`), so tools from different servers can
-never collide by name. This is **native function-calling only** — a model
-without native tool-calling support won't see MCP tools, the same as today.
+never collide by name. Because `__` is the server/tool separator, a server
+name must not itself contain `__` — `/mcp connect` refuses such a name so a
+call can never be routed to the wrong server. This is **native
+function-calling only** — a model without native tool-calling support won't
+see MCP tools, the same as today.
 
 **Approval.** MCP calls have their own "always approve" state, kept
 separate from the workspace-tools one: accepting "Always" on a file write
@@ -93,6 +96,10 @@ containing any MCP call runs asynchronously and is bounded by that server's
 itself block on a real network service, and must not freeze the UI. Press
 Esc or Ctrl+C to cancel an in-flight batch, the same as an in-flight
 streaming response.
+
+MCP results share the workspace tools' output cap (`tools.max_file_kb`,
+default 512 KB): an oversized reply is truncated with a marker rather than
+flooding the model's context.
 
 A timeout means *llmtui* gave up waiting — it does not mean the server
 rolled anything back. A slow `session_start` may still have created a

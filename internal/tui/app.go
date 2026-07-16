@@ -65,6 +65,12 @@ type healthMsg struct {
 type streamEventMsg struct {
 	event provider.ChatEvent
 	ok    bool
+	// gen identifies which request this event belongs to (Model.streamGen at
+	// dispatch time). After an Esc-cancel the abandoned stream still delivers
+	// one final message that races the drain goroutine; without the stamp it
+	// could be mistaken for an event of the *next* request and finish or
+	// corrupt it (see handleStreamEvent's guard).
+	gen int
 }
 
 type clipboardImageMsg struct {
@@ -186,6 +192,14 @@ type Model struct {
 	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
 	bypassCache     bool                // skip the response cache for the next dispatch
 	streamToolCalls []provider.ToolCall // native calls from the finishing stream
+	// streamGen is a monotonic request counter; every firstStreamMsg and
+	// streamEventMsg is stamped with the generation of the request that
+	// produced it so events from an abandoned stream can never be attributed
+	// to the current one (same pattern as mcpBatchGen).
+	streamGen int
+	// toolCallSeq feeds tools.EnsureToolCallIDs so generated tool-call IDs
+	// stay unique across every round of a session.
+	toolCallSeq int
 
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
@@ -408,10 +422,10 @@ func (m *Model) checkHealth(initial bool) tea.Cmd {
 	}
 }
 
-func waitForEvent(stream <-chan provider.ChatEvent) tea.Cmd {
+func waitForEvent(stream <-chan provider.ChatEvent, gen int) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-stream
-		return streamEventMsg{event: ev, ok: ok}
+		return streamEventMsg{event: ev, ok: ok, gen: gen}
 	}
 }
 
@@ -589,6 +603,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case firstStreamMsg:
+		if msg.gen != m.streamGen {
+			// A request the user already cancelled (Esc before its first event)
+			// finally connected. Adopting its stream would splice a dead
+			// request into whatever is running now; drain it instead so the
+			// producer goroutine can exit.
+			if msg.stream != nil {
+				go func(s <-chan provider.ChatEvent) {
+					for range s {
+					}
+				}(msg.stream)
+			}
+			return m, nil
+		}
 		m.stream = msg.stream
 		m.lastDebug.Retries = msg.retries
 		if msg.toolsFellBack && m.toolsNative {
@@ -598,7 +625,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastDebug.CacheStatus = "bypass"
 			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
 		}
-		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok})
+		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok, gen: msg.gen})
 
 	case streamEventMsg:
 		return m.handleStreamEvent(msg)
@@ -1144,6 +1171,9 @@ type firstStreamMsg struct {
 	// toolsFellBack reports that the backend rejected native tool specs and
 	// the request was retried without them.
 	toolsFellBack bool
+	// gen is Model.streamGen at dispatch time; a mismatch marks this as the
+	// first message of a request that was cancelled before it produced output.
+	gen int
 }
 
 // cacheVisionInfo remembers backend-reported vision capability from a
@@ -1425,6 +1455,11 @@ func (m *Model) flushThinkFilter() {
 }
 
 func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != m.streamGen {
+		// An event from an abandoned request (Esc-cancelled, then a new one
+		// dispatched). It must not touch the stream that's running now.
+		return m, nil
+	}
 	if !m.thinking {
 		// Stream already finalized (e.g. stopped with Esc); drop late events.
 		return m, nil
@@ -1450,7 +1485,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.idleWatchdog.Reset(m.idleTimeout)
 		}
 		m.refreshViewport()
-		return m, waitForEvent(m.stream)
+		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDelta:
 		delta := msg.event.Delta
 		if m.thinkFilter != nil {
@@ -1468,9 +1503,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.idleWatchdog.Reset(m.idleTimeout)
 		}
 		m.refreshViewport()
-		return m, waitForEvent(m.stream)
+		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
 		emptyToolContinuation := m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
+		// Backfill IDs a backend omitted (Ollama never sends any) before the
+		// calls are stored on the assistant message, so the stored message and
+		// the tool results always carry the same IDs.
+		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
 		m.streamToolCalls = msg.event.ToolCalls
 		m.finishStream(msg.event.Usage)
 		if emptyToolContinuation {

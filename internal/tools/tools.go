@@ -149,6 +149,11 @@ func NewRunner(root string, maxKB int) *Runner {
 // Root returns the workspace directory.
 func (r *Runner) Root() string { return r.root }
 
+// MaxResultBytes returns the output cap this runner applies to file reads and
+// command output, so other tool sources (MCP) can bound their results the
+// same way.
+func (r *Runner) MaxResultBytes() int { return r.maxKB * 1024 }
+
 // resolve turns a workspace-relative path into an absolute one, rejecting
 // anything that would land outside the root (absolute paths, "..", and
 // existing symlinks that point out of the workspace).

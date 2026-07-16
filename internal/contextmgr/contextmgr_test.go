@@ -84,6 +84,39 @@ func TestSplitKeepsLastMessages(t *testing.T) {
 	}
 }
 
+func TestSplitNeverSeversToolCallResultPairs(t *testing.T) {
+	conv := []provider.Message{
+		{Role: provider.RoleUser, Content: "u1"},
+		{Role: provider.RoleAssistant, Content: "a1"},
+		{Role: provider.RoleUser, Content: "u2"},
+		{Role: provider.RoleAssistant, Content: "", ToolCalls: []provider.ToolCall{{ID: "c1", Name: "read_file"}, {ID: "c2", Name: "list_dir"}}},
+		{Role: provider.RoleTool, ToolCallID: "c1", Content: "file contents"},
+		{Role: provider.RoleTool, ToolCallID: "c2", Content: "dir listing"},
+		{Role: provider.RoleAssistant, Content: "done"},
+	}
+
+	// keepLast=3 would open the kept window on the second tool result,
+	// leaving a role:"tool" message without its assistant tool-call message —
+	// protocol-invalid for OpenAI-compatible backends. The window must widen
+	// backwards to start at the assistant message carrying the calls.
+	older, recent := Split(conv, 3)
+	if len(recent) == 0 || recent[0].Role == provider.RoleTool {
+		t.Fatalf("recent starts with %v, must never start on a tool result", recent[0].Role)
+	}
+	if recent[0].Role != provider.RoleAssistant || len(recent[0].ToolCalls) != 2 {
+		t.Fatalf("recent[0] = %+v, want the assistant message carrying the tool calls", recent[0])
+	}
+	if len(older)+len(recent) != len(conv) {
+		t.Errorf("messages lost: %d + %d != %d", len(older), len(recent), len(conv))
+	}
+
+	// A boundary already on a non-tool message keeps exact keepLast counts.
+	older, recent = Split(conv, 1)
+	if len(recent) != 1 || len(older) != 6 {
+		t.Errorf("Split(conv, 1) = %d/%d, want 6/1", len(older), len(recent))
+	}
+}
+
 func TestHeuristicSummarizerKeepsTechnicalDetail(t *testing.T) {
 	input := SummaryInput{
 		MaxTokens: 500,

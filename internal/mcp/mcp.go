@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -80,6 +81,12 @@ type ClientFactory func(ServerConfig) (Client, error)
 func (c ServerConfig) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("mcp server has no name")
+	}
+	if strings.Contains(c.Name, "__") {
+		// "__" separates server from tool in the model-visible tool name
+		// ("mcp__<server>__<tool>"); a server name containing it would make
+		// the split ambiguous and could route a call to the wrong server.
+		return fmt.Errorf("mcp server %q: name must not contain %q (reserved as the tool-name separator)", c.Name, "__")
 	}
 	switch c.Transport {
 	case TransportStdio:

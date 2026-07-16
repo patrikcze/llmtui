@@ -27,6 +27,10 @@ func TestValidate(t *testing.T) {
 		{Name: "a", Transport: "carrier-pigeon", Command: "srv"},
 		{Name: "a", Transport: TransportStdio, Command: ""},
 		{Name: "a", Transport: TransportStdio, Command: "srv", Approve: "maybe"},
+		// "__" is the server/tool separator in model-visible tool names
+		// ("mcp__<server>__<tool>"); allowing it in a server name would make
+		// SplitMCPToolName ambiguous and could misroute a call.
+		{Name: "my__server", Transport: TransportStdio, Command: "srv"},
 	}
 	for i, c := range bad {
 		if err := c.Validate(); err == nil {
@@ -559,5 +563,21 @@ func TestStaleConnectErrorPreservesNewerAttempt(t *testing.T) {
 	s, _ := r.Get("s")
 	if s.Status != StatusConnected || s.LastErr != nil {
 		t.Fatalf("stale error clobbered connected state: status=%q err=%v", s.Status, s.LastErr)
+	}
+}
+
+func TestConnectRefusesInvalidServerName(t *testing.T) {
+	factory := func(c ServerConfig) (Client, error) {
+		t.Fatal("factory must not run for an invalid server name")
+		return nil, nil
+	}
+	r := NewRegistry([]ServerConfig{{
+		Name: "bad__name", Enabled: true, Transport: TransportStdio, Command: "srv",
+	}}, factory)
+	if err := r.Connect(context.Background(), "bad__name"); err == nil {
+		t.Fatal("Connect accepted a server name containing the reserved __ separator")
+	}
+	if s, ok := r.Get("bad__name"); !ok || s.Status == StatusConnected {
+		t.Errorf("server state after refused connect: %+v", s)
 	}
 }

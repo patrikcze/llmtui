@@ -99,6 +99,22 @@ func SplitMCPToolName(name string) (server, tool string, ok bool) {
 	return server, tool, true
 }
 
+// EnsureToolCallIDs fills in IDs for native tool calls whose backend supplied
+// none (Ollama's native API carries no call IDs; some OpenAI-compatible
+// servers omit them). It must run before the calls are stored on the
+// assistant message, so the stored message and the role:"tool" results built
+// from these same calls always agree on IDs — a result answering an ID the
+// assistant message doesn't carry is protocol-invalid for strict backends.
+// seq persists across rounds so generated IDs never collide within a session.
+func EnsureToolCallIDs(tcs []provider.ToolCall, seq *int) {
+	for i := range tcs {
+		if tcs[i].ID == "" {
+			*seq++
+			tcs[i].ID = fmt.Sprintf("call_%d", *seq)
+		}
+	}
+}
+
 // CallsFromNative converts native function calls into runnable Calls.
 // Malformed arguments still produce a Call so the runner can report the
 // problem back to the model instead of the batch silently vanishing. Missing
