@@ -30,6 +30,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/rag"
+	"github.com/patrikcze/llmtui/internal/skill"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
@@ -173,6 +174,11 @@ type Model struct {
 	ragBuiltAt time.Time    // when the loaded index was built
 	ragLast    []rag.Result // snippets retrieved for the last dispatch (/debug, /rag)
 
+	// Skills: declarative task-instruction packages. The manager owns
+	// discovery, validation, and run/session activation state; it is
+	// mutex-protected because skill_load executes on tool goroutines.
+	skillMgr *skill.Manager
+
 	// Optional MCP servers (config/interfaces only; no transport wired yet).
 	mcpRegistry    *mcp.Registry
 	mcpBatchCancel context.CancelFunc // cancels an in-flight async MCP tool batch, if any
@@ -298,6 +304,13 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.AnyEstimated = s.Estimated
 	m.sessionName = name
 	m.summary = ""
+	// Restore session-scoped skills, re-resolving each against the current
+	// registry. Missing or changed skills are surfaced, never substituted.
+	if m.skillMgr != nil {
+		if warns := m.skillMgr.RestoreSession(s.Skills); len(warns) > 0 {
+			m.errText = "skills: " + strings.Join(warns, "; ")
+		}
+	}
 }
 
 // rebuildFromConfig (re)derives the components that mirror the config:
@@ -365,6 +378,17 @@ func (m *Model) rebuildFromConfig() {
 	}
 	m.ragOn = cfg.RAG.Enabled && cfg.RAG.Workspace.Enabled
 
+	// Skills: discover skill and plugin packages from local directories.
+	// Discovery only parses files — nothing runs and nothing is activated.
+	// The manager is created once so runtime activations (/skills use,
+	// model-driven skill_load) survive a /config reload.
+	if m.skillMgr == nil {
+		m.skillMgr = skill.NewManager(skillOptionsFromConfig(cfg))
+	} else {
+		m.skillMgr.Configure(skillOptionsFromConfig(cfg))
+	}
+	m.syncSkillLoader()
+
 	// MCP: build the registry from config with the stdio transport. Nothing
 	// is started here — a server is only launched when the user connects it
 	// (/mcp connect), which runs the server's configured command.
@@ -387,8 +411,14 @@ func (m *Model) rebuildFromConfig() {
 }
 
 // sessionRecord builds the persistable form of the current session.
+// Session-scoped skill activations are saved as references (ID, scope,
+// version, hash, source); run-scoped activations are never persisted.
 func (m *Model) sessionRecord() history.Session {
 	prof, _ := m.activeProfile()
+	var skills []skill.Ref
+	if m.skillMgr != nil {
+		skills = m.skillMgr.SessionRefs()
+	}
 	return history.Session{
 		Provider:   m.prov.Name(),
 		Model:      m.model,
@@ -399,6 +429,7 @@ func (m *Model) sessionRecord() history.Session {
 		Prompt:     m.session.TotalPromptTokens,
 		Reply:      m.session.TotalCompletionTokens,
 		Estimated:  m.session.AnyEstimated,
+		Skills:     skills,
 	}
 }
 
@@ -537,6 +568,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Stop generation, keeping the partial reply.
 				m.cancelStream()
 				m.finishStream(nil)
+				m.endAgentRun() // a cancelled run clears run-scoped skills
 				m.errText = "generation stopped"
 				m.refreshViewport()
 			} else if m.mcpBatchCancel != nil {
@@ -545,6 +577,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mcpBatchGen++
 				m.activity = nil
 				m.relayout()
+				m.endAgentRun()
 				m.errText = "mcp tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
@@ -1259,6 +1292,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	case m.thinking && m.cancelStream != nil:
 		m.cancelStream()
 		m.finishStream(nil)
+		m.endAgentRun()
 		m.errText = "generation stopped"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1268,6 +1302,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.mcpBatchGen++
 		m.activity = nil
 		m.relayout()
+		m.endAgentRun()
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1514,6 +1549,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.finishStream(msg.event.Usage)
 		if emptyToolContinuation {
 			m.errText = "Model returned an empty completion after tool execution."
+			m.endAgentRun()
 			m.refreshViewport()
 			return m, nil
 		}
@@ -1528,6 +1564,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		if cmd := m.maybeRunTools(); cmd != nil {
 			return m, cmd
+		}
+		// No tool continuation and no pending approval: the run reached its
+		// final answer, so run-scoped skills deactivate. (A pending approval
+		// means the run is still in flight — cleanup happens on its own
+		// completion or denial path.)
+		if len(m.pendingCalls) == 0 {
+			m.endAgentRun()
 		}
 		return m, nil
 	case provider.EventError:
@@ -1572,6 +1615,7 @@ func (m *Model) streamFailed(err error) {
 	}
 	m.idleWatchdog = nil
 	m.drainStream()
+	m.endAgentRun() // a failed run clears run-scoped skills
 	m.refreshViewport()
 }
 

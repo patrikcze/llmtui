@@ -40,6 +40,17 @@ add` reminds you).
 
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
+- Skills and plugins ([docs](skills.md)) are declarative text treated as
+  potentially untrusted local input: strict schema and ID validation, size
+  caps, UTF-8 and hidden-control-character rejection, and plugin manifest
+  paths confined to the plugin directory (absolute paths, `..`, and symlink
+  escapes rejected on the resolved path). Skills add instructions to the
+  prompt under a preamble that subordinates them to core rules; they cannot
+  grant tool permissions, skip approvals, enable web access, or start MCP
+  servers — and neither can enabling a plugin, which parses files and runs
+  nothing. Workspace plugins warn on enablement. The `skill_load` tool only
+  changes prompt state; unknown or malformed requests return recoverable
+  errors and activate nothing.
 - Workspace tools (`/tools`) are off by default and follow the
   least-privilege posture of mainstream coding agents (per OWASP LLM Top 10,
   "Excessive Agency"):

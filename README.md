@@ -176,6 +176,8 @@ Local-LLM experience helpers:
 | `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
 | `/tools` | Opt-in agent mode — the model can create/read files and run commands in your current directory, with y/n approval |
 | `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
+| `/skills` | Declarative task-instruction packages (SKILL.md) — activate per run or session; tool-capable models can load them via `skill_load` ([docs](docs/skills.md)) |
+| `/plugins` | Local declarative packages that contribute skills; inert until explicitly enabled ([docs](docs/skills.md)) |
 | `/rag` | Opt-in local workspace retrieval — index files and add keyword-matched snippets as labeled reference context; fully local, no embeddings ([docs](docs/rag.md)) |
 | `/mcp` | Optional Model Context Protocol servers — declare, inspect, and toggle; off by default ([docs](docs/mcp.md)) |
 | `/template` | Reusable conversation templates from the config |
@@ -394,6 +396,7 @@ internal/contextmgr/      context-window budgeting + heuristic summaries
 internal/memory/          opt-in local memory snippets (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
 internal/tools/           workspace file tools for agent mode (/tools)
+internal/skill/           declarative skills + plugin packages (/skills, /plugins)
 internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log
 internal/clipboard/       image paste / text copy via platform tools

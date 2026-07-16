@@ -69,6 +69,7 @@ type nativeArgs struct {
 	Query      string `json:"query"`
 	URL        string `json:"url"`
 	MaxResults int    `json:"max_results"`
+	Skill      string `json:"skill"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -152,6 +153,8 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			c.Max = args.MaxResults
 		case ToolWebFetch:
 			c.Path = args.URL
+		case ToolSkillLoad:
+			c.Path = args.Skill
 		}
 		out = append(out, c)
 	}
@@ -187,6 +190,30 @@ func WebSpecs() []provider.ToolSpec {
 		},
 	}
 }
+
+// SkillSpecs declares the skill_load tool; appended to Specs() only when the
+// skills subsystem is enabled, the catalog is exposed to the model, and at
+// least one skill is available.
+func SkillSpecs() []provider.ToolSpec {
+	return []provider.ToolSpec{
+		{
+			Name:        ToolSkillLoad,
+			Description: "Activate one optional skill (task-specific instructions) for the current run. Use it only when a listed skill clearly matches the task; the skill's full instructions arrive on your next turn. Loading a skill grants no permissions.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"skill": {"type": "string", "description": "Unique skill identifier to activate for the current agent run."}
+				},
+				"required": ["skill"],
+				"additionalProperties": false
+			}`),
+		},
+	}
+}
+
+// SkillInstructions is appended to the fenced-block tool instructions when
+// model-driven skill loading is available without native function calling.
+const SkillInstructions = "- skill_load <skill-id> — activate one of the listed optional skills for this run (its instructions arrive next turn; empty body)"
 
 // NativeResults renders execution results as role:"tool" messages, one per
 // call, per the standard function-calling protocol.

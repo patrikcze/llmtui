@@ -57,7 +57,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "RAG", "MCP", "Diagnostics", "Session",
+	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Skills", "Plugins", "RAG", "MCP", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -142,6 +142,12 @@ func slashCommands() []slashCommand {
 		// --- Tools ---
 		{name: "tools", usage: "/tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]", desc: "workspace tools: enable/disable, list capabilities, inspect one tool, or classify a command", category: "Tools", blockWhileThinking: true, run: cmdTools},
 		{name: "web", usage: "/web [on|off|status]", desc: "let the model search the web and fetch pages (web_fetch asks per URL)", category: "Tools", blockWhileThinking: true, run: cmdWeb},
+
+		// --- Skills ---
+		{name: "skills", aliases: []string{"skill"}, usage: "/skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]", desc: "discover, inspect and activate task-specific agent skills (instructions, never permissions)", category: "Skills", blockWhileThinking: true, run: cmdSkills},
+
+		// --- Plugins ---
+		{name: "plugins", aliases: []string{"plugin"}, usage: "/plugins [status|list|inspect <id>|enable <id>|disable <id>|reload|paths]", desc: "manage local declarative plugin packages that contribute skills", category: "Plugins", blockWhileThinking: true, run: cmdPlugins},
 
 		// --- RAG ---
 		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, run: cmdRag},

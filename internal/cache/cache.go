@@ -49,6 +49,11 @@ type Key struct {
 	// on the wire — it changes what the backend is asked to do, so it must
 	// vary the cache key.
 	Reasoning string
+	// SkillsHash fingerprints the active skill set (IDs, content hashes, and
+	// order). Skills change the composed system prompt too, but the explicit
+	// field guarantees a response generated under one skill set is never
+	// served for another, independent of how composition evolves.
+	SkillsHash string
 }
 
 // Hash returns a stable content hash for the key. Free-text fields are
@@ -56,7 +61,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v5|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s|%s",
+	fmt.Fprintf(h, "v6|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s|%s|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -70,6 +75,7 @@ func (k Key) Hash() string {
 		k.HistoryHash,
 		k.ToolsHash,
 		k.Reasoning,
+		k.SkillsHash,
 	)
 	return hex.EncodeToString(h.Sum(nil))
 }

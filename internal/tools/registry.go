@@ -92,6 +92,9 @@ var safetyForBuiltin = map[string]SafetyClass{
 	ToolReadFile:   SafetyReadOnly,
 	ToolWriteFile:  SafetyWorkspaceWrite,
 	ToolRunCommand: SafetyCommand,
+	// skill_load only changes prompt state inside the app: no file, command,
+	// or network effect, and no permission grant.
+	ToolSkillLoad: SafetyReadOnly,
 }
 
 // approvalForTool is the static approval policy per tool.
@@ -102,6 +105,7 @@ var approvalForTool = map[string]string{
 	ToolRunCommand: "ask unless read-only",
 	ToolWebSearch:  "no",
 	ToolWebFetch:   "ask",
+	ToolSkillLoad:  "no",
 }
 
 // DefaultRegistry catalogs the built-in workspace tools and the web tools,
@@ -126,6 +130,16 @@ func DefaultRegistry() *Registry {
 			Description: s.Description,
 			Source:      "web",
 			Safety:      SafetyNetwork,
+			Approval:    approvalForTool[s.Name],
+			Parameters:  s.Parameters,
+		})
+	}
+	for _, s := range SkillSpecs() {
+		_ = r.Register(CapabilityInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      "skills",
+			Safety:      safetyForBuiltin[s.Name],
 			Approval:    approvalForTool[s.Name],
 			Parameters:  s.Parameters,
 		})

@@ -213,6 +213,37 @@ type MCPServerConfig struct {
 	Timeout   string            `mapstructure:"timeout" yaml:"timeout"`
 }
 
+// SkillsConfig configures the declarative skills subsystem. Skills are
+// instruction packages (SKILL.md files) discovered from local directories;
+// they never execute code and never grant tool permissions.
+type SkillsConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Paths are additional skill search directories beyond the defaults
+	// (<user-config>/llmtui/skills and <workspace>/.llmtui/skills).
+	Paths []string `mapstructure:"paths" yaml:"paths,omitempty"`
+	// ExposeCatalogToModel lets tool-capable models see a compact skill
+	// catalog and load skills for the current run via the skill_load tool.
+	ExposeCatalogToModel bool `mapstructure:"expose_catalog_to_model" yaml:"expose_catalog_to_model"`
+	// MaxActive caps concurrently active skills.
+	MaxActive int `mapstructure:"max_active" yaml:"max_active"`
+	// MaxSkillKB caps one skill file; oversized skills are rejected at
+	// discovery, never truncated.
+	MaxSkillKB int `mapstructure:"max_skill_kb" yaml:"max_skill_kb"`
+	// MaxTotalActiveKB caps the combined size of all active skill bodies.
+	MaxTotalActiveKB int `mapstructure:"max_total_active_kb" yaml:"max_total_active_kb"`
+}
+
+// PluginsConfig configures declarative plugin packages (plugin.yaml plus
+// contributed skills). Discovered plugins stay inert until enabled.
+type PluginsConfig struct {
+	// Paths are additional plugin search directories beyond the defaults
+	// (<user-config>/llmtui/plugins and <workspace>/.llmtui/plugins).
+	Paths []string `mapstructure:"paths" yaml:"paths,omitempty"`
+	// Enabled lists plugin IDs enabled at startup; /plugins enable adds more
+	// for the session.
+	Enabled []string `mapstructure:"enabled" yaml:"enabled,omitempty"`
+}
+
 // RetryConfig configures request retries.
 type RetryConfig struct {
 	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
@@ -258,6 +289,8 @@ type Config struct {
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
 	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
+	Skills          SkillsConfig                  `mapstructure:"skills" yaml:"skills"`
+	Plugins         PluginsConfig                 `mapstructure:"plugins" yaml:"plugins"`
 	RAG             RAGConfig                     `mapstructure:"rag" yaml:"rag"`
 	MCP             MCPConfig                     `mapstructure:"mcp" yaml:"mcp"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
@@ -507,6 +540,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.guardrails.protect_shell_startup_files", true)
 	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
 
+	v.SetDefault("skills.enabled", true)
+	v.SetDefault("skills.expose_catalog_to_model", true)
+	v.SetDefault("skills.max_active", 8)
+	v.SetDefault("skills.max_skill_kb", 64)
+	v.SetDefault("skills.max_total_active_kb", 256)
+
 	v.SetDefault("rag.enabled", false)
 	v.SetDefault("rag.index_path", "~/.local/share/llmtui/rag")
 	v.SetDefault("rag.workspace.enabled", false)
@@ -645,6 +684,32 @@ tools:
     protect_secret_files: true # reject writes into .ssh, .gnupg
     protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
     require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
+
+# Skills: declarative task-instruction packages (SKILL.md files with YAML
+# front matter) discovered from <user-config>/llmtui/skills/<id>/ and
+# <workspace>/.llmtui/skills/<id>/. Skills teach the model how to do a task;
+# they never execute code, never grant tool permissions, and are only added
+# to prompts when you activate them (/skills use <id>) or a tool-capable
+# model loads one via the skill_load tool. See docs/skills.md.
+skills:
+  enabled: true
+  # Extra search directories (absolute or workspace-relative):
+  paths: []
+  # Show tool-capable models a compact catalog (id + one-line description)
+  # and offer the skill_load tool so they can activate a skill for one run:
+  expose_catalog_to_model: true
+  max_active: 8 # concurrently active skills
+  max_skill_kb: 64 # per-skill file cap (oversized skills are rejected, never truncated)
+  max_total_active_kb: 256 # combined active skill content cap
+
+# Plugins: declarative local packages (plugin.yaml) that contribute skills.
+# Discovered from <user-config>/llmtui/plugins/<id>/ and
+# <workspace>/.llmtui/plugins/<id>/. A plugin stays inert until you enable it
+# (here or /plugins enable); enabling registers its skills but activates
+# nothing and never executes code. See docs/skills.md.
+plugins:
+  paths: []
+  enabled: []
 
 # Optional local RAG: index the workspace and retrieve keyword-matched
 # snippets as labeled reference context. Disabled by default — nothing is

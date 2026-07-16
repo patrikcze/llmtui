@@ -74,6 +74,28 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | `/tools on` / `/tools off` | Let the model list/read/write files and run commands under the launch directory |
 | `/tools ask` / `/tools auto` | Require y/n approval for writes & commands (default), or run them unprompted |
 
+## Skills
+| Command | Description |
+| --- | --- |
+| `/skills` · `/skills status` | Skills overlay: discovered, active, limits, model-driven load state |
+| `/skills list` | Every discovered skill: id, version, source, active scope |
+| `/skills active` | Active skills in deterministic prompt order |
+| `/skills inspect <id>` | Metadata, provenance, hash, recommended tools, content preview |
+| `/skills use <id> [--scope run\|session]` | Activate a skill (default: session; model-driven loads are always run-scoped) |
+| `/skills disable <id>` | Deactivate it (the file stays on disk) |
+| `/skills reload` | Rescan search paths; active snapshots are kept and changes reported |
+| `/skills paths` | Discovery paths and whether they exist |
+
+## Plugins
+| Command | Description |
+| --- | --- |
+| `/plugins` · `/plugins list` | Discovered plugin packages and their state |
+| `/plugins inspect <id>` | Manifest, source, root, declared skills |
+| `/plugins enable <id>` | Register the plugin's skills (activates nothing, runs nothing) |
+| `/plugins disable <id>` | Unregister its skills; deactivates any that were active |
+| `/plugins reload` | Rescan plugin paths |
+| `/plugins paths` | Plugin discovery paths |
+
 ## Diagnostics
 | Command | Description |
 | --- | --- |

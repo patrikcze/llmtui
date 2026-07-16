@@ -40,6 +40,10 @@ const (
 	ToolRunCommand = "run_command"
 	ToolWebSearch  = "web_search"
 	ToolWebFetch   = "web_fetch"
+	// ToolSkillLoad activates a skill (declarative task instructions) for the
+	// current agent run. It executes no code and grants no permissions: the
+	// skill body is included by the prompt composer on the next inference.
+	ToolSkillLoad = "skill_load"
 )
 
 // Call is one tool invocation: parsed from a fenced block in an assistant
@@ -131,6 +135,20 @@ type Runner struct {
 	// files), command classification, and secret-read approval. Defaults to
 	// DefaultGuardrails (everything on).
 	Guardrails GuardrailPolicy
+
+	// Skills enables the skill_load tool when non-nil (mirrors Web). The
+	// implementation validates the ID and marks the skill active for the
+	// current run; it must not execute anything.
+	Skills SkillLoader
+}
+
+// SkillLoader activates one skill for the current agent run. Implemented by
+// the TUI's skill manager adapter; the tools package stays unaware of skill
+// storage and prompt composition.
+type SkillLoader interface {
+	// LoadSkillForRun validates and activates the skill, returning the
+	// confirmation text sent back to the model as the tool result.
+	LoadSkillForRun(id string) (string, error)
 }
 
 // NewRunner confines execution to root; maxKB caps file reads and writes.
@@ -219,6 +237,8 @@ func (r *Runner) Execute(c Call) Result {
 		res.Output, res.Err = r.webSearch(c)
 	case ToolWebFetch:
 		res.Output, res.Err = r.webFetch(c)
+	case ToolSkillLoad:
+		res.Output, res.Err = r.skillLoad(c)
 	default:
 		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s)",
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
@@ -394,6 +414,24 @@ func (r *Runner) runCommand(body string) (string, error) {
 	return output, nil
 }
 
+// skillLoad activates a skill for the current run via the configured
+// SkillLoader. It is deliberately side-effect free beyond prompt state:
+// unknown IDs and validation failures come back as recoverable tool errors
+// the model can correct from.
+func (r *Runner) skillLoad(c Call) (string, error) {
+	id := strings.TrimSpace(c.Path)
+	if id == "" {
+		id = strings.TrimSpace(c.Body)
+	}
+	if id == "" {
+		return "", fmt.Errorf("skill_load needs a skill id")
+	}
+	if r.Skills == nil {
+		return "", fmt.Errorf("skills are not available in this session")
+	}
+	return r.Skills.LoadSkillForRun(id)
+}
+
 // secretEnvPattern matches environment variable names that likely hold
 // credentials; those never reach commands the model runs.
 var secretEnvPattern = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|credential|passphrase)`)
@@ -420,7 +458,7 @@ func sanitizedEnv(environ []string) []string {
 // approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolWebSearch:
+	case ToolListDir, ToolReadFile, ToolWebSearch, ToolSkillLoad:
 		return false
 	case ToolRunCommand:
 		return ClassifyCommand(c.Body).Verdict != VerdictAuto
@@ -435,7 +473,7 @@ func NeedsApproval(c Call) bool {
 // id_rsa, …) asks first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolWebSearch:
+	case ToolListDir, ToolWebSearch, ToolSkillLoad:
 		return false
 	case ToolReadFile:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)

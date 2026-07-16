@@ -674,6 +674,9 @@ func (m *Model) debugOverlay() string {
 	m.kv(&b, "prompt mode", d.PromptMode)
 	m.kv(&b, "template", orNone(d.Template))
 	m.kv(&b, "cache", d.CacheStatus)
+	if len(d.Skills) > 0 {
+		m.kv(&b, "active skills", strings.Join(d.Skills, ", "))
+	}
 	m.kv(&b, "temperature", fmt.Sprintf("%.2f", d.Temperature))
 	m.kv(&b, "max tokens", fmt.Sprintf("%d", d.MaxTokens))
 	m.kv(&b, "stream", fmt.Sprintf("%v", d.Stream))
@@ -1551,6 +1554,7 @@ func (m *Model) toolsListOverlay(args string) string {
 	enabledSources := map[string]bool{
 		"builtin": m.toolsOn,
 		"web":     m.toolsOn && m.webOn,
+		"skills":  m.skillLoadAvailable(),
 	}
 	if m.mcpRegistry != nil {
 		for _, srv := range m.mcpRegistry.List() {

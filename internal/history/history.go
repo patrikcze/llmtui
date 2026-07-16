@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/skill"
 )
 
 // Session is the on-disk representation of one saved conversation.
@@ -28,6 +29,11 @@ type Session struct {
 	Prompt     int                `json:"prompt_tokens"`
 	Reply      int                `json:"completion_tokens"`
 	Estimated  bool               `json:"estimated"`
+	// Skills are the session-scoped skill activations at save time (run-scoped
+	// activations are never persisted). On load they are re-resolved against
+	// the current registry; a missing or changed skill produces a warning
+	// instead of a silent substitution.
+	Skills []skill.Ref `json:"skills,omitempty"`
 }
 
 // Meta summarizes a saved session for listings.

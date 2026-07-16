@@ -113,6 +113,22 @@ and [security.md](security.md):
 | `max_page_kb` | `128` | Fetched page content cap sent to the model |
 | `timeout` | `20s` | Per-request limit for searches and fetches |
 
+### `skills` and `plugins`
+
+Declarative task-instruction packages and the plugin packages that
+contribute them. Documented in detail in [skills.md](skills.md).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `skills.enabled` | `true` | Master switch for discovery and activation |
+| `skills.paths` | `[]` | Extra skill search directories |
+| `skills.expose_catalog_to_model` | `true` | Offer tool-capable models a compact catalog plus the `skill_load` tool (requires `/tools on`) |
+| `skills.max_active` | `8` | Concurrently active skills |
+| `skills.max_skill_kb` | `64` | Per-skill file cap; oversized skills are rejected, never truncated |
+| `skills.max_total_active_kb` | `256` | Combined active skill content cap |
+| `plugins.paths` | `[]` | Extra plugin search directories |
+| `plugins.enabled` | `[]` | Plugin IDs enabled at startup (`/plugins enable` adds more per session) |
+
 ### `rag`
 
 Optional local workspace index and keyword retrieval, off by default.

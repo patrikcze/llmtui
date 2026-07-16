@@ -26,14 +26,16 @@ import (
 
 // debugInfo captures the last request for /debug last.
 type debugInfo struct {
-	When        time.Time
-	RawMessage  string
-	Provider    string
-	Model       string
-	Profile     string
-	PromptMode  string
-	Template    string
-	Sections    []prompt.Section
+	When       time.Time
+	RawMessage string
+	Provider   string
+	Model      string
+	Profile    string
+	PromptMode string
+	Template   string
+	Sections   []prompt.Section
+	// Skills are the active skills' qualified IDs at dispatch time.
+	Skills      []string
 	CtxDecision contextmgr.Decision
 	CacheStatus string    // hit | miss | disabled | bypass | error | write
 	CacheKey    cache.Key // snapshotted at dispatch so mid-stream /model or /provider changes cannot poison the cache
@@ -187,6 +189,10 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 		instructions := tools.Instructions(m.toolRunner.Root(), m.webOn)
 		if m.toolsNative {
 			instructions = tools.NativeInstructions(m.toolRunner.Root(), m.webOn)
+		} else if m.skillLoadAvailable() {
+			// Fenced protocol: the skill_load form must be taught explicitly
+			// (native mode carries it in the tool specs instead).
+			instructions += "\n" + tools.SkillInstructions
 		}
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
@@ -224,6 +230,8 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 		MemorySnippets:   memSnippets,
 		RecentMessages:   recent,
 		RetrievedContext: retrieved,
+		Skills:           m.promptSkills(),
+		SkillCatalog:     m.promptSkillCatalog(),
 		Include: prompt.Include{
 			SessionSummary:  m.cfg.Prompt.IncludeSessionSummary,
 			LocalMemory:     m.cfg.Prompt.IncludeLocalMemory,
@@ -262,7 +270,16 @@ func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 		HistoryHash:  historyFingerprint(m.session.Messages),
 		ToolsHash:    toolSpecsFingerprint(m.activeToolSpecs()),
 		Reasoning:    m.effectiveReasoning(),
+		SkillsHash:   m.activeSkillsFingerprint(),
 	}
+}
+
+// activeSkillsFingerprint hashes the active skill set for the cache key.
+func (m *Model) activeSkillsFingerprint() string {
+	if m.skillMgr == nil {
+		return ""
+	}
+	return m.skillMgr.FingerprintActive()
 }
 
 // historyFingerprint hashes every provider-visible field of every prior
@@ -352,6 +369,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 				When: time.Now(), RawMessage: raw, Provider: m.prov.Name(), Model: m.model,
 				PromptMode: m.effectivePromptMode(), Template: m.template, CacheStatus: "hit",
 			}
+			// The cached answer completed this run; run-scoped skills (which
+			// were part of the key) deactivate like on a live final answer.
+			m.endAgentRun()
 			m.refreshViewport()
 			return nil
 		}
@@ -393,6 +413,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		PromptMode:  m.effectivePromptMode(),
 		Template:    m.template,
 		Sections:    composed.Sections,
+		Skills:      m.activeSkillIDs(),
 		CtxDecision: decision,
 		CacheStatus: cacheStatus,
 		CacheKey:    key,
@@ -416,6 +437,9 @@ func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	specs := tools.Specs()
 	if m.webOn {
 		specs = append(specs, tools.WebSpecs()...)
+	}
+	if m.skillLoadAvailable() {
+		specs = append(specs, tools.SkillSpecs()...)
 	}
 	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
 	return specs
@@ -480,6 +504,7 @@ func (m *Model) continueChat() tea.Cmd {
 		PromptMode:  m.effectivePromptMode(),
 		Template:    m.template,
 		Sections:    composed.Sections,
+		Skills:      m.activeSkillIDs(),
 		CtxDecision: decision,
 		CacheStatus: "bypass",
 		Temperature: req.Temperature,
