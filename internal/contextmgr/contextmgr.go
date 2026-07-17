@@ -30,11 +30,7 @@ func ValidStrategy(s string) bool {
 // EstimateTokens approximates tokens for a message list, including a small
 // per-message overhead for role framing.
 func EstimateTokens(msgs []provider.Message) int {
-	total := 0
-	for _, m := range msgs {
-		total += provider.EstimateTokens(m.Content) + 4
-	}
-	return total
+	return provider.EstimateMessagesTokens(msgs)
 }
 
 // Decision is the outcome of a budget check.
@@ -51,13 +47,17 @@ type Params struct {
 	ContextWindow          int
 	ReserveResponseTokens  int
 	SummarizeAfterMessages int
+	// FixedTokens accounts for provider-visible request data outside the
+	// conversation history, such as the composed system/user prompt and native
+	// tool schemas.
+	FixedTokens int
 }
 
 // Decide determines whether and how to compress. Auto picks summarize when
 // the conversation is long enough to be worth it, truncate otherwise.
 func Decide(msgs []provider.Message, p Params) Decision {
 	d := Decision{
-		Used:     EstimateTokens(msgs),
+		Used:     EstimateTokens(msgs) + p.FixedTokens,
 		Budget:   p.ContextWindow - p.ReserveResponseTokens,
 		Strategy: p.Strategy,
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"math/rand/v2"
@@ -35,16 +36,52 @@ type debugInfo struct {
 	Template   string
 	Sections   []prompt.Section
 	// Skills are the active skills' qualified IDs at dispatch time.
-	Skills      []string
-	CtxDecision contextmgr.Decision
-	CacheStatus string    // hit | miss | disabled | bypass | error | write
-	CacheKey    cache.Key // snapshotted at dispatch so mid-stream /model or /provider changes cannot poison the cache
-	Temperature float64
-	MaxTokens   int
-	Stream      bool
-	Retries     int
-	Duration    time.Duration
-	Usage       *provider.Usage
+	Skills        []string
+	CtxDecision   contextmgr.Decision
+	CacheStatus   string    // hit | miss | disabled | bypass | error | write
+	CacheKey      cache.Key // snapshotted at dispatch so mid-stream /model or /provider changes cannot poison the cache
+	Temperature   float64
+	MaxTokens     int
+	Stream        bool
+	Retries       int
+	Duration      time.Duration
+	Usage         *provider.Usage
+	Estimate      requestTokenEstimate
+	MessageCount  int
+	ToolCount     int
+	ToolsHash     string
+	SummaryActive bool
+	ToolCalls     []toolCallDiagnostic
+	NativeTools   bool
+	WebEnabled    bool
+	RAGEnabled    bool
+	Reasoning     string
+}
+
+type toolCallDiagnostic struct {
+	ID            string
+	Name          string
+	ArgumentBytes int
+	ArgumentsJSON bool
+	ArgumentsHash string
+}
+
+func diagnoseToolCalls(calls []provider.ToolCall) []toolCallDiagnostic {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]toolCallDiagnostic, 0, len(calls))
+	for _, call := range calls {
+		sum := sha256.Sum256([]byte(call.Arguments))
+		out = append(out, toolCallDiagnostic{
+			ID:            call.ID,
+			Name:          call.Name,
+			ArgumentBytes: len(call.Arguments),
+			ArgumentsJSON: json.Valid([]byte(call.Arguments)),
+			ArgumentsHash: hex.EncodeToString(sum[:8]),
+		})
+	}
+	return out
 }
 
 // activeProfile resolves the model profile: pinned by /profile set, or
@@ -104,72 +141,37 @@ func (m *Model) effectivePromptMode() string {
 	return prompt.ModeBalanced
 }
 
-// applyContext runs the context strategy over the session, updating the
-// session summary when summarizing. It returns the messages to include as
-// recent conversation (excluding the pending raw message).
-func (m *Model) applyContext() ([]provider.Message, contextmgr.Decision) {
-	window, _ := m.contextWindow()
-	params := contextmgr.Params{
-		Strategy:               m.ctxStrategy,
-		ContextWindow:          window,
-		ReserveResponseTokens:  m.cfg.Context.ReserveResponseTokens,
-		SummarizeAfterMessages: m.cfg.Context.SummarizeAfterMessages,
-	}
-	decision := contextmgr.Decide(m.session.Messages, params)
-	m.ctxUsed = decision.Used
-	m.ctxWindow = window
-
-	if !decision.Compress {
-		_, recent := contextmgr.Split(m.session.Messages, len(m.session.Messages))
-		return recent, decision
-	}
-
-	older, recent := contextmgr.Split(m.session.Messages, m.cfg.Context.KeepLastMessages)
-	if decision.Strategy == contextmgr.StrategySummarize && len(older) > 0 {
-		out, err := contextmgr.HeuristicSummarizer{}.Summarize(context.Background(), contextmgr.SummaryInput{
-			Messages:  older,
-			MaxTokens: m.cfg.Context.SummaryMaxTokens,
-		})
-		if err == nil && out.Summary != "" {
-			if m.summary != "" {
-				m.summary += "\n"
-			}
-			m.summary += out.Summary
-		}
-	}
-	return recent, decision
+type requestTokenEstimate struct {
+	System       int
+	Messages     int
+	Tools        int
+	Total        int
+	Window       int
+	Reserve      int
+	OlderCount   int
+	RecentCount  int
+	SummaryToken int
 }
 
-// compose builds the provider-ready messages for a raw user message.
-// preview=true composes without touching context state (for /prompt preview).
-func (m *Model) compose(raw string, images []provider.Image, preview bool) (prompt.Output, contextmgr.Decision) {
-	return m.composeWith(raw, images, preview, false)
+// preparedRequest is an immutable snapshot of everything that influences a
+// provider request. The cache key and ChatRequest are both derived from this
+// same value so context summarization, RAG, MCP connections, or skill state
+// cannot make the two disagree between separate composition passes.
+type preparedRequest struct {
+	composed   prompt.Output
+	decision   contextmgr.Decision
+	summary    string
+	tools      []provider.ToolSpec
+	ragResults []rag.Result
+	estimate   requestTokenEstimate
 }
 
-// composeWith adds the omitRaw knob: tool-loop continuations compose the
-// session as-is (it already ends with tool results) without a new user turn.
-func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRaw bool) (prompt.Output, contextmgr.Decision) {
-	var (
-		recent   []provider.Message
-		decision contextmgr.Decision
-	)
-	if preview {
-		window, _ := m.contextWindow()
-		decision = contextmgr.Decide(m.session.Messages, contextmgr.Params{
-			Strategy:               m.ctxStrategy,
-			ContextWindow:          window,
-			ReserveResponseTokens:  m.cfg.Context.ReserveResponseTokens,
-			SummarizeAfterMessages: m.cfg.Context.SummarizeAfterMessages,
-		})
-		keep := len(m.session.Messages)
-		if decision.Compress {
-			keep = m.cfg.Context.KeepLastMessages
-		}
-		_, recent = contextmgr.Split(m.session.Messages, keep)
-	} else {
-		recent, decision = m.applyContext()
-	}
+type compositionBase struct {
+	input      prompt.Input
+	ragResults []rag.Result
+}
 
+func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw bool) compositionBase {
 	prof, _ := m.activeProfile()
 
 	var memSnippets []string
@@ -183,15 +185,10 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 
 	systemPrompt := m.cfg.Chat.SystemPrompt
 	if m.toolsOn && m.toolRunner != nil {
-		// Native mode only needs the house rules — the protocol itself is
-		// carried by the request's tool specs. The fenced-block fallback must
-		// additionally teach the model the protocol.
 		instructions := tools.Instructions(m.toolRunner.Root(), m.webOn)
 		if m.toolsNative {
 			instructions = tools.NativeInstructions(m.toolRunner.Root(), m.webOn)
 		} else if m.skillLoadAvailable() {
-			// Fenced protocol: the skill_load form must be taught explicitly
-			// (native mode carries it in the tool specs instead).
 			instructions += "\n" + tools.SkillInstructions
 		}
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
@@ -203,58 +200,220 @@ func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRa
 		}
 	}
 
-	// Optional RAG: retrieve keyword-matched workspace snippets for the raw
-	// message. Skipped on tool-loop continuations (omitRaw). The raw message
-	// is never modified; retrieved context is added as a labeled section.
+	var results []rag.Result
 	retrieved := ""
 	if m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != "" {
-		results := m.ragIndex.Search(raw, m.ragTopK())
+		results = m.ragIndex.Search(raw, m.ragTopK())
 		if len(results) > 0 {
 			retrieved = rag.FormatContext(results, m.ragMaxContextChars())
-			if !preview {
-				m.ragLast = results
-			}
 		}
 	}
 
-	out := prompt.Compose(prompt.Input{
-		RawMessage:       raw,
-		Images:           images,
-		SystemPrompt:     systemPrompt,
-		TemplateName:     m.template,
-		TemplatePrompt:   templatePrompt,
-		Mode:             m.effectivePromptMode(),
-		HelperText:       m.cfg.Prompt.HelperText,
-		ModelHints:       prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
-		SessionSummary:   m.summary,
-		MemorySnippets:   memSnippets,
-		RecentMessages:   recent,
-		RetrievedContext: retrieved,
-		Skills:           m.promptSkills(),
-		SkillCatalog:     m.promptSkillCatalog(),
-		Include: prompt.Include{
-			SessionSummary:  m.cfg.Prompt.IncludeSessionSummary,
-			LocalMemory:     m.cfg.Prompt.IncludeLocalMemory,
-			ModelHints:      m.cfg.Prompt.IncludeModelHints,
-			FormattingHints: m.cfg.Prompt.IncludeFormattingHints,
+	return compositionBase{
+		input: prompt.Input{
+			RawMessage:       raw,
+			Images:           images,
+			SystemPrompt:     systemPrompt,
+			TemplateName:     m.template,
+			TemplatePrompt:   templatePrompt,
+			Mode:             m.effectivePromptMode(),
+			HelperText:       m.cfg.Prompt.HelperText,
+			ModelHints:       prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
+			MemorySnippets:   memSnippets,
+			RetrievedContext: retrieved,
+			Skills:           m.promptSkills(),
+			SkillCatalog:     m.promptSkillCatalog(),
+			Include: prompt.Include{
+				SessionSummary:  m.cfg.Prompt.IncludeSessionSummary,
+				LocalMemory:     m.cfg.Prompt.IncludeLocalMemory,
+				ModelHints:      m.cfg.Prompt.IncludeModelHints,
+				FormattingHints: m.cfg.Prompt.IncludeFormattingHints,
+			},
+			OmitRaw: omitRaw,
 		},
-		OmitRaw: omitRaw,
+		ragResults: results,
+	}
+}
+
+func composeFromBase(base compositionBase, recent []provider.Message, summary string) prompt.Output {
+	in := base.input
+	in.RecentMessages = recent
+	in.SessionSummary = summary
+	return prompt.Compose(in)
+}
+
+func (m *Model) summarizeMessages(messages []provider.Message, maxTokens int) string {
+	if len(messages) == 0 || maxTokens <= 0 {
+		return ""
+	}
+	out, err := (contextmgr.HeuristicSummarizer{}).Summarize(context.Background(), contextmgr.SummaryInput{
+		Messages:  messages,
+		MaxTokens: maxTokens,
 	})
-	return out, decision
+	if err != nil {
+		return ""
+	}
+	return out.Summary
+}
+
+func estimatePrepared(out prompt.Output, specs []provider.ToolSpec, window, reserve, olderCount, recentCount int) requestTokenEstimate {
+	est := requestTokenEstimate{
+		Window:      window,
+		Reserve:     reserve,
+		OlderCount:  olderCount,
+		RecentCount: recentCount,
+		Tools:       provider.EstimateToolSpecsTokens(specs),
+	}
+	for _, message := range out.Messages {
+		tokens := provider.EstimateMessageTokens(message)
+		if message.Role == provider.RoleSystem {
+			est.System += tokens
+		} else {
+			est.Messages += tokens
+		}
+	}
+	est.Total = est.System + est.Messages + est.Tools
+	return est
+}
+
+// dropOldestGroup removes the oldest request messages while preserving an
+// assistant tool-call message together with its immediately following tool
+// results. It prevents context fitting from producing a protocol-invalid
+// history that starts with role:"tool".
+func dropOldestGroup(messages []provider.Message) (dropped, recent []provider.Message) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	end := 1
+	if len(messages[0].ToolCalls) > 0 {
+		for end < len(messages) && messages[end].Role == provider.RoleTool {
+			end++
+		}
+	}
+	return messages[:end], messages[end:]
+}
+
+func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool) (preparedRequest, error) {
+	base := m.compositionBase(raw, images, omitRaw)
+	specs := m.activeToolSpecs()
+	window, _ := m.contextWindow()
+	reserve := m.cfg.Context.ReserveResponseTokens
+
+	// The no-history/no-summary composition is the irreducible request. Tool
+	// schemas are included because OpenAI-compatible servers count them in the
+	// prompt even though they are outside messages[].
+	probe := composeFromBase(base, nil, "")
+	fixed := estimatePrepared(probe, specs, window, reserve, 0, 0)
+	decision := contextmgr.Decide(m.session.Messages, contextmgr.Params{
+		Strategy:               m.ctxStrategy,
+		ContextWindow:          window,
+		ReserveResponseTokens:  reserve,
+		SummarizeAfterMessages: m.cfg.Context.SummarizeAfterMessages,
+		FixedTokens:            fixed.Total,
+	})
+	if fixed.Total+reserve > window {
+		return preparedRequest{composed: probe, decision: decision, tools: specs, ragResults: base.ragResults, estimate: fixed}, fmt.Errorf(
+			"request overhead is too large for the %d-token context window: system/user prompt %d + tool schemas %d + response reserve %d; disable tools/skills/RAG, shorten the prompt, lower the reserve, or select a larger context window",
+			window, fixed.System+fixed.Messages, fixed.Tools, reserve)
+	}
+
+	keep := len(m.session.Messages)
+	if decision.Compress {
+		keep = m.cfg.Context.KeepLastMessages
+	}
+	older, recent := contextmgr.Split(m.session.Messages, keep)
+	summary := m.summary
+	if decision.Compress && decision.Strategy == contextmgr.StrategySummarize && len(older) > 0 {
+		summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
+	}
+
+	out := composeFromBase(base, recent, summary)
+	est := estimatePrepared(out, specs, window, reserve, len(older), len(recent))
+	budget := window - reserve
+	for est.Total > budget && len(recent) > 0 && decision.Strategy != contextmgr.StrategyNone {
+		var dropped []provider.Message
+		dropped, recent = dropOldestGroup(recent)
+		older = append(older, dropped...)
+		if decision.Strategy == contextmgr.StrategySummarize {
+			summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
+		}
+		out = composeFromBase(base, recent, summary)
+		est = estimatePrepared(out, specs, window, reserve, len(older), len(recent))
+	}
+
+	// If the generated summary is the last thing keeping an otherwise valid
+	// request over budget, rebuild it to fit the exact space that remains.
+	if est.Total > budget && decision.Strategy == contextmgr.StrategySummarize && summary != "" {
+		withoutSummary := composeFromBase(base, recent, "")
+		baseEstimate := estimatePrepared(withoutSummary, specs, window, reserve, len(older), len(recent))
+		maxSummary := budget - baseEstimate.Total - 8
+		if maxSummary > m.cfg.Context.SummaryMaxTokens {
+			maxSummary = m.cfg.Context.SummaryMaxTokens
+		}
+		summary = m.summarizeMessages(older, maxSummary)
+		out = composeFromBase(base, recent, summary)
+		est = estimatePrepared(out, specs, window, reserve, len(older), len(recent))
+	}
+	if est.Total > budget {
+		return preparedRequest{composed: out, decision: decision, summary: summary, tools: specs, ragResults: base.ragResults, estimate: est}, fmt.Errorf(
+			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
+			est.Total, budget)
+	}
+	for _, section := range out.Sections {
+		if section.Title == "Session Summary" {
+			est.SummaryToken = provider.EstimateTokens(summary)
+			break
+		}
+	}
+	return preparedRequest{
+		composed:   out,
+		decision:   decision,
+		summary:    summary,
+		tools:      specs,
+		ragResults: base.ragResults,
+		estimate:   est,
+	}, nil
+}
+
+func (m *Model) commitPrepared(prepared preparedRequest) {
+	m.summary = prepared.summary
+	m.ragLast = prepared.ragResults
+	m.ctxUsed = prepared.decision.Used
+	m.ctxWindow = prepared.estimate.Window
+}
+
+// compose builds the provider-ready messages for a raw user message.
+// preview=true composes without touching context state (for /prompt preview).
+func (m *Model) compose(raw string, images []provider.Image, preview bool) (prompt.Output, contextmgr.Decision) {
+	return m.composeWith(raw, images, preview, false)
+}
+
+// composeWith adds the omitRaw knob: tool-loop continuations compose the
+// session as-is (it already ends with tool results) without a new user turn.
+func (m *Model) composeWith(raw string, images []provider.Image, preview, omitRaw bool) (prompt.Output, contextmgr.Decision) {
+	prepared, _ := m.prepareRequest(raw, images, omitRaw)
+	if !preview {
+		m.commitPrepared(prepared)
+	}
+	return prepared.composed, prepared.decision
 }
 
 // cacheKey builds the cache key for a raw message under current settings.
 // It uses the fully composed system prompt (tool/RAG/memory instructions
 // included) rather than the raw config value, and fingerprints the prior
 // conversation, so two requests that differ in either respect never share a
-// cache entry. compose is called in preview mode so building the key never
-// mutates context state (session summary, RAG-last-results) itself.
+// cache entry. Request preparation is read-only, so building the key never
+// mutates context state (session summary or RAG-last-results).
 func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
+	prepared, _ := m.prepareRequest(raw, images, false)
+	return m.cacheKeyFromPrepared(raw, prepared)
+}
+
+func (m *Model) cacheKeyFromPrepared(raw string, prepared preparedRequest) cache.Key {
 	_, pc, _ := m.cfg.ActiveProvider()
-	composed, _ := m.compose(raw, images, true)
 	systemPrompt := m.cfg.Chat.SystemPrompt
-	if len(composed.Messages) > 0 && composed.Messages[0].Role == provider.RoleSystem {
-		systemPrompt = composed.Messages[0].Content
+	if len(prepared.composed.Messages) > 0 && prepared.composed.Messages[0].Role == provider.RoleSystem {
+		systemPrompt = prepared.composed.Messages[0].Content
 	}
 	return cache.Key{
 		Provider:     m.prov.Name(),
@@ -267,8 +426,8 @@ func (m *Model) cacheKey(raw string, images []provider.Image) cache.Key {
 		Temperature:  m.effectiveTemperature(),
 		TopP:         m.cfg.Chat.TopP,
 		MaxTokens:    m.cfg.Chat.MaxTokens,
-		HistoryHash:  historyFingerprint(m.session.Messages),
-		ToolsHash:    toolSpecsFingerprint(m.activeToolSpecs()),
+		HistoryHash:  historyFingerprint(prepared.composed.Messages),
+		ToolsHash:    toolSpecsFingerprint(prepared.tools),
 		Reasoning:    m.effectiveReasoning(),
 		SkillsHash:   m.activeSkillsFingerprint(),
 	}
@@ -345,8 +504,24 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	skipCache := m.bypassCache
 	m.bypassCache = false
 
-	// Cache lookup happens before composition mutates context state.
-	key := m.cacheKey(raw, images)
+	prepared, prepareErr := m.prepareRequest(raw, images, false)
+	if prepareErr != nil {
+		m.errText = prepareErr.Error()
+		m.lastDebug = debugInfo{
+			When: time.Now(), RawMessage: raw, Provider: m.prov.Name(), Model: m.model,
+			PromptMode: m.effectivePromptMode(), Template: m.template, CacheStatus: "bypass",
+			CtxDecision: prepared.decision, Sections: prepared.composed.Sections,
+			Estimate: prepared.estimate, MessageCount: len(prepared.composed.Messages),
+			ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
+			SummaryActive: prepared.estimate.SummaryToken > 0,
+			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
+		}
+		m.endAgentRun()
+		m.refreshViewport()
+		return nil
+	}
+
+	key := m.cacheKeyFromPrepared(raw, prepared)
 	var cacheErr error
 	if !skipCache && m.responseCache != nil && m.responseCache.Enabled() && len(images) == 0 {
 		entry, ok, err := m.responseCache.Get(key)
@@ -368,6 +543,11 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			m.lastDebug = debugInfo{
 				When: time.Now(), RawMessage: raw, Provider: m.prov.Name(), Model: m.model,
 				PromptMode: m.effectivePromptMode(), Template: m.template, CacheStatus: "hit",
+				Sections: prepared.composed.Sections, CtxDecision: prepared.decision, CacheKey: key,
+				Estimate: prepared.estimate, MessageCount: len(prepared.composed.Messages),
+				ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
+				SummaryActive: prepared.estimate.SummaryToken > 0,
+				NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 			}
 			// The cached answer completed this run; run-scoped skills (which
 			// were part of the key) deactivate like on a live final answer.
@@ -377,7 +557,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		}
 	}
 
-	composed, decision := m.compose(raw, images, false)
+	m.commitPrepared(prepared)
 	m.session.AddUser(raw, images...)
 	m.thinking = true
 	m.streamBuf.Reset()
@@ -392,7 +572,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
-	req := m.buildRequest(composed.Messages)
+	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 
 	cacheStatus := "miss"
 	if m.responseCache == nil || !m.responseCache.Enabled() {
@@ -405,21 +585,27 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		cacheStatus = "error"
 	}
 	m.lastDebug = debugInfo{
-		When:        time.Now(),
-		RawMessage:  raw,
-		Provider:    m.prov.Name(),
-		Model:       m.model,
-		Profile:     prof.Name,
-		PromptMode:  m.effectivePromptMode(),
-		Template:    m.template,
-		Sections:    composed.Sections,
-		Skills:      m.activeSkillIDs(),
-		CtxDecision: decision,
-		CacheStatus: cacheStatus,
-		CacheKey:    key,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream,
+		When:          time.Now(),
+		RawMessage:    raw,
+		Provider:      m.prov.Name(),
+		Model:         m.model,
+		Profile:       prof.Name,
+		PromptMode:    m.effectivePromptMode(),
+		Template:      m.template,
+		Sections:      prepared.composed.Sections,
+		Skills:        m.activeSkillIDs(),
+		CtxDecision:   prepared.decision,
+		CacheStatus:   cacheStatus,
+		CacheKey:      key,
+		Temperature:   req.Temperature,
+		MaxTokens:     req.MaxTokens,
+		Stream:        req.Stream,
+		Estimate:      prepared.estimate,
+		MessageCount:  len(prepared.composed.Messages),
+		ToolCount:     len(prepared.tools),
+		ToolsHash:     toolSpecsFingerprint(prepared.tools),
+		SummaryActive: prepared.estimate.SummaryToken > 0,
+		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 	}
 
 	return m.startRequest(req)
@@ -462,6 +648,10 @@ func (m *Model) effectiveReasoning() string {
 // buildRequest assembles a ChatRequest for the given messages under the
 // current settings, offering native tool specs when enabled.
 func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
+	return m.buildRequestWithTools(messages, m.activeToolSpecs())
+}
+
+func (m *Model) buildRequestWithTools(messages []provider.Message, specs []provider.ToolSpec) provider.ChatRequest {
 	reasoning := m.effectiveReasoning()
 	if reasoning == "auto" {
 		reasoning = ""
@@ -473,7 +663,7 @@ func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
 		TopP:        m.cfg.Chat.TopP,
 		MaxTokens:   m.cfg.Chat.MaxTokens,
 		Stream:      m.cfg.StreamEnabled(),
-		Tools:       m.activeToolSpecs(),
+		Tools:       specs,
 		Reasoning:   reasoning,
 	}
 }
@@ -483,7 +673,14 @@ func (m *Model) buildRequest(messages []provider.Message) provider.ChatRequest {
 // the cache is not consulted: the conversation simply continues.
 func (m *Model) continueChat() tea.Cmd {
 	m.bypassCache = false // consumed: continuations never touch the cache
-	composed, decision := m.composeWith("", nil, false, true)
+	prepared, err := m.prepareRequest("", nil, true)
+	if err != nil {
+		m.errText = err.Error()
+		m.endAgentRun()
+		m.refreshViewport()
+		return nil
+	}
+	m.commitPrepared(prepared)
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
@@ -494,22 +691,28 @@ func (m *Model) continueChat() tea.Cmd {
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
-	req := m.buildRequest(composed.Messages)
+	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 	m.lastDebug = debugInfo{
-		When:        time.Now(),
-		RawMessage:  "(tool results continuation)",
-		Provider:    m.prov.Name(),
-		Model:       m.model,
-		Profile:     prof.Name,
-		PromptMode:  m.effectivePromptMode(),
-		Template:    m.template,
-		Sections:    composed.Sections,
-		Skills:      m.activeSkillIDs(),
-		CtxDecision: decision,
-		CacheStatus: "bypass",
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream,
+		When:          time.Now(),
+		RawMessage:    "(tool results continuation)",
+		Provider:      m.prov.Name(),
+		Model:         m.model,
+		Profile:       prof.Name,
+		PromptMode:    m.effectivePromptMode(),
+		Template:      m.template,
+		Sections:      prepared.composed.Sections,
+		Skills:        m.activeSkillIDs(),
+		CtxDecision:   prepared.decision,
+		CacheStatus:   "bypass",
+		Temperature:   req.Temperature,
+		MaxTokens:     req.MaxTokens,
+		Stream:        req.Stream,
+		Estimate:      prepared.estimate,
+		MessageCount:  len(prepared.composed.Messages),
+		ToolCount:     len(prepared.tools),
+		ToolsHash:     toolSpecsFingerprint(prepared.tools),
+		SummaryActive: prepared.estimate.SummaryToken > 0,
+		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 	}
 	return m.startRequest(req)
 }

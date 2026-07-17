@@ -173,6 +173,48 @@ func EstimateTokens(text string) int {
 	return n
 }
 
+// EstimateMessageTokens approximates every provider-visible part of a chat
+// message. Structured tool calls and tool-result identifiers are part of the
+// prompt just like text, and images have a conservative fixed estimate.
+func EstimateMessageTokens(m Message) int {
+	total := 4 // role/message framing
+	total += EstimateTokens(m.Content)
+	for range m.Images {
+		total += EstimatedTokensPerImage
+	}
+	for _, call := range m.ToolCalls {
+		total += 4 // function-call framing
+		total += EstimateTokens(call.ID)
+		total += EstimateTokens(call.Name)
+		total += EstimateTokens(call.Arguments)
+	}
+	total += EstimateTokens(m.ToolCallID)
+	total += EstimateTokens(m.ToolName)
+	return total
+}
+
+// EstimateMessagesTokens approximates the provider-visible cost of messages.
+func EstimateMessagesTokens(messages []Message) int {
+	total := 0
+	for _, message := range messages {
+		total += EstimateMessageTokens(message)
+	}
+	return total
+}
+
+// EstimateToolSpecsTokens approximates the request overhead of native tool
+// declarations, including their normalized JSON schemas.
+func EstimateToolSpecsTokens(specs []ToolSpec) int {
+	total := 0
+	for _, spec := range specs {
+		total += 12 // function/schema framing
+		total += EstimateTokens(spec.Name)
+		total += EstimateTokens(spec.Description)
+		total += EstimateTokens(string(NormalizeToolParameters(spec.Parameters)))
+	}
+	return total
+}
+
 // DefaultTimeout is a sensible per-request ceiling for non-streaming calls.
 const DefaultTimeout = 30 * time.Second
 

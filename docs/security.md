@@ -151,8 +151,10 @@ add` reminds you).
     existence is only probed for enabled servers while MCP is enabled.
   - **Environments are redacted** — `/mcp inspect` shows only env variable
     names, never their values, and env values are never logged.
-- Debug output (`/debug last`) shows request shape, sections, and timings,
-  never credentials.
+- Debug output (`/debug last`) shows request shape, sections, token/category
+  estimates, tool-spec counts and hashes, and privacy-safe tool-call metadata
+  (name, argument byte count, JSON validity, and hash), never arguments or
+  credentials.
 - The `privacy` config section documents intent (`local_first`,
   `redact_api_keys_in_logs`, `store_prompts`) but these behaviors are
   hardcoded on — there is no switch that starts logging keys or sending

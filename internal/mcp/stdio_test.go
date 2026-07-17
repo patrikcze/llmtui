@@ -28,6 +28,14 @@ func fakeServer(t *testing.T, in io.Reader, out io.Writer) {
 			if json.Unmarshal(line, &req) == nil {
 				switch req.Method {
 				case "initialize":
+					params, _ := req.Params.(map[string]any)
+					clientInfo, _ := params["clientInfo"].(map[string]any)
+					if got, _ := clientInfo["name"].(string); got != clientName {
+						t.Errorf("initialize clientInfo.name = %q, want %q", got, clientName)
+					}
+					if got, _ := clientInfo["version"].(string); got != clientVersion {
+						t.Errorf("initialize clientInfo.version = %q, want %q", got, clientVersion)
+					}
 					respond(req.ID, map[string]any{
 						"protocolVersion": protocolVersion,
 						"serverInfo":      map[string]any{"name": "fake", "version": "1"},
@@ -104,8 +112,8 @@ func TestStdioHandshakeListAndCall(t *testing.T) {
 }
 
 func TestStdioClientVersion(t *testing.T) {
-	if clientVersion != "0.9.3" {
-		t.Errorf("clientVersion = %q, want release version 0.9.3", clientVersion)
+	if clientVersion != "0.9.4" {
+		t.Errorf("clientVersion = %q, want release version 0.9.4", clientVersion)
 	}
 }
 

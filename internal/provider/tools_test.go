@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -27,5 +28,20 @@ func TestNormalizeToolParameters(t *testing.T) {
 				t.Fatalf("NormalizeToolParameters() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEstimateToolSpecsTokensIncludesDescriptionAndSchema(t *testing.T) {
+	small := []ToolSpec{{Name: "lookup", Parameters: json.RawMessage(`{"type":"object"}`)}}
+	large := []ToolSpec{{
+		Name:        "lookup",
+		Description: strings.Repeat("description ", 100),
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"a detailed query"}}}`),
+	}}
+	if EstimateToolSpecsTokens(small) <= 0 {
+		t.Fatal("tool schema estimate must include framing")
+	}
+	if EstimateToolSpecsTokens(large) <= EstimateToolSpecsTokens(small) {
+		t.Fatal("larger description/schema did not increase tool overhead estimate")
 	}
 }

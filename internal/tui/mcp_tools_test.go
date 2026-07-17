@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/mcp"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -264,6 +265,9 @@ func TestToolsInspectShowsMCPToolParameters(t *testing.T) {
 func TestUnknownToolErrorListsConnectedMCPTools(t *testing.T) {
 	reg := newConnectedMCPRegistry(t, "jiraworklog", []mcp.Tool{
 		{Server: "jiraworklog", Name: "jira_get_my_worklogs", Description: "get worklogs", Schema: json.RawMessage(`{"type":"object"}`)},
+		{Server: "jiraworklog", Name: "session_start", Description: "start session", Schema: json.RawMessage(`{"type":"object"}`)},
+		{Server: "jiraworklog", Name: "session_stop", Description: "stop session", Schema: json.RawMessage(`{"type":"object"}`)},
+		{Server: "jiraworklog", Name: "issue_search", Description: "search issues", Schema: json.RawMessage(`{"type":"object"}`)},
 	}, nil)
 	runner := tools.NewRunner(t.TempDir(), 64)
 
@@ -279,6 +283,12 @@ func TestUnknownToolErrorListsConnectedMCPTools(t *testing.T) {
 	}
 	if !strings.Contains(msg, "double underscore") {
 		t.Errorf("error does not call out the __ naming rule:\n%s", msg)
+	}
+	if strings.Contains(msg, "mcp__jiraworklog__session_stop") || strings.Contains(msg, "mcp__jiraworklog__issue_search") {
+		t.Errorf("error flooded history with unrelated MCP tools:\n%s", msg)
+	}
+	if len(msg) > 1024 {
+		t.Errorf("unknown-tool guidance is not bounded: %d bytes", len(msg))
 	}
 
 	// No connected servers → the plain built-in error passes through.
@@ -315,5 +325,13 @@ func TestRunMixedToolBatchAnnotatesUnknownTool(t *testing.T) {
 	}
 	if msg.results[1].Err != nil {
 		t.Errorf("valid MCP call failed: %v", msg.results[1].Err)
+	}
+}
+
+func TestMCPToolSuggestionsBoundTotalNameBytes(t *testing.T) {
+	veryLong := "mcp__server__" + strings.Repeat("tool", 200)
+	suggestions := closestMCPToolNames(strings.ReplaceAll(veryLong, "__", "_"), []provider.ToolSpec{{Name: veryLong}}, 3)
+	if len(suggestions) != 0 {
+		t.Fatalf("oversized suggestion should be omitted, got %d bytes", len(suggestions[0]))
 	}
 }

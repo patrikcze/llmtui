@@ -104,10 +104,17 @@ flooding the model's context.
 **Small-model name mangling.** Some smaller local models reproduce
 `mcp__server__tool` names imperfectly (e.g. collapsing the double
 underscores to `mcp_server_tool`). Such a call cannot be routed, but the
-error returned to the model lists the connected MCP tools' exact names, so
-tool-capable models correct themselves on the next round. If a model keeps
-mangling names, that is a model limitation — try a stronger tool-calling
-model.
+error returned to the model may include up to three close exact-name
+suggestions, so tool-capable models can correct themselves without injecting
+the entire connected-tool catalog into conversation history. Suggestions are
+advisory only: llmtui never aliases, rewrites, or fuzzily executes a mangled
+name. If a model keeps mangling names, that is a model limitation — try a
+stronger tool-calling model.
+
+Connected MCP tools are sent in the same native `tools` array as workspace
+tools. Request composition snapshots that exact array once; the provider
+request, cache fingerprint, context estimate, and `/debug last` tool hash all
+refer to that same snapshot.
 
 A timeout means *llmtui* gave up waiting — it does not mean the server
 rolled anything back. A slow `session_start` may still have created a

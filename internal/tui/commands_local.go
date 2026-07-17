@@ -409,12 +409,22 @@ func cmdContext(m *Model, args string) tea.Cmd {
 
 func (m *Model) contextOverlay() string {
 	window, source := m.contextWindow()
-	used := contextmgr.EstimateTokens(m.session.Messages)
+	prepared, _ := m.prepareRequest("", nil, true)
+	used := prepared.estimate.Total
+	if used == 0 {
+		used = contextmgr.EstimateTokens(m.session.Messages)
+	}
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("context") + "\n\n")
 	m.kv(&b, "strategy", m.ctxStrategy)
 	m.kv(&b, "window", fmt.Sprintf("%s tokens (%s)", components.FormatTokens(window), source))
 	m.kv(&b, "used", fmt.Sprintf("%s tokens (estimated)", components.FormatTokens(used)))
+	if prepared.estimate.Total > 0 {
+		m.kv(&b, "breakdown", fmt.Sprintf("system %s · messages %s · tool schemas %s",
+			components.FormatTokens(prepared.estimate.System),
+			components.FormatTokens(prepared.estimate.Messages),
+			components.FormatTokens(prepared.estimate.Tools)))
+	}
 	m.kv(&b, "reserve", fmt.Sprintf("%s tokens for the response", components.FormatTokens(m.cfg.Context.ReserveResponseTokens)))
 	m.kv(&b, "keep last", fmt.Sprintf("%d messages verbatim", m.cfg.Context.KeepLastMessages))
 	m.kv(&b, "summarize after", fmt.Sprintf("%d messages", m.cfg.Context.SummarizeAfterMessages))
@@ -680,6 +690,8 @@ func (m *Model) debugOverlay() string {
 	m.kv(&b, "temperature", fmt.Sprintf("%.2f", d.Temperature))
 	m.kv(&b, "max tokens", fmt.Sprintf("%d", d.MaxTokens))
 	m.kv(&b, "stream", fmt.Sprintf("%v", d.Stream))
+	m.kv(&b, "modes", fmt.Sprintf("native tools %s · web %s · RAG %s · reasoning %s",
+		onOff(d.NativeTools), onOff(d.WebEnabled), onOff(d.RAGEnabled), d.Reasoning))
 	m.kv(&b, "retries", fmt.Sprintf("%d", d.Retries))
 	if d.Duration > 0 {
 		m.kv(&b, "duration", d.Duration.Round(10*time.Millisecond).String())
@@ -696,6 +708,28 @@ func (m *Model) debugOverlay() string {
 		ctxLine += " — compressed via " + d.CtxDecision.Strategy
 	}
 	m.kv(&b, "context", ctxLine)
+	if d.Estimate.Total > 0 {
+		m.kv(&b, "request estimate", fmt.Sprintf("total %s · system %s · messages %s · tool schemas %s · reserve %s",
+			components.FormatTokens(d.Estimate.Total),
+			components.FormatTokens(d.Estimate.System),
+			components.FormatTokens(d.Estimate.Messages),
+			components.FormatTokens(d.Estimate.Tools),
+			components.FormatTokens(d.Estimate.Reserve)))
+		m.kv(&b, "message counts", fmt.Sprintf("request %d · summarized/omitted %d · recent %d",
+			d.MessageCount, d.Estimate.OlderCount, d.Estimate.RecentCount))
+		m.kv(&b, "summary", fmt.Sprintf("%s · %s tokens", onOff(d.SummaryActive), components.FormatTokens(d.Estimate.SummaryToken)))
+	}
+	if d.ToolCount > 0 {
+		m.kv(&b, "tools", fmt.Sprintf("%d specs · SHA-256 %s", d.ToolCount, d.ToolsHash))
+	}
+	if len(d.ToolCalls) > 0 {
+		b.WriteString("\n" + m.theme.UserLabel.Render("returned tool calls") + "\n")
+		for _, call := range d.ToolCalls {
+			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(fmt.Sprintf(
+				"%s · id %s · args %d bytes · JSON %v · SHA-256 %s",
+				call.Name, call.ID, call.ArgumentBytes, call.ArgumentsJSON, call.ArgumentsHash)))
+		}
+	}
 
 	if len(m.ragLast) > 0 {
 		b.WriteString("\n" + m.theme.UserLabel.Render("retrieved snippets (RAG)") + "\n")

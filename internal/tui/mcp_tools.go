@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,12 +116,9 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	return res
 }
 
-// annotateUnknownTool extends an unknown-tool error with the connected MCP
-// servers' tool names. The Runner's own error lists only the built-in tools
-// (that package is MCP-unaware), which would tell the model the built-ins are
-// everything — so a model that mangled an MCP name ("mcp_srv_tool" instead of
-// "mcp__srv__tool", common with small local models) would conclude MCP tools
-// don't exist and never retry, instead of correcting itself from the list.
+// annotateUnknownTool adds only a small set of likely MCP corrections. It
+// never rewrites or executes the supplied name: execution remains exact-name
+// only, while typo feedback stays bounded so it cannot flood later prompts.
 func annotateUnknownTool(res tools.Result, mcpReg *mcp.Registry) tools.Result {
 	if res.Err == nil || !errors.Is(res.Err, tools.ErrUnknownTool) {
 		return res
@@ -129,13 +127,86 @@ func annotateUnknownTool(res tools.Result, mcpReg *mcp.Registry) tools.Result {
 	if len(specs) == 0 {
 		return res
 	}
-	names := make([]string, 0, len(specs))
-	for _, s := range specs {
-		names = append(names, s.Name)
+	suggestions := closestMCPToolNames(res.Call.Tool, specs, 3)
+	if len(suggestions) == 0 {
+		return res
 	}
-	res.Err = fmt.Errorf("%w; connected MCP tools (use these exact names, including the double underscores): %s",
-		res.Err, strings.Join(names, ", "))
+	res.Err = fmt.Errorf("%w; possible MCP name correction (execution requires the exact registered name, including double underscores): %s",
+		res.Err, strings.Join(suggestions, ", "))
 	return res
+}
+
+type mcpNameCandidate struct {
+	name     string
+	distance int
+}
+
+func closestMCPToolNames(got string, specs []provider.ToolSpec, limit int) []string {
+	if limit <= 0 || len(got) > 512 || !strings.HasPrefix(strings.ToLower(got), "mcp") {
+		return nil
+	}
+	normalizedGot := normalizeToolName(got)
+	candidates := make([]mcpNameCandidate, 0, len(specs))
+	for _, spec := range specs {
+		if len(spec.Name) > 512 {
+			continue
+		}
+		distance := editDistance(normalizedGot, normalizeToolName(spec.Name))
+		threshold := len(normalizedGot) / 3
+		if threshold < 3 {
+			threshold = 3
+		}
+		if distance == 0 || distance <= threshold {
+			candidates = append(candidates, mcpNameCandidate{name: spec.Name, distance: distance})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].distance != candidates[j].distance {
+			return candidates[i].distance < candidates[j].distance
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	const maxSuggestionBytes = 512
+	out := make([]string, 0, min(limit, len(candidates)))
+	used := 0
+	for _, candidate := range candidates {
+		separator := 0
+		if len(out) > 0 {
+			separator = 2
+		}
+		if len(out) == limit || used+separator+len(candidate.name) > maxSuggestionBytes {
+			break
+		}
+		out = append(out, candidate.name)
+		used += separator + len(candidate.name)
+	}
+	return out
+}
+
+func normalizeToolName(name string) string {
+	parts := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool { return r == '_' })
+	return strings.Join(parts, "_")
+}
+
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	previous := make([]int, len(br)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i, ra := range ar {
+		current := make([]int, len(br)+1)
+		current[0] = i + 1
+		for j, rb := range br {
+			cost := 0
+			if ra != rb {
+				cost = 1
+			}
+			current[j+1] = min(current[j]+1, previous[j+1]+1, previous[j]+cost)
+		}
+		previous = current
+	}
+	return previous[len(br)]
 }
 
 // containsMCPCall reports whether any call in the batch targets an MCP

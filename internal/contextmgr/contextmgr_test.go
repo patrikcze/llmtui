@@ -31,6 +31,49 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensIncludesStructuredMessageFields(t *testing.T) {
+	structured := []provider.Message{
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{{
+				ID:        "call_123",
+				Name:      "mcp__jiraWorklog__session_start",
+				Arguments: `{"issue_key":"` + strings.Repeat("X", 1200) + `"}`,
+			}},
+		},
+		{
+			Role:       provider.RoleTool,
+			Content:    "ok",
+			ToolCallID: "call_123",
+			ToolName:   "mcp__jiraWorklog__session_start",
+		},
+		{
+			Role:   provider.RoleUser,
+			Images: []provider.Image{{Data: []byte("image bytes"), MIME: "image/png"}},
+		},
+	}
+
+	if got := EstimateTokens(structured); got < 550 {
+		t.Fatalf("structured messages = %d estimated tokens, want tool arguments and image overhead included", got)
+	}
+}
+
+func TestDecideIncludesFixedRequestOverhead(t *testing.T) {
+	p := Params{
+		Strategy:              StrategyTruncate,
+		ContextWindow:         1000,
+		ReserveResponseTokens: 100,
+		FixedTokens:           850,
+	}
+	d := Decide([]provider.Message{{Role: provider.RoleUser, Content: strings.Repeat("x", 400)}}, p)
+	if !d.Compress {
+		t.Fatalf("decision = %+v, want fixed prompt/tool overhead to trigger compression", d)
+	}
+	if d.Used < 950 {
+		t.Errorf("used = %d, want message plus fixed overhead", d.Used)
+	}
+}
+
 func TestDecideNone(t *testing.T) {
 	d := Decide(msgs(50, 1000), Params{Strategy: StrategyNone, ContextWindow: 1000, ReserveResponseTokens: 100})
 	if d.Compress {

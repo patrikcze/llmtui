@@ -1548,6 +1548,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// calls are stored on the assistant message, so the stored message and
 		// the tool results always carry the same IDs.
 		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
+		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
 		m.streamToolCalls = msg.event.ToolCalls
 		m.finishStream(msg.event.Usage)
 		if emptyToolContinuation {
