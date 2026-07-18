@@ -65,6 +65,60 @@ func TestChatStreamsDeltasInOrderThenDone(t *testing.T) {
 	}
 }
 
+func TestChatMapsReasoningDeltasAndPropagatesMode(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "model.gguf")
+	rt := &scriptedRuntime{genDeltas: []GenDelta{
+		{Kind: DeltaReasoning, Text: "private"},
+		{Kind: DeltaText, Text: "public"},
+	}}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+		Reasoning: "on",
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	got := drain(events)
+	var answer, reasoning strings.Builder
+	for _, event := range got {
+		switch event.Type {
+		case provider.EventDelta:
+			answer.WriteString(event.Delta)
+		case provider.EventReasoning:
+			if event.Delta != "loading model model.gguf …" && event.Delta != "loading model …" {
+				reasoning.WriteString(event.Delta)
+			}
+		}
+	}
+	if answer.String() != "public" || reasoning.String() != "private" {
+		t.Errorf("answer=%q reasoning=%q", answer.String(), reasoning.String())
+	}
+	rt.pathMu.Lock()
+	gotMode := rt.lastReq.Reasoning
+	rt.pathMu.Unlock()
+	if gotMode != "on" {
+		t.Errorf("runtime reasoning = %q, want on", gotMode)
+	}
+}
+
+func TestChatRejectsInvalidReasoningBeforeRuntime(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "model.gguf")
+	rt := &scriptedRuntime{}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+
+	_, err := p.Chat(context.Background(), provider.ChatRequest{Reasoning: "sometimes"})
+	if err == nil || !strings.Contains(err.Error(), "invalid reasoning mode") {
+		t.Fatalf("Chat error = %v, want reasoning validation", err)
+	}
+	if rt.loadCallCount() != 0 || rt.genCallCount() != 0 {
+		t.Fatalf("invalid request reached runtime: loads=%d generations=%d", rt.loadCallCount(), rt.genCallCount())
+	}
+}
+
 func TestModelLoadsOnceAcrossSequentialChats(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")
@@ -415,6 +469,36 @@ func TestListModelsMissingDirectoryReturnsConfiguredOnly(t *testing.T) {
 	}
 }
 
+func TestListModelsReportsAuthoritativeVisionAndExcludesProjectors(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "gemma.gguf")
+	projectorPath := writeFakeModel(t, dir, "mmproj-gemma.gguf")
+	_ = writeFakeModel(t, dir, "sibling.gguf")
+
+	textProvider := New("text", Options{ModelPath: modelPath}, fixedRuntime(&scriptedRuntime{}))
+	textModels, err := textProvider.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("text ListModels: %v", err)
+	}
+	for _, model := range textModels {
+		if model.Vision == nil || *model.Vision {
+			t.Errorf("text model Vision = %v, want authoritative false", model.Vision)
+		}
+		if model.ID == projectorPath {
+			t.Errorf("projector %q leaked into model picker", projectorPath)
+		}
+	}
+
+	visionProvider := New("vision", Options{ModelPath: modelPath, MMProjPath: projectorPath}, fixedRuntime(&scriptedRuntime{}))
+	visionModels, err := visionProvider.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("vision ListModels: %v", err)
+	}
+	if len(visionModels) != 1 || visionModels[0].ID != modelPath || visionModels[0].Vision == nil || !*visionModels[0].Vision {
+		t.Fatalf("vision ListModels = %+v, want configured pair marked vision", visionModels)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")
@@ -459,6 +543,18 @@ func TestRuntimeFingerprintChangesWithOptionsAndModelFile(t *testing.T) {
 	p4 := New("embedded", changedSampling, fixedRuntime(&scriptedRuntime{}))
 	if p4.RuntimeFingerprint() == f1 {
 		t.Error("fingerprint did not change when Sampling.Stop changed")
+	}
+
+	projectorPath := writeFakeModel(t, dir, "mmproj-model.gguf")
+	changedPair := base
+	changedPair.MMProjPath = projectorPath
+	if New("embedded", changedPair, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when MMProjPath changed")
+	}
+	changedFormat := base
+	changedFormat.ToolFormat = ToolFormatGemma
+	if New("embedded", changedFormat, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when ToolFormat changed")
 	}
 
 	// Changing the model file's content (size/mtime) must change the

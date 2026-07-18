@@ -131,6 +131,14 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	if err != nil {
 		return embedded.Options{}, fmt.Errorf("expand library path %q: %w", pc.LibraryPath, err)
 	}
+	mmprojPath, err := history.ExpandHome(pc.MMProjPath)
+	if err != nil {
+		return embedded.Options{}, fmt.Errorf("expand vision projector path %q: %w", pc.MMProjPath, err)
+	}
+	toolFormat, err := embedded.ParseToolFormat(pc.ToolFormat)
+	if err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
 
 	contextSize := pc.ContextSize
 	if ov.ContextSize != nil {
@@ -170,12 +178,14 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 
 	return embedded.Options{
 		ModelPath:    modelPath,
+		MMProjPath:   mmprojPath,
 		LibraryPath:  libraryPath,
 		ContextSize:  contextSize,
 		GPULayers:    gpuLayers,
 		Threads:      pc.Threads,
 		BatchSize:    pc.BatchSize,
 		ChatTemplate: pc.ChatTemplate,
+		ToolFormat:   toolFormat,
 		Sampling:     sampling,
 	}, nil
 }

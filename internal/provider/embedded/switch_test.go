@@ -191,6 +191,25 @@ func TestSwitchToMissingModelKeepsEngineUsable(t *testing.T) {
 	}
 }
 
+func TestVisionPairRejectsModelSwitchBeforeClosingRuntime(t *testing.T) {
+	dir := t.TempDir()
+	first := writeFakeModel(t, dir, "first.gguf")
+	second := writeFakeModel(t, dir, "second.gguf")
+	projector := writeFakeModel(t, dir, "mmproj-first.gguf")
+	f := &runtimeFactory{configure: func(rt *scriptedRuntime) { rt.genPieces = []string{"ok"} }}
+	p := New("embedded-vision", Options{ModelPath: first, MMProjPath: projector}, f.new)
+
+	chatAndDrain(t, p, provider.ChatRequest{Model: first})
+	got := chatAndDrain(t, p, provider.ChatRequest{Model: second})
+	ev := lastEvent(t, got)
+	if ev.Type != provider.EventError || !strings.Contains(ev.Err.Error(), "fixed pair") || !strings.Contains(ev.Err.Error(), "another embedded provider") {
+		t.Fatalf("switch event = %+v, want actionable fixed-pair error", ev)
+	}
+	if f.count() != 1 || f.instance(0).closeCallCount() != 0 {
+		t.Fatalf("failed pair switch changed runtime: instances=%d closes=%d", f.count(), f.instance(0).closeCallCount())
+	}
+}
+
 func TestSwitchToDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")

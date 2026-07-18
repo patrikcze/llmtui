@@ -25,7 +25,7 @@ func (UnavailableRuntime) Load(context.Context, Options, func(string)) (ModelMet
 }
 
 // Generate always fails.
-func (UnavailableRuntime) Generate(context.Context, GenRequest, func(string)) (GenResult, error) {
+func (UnavailableRuntime) Generate(context.Context, GenRequest, func(GenDelta)) (GenResult, error) {
 	return GenResult{}, errUnavailable
 }
 

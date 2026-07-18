@@ -27,6 +27,8 @@ type ModelMeta struct {
 // GenRequest carries one completion request into the native runtime.
 type GenRequest struct {
 	Messages    []provider.Message
+	Tools       []provider.ToolSpec
+	Reasoning   string
 	Temperature float64
 	TopP        float64
 	MaxTokens   int
@@ -36,11 +38,27 @@ type GenRequest struct {
 	Progress func(string)
 }
 
+// DeltaKind identifies whether a streamed model fragment is user-visible
+// answer text or hidden reasoning.
+type DeltaKind uint8
+
+const (
+	DeltaText DeltaKind = iota
+	DeltaReasoning
+)
+
+// GenDelta is a typed streaming fragment from the native runtime.
+type GenDelta struct {
+	Kind DeltaKind
+	Text string
+}
+
 // GenResult reports real (non-estimated) token accounting for a completed
 // generation.
 type GenResult struct {
 	PromptTokens     int
 	CompletionTokens int
+	ToolCalls        []provider.ToolCall
 }
 
 // Runtime is one loaded native inference engine. It is the seam between the
@@ -61,11 +79,12 @@ type Runtime interface {
 	// model foo.gguf …") so a caller can surface load progress as activity.
 	Load(ctx context.Context, opts Options, progress func(string)) (ModelMeta, error)
 
-	// Generate runs one completion, calling emit for each UTF-8-safe text
-	// piece as it becomes available. It returns real token counts. Generate
+	// Generate runs one completion, calling emit for each UTF-8-safe answer or
+	// reasoning fragment as it becomes available. It returns real token counts
+	// and any terminal tool calls. Generate
 	// must honor ctx cancellation promptly and must leave the engine
 	// reusable for a subsequent call afterwards.
-	Generate(ctx context.Context, req GenRequest, emit func(string)) (GenResult, error)
+	Generate(ctx context.Context, req GenRequest, emit func(GenDelta)) (GenResult, error)
 
 	// Close releases any resources held by the runtime. It must be safe to
 	// call even if Load was never called.

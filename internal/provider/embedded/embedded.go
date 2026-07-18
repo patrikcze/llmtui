@@ -132,18 +132,20 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
 	p.mu.Lock()
 	active := p.activePath
+	vision := p.opts.MMProjPath != ""
 	p.mu.Unlock()
 
 	configured := provider.ModelInfo{
 		ID:         active,
 		Name:       filepath.Base(active),
 		ContextLen: p.effectiveContextLen(),
+		Vision:     boolPointer(vision),
 	}
 
 	seen := map[string]bool{active: true}
 	models := []provider.ModelInfo{configured}
 
-	if active == "" {
+	if active == "" || vision {
 		return models, nil
 	}
 	dir := filepath.Dir(active)
@@ -154,7 +156,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 
 	var siblings []string
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".gguf" {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".gguf" || isProjectorName(e.Name()) {
 			continue
 		}
 		abs := filepath.Join(dir, e.Name())
@@ -167,11 +169,19 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 	sort.Strings(siblings)
 	for _, abs := range siblings {
 		models = append(models, provider.ModelInfo{
-			ID:   abs,
-			Name: filepath.Base(abs),
+			ID:     abs,
+			Name:   filepath.Base(abs),
+			Vision: boolPointer(false),
 		})
 	}
 	return models, nil
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func isProjectorName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "mmproj-") || strings.HasPrefix(lower, "mmproj_")
 }
 
 // effectiveContextLen returns the loaded model's effective context (the
@@ -192,8 +202,9 @@ func (p *Provider) effectiveContextLen() int {
 	return p.meta.NCtxTrain
 }
 
-// Capabilities describes the embedded provider. It is honest about lacking
-// native tool support.
+// Capabilities describes provider-wide behavior. Model-dependent vision is
+// reported authoritatively by ListModels, while tool and reasoning support is
+// selected per embedded model/template rather than advertised globally.
 func (p *Provider) Capabilities() provider.Capabilities {
 	return provider.Capabilities{
 		SupportsStreaming:    true,
@@ -209,6 +220,9 @@ func (p *Provider) Capabilities() provider.Capabilities {
 // tool-fallback detector recognizes, so the session degrades to the
 // prompt-based tool protocol automatically.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if err := validateReasoning(req.Reasoning); err != nil {
+		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
+	}
 	if len(req.Tools) > 0 {
 		return nil, fmt.Errorf("embedded provider %q does not support native tool calls — llmtui falls back to the prompt-based tool protocol", p.name)
 	}
@@ -301,6 +315,8 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 
 	genReq := GenRequest{
 		Messages:    req.Messages,
+		Tools:       req.Tools,
+		Reasoning:   req.Reasoning,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
@@ -310,11 +326,15 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 	}
 
 	aborted := false
-	result, err := rt.Generate(genCtx, genReq, func(piece string) {
+	result, err := rt.Generate(genCtx, genReq, func(delta GenDelta) {
 		if aborted {
 			return
 		}
-		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: piece}) {
+		eventType := provider.EventDelta
+		if delta.Kind == DeltaReasoning {
+			eventType = provider.EventReasoning
+		}
+		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: eventType, Delta: delta.Text}) {
 			aborted = true
 		}
 	})
@@ -333,7 +353,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		return
 	}
 
-	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{
+	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Usage: &provider.Usage{
 		PromptTokens:     result.PromptTokens,
 		CompletionTokens: result.CompletionTokens,
 		TotalTokens:      result.PromptTokens + result.CompletionTokens,
@@ -362,6 +382,9 @@ func (p *Provider) switchModelIfRequested(genCtx context.Context, requested stri
 	p.mu.Unlock()
 	if requested == active {
 		return nil
+	}
+	if p.opts.MMProjPath != "" {
+		return fmt.Errorf("embedded provider %q cannot switch model while mmproj_path is configured: the model and vision projector are a fixed pair; create another embedded provider entry for %q with its matching projector", p.name, requested)
 	}
 
 	// Validate the new selection before closing anything.
@@ -442,7 +465,7 @@ func (p *Provider) RuntimeFingerprint() string {
 	opts := p.activeOptions()
 
 	h := sha256.New()
-	writeField(h, []byte(opts.ModelPath))
+	writeField(h, []byte(cleanFingerprintPath(opts.ModelPath)))
 
 	var size int64
 	var mtime int64
@@ -452,12 +475,25 @@ func (p *Provider) RuntimeFingerprint() string {
 	}
 	writeInt64(h, size)
 	writeInt64(h, mtime)
+	writeField(h, []byte(cleanFingerprintPath(opts.MMProjPath)))
+	if info, err := os.Stat(opts.MMProjPath); err == nil {
+		writeInt64(h, info.Size())
+		writeInt64(h, info.ModTime().UnixNano())
+	} else {
+		writeInt64(h, 0)
+		writeInt64(h, 0)
+	}
 
 	writeInt64(h, int64(opts.ContextSize))
 	writeInt64(h, int64(opts.GPULayers))
 	writeInt64(h, int64(opts.Threads))
 	writeInt64(h, int64(opts.BatchSize))
 	writeField(h, []byte(opts.ChatTemplate))
+	toolFormat := opts.ToolFormat
+	if toolFormat == "" {
+		toolFormat = ToolFormatAuto
+	}
+	writeField(h, []byte(toolFormat))
 
 	writeInt64(h, int64(opts.Sampling.TopK))
 	writeFloat64(h, opts.Sampling.MinP)
@@ -470,6 +506,22 @@ func (p *Provider) RuntimeFingerprint() string {
 	writeField(h, []byte("stop-end"))
 
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func cleanFingerprintPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+func validateReasoning(value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto", "on", "off":
+		return nil
+	default:
+		return fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", value)
+	}
 }
 
 // writeField writes a length-prefixed field so concatenated field

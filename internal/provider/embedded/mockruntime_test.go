@@ -21,6 +21,7 @@ type scriptedRuntime struct {
 	loadMeta  ModelMeta
 
 	genPieces []string
+	genDeltas []GenDelta
 	genErr    error
 	genDelay  time.Duration // delay between pieces
 	// blockUntilCanceled, if true, makes Generate ignore genPieces and
@@ -33,6 +34,7 @@ type scriptedRuntime struct {
 
 	pathMu    sync.Mutex
 	loadPaths []string // ModelPath of every Load call, in order
+	lastReq   GenRequest
 }
 
 func (r *scriptedRuntime) Probe(Options) error { return r.probeErr }
@@ -60,8 +62,11 @@ func (r *scriptedRuntime) Load(ctx context.Context, opts Options, progress func(
 	return meta, nil
 }
 
-func (r *scriptedRuntime) Generate(ctx context.Context, req GenRequest, emit func(string)) (GenResult, error) {
+func (r *scriptedRuntime) Generate(ctx context.Context, req GenRequest, emit func(GenDelta)) (GenResult, error) {
 	atomic.AddInt32(&r.genCalls, 1)
+	r.pathMu.Lock()
+	r.lastReq = req
+	r.pathMu.Unlock()
 
 	if r.blockUntilCanceled {
 		<-ctx.Done()
@@ -80,7 +85,11 @@ func (r *scriptedRuntime) Generate(ctx context.Context, req GenRequest, emit fun
 				return GenResult{}, ctx.Err()
 			}
 		}
-		emit(piece)
+		emit(GenDelta{Kind: DeltaText, Text: piece})
+		completion++
+	}
+	for _, delta := range r.genDeltas {
+		emit(delta)
 		completion++
 	}
 	if r.genErr != nil {

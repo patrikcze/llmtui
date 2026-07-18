@@ -4,6 +4,40 @@
 // this stage can build and test everywhere with plain `go build ./...`.
 package embedded
 
+import (
+	"fmt"
+	"strings"
+)
+
+// ToolFormat selects the llama.cpp tool-call grammar used for an embedded
+// model. Auto delegates format detection to the runtime.
+type ToolFormat string
+
+const (
+	ToolFormatAuto     ToolFormat = "auto"
+	ToolFormatStandard ToolFormat = "standard"
+	ToolFormatQwen     ToolFormat = "qwen"
+	ToolFormatGLM      ToolFormat = "glm"
+	ToolFormatMistral  ToolFormat = "mistral"
+	ToolFormatGemma    ToolFormat = "gemma"
+	ToolFormatGPT      ToolFormat = "gpt"
+	ToolFormatPhi      ToolFormat = "phi"
+)
+
+// ParseToolFormat validates a configured embedded tool grammar.
+func ParseToolFormat(value string) (ToolFormat, error) {
+	format := ToolFormat(strings.ToLower(strings.TrimSpace(value)))
+	if format == "" {
+		return ToolFormatAuto, nil
+	}
+	switch format {
+	case ToolFormatAuto, ToolFormatStandard, ToolFormatQwen, ToolFormatGLM, ToolFormatMistral, ToolFormatGemma, ToolFormatGPT, ToolFormatPhi:
+		return format, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded tool_format %q (supported: auto, standard, qwen, glm, mistral, gemma, gpt, phi)", value)
+	}
+}
+
 // Sampling configures the native token sampler chain. Zero values are valid
 // Go zero values, not automatically "use the default" — callers that want
 // ADR defaults applied must do so explicitly (see internal/app/factory.go).
@@ -21,6 +55,9 @@ type Options struct {
 	// ModelPath is the resolved absolute path to the .gguf model file
 	// (leading "~/" already expanded by the caller/factory).
 	ModelPath string
+	// MMProjPath is the resolved absolute path to the vision projector GGUF.
+	// Empty configures a text-only model.
+	MMProjPath string
 	// LibraryPath is the directory containing the llama.cpp dynamic
 	// libraries. Empty means "use the YZMA_LIB environment variable".
 	LibraryPath string
@@ -37,5 +74,8 @@ type Options struct {
 	// ChatTemplate overrides the model's GGUF chat-template metadata, for
 	// models that ship broken or missing template metadata.
 	ChatTemplate string
-	Sampling     Sampling
+	// ToolFormat selects the tool-call grammar. The zero value is equivalent
+	// to auto for backwards compatibility with existing configurations.
+	ToolFormat ToolFormat
+	Sampling   Sampling
 }

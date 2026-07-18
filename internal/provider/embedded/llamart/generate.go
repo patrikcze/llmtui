@@ -1,15 +1,28 @@
 package llamart
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
+	"strings"
 
+	"github.com/ardanlabs/jinja"
 	"github.com/hybridgroup/yzma/pkg/llama"
 
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
 )
+
+type nativeTemplateRenderer func(string, []llama.ChatMessage) (string, error)
+
+type renderedPrompt struct {
+	text            string
+	startsReasoning bool
+}
 
 func applyTemplate(template string, messages []llama.ChatMessage) (string, error) {
 	probe := make([]byte, 1)
@@ -31,6 +44,197 @@ func applyTemplate(template string, messages []llama.ChatMessage) (string, error
 		return "", fmt.Errorf("apply model chat template: invalid rendered length %d", written)
 	}
 	return string(buf[:written]), nil
+}
+
+// renderChatTemplate uses llama.cpp's fast native renderer when the request
+// needs no extended Jinja variables. If llama.cpp does not recognize a valid
+// model template (notably Gemma 4), it falls back to the complete Jinja
+// implementation used by yzma.
+func renderChatTemplate(
+	template string,
+	messages []provider.Message,
+	tools []provider.ToolSpec,
+	reasoning string,
+	native nativeTemplateRenderer,
+) (renderedPrompt, error) {
+	mode := strings.ToLower(strings.TrimSpace(reasoning))
+	auto := mode == "" || mode == "auto"
+
+	var nativeErr error
+	if auto && len(tools) == 0 && nativeCompatibleMessages(messages) {
+		nativeMessages, err := chatMessages(messages)
+		if err == nil {
+			text, err := native(template, nativeMessages)
+			if err == nil {
+				return newRenderedPrompt(text), nil
+			}
+			nativeErr = err
+		}
+	}
+
+	data, err := jinjaTemplateData(messages, tools, mode)
+	if err != nil {
+		return renderedPrompt{}, err
+	}
+	compiled, err := jinja.Compile(template)
+	if err != nil {
+		return renderedPrompt{}, templateRenderError(nativeErr, fmt.Errorf("compile Jinja template: %w", err))
+	}
+	text, err := compiled.Render(data)
+	if err != nil {
+		return renderedPrompt{}, templateRenderError(nativeErr, fmt.Errorf("render Jinja template: %w", err))
+	}
+	return newRenderedPrompt(text), nil
+}
+
+func nativeCompatibleMessages(messages []provider.Message) bool {
+	for _, message := range messages {
+		if len(message.Images) > 0 || len(message.ToolCalls) > 0 || message.Role == provider.RoleTool ||
+			message.ToolCallID != "" || message.ToolName != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func newRenderedPrompt(text string) renderedPrompt {
+	trimmed := strings.TrimSpace(text)
+	return renderedPrompt{
+		text: text,
+		startsReasoning: strings.HasSuffix(trimmed, "<think>") ||
+			strings.HasSuffix(trimmed, "<|channel>thought") ||
+			strings.HasSuffix(trimmed, "<channel>thought"),
+	}
+}
+
+func templateRenderError(nativeErr, jinjaErr error) error {
+	advice := errors.New("set providers.<name>.chat_template to a template supported by this model")
+	if nativeErr == nil {
+		return errors.Join(errors.New("apply model chat template"), jinjaErr, advice)
+	}
+	return errors.Join(
+		fmt.Errorf("llama.cpp template renderer: %w", nativeErr),
+		fmt.Errorf("jinja fallback: %w", jinjaErr),
+		advice,
+	)
+}
+
+func jinjaTemplateData(messages []provider.Message, tools []provider.ToolSpec, reasoning string) (map[string]any, error) {
+	if len(messages) == 0 {
+		return nil, errors.New("chat request has no messages")
+	}
+	result := map[string]any{
+		"messages":              templateMessages(messages),
+		"add_generation_prompt": true,
+	}
+	switch reasoning {
+	case "", "auto":
+		// Omission is intentional: model templates can distinguish their own
+		// default from an explicit enable/disable request.
+	case "on":
+		result["enable_thinking"] = true
+	case "off":
+		result["enable_thinking"] = false
+	default:
+		return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
+	}
+	if len(tools) > 0 {
+		mapped, err := templateTools(tools)
+		if err != nil {
+			return nil, err
+		}
+		result["tools"] = mapped
+	}
+	return result, nil
+}
+
+func templateMessages(messages []provider.Message) []any {
+	result := make([]any, 0, len(messages))
+	for _, message := range messages {
+		mapped := map[string]any{
+			"role":    string(message.Role),
+			"content": message.Content,
+		}
+		if len(message.Images) > 0 {
+			content := make([]any, 0, len(message.Images)+1)
+			for range message.Images {
+				content = append(content, map[string]any{"type": "image"})
+			}
+			if message.Content != "" {
+				content = append(content, map[string]any{"type": "text", "text": message.Content})
+			}
+			mapped["content"] = content
+		}
+		if len(message.ToolCalls) > 0 {
+			calls := make([]any, 0, len(message.ToolCalls))
+			for _, call := range message.ToolCalls {
+				calls = append(calls, map[string]any{
+					"id":   call.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      call.Name,
+						"arguments": jsonValue(call.Arguments),
+					},
+				})
+			}
+			mapped["tool_calls"] = calls
+		}
+		if message.ToolCallID != "" {
+			mapped["tool_call_id"] = message.ToolCallID
+		}
+		if message.ToolName != "" {
+			mapped["name"] = message.ToolName
+		}
+		result = append(result, mapped)
+	}
+	return result
+}
+
+func templateTools(tools []provider.ToolSpec) ([]any, error) {
+	result := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		parameters, err := decodeJSON(tool.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("tool %q parameters are not valid JSON: %w", tool.Name, err)
+		}
+		result = append(result, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"parameters":  parameters,
+			},
+		})
+	}
+	return result, nil
+}
+
+func jsonValue(raw string) any {
+	value, err := decodeJSON([]byte(raw))
+	if err != nil {
+		return raw
+	}
+	return value
+}
+
+func decodeJSON(raw []byte) (any, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	return value, nil
 }
 
 func generationBudget(promptTokens, requested, contextSize int) (int, error) {

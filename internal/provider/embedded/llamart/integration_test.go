@@ -95,7 +95,7 @@ func TestRuntimeIntegration(t *testing.T) {
 		Temperature: 0.7,
 		TopP:        0.9,
 		MaxTokens:   128,
-	}, func(string) {
+	}, func(embedded.GenDelta) {
 		pieces++
 		canceledAt = time.Now()
 		cancel()
@@ -125,7 +125,7 @@ func TestRuntimeIntegration(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
 	}
-	if _, err := runtime.Generate(context.Background(), embedded.GenRequest{}, func(string) {}); err == nil {
+	if _, err := runtime.Generate(context.Background(), embedded.GenRequest{}, func(embedded.GenDelta) {}); err == nil {
 		t.Error("Generate() after Close() error = nil, want unloaded-runtime error")
 	}
 
@@ -180,8 +180,8 @@ func generateIntegration(t *testing.T, runtime *Runtime, req embedded.GenRequest
 	t.Helper()
 	var text strings.Builder
 	started := time.Now()
-	result, err := runtime.Generate(context.Background(), req, func(piece string) {
-		text.WriteString(piece)
+	result, err := runtime.Generate(context.Background(), req, func(delta embedded.GenDelta) {
+		text.WriteString(delta.Text)
 	})
 	elapsed := time.Since(started)
 	if err != nil {

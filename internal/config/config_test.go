@@ -319,12 +319,14 @@ providers:
   embedded:
     type: embedded
     model_path: "~/models/model.gguf"
+    mmproj_path: "~/models/mmproj-model.gguf"
     library_path: "/opt/llama/lib"
     context_size: 8192
     gpu_layers: 0
     threads: 4
     batch_size: 512
     chat_template: "custom template"
+    tool_format: gemma
     sampling:
       top_k: 50
       min_p: 0.1
@@ -351,6 +353,9 @@ providers:
 	if pc.ModelPath != "~/models/model.gguf" {
 		t.Errorf("ModelPath = %q", pc.ModelPath)
 	}
+	if pc.MMProjPath != "~/models/mmproj-model.gguf" {
+		t.Errorf("MMProjPath = %q", pc.MMProjPath)
+	}
 	if pc.LibraryPath != "/opt/llama/lib" {
 		t.Errorf("LibraryPath = %q", pc.LibraryPath)
 	}
@@ -368,6 +373,9 @@ providers:
 	}
 	if pc.ChatTemplate != "custom template" {
 		t.Errorf("ChatTemplate = %q", pc.ChatTemplate)
+	}
+	if pc.ToolFormat != "gemma" {
+		t.Errorf("ToolFormat = %q, want gemma", pc.ToolFormat)
 	}
 	if pc.Sampling == nil {
 		t.Fatal("Sampling should not be nil")
@@ -554,9 +562,9 @@ chat:
 	if ollama.BaseURL != "http://localhost:11434" || ollama.DefaultModel != "qwen3" {
 		t.Errorf("ollama provider = %+v, unexpected values", ollama)
 	}
-	if ollama.ModelPath != "" || ollama.LibraryPath != "" || ollama.ContextSize != 0 ||
+	if ollama.ModelPath != "" || ollama.MMProjPath != "" || ollama.LibraryPath != "" || ollama.ContextSize != 0 ||
 		ollama.GPULayers != nil || ollama.Threads != 0 || ollama.BatchSize != 0 ||
-		ollama.ChatTemplate != "" || ollama.Sampling != nil {
+		ollama.ChatTemplate != "" || ollama.ToolFormat != "" || ollama.Sampling != nil {
 		t.Errorf("ollama provider should have all-zero embedded-only fields, got %+v", ollama)
 	}
 	lmstudio := cfg.Providers["lmstudio"]

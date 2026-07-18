@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/config"
@@ -90,7 +91,13 @@ func TestBuildEmbeddedOptionsTildeExpansion(t *testing.T) {
 	if err != nil {
 		t.Skipf("no home directory available: %v", err)
 	}
-	pc := config.ProviderConfig{Type: "embedded", ModelPath: "~/models/model.gguf", LibraryPath: "~/lib"}
+	pc := config.ProviderConfig{
+		Type:        "embedded",
+		ModelPath:   "~/models/model.gguf",
+		MMProjPath:  "~/models/mmproj-model.gguf",
+		LibraryPath: "~/lib",
+		ToolFormat:  "gemma",
+	}
 	opts, err := buildEmbeddedOptions(pc, ActiveOverrides{})
 	if err != nil {
 		t.Fatalf("buildEmbeddedOptions: %v", err)
@@ -102,6 +109,24 @@ func TestBuildEmbeddedOptionsTildeExpansion(t *testing.T) {
 	wantLib := filepath.Join(home, "lib")
 	if opts.LibraryPath != wantLib {
 		t.Errorf("LibraryPath = %q, want %q", opts.LibraryPath, wantLib)
+	}
+	wantMMProj := filepath.Join(home, "models", "mmproj-model.gguf")
+	if opts.MMProjPath != wantMMProj {
+		t.Errorf("MMProjPath = %q, want %q", opts.MMProjPath, wantMMProj)
+	}
+	if opts.ToolFormat != embedded.ToolFormatGemma {
+		t.Errorf("ToolFormat = %q, want gemma", opts.ToolFormat)
+	}
+}
+
+func TestBuildEmbeddedOptionsRejectsUnknownToolFormat(t *testing.T) {
+	_, err := buildEmbeddedOptions(config.ProviderConfig{
+		Type:       "embedded",
+		ModelPath:  "model.gguf",
+		ToolFormat: "mystery",
+	}, ActiveOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "tool_format") {
+		t.Fatalf("buildEmbeddedOptions error = %v, want tool_format validation", err)
 	}
 }
 

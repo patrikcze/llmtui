@@ -29,6 +29,8 @@ type ProviderConfig struct {
 
 	// ModelPath is the path to a local .gguf model file.
 	ModelPath string `mapstructure:"model_path" yaml:"model_path,omitempty"`
+	// MMProjPath is the optional vision projector GGUF paired with ModelPath.
+	MMProjPath string `mapstructure:"mmproj_path" yaml:"mmproj_path,omitempty"`
 	// LibraryPath is the directory containing llama.cpp dynamic libraries.
 	// Empty defers to the YZMA_LIB environment variable.
 	LibraryPath string `mapstructure:"library_path" yaml:"library_path,omitempty"`
@@ -45,6 +47,8 @@ type ProviderConfig struct {
 	BatchSize int `mapstructure:"batch_size" yaml:"batch_size,omitempty"`
 	// ChatTemplate overrides the model's GGUF chat-template metadata.
 	ChatTemplate string `mapstructure:"chat_template" yaml:"chat_template,omitempty"`
+	// ToolFormat selects the embedded llama.cpp tool-call grammar.
+	ToolFormat string `mapstructure:"tool_format" yaml:"tool_format,omitempty"`
 	// Sampling configures the native token sampler chain.
 	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
 }
@@ -654,10 +658,12 @@ providers:
   # embedded:
   #   type: embedded
   #   model_path: "~/models/qwen2.5-7b-instruct-q4_k_m.gguf"
+  #   mmproj_path: "" # optional matching vision projector GGUF
   #   library_path: "" # directory with libllama/libggml*; "" uses YZMA_LIB
   #   context_size: 0 # 0 = min(model n_ctx_train, 8192)
   #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
   #   threads: 0 # 0 = auto
+  #   tool_format: auto # auto|standard|qwen|glm|mistral|gemma|gpt|phi
   #   sampling:
   #     top_k: 40
   #     min_p: 0.05

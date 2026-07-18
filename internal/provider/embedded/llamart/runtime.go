@@ -227,7 +227,7 @@ func (r *Runtime) Load(
 func (r *Runtime) Generate(
 	ctx context.Context,
 	req embedded.GenRequest,
-	emit func(string),
+	emit func(embedded.GenDelta),
 ) (result embedded.GenResult, err error) {
 	defer recoverError("generate with llama.cpp", &err)
 
@@ -244,14 +244,19 @@ func (r *Runtime) Generate(
 		return result, err
 	}
 
-	messages, err := chatMessages(req.Messages)
+	if len(req.Messages) == 0 {
+		return result, errors.New("chat request has no messages")
+	}
+	for _, message := range req.Messages {
+		if len(message.Images) > 0 {
+			return result, errors.New("embedded text inference does not support image messages")
+		}
+	}
+	rendered, err := renderChatTemplate(r.template, req.Messages, req.Tools, req.Reasoning, applyTemplate)
 	if err != nil {
 		return result, err
 	}
-	prompt, err := applyTemplate(r.template, messages)
-	if err != nil {
-		return result, err
-	}
+	prompt := rendered.text
 	promptTokens := llama.Tokenize(r.vocab, prompt, true, true)
 	if len(promptTokens) == 0 {
 		return result, errors.New("chat template produced no prompt tokens")
@@ -292,6 +297,12 @@ func (r *Runtime) Generate(
 
 	assembler := &embedded.Assembler{}
 	stopScanner := embedded.NewStopScanner(r.opts.Sampling.Stop)
+	reasoningRouter := newReasoningRouter(rendered)
+	emitRouted := func(text string) {
+		for _, delta := range reasoningRouter.Push(text) {
+			emit(delta)
+		}
+	}
 	var batch []llama.Token
 	stopped := false
 
@@ -323,7 +334,7 @@ func (r *Runtime) Generate(
 		if text != "" {
 			out, stop := stopScanner.Push(text)
 			if out != "" {
-				emit(out)
+				emitRouted(out)
 			}
 			if stop {
 				stopped = true
@@ -337,15 +348,18 @@ func (r *Runtime) Generate(
 		if tail := assembler.Flush(); tail != "" {
 			out, stop := stopScanner.Push(tail)
 			if out != "" {
-				emit(out)
+				emitRouted(out)
 			}
 			stopped = stop
 		}
 	}
 	if !stopped {
 		if tail := stopScanner.Flush(); tail != "" {
-			emit(tail)
+			emitRouted(tail)
 		}
+	}
+	for _, delta := range reasoningRouter.Flush() {
+		emit(delta)
 	}
 	return result, nil
 }
