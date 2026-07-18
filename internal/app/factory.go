@@ -139,6 +139,17 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	if err != nil {
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
 	}
+	kvCacheType, err := embedded.ParseKVCacheType(pc.KVCacheType)
+	if err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
+	flashAttention, err := embedded.ParseFlashAttention(pc.FlashAttention)
+	if err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
+	if err := embedded.ValidateKVFlashCombination(kvCacheType, flashAttention); err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
 
 	contextSize := pc.ContextSize
 	if ov.ContextSize != nil {
@@ -177,16 +188,19 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	}
 
 	return embedded.Options{
-		ModelPath:    modelPath,
-		MMProjPath:   mmprojPath,
-		LibraryPath:  libraryPath,
-		ContextSize:  contextSize,
-		GPULayers:    gpuLayers,
-		Threads:      pc.Threads,
-		BatchSize:    pc.BatchSize,
-		ChatTemplate: pc.ChatTemplate,
-		ToolFormat:   toolFormat,
-		Sampling:     sampling,
+		ModelPath:      modelPath,
+		MMProjPath:     mmprojPath,
+		LibraryPath:    libraryPath,
+		ContextSize:    contextSize,
+		GPULayers:      gpuLayers,
+		Threads:        pc.Threads,
+		BatchSize:      pc.BatchSize,
+		ChatTemplate:   pc.ChatTemplate,
+		ToolFormat:     toolFormat,
+		SWAFull:        pc.SWAFull,
+		KVCacheType:    kvCacheType,
+		FlashAttention: flashAttention,
+		Sampling:       sampling,
 	}, nil
 }
 

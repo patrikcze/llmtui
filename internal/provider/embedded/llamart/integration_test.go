@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -605,5 +606,90 @@ func visionIntegrationOptions(t *testing.T) embedded.Options {
 			RepeatLastN:   64,
 			Seed:          1,
 		},
+	}
+}
+
+// TestRuntimeLargeContextMemoryOptions proves that contexts well beyond the
+// old 8192 default load and generate with the memory-efficient KV settings
+// (window-sized SWA cache and q8_0 KV), which for Gemma-style iSWA models cut
+// KV memory several-fold. Gated by the same env vars as the other
+// integration tests.
+func TestRuntimeLargeContextMemoryOptions(t *testing.T) {
+	opts := integrationOptions(t)
+	opts.ContextSize = 32768
+	opts.SWAFull = false
+	opts.KVCacheType = embedded.KVCacheTypeQ8_0
+	opts.FlashAttention = embedded.FlashAttentionAuto
+
+	runtime := New()
+	meta, err := runtime.Load(context.Background(), opts, nil)
+	if err != nil {
+		t.Fatalf("Load() at 32768 with q8_0 KV error = %v", err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+	if meta.ContextSize != 32768 {
+		t.Fatalf("meta.ContextSize = %d, want 32768", meta.ContextSize)
+	}
+
+	first := generateIntegration(t, runtime, embedded.GenRequest{
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "Write a Go function that reverses a string. Reply with only the code."},
+		},
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   256,
+	})
+	if first.text == "" || first.result.CompletionTokens == 0 {
+		t.Fatalf("large-context Generate() = %+v, want streamed code", first)
+	}
+	// Multi-turn on the same context exercises prefix handling with the
+	// window-sized SWA cache, whose partial removals may legitimately fall
+	// back to a full re-decode.
+	second := generateIntegration(t, runtime, embedded.GenRequest{
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "Write a Go function that reverses a string. Reply with only the code."},
+			{Role: provider.RoleAssistant, Content: first.text},
+			{Role: provider.RoleUser, Content: "Now add a doc comment to it."},
+		},
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   256,
+	})
+	if second.text == "" || second.result.CompletionTokens == 0 {
+		t.Fatalf("multi-turn large-context Generate() = %+v, want streamed code", second)
+	}
+	t.Logf("32K q8_0: turn1 %d+%d tokens, turn2 %d+%d tokens",
+		first.result.PromptTokens, first.result.CompletionTokens,
+		second.result.PromptTokens, second.result.CompletionTokens)
+}
+
+// TestLoadInvalidModelQuotesNativeLog proves that native failures surface
+// llama.cpp's own diagnostic lines instead of an opaque "failed" message.
+// It needs only the runtime libraries, not a real model.
+func TestLoadInvalidModelQuotesNativeLog(t *testing.T) {
+	libraryPath := os.Getenv("YZMA_LIB")
+	if libraryPath == "" {
+		t.Skip("set YZMA_LIB to run llama.cpp integration tests")
+	}
+	dir := t.TempDir()
+	bogus := filepath.Join(dir, "corrupt.gguf")
+	if err := os.WriteFile(bogus, []byte("GGUF but not really"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	_, err := runtime.Load(context.Background(), embedded.Options{
+		ModelPath:   bogus,
+		LibraryPath: libraryPath,
+		ContextSize: 2048,
+	}, nil)
+	if err == nil {
+		t.Fatal("Load() succeeded on a corrupt GGUF")
+	}
+	if !strings.Contains(err.Error(), "native log:") {
+		t.Errorf("Load() error %q does not quote the captured native log", err)
 	}
 }

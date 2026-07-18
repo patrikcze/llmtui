@@ -575,3 +575,71 @@ chat:
 		t.Errorf("top-level runtime overrides should be nil for an old config with no flags/env, got context_size=%v gpu_layers=%v", cfg.ContextSize, cfg.GPULayers)
 	}
 }
+
+func TestEmbeddedMemoryOptionsParse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+providers:
+  embedded:
+    type: embedded
+    model_path: /tmp/m.gguf
+    context_size: 32768
+    swa_full: true
+    kv_cache_type: q8_0
+    flash_attention: "off"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	pc := cfg.Providers["embedded"]
+	if !pc.SWAFull {
+		t.Errorf("SWAFull = %v, want true", pc.SWAFull)
+	}
+	if pc.KVCacheType != "q8_0" {
+		t.Errorf("KVCacheType = %q, want q8_0", pc.KVCacheType)
+	}
+	if pc.FlashAttention != "off" {
+		t.Errorf("FlashAttention = %q, want off", pc.FlashAttention)
+	}
+	if pc.ContextSize != 32768 {
+		t.Errorf("ContextSize = %d, want 32768", pc.ContextSize)
+	}
+}
+
+func TestEmbeddedMemoryOptionsDefaultUnset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+providers:
+  embedded:
+    type: embedded
+    model_path: /tmp/m.gguf
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	pc := cfg.Providers["embedded"]
+	if pc.SWAFull {
+		t.Errorf("SWAFull = %v, want false (unset)", pc.SWAFull)
+	}
+	if pc.KVCacheType != "" || pc.FlashAttention != "" {
+		t.Errorf("KVCacheType/FlashAttention = %q/%q, want empty", pc.KVCacheType, pc.FlashAttention)
+	}
+}
