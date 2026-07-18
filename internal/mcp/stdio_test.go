@@ -112,8 +112,8 @@ func TestStdioHandshakeListAndCall(t *testing.T) {
 }
 
 func TestStdioClientVersion(t *testing.T) {
-	if clientVersion != "0.9.4" {
-		t.Errorf("clientVersion = %q, want release version 0.9.4", clientVersion)
+	if clientVersion != "0.9.5" {
+		t.Errorf("clientVersion = %q, want release version 0.9.5", clientVersion)
 	}
 }
 
