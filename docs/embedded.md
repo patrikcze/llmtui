@@ -193,6 +193,12 @@ problems, or raise GPU offload on a machine with sufficient unified/VRAM
 memory. A larger `batch_size` can speed prompt processing but consumes more
 memory.
 
+If the TUI reports that request overhead is too large, the runtime context is
+not larger than the context manager's response reserve (2048 tokens by
+default). Raise `context_size` or set a smaller
+`context.reserve_response_tokens` value appropriate for the model and desired
+answer length.
+
 ### Symbol-resolution or ABI errors
 
 Remove the incompatible runtime and fetch the pinned build. Do not mix yzma

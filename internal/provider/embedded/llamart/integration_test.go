@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -17,9 +18,11 @@ func TestRuntimeIntegration(t *testing.T) {
 	runtime := New()
 	progress := []string{}
 
+	loadStarted := time.Now()
 	meta, err := runtime.Load(context.Background(), opts, func(message string) {
 		progress = append(progress, message)
 	})
+	loadElapsed := time.Since(loadStarted)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -29,6 +32,7 @@ func TestRuntimeIntegration(t *testing.T) {
 	if len(progress) == 0 {
 		t.Error("Load() emitted no progress")
 	}
+	t.Logf("load: %s; model: %.2f GiB; parameters: %.2fB", loadElapsed.Round(time.Millisecond), float64(meta.SizeBytes)/(1<<30), float64(meta.Parameters)/1e9)
 
 	first := generateIntegration(t, runtime, embedded.GenRequest{
 		Messages: []provider.Message{
@@ -42,6 +46,12 @@ func TestRuntimeIntegration(t *testing.T) {
 	if first.text == "" || first.result.PromptTokens == 0 || first.result.CompletionTokens == 0 {
 		t.Errorf("first Generate() = %+v, want streamed text and real usage", first)
 	}
+	t.Logf("first generation: %d prompt + %d completion tokens in %s (%.2f completion tok/s)",
+		first.result.PromptTokens,
+		first.result.CompletionTokens,
+		first.elapsed.Round(time.Millisecond),
+		float64(first.result.CompletionTokens)/first.elapsed.Seconds(),
+	)
 
 	multiTurn := generateIntegration(t, runtime, embedded.GenRequest{
 		Messages: []provider.Message{
@@ -56,6 +66,12 @@ func TestRuntimeIntegration(t *testing.T) {
 	if multiTurn.text == "" {
 		t.Error("multi-turn Generate() streamed no text")
 	}
+	t.Logf("multi-turn/KV reuse: %d prompt + %d completion tokens in %s (%.2f completion tok/s)",
+		multiTurn.result.PromptTokens,
+		multiTurn.result.CompletionTokens,
+		multiTurn.elapsed.Round(time.Millisecond),
+		float64(multiTurn.result.CompletionTokens)/multiTurn.elapsed.Seconds(),
+	)
 
 	unicodeOutput := generateIntegration(t, runtime, embedded.GenRequest{
 		Messages: []provider.Message{
@@ -71,6 +87,7 @@ func TestRuntimeIntegration(t *testing.T) {
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	pieces := 0
+	var canceledAt time.Time
 	_, err = runtime.Generate(cancelCtx, embedded.GenRequest{
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "Write a long numbered list with detailed explanations."},
@@ -80,14 +97,17 @@ func TestRuntimeIntegration(t *testing.T) {
 		MaxTokens:   128,
 	}, func(string) {
 		pieces++
+		canceledAt = time.Now()
 		cancel()
 	})
+	cancelLatency := time.Since(canceledAt)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Generate() after cancel error = %v, want context.Canceled", err)
 	}
 	if pieces == 0 {
 		t.Fatal("Generate() was canceled before streaming a piece; test did not exercise mid-generation cancellation")
 	}
+	t.Logf("mid-generation cancel latency: %s", cancelLatency.Round(time.Millisecond))
 
 	reused := generateIntegration(t, runtime, embedded.GenRequest{
 		Messages:    []provider.Message{{Role: provider.RoleUser, Content: "Reply with OK."}},
@@ -151,20 +171,23 @@ func TestRuntimeIntegration(t *testing.T) {
 }
 
 type integrationGeneration struct {
-	text   string
-	result embedded.GenResult
+	text    string
+	result  embedded.GenResult
+	elapsed time.Duration
 }
 
 func generateIntegration(t *testing.T, runtime *Runtime, req embedded.GenRequest) integrationGeneration {
 	t.Helper()
 	var text strings.Builder
+	started := time.Now()
 	result, err := runtime.Generate(context.Background(), req, func(piece string) {
 		text.WriteString(piece)
 	})
+	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	return integrationGeneration{text: text.String(), result: result}
+	return integrationGeneration{text: text.String(), result: result, elapsed: elapsed}
 }
 
 func integrationOptions(t *testing.T) embedded.Options {
