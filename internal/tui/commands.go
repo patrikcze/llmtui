@@ -279,9 +279,9 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 	// loaded model) off the Update goroutine; Close cancels any in-flight
 	// generation itself and is idempotent.
 	old := m.prov
+	oldName := old.Name()
 	closeOld := func() tea.Msg {
-		provider.CloseProvider(old)
-		return nil
+		return providerClosedMsg{provider: oldName, err: provider.CloseProvider(old)}
 	}
 	m.prov = prov
 	// Keep the config's notion of the active provider in sync, so cache keys,

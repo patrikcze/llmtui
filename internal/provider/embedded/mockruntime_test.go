@@ -13,8 +13,6 @@ import (
 // scriptedRuntime is a fully in-Go, no-native Runtime for exercising
 // Provider lifecycle, streaming, cancellation, and error paths.
 type scriptedRuntime struct {
-	mu sync.Mutex
-
 	probeErr error
 
 	loadCalls int32

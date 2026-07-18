@@ -11,6 +11,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
+	"github.com/patrikcze/llmtui/internal/provider/embedded/llamart"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/provider/ollama"
 	"github.com/patrikcze/llmtui/internal/provider/openai"
@@ -42,11 +43,9 @@ func httpClient(netCfg config.NetworkConfig) *http.Client {
 }
 
 // NewEmbeddedRuntime constructs the native inference runtime backing the
-// embedded provider. It is a package variable so the stage that wires in
-// the real llama.cpp-backed runtime (and opt-in integration tests) can swap
-// it in one place; until then every instance reports itself unavailable
-// with an actionable error instead of pretending to work.
-var NewEmbeddedRuntime = func() embedded.Runtime { return embedded.NewUnavailableRuntime() }
+// embedded provider. It remains a package variable so tests can replace the
+// native boundary at the single application-level construction point.
+var NewEmbeddedRuntime = func() embedded.Runtime { return llamart.New() }
 
 // ActiveOverrides carries runtime overrides (CLI flags, environment
 // variables, or an in-session change) that apply on top of a provider's

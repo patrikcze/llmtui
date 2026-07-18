@@ -63,6 +63,11 @@ type healthMsg struct {
 	initial  bool   // startup check: only then may we fall back to demo mode
 }
 
+type providerClosedMsg struct {
+	provider string
+	err      error
+}
+
 type streamEventMsg struct {
 	event provider.ChatEvent
 	ok    bool
@@ -635,6 +640,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 
+	case providerClosedMsg:
+		if msg.err != nil {
+			m.errText = fmt.Sprintf("closing provider %q: %v", msg.provider, msg.err)
+			m.refreshViewport()
+		}
+		return m, nil
+
 	case firstStreamMsg:
 		if msg.gen != m.streamGen {
 			// A request the user already cancelled (Esc before its first event)
@@ -705,6 +717,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.quit()
 
 	case quitDoneMsg:
+		if msg.err != nil {
+			m.errText = fmt.Sprintf("closing provider during shutdown: %v", msg.err)
+		}
 		return m, tea.Quit
 
 	case mcpToolResultsMsg:
@@ -1321,7 +1336,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 }
 
 type sigQuitMsg struct{}
-type quitDoneMsg struct{}
+type quitDoneMsg struct{ err error }
 
 // quit stops any stream and starts potentially blocking teardown off the
 // Update goroutine. Model-owned session state is saved synchronously first.
@@ -1343,8 +1358,7 @@ func (m *Model) quit() tea.Cmd {
 	prov := m.prov
 	return func() tea.Msg {
 		reg.Close()
-		provider.CloseProvider(prov)
-		return quitDoneMsg{}
+		return quitDoneMsg{err: provider.CloseProvider(prov)}
 	}
 }
 

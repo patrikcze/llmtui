@@ -18,7 +18,9 @@ type ModelMeta struct {
 	Architecture string
 	Quantization string
 	NCtxTrain    int
+	ContextSize  int
 	SizeBytes    int64
+	Parameters   uint64
 	HasTemplate  bool
 }
 
@@ -28,6 +30,10 @@ type GenRequest struct {
 	Temperature float64
 	TopP        float64
 	MaxTokens   int
+	// Progress receives non-content activity such as prompt-processing
+	// updates. The provider surfaces it as reasoning so the TUI's inactivity
+	// watchdog is reset without mixing status text into the answer.
+	Progress func(string)
 }
 
 // GenResult reports real (non-estimated) token accounting for a completed

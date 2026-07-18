@@ -183,6 +183,9 @@ func (p *Provider) effectiveContextLen() int {
 	if !p.haveM {
 		return p.opts.ContextSize
 	}
+	if p.meta.ContextSize > 0 {
+		return p.meta.ContextSize
+	}
 	if p.opts.ContextSize > 0 && p.opts.ContextSize < p.meta.NCtxTrain {
 		return p.opts.ContextSize
 	}
@@ -301,6 +304,9 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
+		Progress: func(message string) {
+			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: message})
+		},
 	}
 
 	aborted := false
