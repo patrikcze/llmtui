@@ -15,7 +15,12 @@ import (
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
 )
 
-var gemmaCallStart = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
+var (
+	gemmaCallStart        = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
+	gemmaZeroArgumentCall = regexp.MustCompile(`call:([A-Za-z_][A-Za-z0-9_.-]*)\{\s*\}`)
+)
+
+const gemmaToolFollowupInstruction = "After the tool returns, use its result to answer this request unless another tool call is necessary."
 
 type canonicalTool struct {
 	Type     string                `json:"type"`
@@ -68,6 +73,17 @@ func prepareToolMessages(messages []provider.Message, tools []provider.ToolSpec,
 	instruction := "Available tools (JSON): " + string(encoded) + "\n" + toolGrammarInstruction(format)
 
 	prepared := append([]provider.Message(nil), messages...)
+	if format == embedded.ToolFormatGemma {
+		for index := len(prepared) - 1; index >= 0; index-- {
+			if prepared[index].Role != provider.RoleUser {
+				continue
+			}
+			if !strings.Contains(prepared[index].Content, gemmaToolFollowupInstruction) {
+				prepared[index].Content = strings.TrimSpace(prepared[index].Content) + "\n\n" + gemmaToolFollowupInstruction
+			}
+			break
+		}
+	}
 	if len(prepared) > 0 && prepared[0].Role == provider.RoleSystem {
 		prepared[0].Content = strings.TrimSpace(prepared[0].Content) + "\n\n" + instruction
 		return prepared, nil
@@ -145,6 +161,9 @@ func (r *toolOutputRouter) Push(text string) []string {
 func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 	raw := r.raw.String()
 	parsed := message.ParseToolCalls(raw)
+	if len(parsed) == 0 && r.format == embedded.ToolFormatGemma {
+		parsed = parseGemmaZeroArgumentCalls(raw)
+	}
 	recognized := r.intent || definiteToolIntentIndex(raw, r.format) >= 0
 	if len(parsed) == 0 && recognized {
 		return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
@@ -166,6 +185,29 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		return nil, calls, nil
 	}
 	return []string{tail}, calls, nil
+}
+
+// parseGemmaZeroArgumentCalls handles valid call:name{} output that yzma's
+// Gemma parser intentionally omits. It returns calls only when every Gemma
+// call-shaped block in the response is a complete empty-object call; a mixed
+// or truncated response must continue down the malformed-output path.
+func parseGemmaZeroArgumentCalls(raw string) []message.ToolCall {
+	starts := gemmaCallStart.FindAllStringIndex(raw, -1)
+	matches := gemmaZeroArgumentCall.FindAllStringSubmatch(raw, -1)
+	if len(starts) == 0 || len(matches) != len(starts) {
+		return nil
+	}
+	calls := make([]message.ToolCall, 0, len(matches))
+	for _, match := range matches {
+		calls = append(calls, message.ToolCall{
+			Type: "function",
+			Function: message.ToolFunction{
+				Name:      match[1],
+				Arguments: map[string]string{},
+			},
+		})
+	}
+	return calls
 }
 
 func (r *toolOutputRouter) emitPending(length int) []string {
@@ -276,6 +318,11 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		if err != nil {
 			return nil, fmt.Errorf("tool %q parameters must be a JSON object: %w", name, err)
 		}
+		if missing, err := missingRequiredArgument(schema, call.Function.Arguments); err != nil {
+			return nil, fmt.Errorf("tool %q parameters are invalid: %w", name, err)
+		} else if missing != "" {
+			return nil, fmt.Errorf("tool %q call is missing required argument %q", name, missing)
+		}
 		arguments := make(map[string]any, len(call.Function.Arguments))
 		for key, raw := range call.Function.Arguments {
 			value, err := normalizeArgument(raw, propertySchema(schema, key))
@@ -291,6 +338,27 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		result = append(result, provider.ToolCall{Name: name, Arguments: string(encoded)})
 	}
 	return result, nil
+}
+
+func missingRequiredArgument(schema map[string]any, arguments map[string]string) (string, error) {
+	required, exists := schema["required"]
+	if !exists {
+		return "", nil
+	}
+	entries, ok := required.([]any)
+	if !ok {
+		return "", errors.New(`"required" must be an array`)
+	}
+	for _, entry := range entries {
+		name, ok := entry.(string)
+		if !ok || strings.TrimSpace(name) == "" {
+			return "", errors.New(`"required" entries must be non-empty strings`)
+		}
+		if _, exists := arguments[name]; !exists {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 func normalizeArgument(raw string, schema map[string]any) (any, error) {

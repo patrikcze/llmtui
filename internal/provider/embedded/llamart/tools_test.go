@@ -162,6 +162,36 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 	})
 }
 
+func TestToolOutputRouterGemmaZeroArgumentCallsHonorSchema(t *testing.T) {
+	pathless := provider.ToolSpec{
+		Name:        "list_dir",
+		Description: "List the project root when path is omitted",
+		Parameters:  []byte(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+	}
+
+	t.Run("optional arguments", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{pathless})
+		router.Push(`<|tool_call>call:list_dir{}<tool_call|>`)
+		visible, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		if len(visible) != 0 || len(calls) != 1 || calls[0].Name != "list_dir" || calls[0].Arguments != `{}` {
+			t.Fatalf("visible=%q calls=%+v", strings.Join(visible, ""), calls)
+		}
+	})
+
+	t.Run("required argument omitted", func(t *testing.T) {
+		required := weatherToolSpec()
+		required.Parameters = []byte(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`)
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{required})
+		router.Push(`<|tool_call>call:weather{}<tool_call|>`)
+		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), `missing required argument "city"`) {
+			t.Fatalf("Finish error = %v", err)
+		}
+	})
+}
+
 func TestToolOutputRouterStripsSimulatedResults(t *testing.T) {
 	raw := `<|toolcall>call:weather{city:<|"|>Prague<|"|>}<toolcall|><toolresult>{"status":"sunny"}</toolresult>spoken`
 	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{weatherToolSpec()})
@@ -218,5 +248,27 @@ func TestPrepareToolMessagesIsDeterministicAndPreservesHistory(t *testing.T) {
 	}
 	if len(first[1].ToolCalls) != 1 || first[2].ToolCallID != "c1" || messages[0].Content != "Be concise." {
 		t.Errorf("history mutated or lost: prepared=%+v original=%+v", first, messages)
+	}
+}
+
+func TestPrepareToolMessagesAddsGemmaFollowupToClonedUserTurn(t *testing.T) {
+	messages := []provider.Message{{Role: provider.RoleUser, Content: "list dir"}}
+	prepared, err := prepareToolMessages(messages, []provider.ToolSpec{weatherToolSpec()}, embedded.ToolFormatGemma)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared) != 2 || !strings.Contains(prepared[1].Content, gemmaToolFollowupInstruction) {
+		t.Fatalf("prepared messages = %+v", prepared)
+	}
+	if messages[0].Content != "list dir" {
+		t.Fatalf("source message mutated: %q", messages[0].Content)
+	}
+
+	standard, err := prepareToolMessages(messages, []provider.ToolSpec{weatherToolSpec()}, embedded.ToolFormatStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(standard[len(standard)-1].Content, gemmaToolFollowupInstruction) {
+		t.Fatalf("non-Gemma user turn changed: %+v", standard)
 	}
 }

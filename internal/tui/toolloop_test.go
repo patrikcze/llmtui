@@ -250,7 +250,7 @@ func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
 	m.thinking = true
 
 	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
-		{ID: "call_1", Name: "list_dir", Arguments: `{"path":""}`},
+		{ID: "call_1", Name: "list_dir", Arguments: `{}`},
 	}}
 	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
 	if cmd == nil {

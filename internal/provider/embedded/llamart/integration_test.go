@@ -371,6 +371,53 @@ func TestRuntimeVisionIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("native pathless list directory request", func(t *testing.T) {
+		toolFormat, ok := embedded.ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
+		if !ok {
+			t.Fatalf("Gemma model path %q has no tool format", opts.ModelPath)
+		}
+		question := provider.Message{
+			Role:    provider.RoleUser,
+			Content: "Call the list_dir tool now to list the project root. The optional path must be omitted. Do not ask a question and do not answer from memory.",
+		}
+		tool := provider.ToolSpec{
+			Name:        "list_dir",
+			Description: "List a directory in the project workspace. Omit path for the project root.",
+			Parameters:  []byte(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+		}
+		generation := generateIntegration(t, runtime, embedded.GenRequest{
+			Messages: []provider.Message{{
+				Role:    provider.RoleUser,
+				Content: question.Content,
+			}},
+			Tools:       []provider.ToolSpec{tool},
+			ToolFormat:  toolFormat,
+			Temperature: 0,
+			TopP:        0.9,
+			MaxTokens:   96,
+		})
+		if len(generation.result.ToolCalls) != 1 || generation.result.ToolCalls[0].Name != "list_dir" || generation.result.ToolCalls[0].Arguments != `{}` {
+			t.Fatalf("pathless tool request=%+v visible=%q", generation.result.ToolCalls, generation.text)
+		}
+		call := generation.result.ToolCalls[0]
+		continuationMessages := []provider.Message{
+			question,
+			{Role: provider.RoleAssistant, ToolCalls: generation.result.ToolCalls},
+			{Role: provider.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: "README.md\ngo.mod\ninternal/"},
+		}
+		continued := generateIntegration(t, runtime, embedded.GenRequest{
+			Messages:    continuationMessages,
+			Tools:       []provider.ToolSpec{tool},
+			ToolFormat:  toolFormat,
+			Temperature: 0,
+			TopP:        0.9,
+			MaxTokens:   64,
+		})
+		if len(continued.result.ToolCalls) != 0 || !strings.Contains(continued.text, "README.md") {
+			t.Fatalf("pathless tool continuation result=%+v answer=%q reasoning=%q", continued.result, continued.text, continued.reasoning)
+		}
+	})
+
 	t.Run("cancel image prompt and reuse", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		_, err := runtime.Generate(ctx, embedded.GenRequest{

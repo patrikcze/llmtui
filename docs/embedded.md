@@ -173,7 +173,11 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
   families; a recognized native grammar returns structured calls. Unknown
   formats use llmtui's existing fenced prompt-protocol fallback. Model training
   determines reliability—configuration can enable a protocol, but cannot make
-  a model good at tool use.
+  a model good at tool use. Gemma's `call:name{}` form is accepted for tools
+  whose JSON schema permits an empty object (for example pathless `list_dir`);
+  missing required arguments remain errors. A Gemma-only prompt hint asks the
+  model to answer after tool results and is applied to a cloned request—it is
+  not written into the conversation history.
 - `/think on|off|auto` and `chat.reasoning` are passed to the GGUF Jinja
   template as `enable_thinking`: `auto` omits it, `on` sets true, and `off`
   sets false. A model may still choose to answer directly when thinking is on.
@@ -258,7 +262,9 @@ Keep `tool_format: auto` for recognized Gemma/Qwen/GLM/Mistral/GPT/Phi model
 paths. If the filename is unconventional, set the matching format explicitly.
 An unknown format falls back to fenced calls; a known format with no calls is
 usually model behavior, so try a clearer instruction or a model trained for
-tool use.
+tool use. A “recognizable but malformed” error means the emitted call is still
+incomplete or violates the offered schema; a valid Gemma zero-argument call is
+accepted when the tool has no required parameters.
 
 ### Out of memory or very slow prompt processing
 

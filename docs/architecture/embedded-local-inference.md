@@ -27,7 +27,13 @@ the embedded runtime, while `EventReasoning`, `EventDelta`, and terminal
 No embedded-specific tool executor is introduced. Model-family tool grammars
 come from yzma's `pkg/message`; unrecognized automatic formats keep the current
 synchronous unsupported-tool error so the established prompt fallback still
-works.
+works. LLMTUI adds one schema-aware Gemma compatibility seam for
+`call:name{}`: yzma intentionally omits empty argument blocks, but an empty
+object is valid for tools such as pathless `list_dir`. The adapter accepts that
+shape only when the offered JSON schema has no missing required property, then
+uses the same shared approval/execution/continuation loop. A request-local
+Gemma hint requires a user-facing answer after tool results without modifying
+stored conversation history.
 
 GGUF chat-template metadata is authoritative but not every valid Jinja template
 is supported by llama.cpp's `ChatApplyTemplate` convenience renderer. This was
