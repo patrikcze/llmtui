@@ -32,3 +32,12 @@ Foreign-function-interface layers used by yzma.
 
 purego: Apache License 2.0. Copyright the Ebitengine authors.
 ffi: MIT License. Copyright (c) 2024 JupiterRider.
+
+The ffi module embeds libffi binaries on macOS and Windows.
+libffi: MIT/Expat License. Copyright (c) 1996-2025 Anthony Green,
+Red Hat, Inc. and others.
+
+Full texts:
+<https://github.com/ebitengine/purego/blob/main/LICENSE>
+<https://github.com/jupiterrider/ffi/blob/main/LICENSE>
+<https://github.com/jupiterrider/ffi/blob/main/assets/libffi/LICENSE>

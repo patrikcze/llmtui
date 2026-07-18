@@ -45,7 +45,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	pf.String("theme", "", "UI theme")
 	pf.Bool("no-stream", false, "disable streaming responses")
 	pf.Bool("debug", false, "enable debug output")
-	pf.Int("context-size", 0, "context window for the embedded provider (0 = model default)")
+	pf.Int("context-size", 0, "context window for the embedded provider (0 = bounded model default, max 8192)")
 	pf.Int("gpu-layers", 0, "GPU layers to offload for the embedded provider (-1 = all, 0 = CPU only)")
 
 	cmd.AddCommand(

@@ -38,6 +38,24 @@ add` reminds you).
 
 ## Hardening details
 
+- Embedded GGUF inference ([embedded.md](embedded.md)) stays in-process and
+  makes no network requests, but it expands the native-code trust boundary:
+  - llama.cpp dynamic libraries execute with llmtui's full user permissions.
+    Use the checksum-pinned fetch script or libraries you built from a trusted
+    source; never point `library_path` at an untrusted directory.
+  - GGUF parsing happens in native llama.cpp code. Treat model files as
+    untrusted inputs, prefer reputable sources, and keep the pinned runtime
+    current. Go can recover ordinary binding panics but not native faults such
+    as segmentation violations.
+  - The first model load and its KV cache can consume substantial RAM/VRAM.
+    The automatic context is capped at 8192 tokens; lower `context_size` when
+    memory is constrained.
+  - Model and context memory are released on provider switch and quit. The
+    process-global backend stays initialized until process exit; no library is
+    unloaded while another runtime might use it.
+  - On macOS, the FFI dependency normally extracts its bundled libffi into the
+    user's cache. Locked-down/read-only-cache environments can opt out and use
+    a trusted system libffi as described in the troubleshooting guide.
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
 - Skills and plugins ([docs](skills.md)) are declarative text treated as

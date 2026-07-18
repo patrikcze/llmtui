@@ -6,10 +6,16 @@
 | LM Studio | `openai_compatible` | `http://localhost:1234/v1` | SSE streaming |
 | vLLM / llama.cpp / Unsloth | `openai_compatible` | your server | Set `base_url` |
 | Anything OpenAI-compatible | `openai_compatible` | — | `api_key_env` keeps secrets out of YAML |
+| Embedded GGUF | `embedded` | — | In-process llama.cpp; no server or network; [setup](embedded.md) |
 
 Each provider reports **capabilities** (streaming, model listing, token
 usage, JSON mode, system prompt) used by `/doctor` and prompt composition.
 Unknown backends get conservative defaults.
+
+The embedded provider reports prompt processing as activity, streams exact
+token usage, and unloads its model on provider switch or exit. Its native
+runtime, platform matrix, and limitations are documented in
+[embedded.md](embedded.md).
 
 ## Network behavior
 
@@ -43,12 +49,11 @@ and token-usage support, and where the context window number comes from.
 
 ## Reasoning models (Qwen 3.5 / 3.6, DeepSeek-R1)
 
-llmtui talks to every backend through structured chat APIs
-(`/v1/chat/completions`, Ollama `/api/chat`). The **chat template — the
-Jinja program that turns messages into the model's token stream — is
-applied by the backend, never by llmtui.** If a Qwen 3.5/3.6 model is slow
-or unstable (degenerate reasoning loops, stalled tool calls, KV-cache
-thrash making every turn slower), fix the template in the backend:
+Server providers use structured chat APIs (`/v1/chat/completions`, Ollama
+`/api/chat`) and apply their own chat templates. The embedded provider
+applies the GGUF's template inside its llama.cpp runtime. If a Qwen 3.5/3.6
+model is slow or unstable (degenerate reasoning loops, stalled tool calls,
+KV-cache thrash making every turn slower), fix the template in the backend:
 
 The official Qwen 3.5/3.6 templates have known bugs; the community-fixed
 drop-in replacement is

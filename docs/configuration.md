@@ -17,9 +17,10 @@ Highest wins:
 
 1. CLI flags (`--provider`, `--model`, `--base-url`, `--api-key`,
    `--temperature`, `--top-p`, `--max-tokens`, `--system`, `--theme`,
-   `--no-stream`, `--debug`, `--config`)
+   `--context-size`, `--gpu-layers`, `--no-stream`, `--debug`, `--config`)
 2. Environment variables, prefix `LLMTUI_` (`LLMTUI_PROVIDER`,
    `LLMTUI_MODEL`, `LLMTUI_BASE_URL`, `LLMTUI_API_KEY`,
+   `LLMTUI_CONTEXT_SIZE`, `LLMTUI_GPU_LAYERS`,
    `LLMTUI_CHAT_TEMPERATURE`, `LLMTUI_CHAT_MAX_TOKENS`,
    `LLMTUI_NETWORK_TIMEOUT`, …; dots become underscores). This lets you tune
    the common knobs without a config file, e.g.
@@ -31,9 +32,9 @@ Highest wins:
 
 ### `providers`
 
-Each entry has `type` (`ollama`, `openai_compatible`, `mock`), `base_url`,
-`api_key`, `api_key_env`, and `default_model`. Prefer `api_key_env` so
-secrets never live in the file:
+Each entry has `type` (`ollama`, `openai_compatible`, `embedded`, `mock`),
+`base_url`, `api_key`, `api_key_env`, and `default_model`. Prefer
+`api_key_env` so secrets never live in the file:
 
 ```yaml
 providers:
@@ -41,10 +42,33 @@ providers:
     api_key_env: LLMTUI_API_KEY
 ```
 
-`ollama`, `lmstudio`, `openai_compatible`, and `mock` are always available
-as built-ins even with an empty config. `default_provider` and
+`ollama`, `lmstudio`, `openai_compatible`, `embedded`, and `mock` are always
+available as built-ins even with an empty config. `default_provider` and
 `default_model` at the top level pick the starting point; a provider's
-`default_model` wins over the global one.
+`default_model` wins over the global one. For an embedded provider,
+`model_path` wins over both defaults; an explicit `--model` or
+`LLMTUI_MODEL` wins over `model_path`.
+
+Embedded-only provider keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `model_path` | empty | Local GGUF model file |
+| `library_path` | `YZMA_LIB` | Directory containing llama.cpp shared libraries |
+| `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context |
+| `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only |
+| `threads` | `0` | Automatic CPU thread selection |
+| `batch_size` | `512` | Prompt-decode batch size |
+| `chat_template` | GGUF metadata | Inline Jinja template override |
+| `sampling.top_k` | `40` | Top-k sampler (`0` disables) |
+| `sampling.min_p` | `0.05` | Min-p sampler (`0` disables) |
+| `sampling.repeat_penalty` | `1.1` | Repetition penalty |
+| `sampling.repeat_last_n` | `64` | Repetition-history length |
+| `sampling.seed` | `0` | Random; nonzero is deterministic |
+| `sampling.stop` | `[]` | Case-sensitive stop strings |
+
+See [embedded.md](embedded.md) for installation, platform support, examples,
+and limitations.
 
 ### `chat`
 

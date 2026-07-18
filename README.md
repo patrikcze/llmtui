@@ -25,6 +25,9 @@ enter send · ctrl+l clear · ctrl+c quit
 Local-first: no telemetry, no external calls unless you configure them,
 API keys never logged — see [docs/security.md](docs/security.md).
 
+llmtui can also run a local GGUF directly in-process through llama.cpp—no
+separate model server required. See [Embedded GGUF inference](docs/embedded.md).
+
 ## Install
 
 Requires Go 1.26+.
@@ -59,6 +62,18 @@ Start LM Studio's local server (default `http://localhost:1234/v1`), then:
 ```bash
 ./llmtui chat --provider lmstudio --model <loaded-model-id>
 ```
+
+### With an embedded GGUF (Apple Silicon)
+
+```bash
+scripts/fetch-llama-runtime.sh
+export YZMA_LIB="$HOME/.local/share/llmtui/llama.cpp"
+./llmtui chat --provider embedded --model "$HOME/models/model.gguf"
+```
+
+The runtime is checksum-pinned and inference stays inside the llmtui process.
+See [docs/embedded.md](docs/embedded.md) for configuration, CPU/Metal choices,
+other platforms, security notes, and troubleshooting.
 
 ### With any OpenAI-compatible server (vLLM, llama.cpp, Unsloth, …)
 
@@ -389,6 +404,7 @@ internal/provider/        Provider interface + shared types
 internal/provider/mock/   offline demo provider
 internal/provider/ollama/ native Ollama API (NDJSON streaming)
 internal/provider/openai/ OpenAI-compatible API (SSE streaming)
+internal/provider/embedded/ in-process GGUF inference (llama.cpp via yzma)
 internal/app/             config → provider factory
 internal/chat/            session state + usage statistics
 internal/cache/           local response cache (/cache)

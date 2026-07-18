@@ -24,8 +24,8 @@ type Options struct {
 	// LibraryPath is the directory containing the llama.cpp dynamic
 	// libraries. Empty means "use the YZMA_LIB environment variable".
 	LibraryPath string
-	// ContextSize is the requested context window in tokens. 0 means "use
-	// the model's trained default (n_ctx_train)".
+	// ContextSize is the requested context window in tokens. 0 means the
+	// runtime's bounded model default (min(n_ctx_train, 8192)).
 	ContextSize int
 	// GPULayers is the number of layers to offload to the GPU. -1 offloads
 	// all layers (the default); 0 forces CPU-only inference.

@@ -32,7 +32,8 @@ type ProviderConfig struct {
 	// LibraryPath is the directory containing llama.cpp dynamic libraries.
 	// Empty defers to the YZMA_LIB environment variable.
 	LibraryPath string `mapstructure:"library_path" yaml:"library_path,omitempty"`
-	// ContextSize is the requested context window in tokens (0 = model default).
+	// ContextSize is the requested context window in tokens (0 = bounded model
+	// default, capped at 8192 by the runtime).
 	ContextSize int `mapstructure:"context_size" yaml:"context_size,omitempty"`
 	// GPULayers is the number of layers to offload to the GPU. nil means
 	// "auto/all"; the distinction from an explicit 0 (CPU-only) matters, so
@@ -654,7 +655,7 @@ providers:
   #   type: embedded
   #   model_path: "~/models/qwen2.5-7b-instruct-q4_k_m.gguf"
   #   library_path: "" # directory with libllama/libggml*; "" uses YZMA_LIB
-  #   context_size: 0 # 0 = model default (n_ctx_train)
+  #   context_size: 0 # 0 = min(model n_ctx_train, 8192)
   #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
   #   threads: 0 # 0 = auto
   #   sampling:
