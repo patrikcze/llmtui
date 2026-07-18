@@ -2,6 +2,58 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-07-18 addendum: multimodal, tools, and reasoning
+
+Status: **Accepted for the next increment**. This addendum supersedes only the
+first increment's vision/native-tool non-goals, tool-calling section, chat
+template restriction, and corresponding known limitations. The selected
+in-process yzma/purego architecture, optional provider boundary, lazy health
+check, serialized native access, cancellation, release packaging, and security
+model remain unchanged.
+
+The next increment extends one embedded provider entry into an explicit model
+pair: a main GGUF and, when vision is enabled, its compatible `mmproj` GGUF.
+`yzma/pkg/mtmd` loads the projector lazily from the same pinned llama.cpp
+library directory and evaluates in-memory PNG/JPEG attachments. A provider with
+no projector remains text-only and never loads `libmtmd`. Because projector
+compatibility cannot be inferred safely from sibling filenames, a vision
+provider exposes only its configured main model; another model/projector pair
+requires another provider entry.
+
+The existing shared request/event contract is sufficient for feature parity:
+`ChatRequest.Tools`, `ChatRequest.Reasoning`, and `Message.Images` flow through
+the embedded runtime, while `EventReasoning`, `EventDelta`, and terminal
+`EventDone.ToolCalls` feed the existing TUI reasoning and approved tool loop.
+No embedded-specific tool executor is introduced. Model-family tool grammars
+come from yzma's `pkg/message`; unrecognized automatic formats keep the current
+synchronous unsupported-tool error so the established prompt fallback still
+works.
+
+GGUF chat-template metadata is authoritative but not every valid Jinja template
+is supported by llama.cpp's `ChatApplyTemplate` convenience renderer. This was
+reproduced with Gemma 4 E4B: model loading succeeds, the metadata template is
+present, and `ChatApplyTemplate` rejects its macros/namespace/tool branches.
+The runtime therefore tries that fast renderer for compatible auto/text
+requests, then falls back automatically to the full `ardanlabs/jinja` renderer.
+The fallback omits `enable_thinking` for `auto`, sets it only for explicit
+`on`/`off`, and supplies tools/rich messages when required. The YAML
+`chat_template` field remains an escape hatch for genuinely absent or broken
+metadata, not a per-model setup requirement.
+
+Multimodal prompts clear and invalidate the text prefix-KV bookkeeping because
+image embeddings cannot be represented by its token slice. Every bitmap,
+input-chunk list, projector context, llama context, and model has explicit,
+ordered cleanup. Images stay in memory, are bounded and validated before FFI,
+are never logged, and retain the existing history policy that does not persist
+attachment bytes. Native mtmd sections that cannot be interrupted mid-call
+observe cancellation at the next safe boundary; llama decode retains its abort
+callback.
+
+The compatibility invariant is unchanged: old YAML, text-only embedded models,
+remote providers, default selection, and all five `CGO_ENABLED=0` release builds
+must retain their v0.9.5 behavior. The implementation and acceptance checklist
+is maintained in `.claude/tasks/embedded-local-inference-plan.md`.
+
 ## Current architecture summary
 
 llmtui is a pure-Go (zero cgo, zero build tags) Bubble Tea TUI. All LLM
