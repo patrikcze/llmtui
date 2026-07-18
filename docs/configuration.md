@@ -79,7 +79,7 @@ vision pairing, image limits, native tools/reasoning, and limitations.
 | `system_prompt` | helpful-assistant text | First system section of every request |
 | `temperature` | `0.7` | Sampling temperature; `0` is honored (deterministic) |
 | `top_p` | `0.9` | Nucleus sampling |
-| `max_tokens` | `4096` | Response budget; reasoning models may need more |
+| `max_tokens` | `4096` | Maximum response budget; embedded requests clamp it to the positions remaining after the prompt |
 | `stream` | `true` | Stream tokens (`--no-stream` overrides) |
 | `save_history` | `true` | Enables sessions + `usage.jsonl` under `history_dir` |
 | `history_dir` | `~/.local/share/llmtui/history` | Where history lives |

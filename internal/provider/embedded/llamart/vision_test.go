@@ -265,8 +265,11 @@ func TestGenerationBudgetWithPositions(t *testing.T) {
 	if _, err := generationBudgetWithPositions(50, 100, 1, 100); err == nil || !strings.Contains(err.Error(), "50 tokens across 100 positions") {
 		t.Fatalf("overflow error = %v", err)
 	}
-	if _, err := generationBudgetWithPositions(50, 20, 81, 100); err == nil || !strings.Contains(err.Error(), "plus max_tokens") {
-		t.Fatalf("requested budget error = %v", err)
+	if got, err := generationBudgetWithPositions(50, 20, 81, 100); err != nil || got != 80 {
+		t.Fatalf("clamped requested budget = %d, %v", got, err)
+	}
+	if got, err := generationBudgetWithPositions(4220, 4220, 4096, 8192); err != nil || got != 3972 {
+		t.Fatalf("reported Gemma image budget = %d, %v", got, err)
 	}
 }
 

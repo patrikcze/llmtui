@@ -145,8 +145,10 @@ support valid GGUF template constructs.
 
 The shared `chat.temperature`, `chat.top_p`, and `chat.max_tokens` settings
 still shape each request. A temperature at or below zero uses greedy sampling.
-If prompt tokens plus `max_tokens` exceed the loaded context, llmtui returns an
-actionable error rather than overflowing the KV cache.
+`max_tokens` is a ceiling: when a valid text or multimodal prompt leaves fewer
+positions, llmtui automatically clamps that request to the remaining context
+instead of rejecting it. A prompt that already fills the context still returns
+an actionable error rather than overflowing the KV cache.
 
 Per-run overrides:
 

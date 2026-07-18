@@ -253,12 +253,10 @@ func generationBudget(promptTokens, requested, contextSize int) (int, error) {
 		return remaining, nil
 	}
 	if requested > remaining {
-		return 0, fmt.Errorf(
-			"prompt (%d tokens) plus max_tokens (%d) exceeds the %d-token context; raise context_size, lower max_tokens, or shorten the conversation",
-			promptTokens,
-			requested,
-			contextSize,
-		)
+		// max_tokens is an upper bound, not a required reservation. Use every
+		// position still available instead of rejecting an otherwise valid
+		// prompt merely because its configured ceiling is slightly larger.
+		return remaining, nil
 	}
 	return requested, nil
 }

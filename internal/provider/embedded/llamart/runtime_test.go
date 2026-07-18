@@ -126,7 +126,8 @@ func TestGenerationBudget(t *testing.T) {
 		{name: "explicit budget", prompt: 100, requested: 20, context: 200, want: 20},
 		{name: "zero uses remaining context", prompt: 100, context: 200, want: 100},
 		{name: "prompt fills context", prompt: 200, requested: 1, context: 200, wantErr: "raise context_size"},
-		{name: "request exceeds remaining", prompt: 190, requested: 20, context: 200, wantErr: "lower max_tokens"},
+		{name: "request is clamped to remaining context", prompt: 190, requested: 20, context: 200, want: 10},
+		{name: "reported Gemma image-sized budget", prompt: 4220, requested: 4096, context: 8192, want: 3972},
 		{name: "negative request", prompt: 10, requested: -1, context: 200, wantErr: "must not be negative"},
 	}
 

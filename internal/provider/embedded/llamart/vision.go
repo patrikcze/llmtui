@@ -265,7 +265,9 @@ func generationBudgetWithPositions(promptTokens, promptPositions, requested, con
 		return remaining, nil
 	}
 	if requested > remaining {
-		return 0, fmt.Errorf("multimodal prompt (%d tokens, %d positions) plus max_tokens (%d) exceeds the %d-position context; raise context_size, lower max_tokens, or shorten the conversation", promptTokens, promptPositions, requested, contextSize)
+		// max_tokens is an upper bound. Multimodal positions, rather than text
+		// token count, define the space available to the continuation.
+		return remaining, nil
 	}
 	return requested, nil
 }
