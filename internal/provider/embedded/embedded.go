@@ -504,6 +504,27 @@ func (p *Provider) RuntimeFingerprint() string {
 	}
 	writeField(h, []byte(toolFormat))
 
+	// KV layout and attention-kernel selection change logits, so they must
+	// vary the cache key. Values are normalized through the same parsers the
+	// runtime uses so spelling variants ("Q8_0" vs "q8_0", "" vs "f16")
+	// cannot split the cache; an invalid value falls back to its raw string
+	// so it still varies the key rather than colliding with a default.
+	swaFull := int64(0)
+	if opts.SWAFull {
+		swaFull = 1
+	}
+	writeInt64(h, swaFull)
+	kvCacheType, err := ParseKVCacheType(opts.KVCacheType)
+	if err != nil {
+		kvCacheType = opts.KVCacheType
+	}
+	writeField(h, []byte(kvCacheType))
+	flashAttention, err := ParseFlashAttention(opts.FlashAttention)
+	if err != nil {
+		flashAttention = opts.FlashAttention
+	}
+	writeField(h, []byte(flashAttention))
+
 	writeInt64(h, int64(opts.Sampling.TopK))
 	writeFloat64(h, opts.Sampling.MinP)
 	writeFloat64(h, opts.Sampling.RepeatPenalty)

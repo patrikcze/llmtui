@@ -72,6 +72,61 @@ func ResolveToolFormat(configured ToolFormat, modelPath string) (ToolFormat, boo
 	}
 }
 
+// KV cache element types supported for the native K/V cache. F16 is the
+// llama.cpp default; Q8_0 halves KV memory with a small quality cost.
+const (
+	KVCacheTypeF16  = "f16"
+	KVCacheTypeQ8_0 = "q8_0"
+)
+
+// ParseKVCacheType validates a configured kv_cache_type. Empty selects f16.
+func ParseKVCacheType(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "":
+		return KVCacheTypeF16, nil
+	case KVCacheTypeF16, KVCacheTypeQ8_0:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded kv_cache_type %q (supported: f16, q8_0)", value)
+	}
+}
+
+// Flash-attention modes. Auto lets llama.cpp decide per model and backend.
+const (
+	FlashAttentionAuto = "auto"
+	FlashAttentionOn   = "on"
+	FlashAttentionOff  = "off"
+)
+
+// ParseFlashAttention validates a configured flash_attention mode. Empty
+// selects auto.
+func ParseFlashAttention(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "":
+		return FlashAttentionAuto, nil
+	case FlashAttentionAuto, FlashAttentionOn, FlashAttentionOff:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded flash_attention %q (supported: auto, on, off)", value)
+	}
+}
+
+// ValidateKVFlashCombination rejects combinations llama.cpp deterministically
+// refuses at context init: a quantized V cache requires flash attention, so
+// q8_0 with flash_attention "off" can never load (and with "auto" it fails on
+// backends where flash attention resolves to disabled).
+func ValidateKVFlashCombination(kvCacheType, flashAttention string) error {
+	if kvCacheType == KVCacheTypeQ8_0 && flashAttention == FlashAttentionOff {
+		return fmt.Errorf(
+			"kv_cache_type %q requires flash attention: set flash_attention: auto or on, or use kv_cache_type: f16",
+			kvCacheType,
+		)
+	}
+	return nil
+}
+
 // Sampling configures the native token sampler chain. Zero values are valid
 // Go zero values, not automatically "use the default" — callers that want
 // ADR defaults applied must do so explicitly (see internal/app/factory.go).
@@ -111,5 +166,19 @@ type Options struct {
 	// ToolFormat selects the tool-call grammar. The zero value is equivalent
 	// to auto for backwards compatibility with existing configurations.
 	ToolFormat ToolFormat
-	Sampling   Sampling
+	// SWAFull requests full-size KV allocation for sliding-window-attention
+	// layers (llama.cpp's C default). llmtui defaults to false: models with
+	// interleaved SWA (Gemma) then allocate only window-sized caches for SWA
+	// layers — for Gemma 4 E4B this shrinks 131072-token KV from ~7.2 GiB to
+	// ~2.0 GiB. The trade-off is that a conversation prefix older than the
+	// window cannot be trimmed in place; the runtime already falls back to a
+	// full re-decode when the cache refuses a partial removal.
+	SWAFull bool
+	// KVCacheType selects the K/V cache element type: "" or "f16" (default),
+	// or "q8_0" (about half the KV memory, small quality cost).
+	KVCacheType string
+	// FlashAttention selects the flash-attention mode: "" or "auto"
+	// (default, llama.cpp decides), "on", or "off".
+	FlashAttention string
+	Sampling       Sampling
 }

@@ -154,6 +154,7 @@ func (r *Runtime) Load(
 	if err != nil {
 		return meta, err
 	}
+	nativeLogReset()
 	if err := initBackend(dir); err != nil {
 		return meta, fmt.Errorf("initialize llama.cpp libraries from %q: %w", dir, err)
 	}
@@ -172,7 +173,7 @@ func (r *Runtime) Load(
 	emitProgress(progress, "loading model weights …")
 	model, err := llama.ModelLoadFromFile(opts.ModelPath, modelParams)
 	if err != nil {
-		return meta, fmt.Errorf("load GGUF model: %w", err)
+		return meta, fmt.Errorf("load GGUF model: %w%s", err, nativeLogTail(3))
 	}
 	loaded := false
 	defer func() {
@@ -222,7 +223,10 @@ func (r *Runtime) Load(
 	emitProgress(progress, fmt.Sprintf("initializing %d-token context …", nCtx))
 	lctx, err := llama.InitFromModel(model, contextParams)
 	if err != nil {
-		return meta, fmt.Errorf("initialize model context: %w", err)
+		return meta, fmt.Errorf(
+			"initialize %d-token model context: %w%s; if this is a memory failure, lower context_size, keep swa_full unset, set kv_cache_type: q8_0 (requires flash_attention auto or on), or close other model servers (e.g. LM Studio, Ollama) while the embedded model is loaded",
+			nCtx, err, nativeLogTail(3),
+		)
 	}
 	r.lctx = lctx
 	mem, err := llama.GetMemory(lctx)
@@ -569,7 +573,10 @@ func initBackend(dir string) error {
 			globalBackend.llamaErr = err
 			return
 		}
-		llama.LogSet(llama.LogSilent())
+		// Capture native logs into a bounded in-memory ring instead of
+		// silencing them: nothing reaches stderr (which would corrupt the
+		// TUI), and load/allocation failures can quote the decisive lines.
+		llama.LogSet(nativeLogCallback())
 		llama.Init()
 	})
 	return globalBackend.llamaErr
@@ -593,7 +600,7 @@ func initMTMDBackend(dir string) error {
 			globalBackend.mtmdErr = err
 			return
 		}
-		mtmd.LogSet(llama.LogSilent())
+		mtmd.LogSet(nativeLogCallback())
 	})
 	return globalBackend.mtmdErr
 }
@@ -680,6 +687,18 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 		batchSize = nCtx
 	}
 
+	kvCacheType, err := embedded.ParseKVCacheType(opts.KVCacheType)
+	if err != nil {
+		return llama.ContextParams{}, 0, err
+	}
+	flashAttention, err := embedded.ParseFlashAttention(opts.FlashAttention)
+	if err != nil {
+		return llama.ContextParams{}, 0, err
+	}
+	if err := embedded.ValidateKVFlashCombination(kvCacheType, flashAttention); err != nil {
+		return llama.ContextParams{}, 0, err
+	}
+
 	params := llama.ContextDefaultParams()
 	params.NCtx = uint32(nCtx)
 	params.NBatch = uint32(batchSize)
@@ -689,6 +708,30 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	if opts.Threads > 0 {
 		params.NThreads = int32(opts.Threads)
 		params.NThreadsBatch = int32(opts.Threads)
+	}
+
+	// llama.cpp's C default is swa_full=true (full-size KV for every
+	// sliding-window layer, kept for API compatibility upstream). llmtui
+	// defaults to the window-sized SWA cache: on Gemma 4 E4B it shrinks
+	// 131072-token KV from ~7.2 GiB to ~2.0 GiB, and generate.go already
+	// falls back to a full re-decode whenever the SWA cache refuses a
+	// partial prefix removal.
+	if opts.SWAFull {
+		params.SwaFull = 1
+	} else {
+		params.SwaFull = 0
+	}
+	if kvCacheType == embedded.KVCacheTypeQ8_0 {
+		params.TypeK = llama.GGMLTypeQ8_0
+		params.TypeV = llama.GGMLTypeQ8_0
+	}
+	switch flashAttention {
+	case embedded.FlashAttentionOn:
+		params.FlashAttentionType = llama.FlashAttentionTypeEnabled
+	case embedded.FlashAttentionOff:
+		params.FlashAttentionType = llama.FlashAttentionTypeDisabled
+	default:
+		params.FlashAttentionType = llama.FlashAttentionTypeAuto
 	}
 	return params, batchSize, nil
 }

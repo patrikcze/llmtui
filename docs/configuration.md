@@ -61,6 +61,9 @@ Embedded-only provider keys:
 | `threads` | `0` | Automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size |
 | `chat_template` | GGUF metadata | Inline Jinja template override |
+| `swa_full` | `false` | `true` restores full-size sliding-window KV caches (more memory) |
+| `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |
+| `flash_attention` | `auto` | `auto`, `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
 | `sampling.top_k` | `40` | Top-k sampler (`0` disables) |
 | `sampling.min_p` | `0.05` | Min-p sampler (`0` disables) |

@@ -135,6 +135,9 @@ support valid GGUF template constructs.
 | `threads` | `0` | llama.cpp automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size, capped by the context size |
 | `chat_template` | model metadata | Inline Jinja chat template override; this is template text, not a filename |
+| `swa_full` | `false` | `true` restores llama.cpp's full-size KV cache for sliding-window-attention layers. The default window-sized SWA cache cuts KV memory several-fold on Gemma-style models (Gemma 4 E4B at 131072 tokens: ~2.0 GiB vs ~7.2 GiB) at the cost of occasional full prompt re-decodes when an old prefix cannot be trimmed in place |
+| `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |
+| `flash_attention` | `auto` | Flash-attention mode: `auto` (llama.cpp decides per model/backend), `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
 | `sampling.top_k` | `40` | Top-k sampling; `0` disables it |
 | `sampling.min_p` | `0.05` | Min-p sampling; `0` disables it |
@@ -270,10 +273,15 @@ accepted when the tool has no required parameters.
 
 ### Out of memory or very slow prompt processing
 
-Lower `context_size` first. Use `gpu_layers: 0` to diagnose GPU/backend
-problems, or raise GPU offload on a machine with sufficient unified/VRAM
-memory. A larger `batch_size` can speed prompt processing but consumes more
-memory.
+Context-init and model-load failures now quote the decisive lines of
+llama.cpp's own log (for example the exact buffer that failed to allocate),
+so read the error text first. The memory levers, in order of preference:
+keep `swa_full` unset (window-sized SWA caches are the default and are
+dramatically smaller for Gemma-style models), set `kv_cache_type: q8_0`
+(halves KV memory), lower `context_size`, and close other model hosts
+(LM Studio, Ollama) that share the same GPU memory while the embedded model
+is loaded. Use `gpu_layers: 0` to diagnose GPU/backend problems. A larger
+`batch_size` can speed prompt processing but consumes more memory.
 
 If the TUI reports that request overhead is too large, the runtime context is
 not larger than the context manager's response reserve (2048 tokens by

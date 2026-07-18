@@ -34,8 +34,10 @@ type ProviderConfig struct {
 	// LibraryPath is the directory containing llama.cpp dynamic libraries.
 	// Empty defers to the YZMA_LIB environment variable.
 	LibraryPath string `mapstructure:"library_path" yaml:"library_path,omitempty"`
-	// ContextSize is the requested context window in tokens (0 = bounded model
-	// default, capped at 8192 by the runtime).
+	// ContextSize is the requested context window in tokens. 0 selects the
+	// bounded automatic default (min of the model's trained context and
+	// 8192); explicit positive values are capped only by the model's trained
+	// context.
 	ContextSize int `mapstructure:"context_size" yaml:"context_size,omitempty"`
 	// GPULayers is the number of layers to offload to the GPU. nil means
 	// "auto/all"; the distinction from an explicit 0 (CPU-only) matters, so
@@ -49,6 +51,17 @@ type ProviderConfig struct {
 	ChatTemplate string `mapstructure:"chat_template" yaml:"chat_template,omitempty"`
 	// ToolFormat selects the embedded llama.cpp tool-call grammar.
 	ToolFormat string `mapstructure:"tool_format" yaml:"tool_format,omitempty"`
+	// SWAFull requests full-size KV caches for sliding-window-attention
+	// layers. false (the default) allocates window-sized SWA caches, which
+	// dramatically lowers memory for Gemma-style models at large context
+	// sizes; true restores llama.cpp's conservative C default.
+	SWAFull bool `mapstructure:"swa_full" yaml:"swa_full,omitempty"`
+	// KVCacheType selects the native K/V cache element type: "f16" (default)
+	// or "q8_0" (about half the KV memory, small quality cost).
+	KVCacheType string `mapstructure:"kv_cache_type" yaml:"kv_cache_type,omitempty"`
+	// FlashAttention selects the flash-attention mode: "auto" (default),
+	// "on", or "off".
+	FlashAttention string `mapstructure:"flash_attention" yaml:"flash_attention,omitempty"`
 	// Sampling configures the native token sampler chain.
 	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
 }
