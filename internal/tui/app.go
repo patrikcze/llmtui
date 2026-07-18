@@ -1340,8 +1340,10 @@ func (m *Model) quit() tea.Cmd {
 	}
 	m.notice = "shutting down…"
 	reg := m.mcpRegistry
+	prov := m.prov
 	return func() tea.Msg {
 		reg.Close()
+		provider.CloseProvider(prov)
 		return quitDoneMsg{}
 	}
 }

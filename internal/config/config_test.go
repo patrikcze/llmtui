@@ -200,6 +200,31 @@ func TestWriteDefaultRefusesOverwrite(t *testing.T) {
 	}
 }
 
+// TestWriteDefaultProducesLoadableConfig guards the annotated embedded
+// example block added to DefaultYAML: even though it is commented out, a
+// stray syntax mistake (unbalanced quote, bad indentation, a literal
+// backtick breaking the Go raw string) must not go unnoticed.
+func TestWriteDefaultProducesLoadableConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := WriteDefault(path); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultProvider != "ollama" {
+		t.Errorf("DefaultProvider = %q, want ollama", cfg.DefaultProvider)
+	}
+	if _, ok := cfg.Providers["embedded"]; !ok {
+		t.Error("embedded provider should still be present (builtin), even though its YAML example is commented out")
+	}
+}
+
 func TestStreamEnabled(t *testing.T) {
 	cfg := &Config{Chat: ChatConfig{Stream: true}}
 	if !cfg.StreamEnabled() {
@@ -247,5 +272,260 @@ func TestWebToolsDefaults(t *testing.T) {
 	}
 	if w.Timeout != "20s" {
 		t.Errorf("timeout = %q, want 20s", w.Timeout)
+	}
+}
+
+func TestEmbeddedProviderFieldsParseFromYAML(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  embedded:
+    type: embedded
+    model_path: "~/models/model.gguf"
+    library_path: "/opt/llama/lib"
+    context_size: 8192
+    gpu_layers: 0
+    threads: 4
+    batch_size: 512
+    chat_template: "custom template"
+    sampling:
+      top_k: 50
+      min_p: 0.1
+      repeat_penalty: 1.2
+      repeat_last_n: 128
+      seed: 42
+      stop: ["</s>", "STOP"]
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pc, ok := cfg.Providers["embedded"]
+	if !ok {
+		t.Fatal("embedded provider missing from parsed config")
+	}
+	if pc.Type != "embedded" {
+		t.Errorf("Type = %q, want embedded", pc.Type)
+	}
+	if pc.ModelPath != "~/models/model.gguf" {
+		t.Errorf("ModelPath = %q", pc.ModelPath)
+	}
+	if pc.LibraryPath != "/opt/llama/lib" {
+		t.Errorf("LibraryPath = %q", pc.LibraryPath)
+	}
+	if pc.ContextSize != 8192 {
+		t.Errorf("ContextSize = %d, want 8192", pc.ContextSize)
+	}
+	if pc.GPULayers == nil || *pc.GPULayers != 0 {
+		t.Errorf("GPULayers = %v, want pointer to 0", pc.GPULayers)
+	}
+	if pc.Threads != 4 {
+		t.Errorf("Threads = %d, want 4", pc.Threads)
+	}
+	if pc.BatchSize != 512 {
+		t.Errorf("BatchSize = %d, want 512", pc.BatchSize)
+	}
+	if pc.ChatTemplate != "custom template" {
+		t.Errorf("ChatTemplate = %q", pc.ChatTemplate)
+	}
+	if pc.Sampling == nil {
+		t.Fatal("Sampling should not be nil")
+	}
+	if pc.Sampling.TopK != 50 || pc.Sampling.MinP != 0.1 || pc.Sampling.RepeatPenalty != 1.2 ||
+		pc.Sampling.RepeatLastN != 128 || pc.Sampling.Seed != 42 {
+		t.Errorf("Sampling = %+v", pc.Sampling)
+	}
+	if len(pc.Sampling.Stop) != 2 || pc.Sampling.Stop[0] != "</s>" || pc.Sampling.Stop[1] != "STOP" {
+		t.Errorf("Sampling.Stop = %v", pc.Sampling.Stop)
+	}
+}
+
+func TestEmbeddedBuiltinProviderExistsWithZeroConfig(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pc, ok := cfg.Providers["embedded"]
+	if !ok {
+		t.Fatal("builtin embedded provider missing")
+	}
+	if pc.Type != "embedded" {
+		t.Errorf("Type = %q, want embedded", pc.Type)
+	}
+	// The embedded provider must not be active by default.
+	if cfg.DefaultProvider == "embedded" {
+		t.Error("embedded must not be the default provider")
+	}
+}
+
+func TestContextSizeAndGPULayersEnvOverrides(t *testing.T) {
+	t.Setenv("LLMTUI_CONTEXT_SIZE", "16384")
+	t.Setenv("LLMTUI_GPU_LAYERS", "0")
+
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ContextSize == nil || *cfg.ContextSize != 16384 {
+		t.Errorf("ContextSize = %v, want pointer to 16384", cfg.ContextSize)
+	}
+	if cfg.GPULayers == nil || *cfg.GPULayers != 0 {
+		t.Errorf("GPULayers = %v, want pointer to 0", cfg.GPULayers)
+	}
+}
+
+func TestContextSizeAndGPULayersFlagOverridesEnv(t *testing.T) {
+	t.Setenv("LLMTUI_CONTEXT_SIZE", "16384")
+	t.Setenv("LLMTUI_GPU_LAYERS", "0")
+
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	// Simulate bound flags: viper.Set has flag-level (highest) precedence.
+	v.Set("context_size", 4096)
+	v.Set("gpu_layers", 20)
+
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ContextSize == nil || *cfg.ContextSize != 4096 {
+		t.Errorf("ContextSize = %v, want pointer to 4096 (flag should win over env)", cfg.ContextSize)
+	}
+	if cfg.GPULayers == nil || *cfg.GPULayers != 20 {
+		t.Errorf("GPULayers = %v, want pointer to 20 (flag should win over env)", cfg.GPULayers)
+	}
+}
+
+func TestContextSizeAndGPULayersUnsetStayNil(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ContextSize != nil {
+		t.Errorf("ContextSize = %v, want nil when unset", cfg.ContextSize)
+	}
+	if cfg.GPULayers != nil {
+		t.Errorf("GPULayers = %v, want nil when unset", cfg.GPULayers)
+	}
+}
+
+func TestGPULayersNilVsZeroDistinguished(t *testing.T) {
+	// A provider config that never mentions gpu_layers must decode to a nil
+	// pointer (meaning "auto/all"), not a pointer to the zero value 0
+	// (meaning "CPU only") — these have opposite runtime meanings.
+	pathAuto := writeConfig(t, `
+providers:
+  embedded:
+    type: embedded
+    model_path: "/models/a.gguf"
+`)
+	vAuto, err := NewViper(pathAuto)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfgAuto, err := Load(vAuto)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if pc := cfgAuto.Providers["embedded"]; pc.GPULayers != nil {
+		t.Errorf("GPULayers = %v, want nil (auto) when omitted from YAML", pc.GPULayers)
+	}
+
+	pathCPU := writeConfig(t, `
+providers:
+  embedded:
+    type: embedded
+    model_path: "/models/a.gguf"
+    gpu_layers: 0
+`)
+	vCPU, err := NewViper(pathCPU)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfgCPU, err := Load(vCPU)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pc := cfgCPU.Providers["embedded"]
+	if pc.GPULayers == nil {
+		t.Fatal("GPULayers = nil, want pointer to 0 (explicit CPU-only) when set in YAML")
+	}
+	if *pc.GPULayers != 0 {
+		t.Errorf("GPULayers = %d, want 0", *pc.GPULayers)
+	}
+}
+
+// TestOldConfigFileStillParsesIdentically is a regression guard: config
+// files written before the embedded provider fields existed must still
+// parse with identical values for the pre-existing fields, and the new
+// fields must all be their Go zero values (empty/nil), never accidentally
+// populated by cross-talk between providers or defaults.
+func TestOldConfigFileStillParsesIdentically(t *testing.T) {
+	path := writeConfig(t, `
+default_provider: lmstudio
+default_model: qwen3
+
+providers:
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434
+    api_key: ""
+    default_model: qwen3
+
+  lmstudio:
+    type: openai_compatible
+    base_url: http://localhost:1234/v1
+    api_key: lm-studio
+    default_model: local-model
+
+chat:
+  temperature: 0.3
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultProvider != "lmstudio" {
+		t.Errorf("DefaultProvider = %q, want lmstudio", cfg.DefaultProvider)
+	}
+	if cfg.Chat.Temperature != 0.3 {
+		t.Errorf("Temperature = %v, want 0.3", cfg.Chat.Temperature)
+	}
+	ollama := cfg.Providers["ollama"]
+	if ollama.BaseURL != "http://localhost:11434" || ollama.DefaultModel != "qwen3" {
+		t.Errorf("ollama provider = %+v, unexpected values", ollama)
+	}
+	if ollama.ModelPath != "" || ollama.LibraryPath != "" || ollama.ContextSize != 0 ||
+		ollama.GPULayers != nil || ollama.Threads != 0 || ollama.BatchSize != 0 ||
+		ollama.ChatTemplate != "" || ollama.Sampling != nil {
+		t.Errorf("ollama provider should have all-zero embedded-only fields, got %+v", ollama)
+	}
+	lmstudio := cfg.Providers["lmstudio"]
+	if lmstudio.APIKey != "lm-studio" || lmstudio.DefaultModel != "local-model" {
+		t.Errorf("lmstudio provider = %+v, unexpected values", lmstudio)
+	}
+	if cfg.ContextSize != nil || cfg.GPULayers != nil {
+		t.Errorf("top-level runtime overrides should be nil for an old config with no flags/env, got context_size=%v gpu_layers=%v", cfg.ContextSize, cfg.GPULayers)
 	}
 }

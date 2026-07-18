@@ -140,6 +140,42 @@ type Provider interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// Closer is implemented by providers that hold resources needing explicit
+// release (e.g. an in-process inference runtime with a loaded model).
+// Callers must invoke Close when discarding such a provider — on provider
+// switch and on application exit. Close must be idempotent and safe to call
+// while a stream is in flight (it cancels the stream first).
+type Closer interface {
+	Close() error
+}
+
+// CloseProvider releases p's resources if it implements Closer. It is safe
+// to call with a nil provider.
+func CloseProvider(p Provider) error {
+	if c, ok := p.(Closer); ok && c != nil {
+		return c.Close()
+	}
+	return nil
+}
+
+// RuntimeFingerprinter is implemented by providers whose response-shaping
+// state is not fully captured by the request fields shared across backends —
+// e.g. an embedded runtime's model file identity and native sampling
+// parameters. The fingerprint participates in the response-cache key so two
+// materially different runtime configurations can never share a cache entry.
+type RuntimeFingerprinter interface {
+	RuntimeFingerprint() string
+}
+
+// RuntimeFingerprintOf returns p's runtime fingerprint or "" for backends
+// whose behavior is fully described by the shared request fields.
+func RuntimeFingerprintOf(p Provider) string {
+	if f, ok := p.(RuntimeFingerprinter); ok {
+		return f.RuntimeFingerprint()
+	}
+	return ""
+}
+
 // Emit delivers ev on events, giving up when ctx is canceled so producers
 // never block forever on an abandoned stream. It reports whether ev was sent.
 func Emit(ctx context.Context, events chan<- ChatEvent, ev ChatEvent) bool {

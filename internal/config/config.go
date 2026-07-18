@@ -23,6 +23,39 @@ type ProviderConfig struct {
 	APIKey       string `mapstructure:"api_key" yaml:"api_key"`
 	APIKeyEnv    string `mapstructure:"api_key_env" yaml:"api_key_env"`
 	DefaultModel string `mapstructure:"default_model" yaml:"default_model"`
+
+	// The fields below configure the embedded (in-process) provider only;
+	// other provider types ignore them.
+
+	// ModelPath is the path to a local .gguf model file.
+	ModelPath string `mapstructure:"model_path" yaml:"model_path,omitempty"`
+	// LibraryPath is the directory containing llama.cpp dynamic libraries.
+	// Empty defers to the YZMA_LIB environment variable.
+	LibraryPath string `mapstructure:"library_path" yaml:"library_path,omitempty"`
+	// ContextSize is the requested context window in tokens (0 = model default).
+	ContextSize int `mapstructure:"context_size" yaml:"context_size,omitempty"`
+	// GPULayers is the number of layers to offload to the GPU. nil means
+	// "auto/all"; the distinction from an explicit 0 (CPU-only) matters, so
+	// this is a pointer.
+	GPULayers *int `mapstructure:"gpu_layers" yaml:"gpu_layers,omitempty"`
+	// Threads is the CPU thread count (0 = auto).
+	Threads int `mapstructure:"threads" yaml:"threads,omitempty"`
+	// BatchSize is the native decode batch size (0 = runtime default).
+	BatchSize int `mapstructure:"batch_size" yaml:"batch_size,omitempty"`
+	// ChatTemplate overrides the model's GGUF chat-template metadata.
+	ChatTemplate string `mapstructure:"chat_template" yaml:"chat_template,omitempty"`
+	// Sampling configures the native token sampler chain.
+	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
+}
+
+// SamplingConfig configures the embedded provider's native sampler chain.
+type SamplingConfig struct {
+	TopK          int      `mapstructure:"top_k" yaml:"top_k,omitempty"`
+	MinP          float64  `mapstructure:"min_p" yaml:"min_p,omitempty"`
+	RepeatPenalty float64  `mapstructure:"repeat_penalty" yaml:"repeat_penalty,omitempty"`
+	RepeatLastN   int      `mapstructure:"repeat_last_n" yaml:"repeat_last_n,omitempty"`
+	Seed          uint32   `mapstructure:"seed" yaml:"seed,omitempty"`
+	Stop          []string `mapstructure:"stop" yaml:"stop,omitempty"`
 }
 
 // ResolveAPIKey returns the API key, preferring an env var reference so
@@ -304,6 +337,12 @@ type Config struct {
 	APIKey   string `mapstructure:"api_key" yaml:"-"`
 	Debug    bool   `mapstructure:"debug" yaml:"-"`
 	NoStream bool   `mapstructure:"no_stream" yaml:"-"`
+	// ContextSize and GPULayers override the embedded provider's context
+	// window and GPU offload for the current run (--context-size,
+	// --gpu-layers, or LLMTUI_CONTEXT_SIZE / LLMTUI_GPU_LAYERS). nil means
+	// "no override": fall back to the provider's configured value.
+	ContextSize *int `mapstructure:"context_size" yaml:"-"`
+	GPULayers   *int `mapstructure:"gpu_layers" yaml:"-"`
 }
 
 // ActiveProviderName resolves which provider to use, applying overrides.
@@ -401,6 +440,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 	// LLMTUI_NETWORK_TIMEOUT=600s or LLMTUI_CHAT_MAX_TOKENS=8192.
 	for _, key := range []string{
 		"provider", "model", "base_url", "api_key", "no_stream", "debug",
+		"context_size", "gpu_layers",
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 	} {
@@ -468,6 +508,12 @@ func builtinProviders() map[string]ProviderConfig {
 		"mock": {
 			Type:         "mock",
 			DefaultModel: "demo-model",
+		},
+		// embedded has no active role by default (default_provider stays
+		// "ollama"); this entry only guarantees `--provider embedded
+		// --model /path/to/model.gguf` works with zero config file.
+		"embedded": {
+			Type: "embedded",
 		},
 	}
 }
@@ -592,6 +638,25 @@ providers:
     # api_key_env: LLMTUI_API_KEY
     api_key: ""
     default_model: local-model
+
+  # Embedded (in-process) inference: loads a local .gguf model directly,
+  # with no separate server. Opt-in and inert until you configure it or run
+  # llmtui chat --provider embedded --model /path/to/model.gguf. See
+  # docs/embedded.md for native library setup.
+  # embedded:
+  #   type: embedded
+  #   model_path: "~/models/qwen2.5-7b-instruct-q4_k_m.gguf"
+  #   library_path: "" # directory with libllama/libggml*; "" uses YZMA_LIB
+  #   context_size: 0 # 0 = model default (n_ctx_train)
+  #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
+  #   threads: 0 # 0 = auto
+  #   sampling:
+  #     top_k: 40
+  #     min_p: 0.05
+  #     repeat_penalty: 1.1
+  #     repeat_last_n: 64
+  #     seed: 0 # 0 = random
+  #     stop: []
 
 chat:
   system_prompt: "You are a helpful local assistant."

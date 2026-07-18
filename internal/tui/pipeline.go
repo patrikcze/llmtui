@@ -430,6 +430,7 @@ func (m *Model) cacheKeyFromPrepared(raw string, prepared preparedRequest) cache
 		ToolsHash:    toolSpecsFingerprint(prepared.tools),
 		Reasoning:    m.effectiveReasoning(),
 		SkillsHash:   m.activeSkillsFingerprint(),
+		RuntimeID:    provider.RuntimeFingerprintOf(m.prov),
 	}
 }
 

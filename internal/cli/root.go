@@ -34,8 +34,8 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 
 	pf := cmd.PersistentFlags()
 	pf.StringVar(&r.cfgFile, "config", "", "path to config file")
-	pf.String("provider", "", "provider to use (ollama, lmstudio, openai_compatible, mock)")
-	pf.String("model", "", "model to use")
+	pf.String("provider", "", "provider to use (ollama, lmstudio, openai_compatible, embedded, mock)")
+	pf.String("model", "", "model to use (a local .gguf file path for --provider embedded)")
 	pf.String("base-url", "", "override the provider base URL")
 	pf.String("api-key", "", "override the provider API key")
 	pf.Float64("temperature", 0, "sampling temperature")
@@ -45,6 +45,8 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	pf.String("theme", "", "UI theme")
 	pf.Bool("no-stream", false, "disable streaming responses")
 	pf.Bool("debug", false, "enable debug output")
+	pf.Int("context-size", 0, "context window for the embedded provider (0 = model default)")
+	pf.Int("gpu-layers", 0, "GPU layers to offload for the embedded provider (-1 = all, 0 = CPU only)")
 
 	cmd.AddCommand(
 		newChatCmd(r),
@@ -79,6 +81,8 @@ func (r *Root) load(cmd *cobra.Command) error {
 		"ui.theme":           "theme",
 		"no_stream":          "no-stream",
 		"debug":              "debug",
+		"context_size":       "context-size",
+		"gpu_layers":         "gpu-layers",
 	}
 	flags := cmd.Flags()
 	for key, flag := range bindings {

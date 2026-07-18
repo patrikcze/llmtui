@@ -54,6 +54,12 @@ type Key struct {
 	// field guarantees a response generated under one skill set is never
 	// served for another, independent of how composition evolves.
 	SkillsHash string
+	// RuntimeID fingerprints backend state that shapes responses but is not
+	// visible in the shared request fields — for the embedded provider this
+	// is the model file identity (path, size, mtime) plus native sampling
+	// and context settings. Empty for remote providers, whose behavior is
+	// fully described by Provider/BaseURL/Model and the fields above.
+	RuntimeID string
 }
 
 // Hash returns a stable content hash for the key. Free-text fields are
@@ -61,7 +67,7 @@ type Key struct {
 // separator characters inside them.
 func (k Key) Hash() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v6|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s|%s|%s",
+	fmt.Fprintf(h, "v7|%s|%s|%s|%s|%s|%s|%s|%.4f|%.4f|%d|%s|%s|%s|%s|%s",
 		k.Provider,
 		hashText(k.BaseURL),
 		k.Model,
@@ -76,6 +82,7 @@ func (k Key) Hash() string {
 		k.ToolsHash,
 		k.Reasoning,
 		k.SkillsHash,
+		k.RuntimeID,
 	)
 	return hex.EncodeToString(h.Sum(nil))
 }

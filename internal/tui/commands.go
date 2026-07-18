@@ -275,6 +275,14 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
+	// Release the outgoing provider's resources (e.g. an embedded runtime's
+	// loaded model) off the Update goroutine; Close cancels any in-flight
+	// generation itself and is idempotent.
+	old := m.prov
+	closeOld := func() tea.Msg {
+		provider.CloseProvider(old)
+		return nil
+	}
 	m.prov = prov
 	// Keep the config's notion of the active provider in sync, so cache keys,
 	// error messages, and /doctor resolve this provider's settings. The
@@ -288,7 +296,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 	m.demoMode = false
 	m.connected = false
 	m.notice = fmt.Sprintf("switched to %s (%s)", name, m.model)
-	return m.checkHealth(false)
+	return tea.Batch(closeOld, m.checkHealth(false))
 }
 
 // openOverlay shows scrollable content in the viewport area until Esc.
