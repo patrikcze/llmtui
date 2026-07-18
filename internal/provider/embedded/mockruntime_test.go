@@ -22,6 +22,7 @@ type scriptedRuntime struct {
 
 	genPieces []string
 	genDeltas []GenDelta
+	genResult GenResult
 	genErr    error
 	genDelay  time.Duration // delay between pieces
 	// blockUntilCanceled, if true, makes Generate ignore genPieces and
@@ -95,7 +96,14 @@ func (r *scriptedRuntime) Generate(ctx context.Context, req GenRequest, emit fun
 	if r.genErr != nil {
 		return GenResult{}, r.genErr
 	}
-	return GenResult{PromptTokens: 7, CompletionTokens: completion}, nil
+	result := r.genResult
+	if result.PromptTokens == 0 {
+		result.PromptTokens = 7
+	}
+	if result.CompletionTokens == 0 {
+		result.CompletionTokens = completion
+	}
+	return result, nil
 }
 
 func (r *scriptedRuntime) Close() error {

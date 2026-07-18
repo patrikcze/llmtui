@@ -224,7 +224,13 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
 	}
 	if len(req.Tools) > 0 {
-		return nil, fmt.Errorf("embedded provider %q does not support native tool calls — llmtui falls back to the prompt-based tool protocol", p.name)
+		opts := p.activeOptions()
+		if requested := expandHome(req.Model); requested != "" {
+			opts.ModelPath = requested
+		}
+		if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); !ok {
+			return nil, fmt.Errorf("embedded provider %q does not support native tool calls for model %q: tool format is unknown — set providers.%s.tool_format or use llmtui's prompt-based tool protocol", p.name, opts.ModelPath, p.name)
+		}
 	}
 
 	p.mu.Lock()
@@ -323,6 +329,9 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		Progress: func(message string) {
 			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: message})
 		},
+	}
+	if len(req.Tools) > 0 {
+		genReq.ToolFormat, _ = ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
 	}
 
 	aborted := false

@@ -7,6 +7,8 @@ package embedded
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hybridgroup/yzma/pkg/message"
 )
 
 // ToolFormat selects the llama.cpp tool-call grammar used for an embedded
@@ -35,6 +37,38 @@ func ParseToolFormat(value string) (ToolFormat, error) {
 		return format, nil
 	default:
 		return "", fmt.Errorf("unsupported embedded tool_format %q (supported: auto, standard, qwen, glm, mistral, gemma, gpt, phi)", value)
+	}
+}
+
+// ResolveToolFormat returns the configured grammar, or detects it from the
+// selected model path when auto is configured. The boolean is false for an
+// unknown or unsupported model family.
+func ResolveToolFormat(configured ToolFormat, modelPath string) (ToolFormat, bool) {
+	if configured != "" && configured != ToolFormatAuto {
+		switch configured {
+		case ToolFormatStandard, ToolFormatQwen, ToolFormatGLM, ToolFormatMistral, ToolFormatGemma, ToolFormatGPT, ToolFormatPhi:
+			return configured, true
+		default:
+			return ToolFormatAuto, false
+		}
+	}
+	switch message.DetectFormatFromPath(modelPath) {
+	case message.FormatStandard:
+		return ToolFormatStandard, true
+	case message.FormatQwen:
+		return ToolFormatQwen, true
+	case message.FormatGLM:
+		return ToolFormatGLM, true
+	case message.FormatMistral:
+		return ToolFormatMistral, true
+	case message.FormatGemma:
+		return ToolFormatGemma, true
+	case message.FormatGPT:
+		return ToolFormatGPT, true
+	case message.FormatPhi:
+		return ToolFormatPhi, true
+	default:
+		return ToolFormatAuto, false
 	}
 }
 

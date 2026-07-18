@@ -252,7 +252,19 @@ func (r *Runtime) Generate(
 			return result, errors.New("embedded text inference does not support image messages")
 		}
 	}
-	rendered, err := renderChatTemplate(r.template, req.Messages, req.Tools, req.Reasoning, applyTemplate)
+	toolFormat := req.ToolFormat
+	if len(req.Tools) > 0 && toolFormat == "" {
+		var ok bool
+		toolFormat, ok = embedded.ResolveToolFormat(r.opts.ToolFormat, r.opts.ModelPath)
+		if !ok {
+			return result, fmt.Errorf("native tool format is unknown for model %q", r.opts.ModelPath)
+		}
+	}
+	messages, err := prepareToolMessages(req.Messages, req.Tools, toolFormat)
+	if err != nil {
+		return result, err
+	}
+	rendered, err := renderChatTemplate(r.template, messages, req.Tools, req.Reasoning, applyTemplate)
 	if err != nil {
 		return result, err
 	}
@@ -298,9 +310,16 @@ func (r *Runtime) Generate(
 	assembler := &embedded.Assembler{}
 	stopScanner := embedded.NewStopScanner(r.opts.Sampling.Stop)
 	reasoningRouter := newReasoningRouter(rendered)
+	toolRouter := newToolOutputRouter(toolFormat, req.Tools)
 	emitRouted := func(text string) {
 		for _, delta := range reasoningRouter.Push(text) {
-			emit(delta)
+			if delta.Kind == embedded.DeltaReasoning || len(req.Tools) == 0 {
+				emit(delta)
+				continue
+			}
+			for _, visible := range toolRouter.Push(delta.Text) {
+				emit(embedded.GenDelta{Kind: embedded.DeltaText, Text: visible})
+			}
 		}
 	}
 	var batch []llama.Token
@@ -359,7 +378,23 @@ func (r *Runtime) Generate(
 		}
 	}
 	for _, delta := range reasoningRouter.Flush() {
-		emit(delta)
+		if delta.Kind == embedded.DeltaReasoning || len(req.Tools) == 0 {
+			emit(delta)
+			continue
+		}
+		for _, visible := range toolRouter.Push(delta.Text) {
+			emit(embedded.GenDelta{Kind: embedded.DeltaText, Text: visible})
+		}
+	}
+	if len(req.Tools) > 0 {
+		visible, calls, err := toolRouter.Finish()
+		if err != nil {
+			return result, err
+		}
+		for _, text := range visible {
+			emit(embedded.GenDelta{Kind: embedded.DeltaText, Text: text})
+		}
+		result.ToolCalls = calls
 	}
 	return result, nil
 }

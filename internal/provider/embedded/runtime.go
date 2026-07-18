@@ -28,6 +28,7 @@ type ModelMeta struct {
 type GenRequest struct {
 	Messages    []provider.Message
 	Tools       []provider.ToolSpec
+	ToolFormat  ToolFormat
 	Reasoning   string
 	Temperature float64
 	TopP        float64

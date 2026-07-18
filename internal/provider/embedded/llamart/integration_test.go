@@ -2,6 +2,7 @@ package llamart
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -168,6 +169,57 @@ func TestRuntimeIntegration(t *testing.T) {
 			t.Errorf("Chat() text = %q, usage = %+v; want streamed text and exact usage", text.String(), usage)
 		}
 	})
+}
+
+func TestRuntimeToolIntegration(t *testing.T) {
+	opts := integrationOptions(t)
+	toolFormat, ok := embedded.ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
+	if !ok {
+		t.Skipf("model path %q has no recognized tool format", opts.ModelPath)
+	}
+	runtime := New()
+	if _, err := runtime.Load(context.Background(), opts, nil); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+
+	var visible strings.Builder
+	result, err := runtime.Generate(context.Background(), embedded.GenRequest{
+		Messages: []provider.Message{{
+			Role:    provider.RoleUser,
+			Content: "Use the weather tool for Prague. Do not answer from memory.",
+		}},
+		Tools: []provider.ToolSpec{{
+			Name:        "weather",
+			Description: "Get current weather for a city",
+			Parameters:  []byte(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
+		}},
+		ToolFormat:  toolFormat,
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   96,
+	}, func(delta embedded.GenDelta) {
+		if delta.Kind == embedded.DeltaText {
+			visible.WriteString(delta.Text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "weather" {
+		t.Fatalf("ToolCalls = %+v, visible = %q", result.ToolCalls, visible.String())
+	}
+	if strings.Contains(visible.String(), "toolcall") || strings.Contains(visible.String(), "call:weather") {
+		t.Errorf("tool markup leaked into visible text: %q", visible.String())
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(result.ToolCalls[0].Arguments), &arguments); err != nil || arguments["city"] == "" {
+		t.Errorf("arguments = %q, error = %v", result.ToolCalls[0].Arguments, err)
+	}
 }
 
 type integrationGeneration struct {

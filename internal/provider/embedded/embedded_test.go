@@ -319,6 +319,34 @@ func TestChatWithToolsRejectsSynchronouslyAndMatchesFallbackDetector(t *testing.
 	}
 }
 
+func TestChatWithKnownToolFormatUsesTerminalToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "gemma-4-tool.gguf")
+	wantCall := provider.ToolCall{Name: "read_file", Arguments: `{"path":"README.md"}`}
+	rt := &scriptedRuntime{genResult: GenResult{ToolCalls: []provider.ToolCall{wantCall}}}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+	tools := []provider.ToolSpec{{Name: "read_file", Parameters: []byte(`{"type":"object"}`)}}
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "read it"}},
+		Tools:    tools,
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	got := drain(events)
+	done := got[len(got)-1]
+	if done.Type != provider.EventDone || len(done.ToolCalls) != 1 || done.ToolCalls[0] != wantCall {
+		t.Fatalf("terminal event = %+v, want one tool call", done)
+	}
+	rt.pathMu.Lock()
+	request := rt.lastReq
+	rt.pathMu.Unlock()
+	if request.ToolFormat != ToolFormatGemma || len(request.Tools) != 1 || request.Tools[0].Name != "read_file" {
+		t.Errorf("runtime request format=%q tools=%+v", request.ToolFormat, request.Tools)
+	}
+}
+
 // toolsRejectedErrorLike mirrors internal/tui/pipeline.go's toolsRejectedError
 // predicate (substring "tool" plus "does not support") without importing the
 // tui package, which would create an import cycle risk and pull in
