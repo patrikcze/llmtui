@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -58,10 +58,10 @@ jobs:
             cgo: "0"
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -74,7 +74,7 @@ jobs:
           CGO_ENABLED=${{ matrix.cgo }}
 
       - name: Upload release platform
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: llmtui-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -86,13 +86,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Full history so release notes can diff against the previous tag.
           fetch-depth: 0
 
       - name: Download release platforms
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: llmtui-*
           path: dist
