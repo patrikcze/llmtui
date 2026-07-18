@@ -104,6 +104,28 @@ func TestChatMapsReasoningDeltasAndPropagatesMode(t *testing.T) {
 	}
 }
 
+func TestChatPreservesImageAttachmentsForRuntime(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "vision.gguf")
+	rt := &scriptedRuntime{}
+	p := New("embedded", Options{ModelPath: modelPath, MMProjPath: filepath.Join(dir, "mmproj.gguf")}, fixedRuntime(rt))
+	image := provider.Image{Data: []byte{1, 2, 3}, MIME: "image/png"}
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "describe", Images: []provider.Image{image}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(events)
+	rt.pathMu.Lock()
+	request := rt.lastReq
+	rt.pathMu.Unlock()
+	if len(request.Messages) != 1 || len(request.Messages[0].Images) != 1 || request.Messages[0].Images[0].MIME != "image/png" || len(request.Messages[0].Images[0].Data) != 3 {
+		t.Errorf("runtime messages = %+v", request.Messages)
+	}
+}
+
 func TestChatRejectsInvalidReasoningBeforeRuntime(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")

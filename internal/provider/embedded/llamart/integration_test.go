@@ -1,9 +1,13 @@
 package llamart
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"strings"
 	"testing"
@@ -222,6 +226,59 @@ func TestRuntimeToolIntegration(t *testing.T) {
 	}
 }
 
+func TestRuntimeVisionIntegration(t *testing.T) {
+	opts := integrationOptions(t)
+	if opts.MMProjPath == "" {
+		t.Skip("set LLMTUI_TEST_MMPROJ to run mtmd vision integration tests")
+	}
+	runtime := New()
+	if _, err := runtime.Load(context.Background(), opts, nil); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+
+	bitmap := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	for y := range 32 {
+		for x := range 32 {
+			bitmap.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, bitmap); err != nil {
+		t.Fatal(err)
+	}
+
+	vision := generateIntegration(t, runtime, embedded.GenRequest{
+		Messages: []provider.Message{{
+			Role:    provider.RoleUser,
+			Content: "What is the dominant color? Reply with one word.",
+			Images:  []provider.Image{{Data: encoded.Bytes(), MIME: "image/png"}},
+		}},
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   24,
+	})
+	if vision.text == "" || vision.result.PromptTokens == 0 || vision.result.CompletionTokens == 0 {
+		t.Fatalf("vision generation = %+v", vision)
+	}
+
+	// A text request after image embeddings must clear contaminated KV state
+	// and remain usable.
+	text := generateIntegration(t, runtime, embedded.GenRequest{
+		Messages:    []provider.Message{{Role: provider.RoleUser, Content: "Reply with OK."}},
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   8,
+	})
+	if text.text == "" {
+		t.Fatal("text generation after vision returned no output")
+	}
+}
+
 type integrationGeneration struct {
 	text    string
 	result  embedded.GenResult
@@ -249,11 +306,16 @@ func integrationOptions(t *testing.T) embedded.Options {
 	if libraryPath == "" || modelPath == "" {
 		t.Skip("set YZMA_LIB and LLMTUI_TEST_GGUF to run llama.cpp integration tests")
 	}
+	gpuLayers := -1
+	if os.Getenv("LLMTUI_TEST_CPU") == "1" {
+		gpuLayers = 0
+	}
 	return embedded.Options{
 		ModelPath:   modelPath,
+		MMProjPath:  os.Getenv("LLMTUI_TEST_MMPROJ"),
 		LibraryPath: libraryPath,
 		ContextSize: 2048,
-		GPULayers:   -1,
+		GPULayers:   gpuLayers,
 		BatchSize:   512,
 		Sampling: embedded.Sampling{
 			TopK:          40,

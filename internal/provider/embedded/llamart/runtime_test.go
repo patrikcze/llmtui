@@ -34,6 +34,28 @@ func TestRuntime_Probe(t *testing.T) {
 	if err := runtime.Probe(embedded.Options{LibraryPath: dir}); err != nil {
 		t.Fatalf("Probe() = %v, want stat-only success", err)
 	}
+
+	model := filepath.Join(dir, "model.gguf")
+	projector := filepath.Join(dir, "mmproj-model.gguf")
+	if err := os.WriteFile(model, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Probe(embedded.Options{LibraryPath: dir, ModelPath: model, MMProjPath: projector}); err == nil || !strings.Contains(err.Error(), "vision projector not found") {
+		t.Fatalf("Probe() missing projector error = %v", err)
+	}
+	if err := os.WriteFile(projector, []byte("projector"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Probe(embedded.Options{LibraryPath: dir, ModelPath: model, MMProjPath: projector}); err == nil || !strings.Contains(err.Error(), "mtmd vision library not found") {
+		t.Fatalf("Probe() missing mtmd error = %v", err)
+	}
+	mtmdLibrary := loader.GetLibraryFilename(dir, "mtmd")
+	if err := os.WriteFile(mtmdLibrary, []byte("test fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Probe(embedded.Options{LibraryPath: dir, ModelPath: model, MMProjPath: projector}); err != nil {
+		t.Fatalf("Probe() vision pair = %v, want stat-only success", err)
+	}
 }
 
 func TestResolveLibraryDir(t *testing.T) {

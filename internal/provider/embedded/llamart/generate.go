@@ -264,6 +264,13 @@ func generationBudget(promptTokens, requested, contextSize int) (int, error) {
 }
 
 func (r *Runtime) preparePrompt(prompt []llama.Token) ([]llama.Token, error) {
+	if r.kvContaminated {
+		if err := r.vision.memoryClear(r.mem, true); err != nil {
+			return nil, fmt.Errorf("clear image-contaminated model memory before text prompt: %w", err)
+		}
+		r.kvTokens = []llama.Token{}
+		r.kvContaminated = false
+	}
 	if len(r.kvTokens) == 0 {
 		return slices.Clone(prompt), nil
 	}

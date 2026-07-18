@@ -1,7 +1,7 @@
 // Package llamart implements embedded.Runtime with yzma's pure-Go llama.cpp
-// bindings. It intentionally imports only github.com/hybridgroup/yzma/pkg/llama
-// and pkg/loader; yzma's optional downloader and its network dependencies are
-// not part of llmtui.
+// bindings. It intentionally imports only yzma's llama, mtmd, and loader
+// packages; yzma's optional downloader and network dependencies are not part
+// of llmtui.
 package llamart
 
 import (
@@ -18,6 +18,7 @@ import (
 
 	"github.com/hybridgroup/yzma/pkg/llama"
 	"github.com/hybridgroup/yzma/pkg/loader"
+	"github.com/hybridgroup/yzma/pkg/mtmd"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
@@ -31,10 +32,12 @@ const (
 )
 
 var globalBackend struct {
-	mu   sync.Mutex
-	once sync.Once
-	dir  string
-	err  error
+	mu        sync.Mutex
+	dir       string
+	llamaOnce sync.Once
+	llamaErr  error
+	mtmdOnce  sync.Once
+	mtmdErr   error
 }
 
 // Runtime owns one llama.cpp model and context. Calls are serialized by the
@@ -45,12 +48,18 @@ type Runtime struct {
 	lctx  llama.Context
 	vocab llama.Vocab
 	mem   llama.Memory
+	mctx  mtmd.Context
 
 	template  string
 	nCtx      int
 	batchSize int
 	opts      embedded.Options
 	kvTokens  []llama.Token
+	// kvContaminated is set as soon as mtmd evaluation may have inserted image
+	// embeddings. Prefix reuse stays disabled until a later text request has
+	// cleared memory and rebuilt a text-only cache.
+	kvContaminated bool
+	vision         visionNative
 
 	// purego callback slots live for the process lifetime. Install one callback
 	// per context and update this flag per request instead of allocating a new
@@ -60,7 +69,7 @@ type Runtime struct {
 
 // New returns an unloaded llama.cpp runtime.
 func New() *Runtime {
-	return &Runtime{kvTokens: []llama.Token{}}
+	return &Runtime{kvTokens: []llama.Token{}, vision: defaultVisionNative()}
 }
 
 // Probe performs stat-only library validation. It never loads native code.
@@ -82,12 +91,39 @@ func (r *Runtime) Probe(opts embedded.Options) error {
 	if info.IsDir() {
 		return fmt.Errorf("llama.cpp library path %q is a directory; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", filename)
 	}
+	if opts.ModelPath != "" {
+		modelInfo, err := os.Stat(opts.ModelPath)
+		if err != nil {
+			return fmt.Errorf("GGUF model not found at %q: %w", opts.ModelPath, err)
+		}
+		if modelInfo.IsDir() {
+			return fmt.Errorf("GGUF model path %q is a directory", opts.ModelPath)
+		}
+	}
+	if opts.MMProjPath != "" {
+		projector, err := os.Stat(opts.MMProjPath)
+		if err != nil {
+			return fmt.Errorf("vision projector not found at %q: %w", opts.MMProjPath, err)
+		}
+		if projector.IsDir() {
+			return fmt.Errorf("vision projector path %q is a directory; a matching mmproj GGUF file is required", opts.MMProjPath)
+		}
+		mtmdLibrary := loader.GetLibraryFilename(dir, "mtmd")
+		mtmdInfo, err := os.Stat(mtmdLibrary)
+		if err != nil {
+			return fmt.Errorf("mtmd vision library not found at %q: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", mtmdLibrary, err)
+		}
+		if mtmdInfo.IsDir() {
+			return fmt.Errorf("mtmd vision library path %q is a directory", mtmdLibrary)
+		}
+	}
 	return nil
 }
 
 // Load initializes the process-global backend, then loads this runtime's model
 // and bounded inference context. llama.cpp's backend remains initialized for
-// the process lifetime; Close releases only the per-runtime context and model.
+// the process lifetime; Close releases the per-runtime projector, context, and
+// model.
 func (r *Runtime) Load(
 	ctx context.Context,
 	opts embedded.Options,
@@ -144,6 +180,12 @@ func (r *Runtime) Load(
 			return
 		}
 		var cleanupErrors []error
+		if r.mctx != 0 {
+			if freeErr := mtmd.Free(r.mctx); freeErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("free projector after load failure: %w", freeErr))
+			}
+			r.mctx = 0
+		}
 		if r.lctx != 0 {
 			if freeErr := llama.Free(r.lctx); freeErr != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("free context after load failure: %w", freeErr))
@@ -169,6 +211,9 @@ func (r *Runtime) Load(
 
 	nCtxTrain := int(llama.ModelNCtxTrain(model))
 	nCtx := effectiveContextSize(opts.ContextSize, nCtxTrain)
+	if opts.MMProjPath != "" && nCtx > math.MaxInt32 {
+		return meta, fmt.Errorf("vision context_size %d exceeds mtmd's supported maximum %d", nCtx, math.MaxInt32)
+	}
 	contextParams, batchSize, err := buildContextParams(opts, nCtx)
 	if err != nil {
 		return meta, err
@@ -183,6 +228,29 @@ func (r *Runtime) Load(
 	mem, err := llama.GetMemory(lctx)
 	if err != nil {
 		return meta, fmt.Errorf("get model memory: %w", err)
+	}
+	if opts.MMProjPath != "" {
+		if err := initMTMDBackend(dir); err != nil {
+			return meta, fmt.Errorf("initialize mtmd vision library from %q: %w", dir, err)
+		}
+		if opts.BatchSize > math.MaxInt32 {
+			return meta, fmt.Errorf("batch_size %d exceeds mtmd's supported maximum %d", opts.BatchSize, math.MaxInt32)
+		}
+		emitProgress(progress, "loading vision projector …")
+		projectorParams := mtmd.ContextParamsDefault()
+		projectorParams.UseGPU = opts.GPULayers != 0
+		if opts.Threads > 0 {
+			projectorParams.Threads = int32(opts.Threads)
+		}
+		mctx, initErr := mtmd.InitFromFile(opts.MMProjPath, model, projectorParams)
+		if initErr != nil {
+			return meta, fmt.Errorf("load vision projector %q: %w", opts.MMProjPath, initErr)
+		}
+		r.mctx = mctx
+		if !mtmd.SupportVision(mctx) {
+			return meta, fmt.Errorf("projector %q does not provide vision support for model %q", opts.MMProjPath, opts.ModelPath)
+		}
+		emitProgress(progress, "vision projector ready")
 	}
 
 	template := opts.ChatTemplate
@@ -216,6 +284,7 @@ func (r *Runtime) Load(
 	r.batchSize = batchSize
 	r.opts = opts
 	r.kvTokens = []llama.Token{}
+	r.kvContaminated = false
 	loaded = true
 	emitProgress(progress, "model ready")
 	return meta, nil
@@ -247,10 +316,23 @@ func (r *Runtime) Generate(
 	if len(req.Messages) == 0 {
 		return result, errors.New("chat request has no messages")
 	}
-	for _, message := range req.Messages {
-		if len(message.Images) > 0 {
-			return result, errors.New("embedded text inference does not support image messages")
+	images, err := collectAndValidateImages(req.Messages)
+	if err != nil {
+		return result, err
+	}
+	messages := req.Messages
+	if len(images) > 0 {
+		if r.mctx == 0 {
+			return result, errors.New("image messages require providers.<name>.mmproj_path with a projector matching the model")
 		}
+		marker := mtmd.GetMarker(r.mctx)
+		if marker == "" {
+			marker = mtmd.DefaultMarker()
+		}
+		if marker == "" {
+			return result, errors.New("mtmd returned an empty image marker")
+		}
+		messages = injectVisionMarkers(messages, marker)
 	}
 	toolFormat := req.ToolFormat
 	if len(req.Tools) > 0 && toolFormat == "" {
@@ -260,7 +342,7 @@ func (r *Runtime) Generate(
 			return result, fmt.Errorf("native tool format is unknown for model %q", r.opts.ModelPath)
 		}
 	}
-	messages, err := prepareToolMessages(req.Messages, req.Tools, toolFormat)
+	messages, err = prepareToolMessages(messages, req.Tools, toolFormat)
 	if err != nil {
 		return result, err
 	}
@@ -269,16 +351,6 @@ func (r *Runtime) Generate(
 		return result, err
 	}
 	prompt := rendered.text
-	promptTokens := llama.Tokenize(r.vocab, prompt, true, true)
-	if len(promptTokens) == 0 {
-		return result, errors.New("chat template produced no prompt tokens")
-	}
-
-	maxNew, err := generationBudget(len(promptTokens), req.MaxTokens, r.nCtx)
-	if err != nil {
-		return result, err
-	}
-	result.PromptTokens = len(promptTokens)
 
 	r.abort.Store(false)
 	abortDone := make(chan struct{})
@@ -293,12 +365,34 @@ func (r *Runtime) Generate(
 		r.abort.Store(false)
 	}()
 
-	pending, err := r.preparePrompt(promptTokens)
-	if err != nil {
-		return result, err
-	}
-	if err := r.decodePrompt(ctx, pending, len(promptTokens), req.Progress); err != nil {
-		return result, err
+	multimodal := len(images) > 0
+	maxNew := 0
+	var nextPosition llama.Pos
+	if multimodal {
+		visionResult, err := r.evaluateVisionPrompt(ctx, prompt, images, req.MaxTokens, req.Progress)
+		if err != nil {
+			return result, err
+		}
+		result.PromptTokens = visionResult.promptTokens
+		maxNew = visionResult.maxNew
+		nextPosition = visionResult.nextPosition
+	} else {
+		promptTokens := llama.Tokenize(r.vocab, prompt, true, true)
+		if len(promptTokens) == 0 {
+			return result, errors.New("chat template produced no prompt tokens")
+		}
+		maxNew, err = generationBudget(len(promptTokens), req.MaxTokens, r.nCtx)
+		if err != nil {
+			return result, err
+		}
+		result.PromptTokens = len(promptTokens)
+		pending, err := r.preparePrompt(promptTokens)
+		if err != nil {
+			return result, err
+		}
+		if err := r.decodePrompt(ctx, pending, len(promptTokens), req.Progress); err != nil {
+			return result, err
+		}
 	}
 
 	sampler, err := r.newSampler(req)
@@ -330,10 +424,17 @@ func (r *Runtime) Generate(
 			return result, err
 		}
 		if len(batch) > 0 {
-			if err := r.decode(ctx, batch); err != nil {
-				return result, err
+			if multimodal {
+				if err := r.decodeAt(ctx, batch[0], nextPosition); err != nil {
+					return result, err
+				}
+				nextPosition++
+			} else {
+				if err := r.decode(ctx, batch); err != nil {
+					return result, err
+				}
+				r.kvTokens = append(r.kvTokens, batch...)
 			}
-			r.kvTokens = append(r.kvTokens, batch...)
 		}
 
 		token := llama.SamplerSample(sampler, r.lctx, -1)
@@ -408,16 +509,24 @@ func (r *Runtime) Close() (err error) {
 	r.abort.Store(true)
 	lctx := r.lctx
 	model := r.model
+	mctx := r.mctx
 	r.lctx = 0
 	r.model = 0
 	r.vocab = 0
 	r.mem = 0
+	r.mctx = 0
 	r.template = ""
 	r.nCtx = 0
 	r.batchSize = 0
 	r.kvTokens = []llama.Token{}
+	r.kvContaminated = false
 
 	var errs []error
+	if mctx != 0 {
+		if freeErr := mtmd.Free(mctx); freeErr != nil {
+			errs = append(errs, fmt.Errorf("free mtmd projector context: %w", freeErr))
+		}
+	}
 	if lctx != 0 {
 		if freeErr := llama.Free(lctx); freeErr != nil {
 			errs = append(errs, fmt.Errorf("free llama.cpp context: %w", freeErr))
@@ -450,20 +559,43 @@ func initBackend(dir string) error {
 		return fmt.Errorf("llama.cpp is already initialized from %q and cannot be reloaded from %q in the same process", globalBackend.dir, dir)
 	}
 	globalBackend.dir = dir
-	globalBackend.once.Do(func() {
+	globalBackend.llamaOnce.Do(func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				globalBackend.err = fmt.Errorf("native initialization panic: %v", recovered)
+				globalBackend.llamaErr = fmt.Errorf("native llama initialization panic: %v", recovered)
 			}
 		}()
 		if err := llama.Load(dir); err != nil {
-			globalBackend.err = err
+			globalBackend.llamaErr = err
 			return
 		}
 		llama.LogSet(llama.LogSilent())
 		llama.Init()
 	})
-	return globalBackend.err
+	return globalBackend.llamaErr
+}
+
+func initMTMDBackend(dir string) error {
+	globalBackend.mu.Lock()
+	defer globalBackend.mu.Unlock()
+
+	if globalBackend.dir != "" && globalBackend.dir != dir {
+		return fmt.Errorf("native libraries are already initialized from %q and cannot load mtmd from %q in the same process", globalBackend.dir, dir)
+	}
+	globalBackend.dir = dir
+	globalBackend.mtmdOnce.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				globalBackend.mtmdErr = fmt.Errorf("native mtmd initialization panic: %v", recovered)
+			}
+		}()
+		if err := mtmd.Load(dir); err != nil {
+			globalBackend.mtmdErr = err
+			return
+		}
+		mtmd.LogSet(llama.LogSilent())
+	})
+	return globalBackend.mtmdErr
 }
 
 func gpuLayerCount(configured int) (int32, error) {
