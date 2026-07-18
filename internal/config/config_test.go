@@ -134,25 +134,63 @@ func TestFlagOverridesEnv(t *testing.T) {
 }
 
 func TestActiveModelPrecedence(t *testing.T) {
-	cfg := &Config{
-		DefaultProvider: "ollama",
-		DefaultModel:    "global-model",
-		Providers: map[string]ProviderConfig{
-			"ollama": {Type: "ollama", DefaultModel: "provider-model"},
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		pc       ProviderConfig
+		want     string
+	}{
+		{
+			name:     "embedded model path without default",
+			provider: "embedded",
+			pc:       ProviderConfig{Type: "embedded", ModelPath: "/models/local.gguf"},
+			want:     "/models/local.gguf",
+		},
+		{
+			name:     "embedded model path before provider default",
+			provider: "embedded",
+			pc: ProviderConfig{
+				Type:         "embedded",
+				ModelPath:    "/models/local.gguf",
+				DefaultModel: "provider-model",
+			},
+			want: "/models/local.gguf",
+		},
+		{
+			name:     "explicit model override before embedded path",
+			provider: "embedded",
+			model:    "/models/override.gguf",
+			pc:       ProviderConfig{Type: "embedded", ModelPath: "/models/local.gguf"},
+			want:     "/models/override.gguf",
+		},
+		{
+			name:     "remote provider default unchanged",
+			provider: "ollama",
+			pc:       ProviderConfig{Type: "ollama", DefaultModel: "provider-model"},
+			want:     "provider-model",
+		},
+		{
+			name:     "global default remains final fallback",
+			provider: "ollama",
+			pc:       ProviderConfig{Type: "ollama"},
+			want:     "global-model",
 		},
 	}
 
-	if got := cfg.ActiveModel(); got != "provider-model" {
-		t.Errorf("ActiveModel = %q, want provider-model", got)
-	}
-	cfg.Model = "flag-model"
-	if got := cfg.ActiveModel(); got != "flag-model" {
-		t.Errorf("ActiveModel = %q, want flag-model", got)
-	}
-	cfg.Model = ""
-	cfg.Providers["ollama"] = ProviderConfig{Type: "ollama"}
-	if got := cfg.ActiveModel(); got != "global-model" {
-		t.Errorf("ActiveModel = %q, want global-model", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				DefaultProvider: tt.provider,
+				DefaultModel:    "global-model",
+				Model:           tt.model,
+				Providers:       map[string]ProviderConfig{tt.provider: tt.pc},
+			}
+			if got := cfg.ActiveModel(); got != tt.want {
+				t.Errorf("ActiveModel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

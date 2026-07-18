@@ -380,13 +380,20 @@ func (c *Config) ActiveBaseURL() string {
 }
 
 // ActiveModel resolves the model with precedence:
-// --model flag/env > provider default_model > global default_model.
+// --model flag/env > provider model_path > provider default_model > global
+// default_model. ModelPath is normally empty for remote providers; preferring it
+// keeps an embedded provider's request model aligned with the GGUF file it loads.
 func (c *Config) ActiveModel() string {
 	if c.Model != "" {
 		return c.Model
 	}
-	if _, pc, ok := c.ActiveProvider(); ok && pc.DefaultModel != "" {
-		return pc.DefaultModel
+	if _, pc, ok := c.ActiveProvider(); ok {
+		if pc.ModelPath != "" {
+			return pc.ModelPath
+		}
+		if pc.DefaultModel != "" {
+			return pc.DefaultModel
+		}
 	}
 	return c.DefaultModel
 }

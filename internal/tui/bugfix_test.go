@@ -83,6 +83,27 @@ func TestSwitchProviderSyncsConfig(t *testing.T) {
 	}
 }
 
+func TestSwitchProviderUsesEmbeddedModelPath(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Providers = map[string]config.ProviderConfig{
+		"embedded": {
+			Type:         "embedded",
+			ModelPath:    "/models/local.gguf",
+			DefaultModel: "remote-style-default",
+		},
+	}
+
+	if cmd := m.switchProvider("embedded"); cmd == nil {
+		t.Fatal("switchProvider should schedule provider cleanup and a health check")
+	}
+	if m.model != "/models/local.gguf" {
+		t.Errorf("model = %q, want embedded model_path", m.model)
+	}
+	if got := m.cfg.ActiveModel(); got != "/models/local.gguf" {
+		t.Errorf("ActiveModel() = %q, want embedded model_path", got)
+	}
+}
+
 // A failed mid-session health check must not hijack the session into demo
 // mode, and results from a previously active provider must be discarded.
 func TestHealthCheckFailureRules(t *testing.T) {

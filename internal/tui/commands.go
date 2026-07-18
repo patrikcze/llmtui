@@ -290,7 +290,9 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 	m.cfg.Provider = name
 	m.cfg.BaseURL = ""
 	m.cfg.APIKey = ""
-	if pc.DefaultModel != "" {
+	if pc.ModelPath != "" {
+		m.model = pc.ModelPath
+	} else if pc.DefaultModel != "" {
 		m.model = pc.DefaultModel
 	}
 	m.demoMode = false
