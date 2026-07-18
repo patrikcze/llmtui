@@ -69,11 +69,12 @@ func (m *Model) openSkillsPicker() {
 	m.pickerKind = pickerSkill
 	m.pickerItems = make([]string, 0, len(skills))
 	m.pickerIdx = 0
+	foundActive := false
 	for i, s := range skills {
 		m.pickerItems = append(m.pickerItems, s.QualifiedID())
-		if _, active := m.skillMgr.IsActive(s.QualifiedID()); active {
+		if _, active := m.skillMgr.IsActive(s.QualifiedID()); active && !foundActive {
 			m.pickerIdx = i
-			break
+			foundActive = true
 		}
 	}
 	m.overlayOpen = true

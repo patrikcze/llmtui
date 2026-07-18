@@ -487,6 +487,35 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 	}
 }
 
+func TestSkillsPickerActiveSkillDoesNotTruncateNavigation(t *testing.T) {
+	m := newTestModel(t)
+	setupSkills(t, m, map[string]string{
+		"alpha":   "Alpha instructions.",
+		"beta":    "Beta instructions.",
+		"delta":   "Delta instructions.",
+		"epsilon": "Epsilon instructions.",
+		"gamma":   "Gamma instructions.",
+	})
+	if _, err := m.skillMgr.Activate("beta", skill.ScopeSession); err != nil {
+		t.Fatal(err)
+	}
+
+	cmdSkills(m, "list")
+	if got, want := len(m.pickerItems), 5; got != want {
+		t.Fatalf("picker items = %d, want %d: %v", got, want, m.pickerItems)
+	}
+	if got := m.pickerItems[m.pickerIdx]; got != "user:beta" {
+		t.Fatalf("initial selection = %q, want active skill user:beta", got)
+	}
+
+	for range 3 {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if got := m.pickerItems[m.pickerIdx]; got != "user:gamma" {
+		t.Errorf("selection after moving to the last row = %q, want user:gamma", got)
+	}
+}
+
 func TestSkillsWorkWithoutToolSupport(t *testing.T) {
 	m := newTestModel(t) // tools stay off: no native calling, no fenced protocol
 	setupSkills(t, m, map[string]string{"secure-powershell": "Always set StrictMode."})
