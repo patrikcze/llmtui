@@ -397,7 +397,7 @@ make run        # build and launch chat
 make check      # fmt + vet + golangci-lint + race tests
 make test       # unit tests
 make cover      # coverage report
-make dist       # cross-compile darwin/linux/windows into dist/ with checksums
+make dist       # build this native release target into dist/ with checksums
 make clean      # remove artifacts
 make help       # list all targets
 ```

@@ -13,8 +13,11 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-# GOOS/GOARCH pairs built by `make dist`
-PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
+TARGET_GOOS   ?= $(shell go env GOOS)
+TARGET_GOARCH ?= $(shell go env GOARCH)
+CGO_ENABLED   ?= $(if $(filter darwin,$(TARGET_GOOS)),1,0)
+TARGET_EXT    := $(if $(filter windows,$(TARGET_GOOS)),.exe,)
+TARGET_OUT    := $(DIST)/$(BINARY)_$(VERSION)_$(TARGET_GOOS)_$(TARGET_GOARCH)$(TARGET_EXT)
 
 .DEFAULT_GOAL := help
 
@@ -87,19 +90,25 @@ check: fmt vet lint test-race
 tidy:
 	go mod tidy
 
-## dist: cross-compile release binaries with checksums into dist/
+## dist: build the current native release binary with checksums into dist/
 .PHONY: dist
 dist:
 	@rm -rf $(DIST)
+	@$(MAKE) --no-print-directory dist-platform
+	@$(MAKE) --no-print-directory dist-checksums
+
+## dist-platform: build one release binary for TARGET_GOOS/TARGET_GOARCH
+.PHONY: dist-platform
+dist-platform:
 	@mkdir -p $(DIST)
-	@set -e; for platform in $(PLATFORMS); do \
-		GOOS=$${platform%/*}; GOARCH=$${platform#*/}; \
-		out=$(DIST)/$(BINARY)_$(VERSION)_$${GOOS}_$${GOARCH}; \
-		[ "$$GOOS" = "windows" ] && out=$$out.exe; \
-		echo "  building $$out"; \
-		CGO_ENABLED=0 GOOS=$$GOOS GOARCH=$$GOARCH \
-			go build -trimpath -ldflags '$(LDFLAGS)' -o $$out $(MAIN); \
-	done
+	@echo "  building $(TARGET_OUT) (CGO_ENABLED=$(CGO_ENABLED))"
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) \
+		go build -trimpath -ldflags '$(LDFLAGS)' -o $(TARGET_OUT) $(MAIN)
+
+## dist-checksums: write checksums for existing dist artifacts
+.PHONY: dist-checksums
+dist-checksums:
+	@rm -f $(DIST)/checksums.txt
 	@cd $(DIST) && shasum -a 256 * > checksums.txt
 	@echo "release artifacts in $(DIST)/"
 

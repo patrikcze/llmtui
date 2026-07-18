@@ -4,9 +4,11 @@ The `embedded` provider runs a GGUF model inside the llmtui process through
 llama.cpp. It needs no Ollama, LM Studio, HTTP server, or API key. It is
 opt-in: existing providers and the default `llmtui chat` flow are unchanged.
 
-The implementation uses `hybridgroup/yzma` with purego and libffi, so llmtui
-still builds with `CGO_ENABLED=0`. Native llama.cpp libraries remain a separate
-runtime dependency and are never downloaded automatically.
+The implementation uses `hybridgroup/yzma` with purego and libffi. Native
+llama.cpp libraries remain a separate runtime dependency and are never
+downloaded automatically. Published macOS binaries enable Go's cgo runtime so
+Metal can safely use native threads; they still load llama.cpp dynamically and
+do not require users to compile llmtui or link a model runtime.
 
 ## Platform status
 

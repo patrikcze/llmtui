@@ -16,6 +16,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
+	llmtools "github.com/patrikcze/llmtui/internal/tools"
 )
 
 func TestRuntimeIntegration(t *testing.T) {
@@ -428,6 +429,38 @@ func TestRuntimeVisionRejectsWrongProjectorIntegration(t *testing.T) {
 	_, err := runtime.Load(context.Background(), opts, nil)
 	if err == nil || !strings.Contains(err.Error(), "load vision projector") {
 		t.Fatalf("Load() wrong projector error = %v", err)
+	}
+}
+
+// TestRuntimeLargePromptIntegration mirrors a real TUI request with the normal
+// 8192-token context and several native tool schemas. Small acceptance prompts
+// do not exercise llama.Decode with multiple full-sized prompt chunks.
+func TestRuntimeLargePromptIntegration(t *testing.T) {
+	opts := visionIntegrationOptions(t)
+	opts.ContextSize = 8192
+	runtime := New()
+	if _, err := runtime.Load(context.Background(), opts, nil); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+
+	generation := generateIntegration(t, runtime, embedded.GenRequest{
+		Messages: []provider.Message{
+			{Role: provider.RoleSystem, Content: "You are a helpful local coding assistant."},
+			{Role: provider.RoleUser, Content: strings.Repeat("context ", 300) + "\nReply with OK."},
+		},
+		Tools:       append(llmtools.Specs(), llmtools.WebSpecs()...),
+		ToolFormat:  embedded.ToolFormatGemma,
+		Temperature: 0,
+		TopP:        0.9,
+		MaxTokens:   32,
+	})
+	if generation.result.PromptTokens <= opts.BatchSize {
+		t.Fatalf("prompt tokens = %d, want more than batch size %d", generation.result.PromptTokens, opts.BatchSize)
 	}
 }
 

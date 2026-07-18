@@ -50,13 +50,14 @@ observe cancellation at the next safe boundary; llama decode retains its abort
 callback.
 
 The compatibility invariant is unchanged: old YAML, text-only embedded models,
-remote providers, default selection, and all five `CGO_ENABLED=0` release builds
-must retain their v0.9.5 behavior. The implementation and acceptance checklist
-is maintained in `.claude/tasks/embedded-local-inference-plan.md`.
+remote providers, default selection, and all five release targets must retain
+their v0.9.5 behavior. A release-validation addendum below records why macOS
+artifacts now use the real cgo runtime. The implementation and acceptance
+checklist is maintained in `.claude/tasks/embedded-local-inference-plan.md`.
 
 ## Current architecture summary
 
-llmtui is a pure-Go (zero cgo, zero build tags) Bubble Tea TUI. All LLM
+llmtui contains no application cgo code or build tags. All LLM
 backends implement `provider.Provider` (`internal/provider/provider.go`):
 `Chat(ctx, req)` returns a `<-chan ChatEvent` that emits `EventDelta` /
 `EventReasoning` events and exactly one terminal `EventDone`/`EventError`,
@@ -66,8 +67,9 @@ constructed by a `switch pc.Type` in `internal/app/factory.go` from
 watchdog, a native-tool fallback (`toolsRejectedError` → prompt-based tool
 protocol), a response cache keyed by request-shaping fields
 (`internal/cache`), and drains abandoned streams so producer goroutines exit.
-Release builds are `CGO_ENABLED=0` cross-compiles of five platforms from a
-Linux CI runner (`make dist`, `.github/workflows/release.yml`).
+Release builds cover five platforms in a native GitHub Actions matrix. macOS
+uses `CGO_ENABLED=1` so Metal's native threads run with Go's real cgo runtime;
+Linux and Windows remain `CGO_ENABLED=0`.
 
 ## Problem statement
 
@@ -93,7 +95,7 @@ strategy described below.
 
 | Option | Verdict | Reason |
 | --- | --- | --- |
-| A: cgo thin shim over pinned llama.cpp static libs | Rejected | Strongest compile-time safety, but requires CMake/Xcode CLT for any native build, cannot be produced by the existing `CGO_ENABLED=0` Linux-runner release pipeline, and forces build-tag bifurcation of the codebase. |
+| A: cgo thin shim over pinned llama.cpp static libs | Rejected | Strongest compile-time safety, but requires compiling/linking llama.cpp into every artifact and forces build-tag bifurcation. Merely enabling Go's cgo runtime in a native macOS build does not adopt this design. |
 | B: raw purego dlopen | Rejected | Struct-by-value ABI mirrors of `llama_context_params` (30+ volatile fields) would be hand-maintained per llama.cpp bump — exactly the class of silent-corruption risk we must not own. |
 | C: maintained Go binding — **hybridgroup/yzma v1.19.0** | **Selected** | Apache-2.0; actively tracks llama.cpp (supports builds b9979+; CI runs against each upstream release); purego + jupiterrider/ffi handles ABI marshaling; covers the full needed API (verified against source: model/context lifecycle, tokenizer, batch/decode, sampler chain, `ChatApplyTemplate`, `ModelChatTemplate`, metadata, `MemoryClear`, `SetAbortCallback`, log silencing, `*DefaultParams()` backed by C calls); binding package `pkg/llama` adds only purego + jupiterrider/ffi + x/sys; no network access in the binding; cross-compiles for all five release targets with no build tags. |
 | D: reuse Ollama internals | Rejected | `ollama/llama` is an internal implementation detail coupled to Ollama's fork and build layout; would embed a second application. Ollama stays an HTTP provider. |
@@ -124,8 +126,11 @@ New package `internal/provider/embedded`:
 
 ### Native build strategy
 
-There is no native build step in this repository. The embedded runtime
-dynamically loads `libllama`/`libggml*` at runtime. Users obtain them by:
+There is no llama.cpp native build or link step in this repository. The
+embedded runtime dynamically loads `libllama`/`libggml*` at runtime. The
+macOS Go artifact enables cgo only to initialize the real cgo thread runtime;
+it links exclusively to Apple system libraries and frameworks. Users obtain
+the llama.cpp libraries by:
 
 1. Downloading the official llama.cpp release archive for their platform
    (pinned tag, SHA256-verified) — convenience script
@@ -261,10 +266,29 @@ the request fails with an actionable error — no silent guessed formats.
 
 ### Packaging strategy
 
-Release artifacts are unchanged (same `make dist`, same five targets,
-`CGO_ENABLED=0`). Every release binary contains the embedded provider; the
-feature activates when the user supplies the native libraries. Missing
-libraries produce an actionable error, not a linker failure or panic.
+Release target coverage is unchanged. GitHub Actions builds each OS/architecture
+on a matching native runner and publishes the five artifacts together. macOS
+arm64/amd64 use `CGO_ENABLED=1`; Linux amd64/arm64 and Windows amd64 remain
+`CGO_ENABLED=0`. `make dist` builds the current native target, while
+`make dist-platform` is the CI primitive. Every binary contains the embedded
+provider, which activates only when the user supplies native libraries.
+Missing libraries produce an actionable error, not a linker failure or panic.
+
+### 2026-07-18 release-validation addendum: macOS cgo runtime
+
+The first packaged Apple Silicon smoke test exposed a deterministic SIGSEGV in
+Metal during `llama.Decode`. It reproduced with 14-token and 1354-token prompts,
+with both `BatchGetOne` and llama-owned batches, and with current stable
+purego/libffi patch releases. `CGO_ENABLED=0` plus `gpu_layers: 0` passed;
+Metal plus the ordinary cgo-enabled Go build passed the full Gemma suite and
+the real TUI. The fault boundary is therefore purego's fake-cgo/native-thread
+environment on macOS, not model templates, prompt batch size, or Go memory.
+
+The narrow packaging fix is native macOS release jobs with `CGO_ENABLED=1`.
+This adds no `import "C"` to llmtui, does not compile or link llama.cpp, and
+does not change runtime configuration. The verified arm64 artifact depends
+only on `/usr/lib/libSystem`, `/usr/lib/libresolv`, CoreFoundation, and
+Security; llama.cpp remains an explicitly configured dynamic dependency.
 
 ### Security considerations
 

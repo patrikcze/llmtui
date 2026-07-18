@@ -39,9 +39,33 @@ jobs:
       - name: Build
         run: make build
 
-  cross-compile:
-    name: Cross-compile smoke test
-    runs-on: ubuntu-latest
+  release-build:
+    name: Release build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+            cgo: "1"
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            cgo: "1"
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: "0"
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            cgo: "0"
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            cgo: "0"
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -51,6 +75,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Catch platform-specific build breaks before a release tag does.
-      - name: Build all release platforms
-        run: make dist VERSION=ci-smoke
+      # macOS uses the real cgo runtime because Metal creates native threads;
+      # Linux and Windows keep the portable no-cgo release configuration.
+      - name: Build release platform
+        shell: bash
+        run: >-
+          make dist-platform VERSION=ci-smoke
+          TARGET_GOOS=${{ matrix.goos }}
+          TARGET_GOARCH=${{ matrix.goarch }}
+          CGO_ENABLED=${{ matrix.cgo }}
