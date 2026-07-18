@@ -47,12 +47,24 @@ add` reminds you).
     untrusted inputs, prefer reputable sources, and keep the pinned runtime
     current. Go can recover ordinary binding panics but not native faults such
     as segmentation violations.
+  - Vision adds `libmtmd` and a projector GGUF to the same trust boundary. Use
+    a main model/projector pair published together; llmtui never guesses a
+    projector from neighboring files. Encoded PNG/JPEG bytes are validated and
+    size/dimension-capped before FFI, remain in memory during preprocessing,
+    and are never written to a temporary file or session/cache entry.
   - The first model load and its KV cache can consume substantial RAM/VRAM.
     The automatic context is capped at 8192 tokens; lower `context_size` when
     memory is constrained.
-  - Model and context memory are released on provider switch and quit. The
-    process-global backend stays initialized until process exit; no library is
-    unloaded while another runtime might use it.
+  - Projector, model, and context memory are released on provider switch and
+    quit. The process-global llama.cpp/mtmd backends stay initialized until
+    process exit; no library is unloaded while another runtime might use it.
+  - Native embedded tool calls still pass through the same tool allowlists,
+    workspace confinement, and approval gates below. A model emitting markup
+    does not itself authorize execution. Unknown/malformed names or arguments
+    are rejected before the TUI can run them.
+  - Reasoning output is routed separately and is not saved, cached, or sent
+    back to the model as answer history. `reasoning: on` requests thinking but
+    cannot force a model to produce it.
   - On macOS, the FFI dependency normally extracts its bundled libffi into the
     user's cache. Locked-down/read-only-cache environments can opt out and use
     a trusted system libffi as described in the troubleshooting guide.

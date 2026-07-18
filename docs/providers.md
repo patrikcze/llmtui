@@ -12,9 +12,10 @@ Each provider reports **capabilities** (streaming, model listing, token
 usage, JSON mode, system prompt) used by `/doctor` and prompt composition.
 Unknown backends get conservative defaults.
 
-The embedded provider reports prompt processing as activity, streams exact
-token usage, and unloads its model on provider switch or exit. Its native
-runtime, platform matrix, and limitations are documented in
+The embedded provider reports prompt/vision processing as activity, streams
+exact token usage, supports a configured main-GGUF + mmproj vision pair and
+recognized native tool grammars, and unloads its projector/model on provider
+switch or exit. Its native runtime, platform matrix, and limitations are documented in
 [embedded.md](embedded.md).
 
 ## Network behavior
@@ -78,3 +79,16 @@ What llmtui does client-side, for any reasoning model:
   llama.cpp server, ignored elsewhere), Ollama receives `think`. `auto`
   sends nothing. Note: Ollama returns an error if `think` is set for a
   model without thinking support — use `auto` there.
+
+For embedded GGUF models the same `auto|on|off` choice is applied locally to
+the GGUF Jinja template. `auto` omits `enable_thinking`; `on` and `off` set it
+to true and false. Supported thought/channel delimiters are routed separately
+before native tool-call parsing, so thought text is not stored as the answer or
+fed back on the next turn. Whether a model actually emits reasoning when
+enabled remains model-dependent.
+
+Embedded native tool calls use `providers.<name>.tool_format`. `auto` detects
+the supported family from the model path; explicit values are available for
+unconventional filenames. Calls enter the same approval/execution loop as
+remote-provider calls. Unknown families fall back synchronously to the fenced
+prompt protocol instead of executing unrecognized output.

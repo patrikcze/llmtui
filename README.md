@@ -72,8 +72,10 @@ export YZMA_LIB="$HOME/.local/share/llmtui/llama.cpp"
 ```
 
 The runtime is checksum-pinned and inference stays inside the llmtui process.
-See [docs/embedded.md](docs/embedded.md) for configuration, CPU/Metal choices,
-other platforms, security notes, and troubleshooting.
+Add a matching `mmproj_path` to the embedded provider to enable PNG/JPEG
+vision; recognized embedded models also use native structured tools and
+`/think on|off|auto`. See [docs/embedded.md](docs/embedded.md) for a Gemma 4
+example, CPU/Metal choices, image limits, security notes, and troubleshooting.
 
 ### With any OpenAI-compatible server (vLLM, llama.cpp, Unsloth, …)
 
@@ -205,8 +207,9 @@ Local-LLM experience helpers:
 
 Copy an image, then press `Ctrl+V` in chat. The attachment shows as a chip
 above the input and is sent with your next message — as OpenAI-style
-`image_url` content parts for OpenAI-compatible servers, or native base64
-`images` for Ollama.
+`image_url` content parts for OpenAI-compatible servers, native base64
+`images` for Ollama, or in-memory mtmd bitmaps for an embedded provider with a
+matching `mmproj_path`.
 
 Vision capability is detected from the model ID (llava, `*-vision`,
 qwen-vl, minicpm-v, gemma3, moondream, …). If your vision model is not
@@ -216,6 +219,11 @@ recognized, set:
 chat:
   force_vision: true
 ```
+
+Embedded vision does not use that filename heuristic: it is reported
+authoritatively when the provider has a configured model/projector pair. It
+accepts PNG/JPEG only (up to 8 images, 20 MiB each and 64 MiB total); images
+stay local and are not persisted in history or the response cache.
 
 Clipboard backends: macOS `pngpaste` (optional, faster) or built-in
 AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.

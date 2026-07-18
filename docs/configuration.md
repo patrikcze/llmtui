@@ -54,12 +54,14 @@ Embedded-only provider keys:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `model_path` | empty | Local GGUF model file |
+| `mmproj_path` | empty | Optional matching multimodal-projector GGUF; enables vision and fixes this provider to the configured pair |
 | `library_path` | `YZMA_LIB` | Directory containing llama.cpp shared libraries |
 | `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context |
 | `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only |
 | `threads` | `0` | Automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size |
 | `chat_template` | GGUF metadata | Inline Jinja template override |
+| `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
 | `sampling.top_k` | `40` | Top-k sampler (`0` disables) |
 | `sampling.min_p` | `0.05` | Min-p sampler (`0` disables) |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
@@ -68,7 +70,7 @@ Embedded-only provider keys:
 | `sampling.stop` | `[]` | Case-sensitive stop strings |
 
 See [embedded.md](embedded.md) for installation, platform support, examples,
-and limitations.
+vision pairing, image limits, native tools/reasoning, and limitations.
 
 ### `chat`
 

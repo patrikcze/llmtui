@@ -30,7 +30,8 @@ scripts/fetch-llama-runtime.sh
 ```
 
 The script downloads the official `b10066` macOS arm64 archive, verifies its
-pinned SHA-256 checksum, and installs its dynamic libraries under
+pinned SHA-256 checksum, and installs its llama, ggml, and mtmd dynamic
+libraries under
 `~/.local/share/llmtui/llama.cpp`. It does not download a model.
 
 To choose another destination:
@@ -40,8 +41,8 @@ scripts/fetch-llama-runtime.sh /path/to/llama.cpp-libs
 ```
 
 On other supported architectures, build the matching llama.cpp revision as
-shared libraries and point llmtui at the directory containing `libllama` and
-`libggml*`:
+shared libraries and point llmtui at the directory containing `libllama`,
+`libmtmd`, and `libggml*`:
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git
@@ -64,11 +65,14 @@ providers:
   embedded:
     type: embedded
     model_path: "~/models/model.gguf"
+    # Optional: enables vision. This projector must match model_path exactly.
+    # mmproj_path: "~/models/mmproj-model.gguf"
     library_path: "~/.local/share/llmtui/llama.cpp"
     context_size: 8192
     gpu_layers: -1
     threads: 0
     batch_size: 512
+    tool_format: auto
     sampling:
       top_k: 40
       min_p: 0.05
@@ -91,22 +95,45 @@ export YZMA_LIB="$HOME/.local/share/llmtui/llama.cpp"
 llmtui chat --provider embedded --model "$HOME/models/model.gguf"
 ```
 
-`--model` wins over `model_path`. Without an explicit override,
-`model_path` wins over provider and global `default_model` values. The model
-picker lists sibling `.gguf` files and loads a selected model lazily; a bad
-selection is validated before the working model is unloaded.
+`--model` wins over `model_path`. Without an explicit override, `model_path`
+wins over provider and global `default_model` values. For a text-only provider,
+the model picker lists sibling main-model `.gguf` files and excludes
+`mmproj-*.gguf`. A provider with `mmproj_path` is a fixed model/projector pair:
+only its configured main model is selectable, because guessing compatibility
+from filenames could load an unsafe or nonsensical pair. Create another
+embedded provider entry for another vision model.
+
+Vision configuration example:
+
+```yaml
+providers:
+  embedded_gemma4:
+    type: embedded
+    model_path: "~/.lmstudio/models/lmstudio-community/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
+    mmproj_path: "~/.lmstudio/models/lmstudio-community/gemma-4-E4B-it-GGUF/mmproj-gemma-4-E4B-it-BF16.gguf"
+    library_path: "~/.local/share/llmtui/llama.cpp"
+    context_size: 8192
+    gpu_layers: -1
+    tool_format: auto
+```
+
+No `chat_template` override is needed for that Gemma 4 build; llmtui falls
+back to a full Jinja renderer when llama.cpp's restricted renderer does not
+support valid GGUF template constructs.
 
 ## Runtime and sampling options
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `model_path` | empty | Local GGUF file; required unless `--model`/`LLMTUI_MODEL` supplies it |
+| `mmproj_path` | empty | Optional compatible multimodal projector GGUF; enables authoritative vision support and fixes the provider to this model/projector pair |
 | `library_path` | `YZMA_LIB` | Directory containing the llama.cpp shared libraries |
 | `context_size` | `0` | Bounded model default: `min(n_ctx_train, 8192)`; a positive value is capped at the trained context |
 | `gpu_layers` | `-1` | `-1` offloads all possible layers, `0` is CPU-only, positive values set an exact layer count |
 | `threads` | `0` | llama.cpp automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size, capped by the context size |
 | `chat_template` | model metadata | Inline Jinja chat template override; this is template text, not a filename |
+| `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
 | `sampling.top_k` | `40` | Top-k sampling; `0` disables it |
 | `sampling.min_p` | `0.05` | Min-p sampling; `0` disables it |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
@@ -129,6 +156,29 @@ llmtui chat --provider embedded --model /models/model.gguf \
 The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
 `LLMTUI_GPU_LAYERS`.
 
+## Vision, tools, and reasoning
+
+- Vision requires both the main GGUF and its matching `mmproj` GGUF. Paste a
+  PNG or JPEG with `Ctrl+V`; attachments are passed as encoded bytes directly
+  to mtmd in memory. Up to 8 images are accepted per request, with limits of
+  20 MiB per image, 64 MiB total, 8192 pixels per dimension, and 40 million
+  decoded pixels per image. Declared MIME and detected format must agree.
+- Images keep message and attachment order. Prompt usage reports exact mtmd
+  chunk tokens; context capacity is budgeted with mtmd positions, which are a
+  different native quantity.
+- Tools use the same `/tools` approval, execution, result, and continuation
+  loop as remote providers. `tool_format: auto` recognizes supported model
+  families; a recognized native grammar returns structured calls. Unknown
+  formats use llmtui's existing fenced prompt-protocol fallback. Model training
+  determines reliability—configuration can enable a protocol, but cannot make
+  a model good at tool use.
+- `/think on|off|auto` and `chat.reasoning` are passed to the GGUF Jinja
+  template as `enable_thinking`: `auto` omits it, `on` sets true, and `off`
+  sets false. A model may still choose to answer directly when thinking is on.
+  When the model emits supported thought delimiters, llmtui routes the content
+  to the reasoning stream and keeps it out of the visible answer, history,
+  subsequent prompts, and response cache.
+
 ## Lifecycle and behavior
 
 - Health checks only stat the model and libraries. The first chat loads the
@@ -137,21 +187,27 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
   context is cleared and decoded again.
 - `Esc` cancels native decode and keeps the runtime reusable for the next
   prompt.
-- Switching models or providers frees the old context and model. Quitting
-  also unloads them. The process-global llama.cpp backend stays initialized
-  until process exit by design.
-- Model file size/mtime and every runtime/sampling option are part of the
-  response-cache fingerprint, so replacing a GGUF or changing inference
-  settings cannot return an incompatible cached answer.
+- Switching models or providers frees the old projector, context, and model.
+  Quitting also unloads them. The process-global llama.cpp/mtmd backends stay
+  initialized until process exit by design.
+- Model/projector size and mtime plus every runtime, sampling, and tool-format
+  option are part of the response-cache fingerprint, so replacing a GGUF or
+  changing inference settings cannot return an incompatible cached answer.
+- Image requests bypass response-cache writes and image embeddings never use
+  the text-prefix KV cache. Native memory is cleared before image evaluation
+  and again before the next text request, including after cancellation/error.
 - All prompts and inference stay in-process. Enabling web tools, MCP, or a
   separately configured remote provider follows their normal, explicit
   network behavior.
 
 ## Limitations
 
-- Text-only in the first release; image attachments are not supported.
-- No native function-calling protocol. When tools are enabled, llmtui
-  automatically uses its prompt-based fenced tool protocol.
+- Vision supports encoded PNG and JPEG images only; audio/video projectors are
+  not exposed.
+- Main-model/projector compatibility is not auto-discovered. Use a pair
+  published together by the model distributor.
+- Tool and reasoning quality is model/template dependent. `tool_format` and
+  `/think` select protocols; they do not add capabilities absent from training.
 - One generation runs at a time per embedded provider.
 - No `/runtime unload` command. Switch providers or quit to unload.
 - Model loading itself cannot be interrupted inside llama.cpp. If cancellation
@@ -165,7 +221,8 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
 ### Runtime library missing
 
 Set `providers.embedded.library_path` or `YZMA_LIB` to the directory that
-contains `libllama` and `libggml*`. On Apple Silicon, rerun
+contains `libllama` and `libggml*`; vision additionally requires `libmtmd` in
+that same directory. On Apple Silicon, rerun
 `scripts/fetch-llama-runtime.sh`; it is checksum-safe and idempotent.
 
 ### `libffi.8.dylib` cannot be opened on macOS
@@ -185,6 +242,21 @@ FFI_NO_EMBED=1 DYLD_LIBRARY_PATH="$(brew --prefix libffi)/lib" \
 Use an instruct/chat GGUF with `tokenizer.chat_template` metadata, or put the
 actual Jinja template text in `providers.<name>.chat_template`. Base models
 often have no appropriate chat format.
+
+### Vision projector errors
+
+`mmproj_path` must name a file, not its directory, and must match the exact
+main-model family/revision. A missing `libmtmd`, absent projector, incompatible
+pair, or projector without vision support fails before the provider accepts an
+image. Do not rename an unrelated projector to bypass this validation.
+
+### Tool calls are not produced
+
+Keep `tool_format: auto` for recognized Gemma/Qwen/GLM/Mistral/GPT/Phi model
+paths. If the filename is unconventional, set the matching format explicitly.
+An unknown format falls back to fenced calls; a known format with no calls is
+usually model behavior, so try a clearer instruction or a model trained for
+tool use.
 
 ### Out of memory or very slow prompt processing
 

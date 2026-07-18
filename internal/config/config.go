@@ -658,12 +658,12 @@ providers:
   # embedded:
   #   type: embedded
   #   model_path: "~/models/qwen2.5-7b-instruct-q4_k_m.gguf"
-  #   mmproj_path: "" # optional matching vision projector GGUF
+  #   mmproj_path: "" # optional vision projector GGUF; must match model_path
   #   library_path: "" # directory with libllama/libggml*; "" uses YZMA_LIB
   #   context_size: 0 # 0 = min(model n_ctx_train, 8192)
   #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
   #   threads: 0 # 0 = auto
-  #   tool_format: auto # auto|standard|qwen|glm|mistral|gemma|gpt|phi
+  #   tool_format: auto # native tools: auto|standard|qwen|glm|mistral|gemma|gpt|phi
   #   sampling:
   #     top_k: 40
   #     min_p: 0.05

@@ -14,6 +14,15 @@ yzma incorporates definitions originating from `dianlight/gollama.cpp`
 
 Full text: <https://github.com/hybridgroup/yzma/blob/main/LICENSE>
 
+## jinja (github.com/ardanlabs/jinja)
+
+Full Jinja chat-template rendering used when a valid GGUF template is outside
+llama.cpp's restricted native renderer.
+
+License: Apache License 2.0. Copyright Ardan Labs.
+
+Full text: <https://github.com/ardanlabs/jinja/blob/main/LICENSE>
+
 ## llama.cpp / ggml (github.com/ggml-org/llama.cpp)
 
 The native inference runtime. llmtui does not vendor or compile llama.cpp;
