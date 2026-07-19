@@ -9,3 +9,6 @@
 .claude/
 *.env
 config.local.yaml
+
+# Local security review artifacts may contain sensitive exploit details.
+/security-review/
