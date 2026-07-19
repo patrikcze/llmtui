@@ -3,6 +3,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -95,6 +96,25 @@ func TestChatStreamError(t *testing.T) {
 	_, _, err = collect(t, events)
 	if err == nil || !strings.Contains(err.Error(), "model not loaded") {
 		t.Errorf("err = %v, want in-stream error surfaced", err)
+	}
+}
+
+func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
+	chunk := strings.Repeat("x", 600*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < 8; i++ {
+			fmt.Fprintf(w, `{"message":{"content":%q},"done":false}`+"\n", chunk)
+		}
+	}))
+	defer srv.Close()
+
+	events, err := New(srv.URL).Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, _, err = collect(t, events)
+	if !errors.Is(err, provider.ErrResponseTooLarge) {
+		t.Fatalf("stream error = %v, want ErrResponseTooLarge", err)
 	}
 }
 

@@ -102,7 +102,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 		return nil, fmt.Errorf("list models: status %d", resp.StatusCode)
 	}
 	var out modelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := provider.DecodeJSONLimited(resp.Body, &out); err != nil {
 		return nil, fmt.Errorf("decode models: %w", err)
 	}
 	vision := p.lmStudioVisionByID(ctx)
@@ -153,7 +153,7 @@ func (p *Provider) lmStudioVisionByID(ctx context.Context) map[string]bool {
 		return nil
 	}
 	var out lmStudioModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := provider.DecodeJSONLimited(resp.Body, &out); err != nil {
 		return nil
 	}
 	result := make(map[string]bool, len(out.Data))
@@ -388,7 +388,7 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	defer body.Close()
 
 	var out chatCompletionResponse
-	if err := json.NewDecoder(body).Decode(&out); err != nil {
+	if err := provider.DecodeJSONLimited(body, &out); err != nil {
 		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("decode response: %w", err)})
 		return
 	}
@@ -397,6 +397,10 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 		return
 	}
 	toolCalls := fromWireToolCalls(out.Choices[0].Message.ToolCalls)
+	if err := provider.ValidateToolCalls(toolCalls); err != nil {
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
+		return
+	}
 	content := out.Choices[0].Message.Content
 	if content == "" && len(toolCalls) == 0 && out.Choices[0].Message.ReasoningContent != "" {
 		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)

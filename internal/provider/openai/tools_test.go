@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -108,6 +109,38 @@ func TestChatStreamingAccumulatesToolCallFragments(t *testing.T) {
 	want := provider.ToolCall{ID: "call_9", Name: "read_file", Arguments: `{"path":"a.txt"}`}
 	if calls[0] != want {
 		t.Errorf("call = %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestToolCallAccumulatorRejectsUnboundedAndNamelessCalls(t *testing.T) {
+	var tooMany toolCallAccumulator
+	for i := 0; i <= provider.MaxToolCalls; i++ {
+		var fragment streamToolCall
+		fragment.Index = i
+		fragment.Function.Name = "read_file"
+		if err := tooMany.add([]streamToolCall{fragment}); err != nil {
+			if i != provider.MaxToolCalls {
+				t.Fatalf("rejected at %d calls: %v", i, err)
+			}
+			break
+		}
+	}
+
+	var oversized toolCallAccumulator
+	var fragment streamToolCall
+	fragment.Index = 0
+	fragment.Function.Name = "read_file"
+	fragment.Function.Arguments = strings.Repeat("x", provider.MaxToolCallArgumentBytes+1)
+	if err := oversized.add([]streamToolCall{fragment}); err == nil {
+		t.Fatal("oversized arguments were accepted")
+	}
+
+	var nameless toolCallAccumulator
+	if err := nameless.add([]streamToolCall{{Index: 0}}); err != nil {
+		t.Fatalf("add nameless fragment: %v", err)
+	}
+	if _, err := nameless.result(); err == nil {
+		t.Fatal("nameless tool call was accepted at stream completion")
 	}
 }
 

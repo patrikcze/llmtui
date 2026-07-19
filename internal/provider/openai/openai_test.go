@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -171,6 +172,44 @@ func TestChatMalformedStreamChunk(t *testing.T) {
 	_, _, err = collect(t, events)
 	if err == nil {
 		t.Fatal("expected error for malformed chunk")
+	}
+}
+
+func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
+	chunk := strings.Repeat("x", 600*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < 8; i++ {
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", chunk)
+		}
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, _, err = collect(t, events)
+	if !errors.Is(err, provider.ErrResponseTooLarge) {
+		t.Fatalf("stream error = %v, want ErrResponseTooLarge", err)
+	}
+}
+
+func TestChatNonStreamingRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, strings.Repeat("x", provider.MaxResponseBytes))
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, _, err = collect(t, events)
+	if !errors.Is(err, provider.ErrResponseTooLarge) {
+		t.Fatalf("response error = %v, want ErrResponseTooLarge", err)
 	}
 }
 

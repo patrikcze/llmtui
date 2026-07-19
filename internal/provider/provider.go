@@ -4,8 +4,56 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"time"
 )
+
+const (
+	// MaxResponseBytes is the hard upper bound for data accepted from one
+	// remote provider response. Request max_tokens is only a hint and cannot
+	// be trusted as an inbound memory limit.
+	MaxResponseBytes = 4 << 20
+	// MaxToolCalls and MaxToolCallArgumentBytes bound model-controlled native
+	// function-call accumulation independently of the overall response cap.
+	MaxToolCalls             = 128
+	MaxToolCallArgumentBytes = 1 << 20
+)
+
+var ErrResponseTooLarge = errors.New("provider response exceeds the 4 MiB limit")
+
+// DecodeJSONLimited decodes a non-streaming provider response without ever
+// materializing more than MaxResponseBytes plus one detection byte.
+func DecodeJSONLimited(r io.Reader, dst any) error {
+	data, err := io.ReadAll(io.LimitReader(r, MaxResponseBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > MaxResponseBytes {
+		return ErrResponseTooLarge
+	}
+	return json.Unmarshal(data, dst)
+}
+
+// ValidateToolCalls applies the provider-neutral native-call bounds after a
+// backend has decoded or reassembled calls.
+func ValidateToolCalls(calls []ToolCall) error {
+	if len(calls) > MaxToolCalls {
+		return fmt.Errorf("provider returned too many tool calls (maximum %d)", MaxToolCalls)
+	}
+	totalArgs := 0
+	for i, call := range calls {
+		if call.Name == "" {
+			return fmt.Errorf("provider returned tool call %d without a name", i)
+		}
+		totalArgs += len(call.Arguments)
+		if totalArgs > MaxToolCallArgumentBytes {
+			return fmt.Errorf("provider tool-call arguments exceed the %d byte limit", MaxToolCallArgumentBytes)
+		}
+	}
+	return nil
+}
 
 // Role identifies the author of a chat message.
 type Role string

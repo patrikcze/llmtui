@@ -110,7 +110,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error)
 		return nil, fmt.Errorf("list models: status %d", resp.StatusCode)
 	}
 	var out tagsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := provider.DecodeJSONLimited(resp.Body, &out); err != nil {
 		return nil, fmt.Errorf("decode models: %w", err)
 	}
 	models := make([]provider.ModelInfo, 0, len(out.Models))
@@ -308,15 +308,21 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	defer body.Close()
 
 	var (
-		usage      *provider.Usage
-		completion strings.Builder
-		toolCalls  []provider.ToolCall
+		usage       *provider.Usage
+		completion  strings.Builder
+		toolCalls   []provider.ToolCall
+		streamBytes int
 	)
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
+		streamBytes += len(scanner.Bytes())
+		if streamBytes > provider.MaxResponseBytes {
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: provider.ErrResponseTooLarge})
+			return
+		}
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
@@ -340,6 +346,10 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			// Ollama sends each tool call complete (never fragmented), so
 			// collecting across chunks is enough; they ride the Done event.
 			toolCalls = append(toolCalls, fromWireToolCalls(chunk.Message.ToolCalls)...)
+			if err := provider.ValidateToolCalls(toolCalls); err != nil {
+				provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
+				return
+			}
 		}
 		if chunk.Message.Content != "" {
 			completion.WriteString(chunk.Message.Content)
