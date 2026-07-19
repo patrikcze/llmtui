@@ -830,13 +830,7 @@ func cmdConfig(m *Model, args string) tea.Cmd {
 }
 
 func (m *Model) configOverlay() string {
-	shown := *m.cfg
-	shown.Providers = make(map[string]config.ProviderConfig, len(m.cfg.Providers))
-	for name, pc := range m.cfg.Providers {
-		pc.APIKey = config.Redact(pc.APIKey)
-		shown.Providers[name] = pc
-	}
-	shown.APIKey = config.Redact(shown.APIKey)
+	shown := config.RedactedCopy(m.cfg)
 	out, err := yaml.Marshal(shown)
 
 	var b strings.Builder

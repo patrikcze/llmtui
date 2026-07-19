@@ -264,6 +264,33 @@ type MCPServerConfig struct {
 	Timeout   string            `mapstructure:"timeout" yaml:"timeout"`
 }
 
+// RedactedCopy returns a display-safe copy of c. It deep-copies every map
+// that contains secret-bearing values so redaction can never mutate the live
+// configuration used by providers or MCP subprocesses.
+func RedactedCopy(c *Config) Config {
+	if c == nil {
+		return Config{}
+	}
+	shown := *c
+	shown.APIKey = Redact(shown.APIKey)
+	shown.Providers = make(map[string]ProviderConfig, len(c.Providers))
+	for name, pc := range c.Providers {
+		pc.APIKey = Redact(pc.APIKey)
+		shown.Providers[name] = pc
+	}
+	shown.MCP.Servers = make(map[string]MCPServerConfig, len(c.MCP.Servers))
+	for name, server := range c.MCP.Servers {
+		if len(server.Env) > 0 {
+			server.Env = make(map[string]string, len(server.Env))
+			for key := range c.MCP.Servers[name].Env {
+				server.Env[key] = "***"
+			}
+		}
+		shown.MCP.Servers[name] = server
+	}
+	return shown
+}
+
 // SkillsConfig configures the declarative skills subsystem. Skills are
 // instruction packages (SKILL.md files) discovered from local directories;
 // they never execute code and never grant tool permissions.

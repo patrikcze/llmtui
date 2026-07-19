@@ -49,12 +49,7 @@ func newConfigShowCmd(r *Root) *cobra.Command {
 		Short: "Print the effective merged configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Redact secrets before printing.
-			shown := *r.cfg
-			shown.Providers = make(map[string]config.ProviderConfig, len(r.cfg.Providers))
-			for name, pc := range r.cfg.Providers {
-				pc.APIKey = config.Redact(pc.APIKey)
-				shown.Providers[name] = pc
-			}
+			shown := config.RedactedCopy(r.cfg)
 			out, err := yaml.Marshal(shown)
 			if err != nil {
 				return fmt.Errorf("encode config: %w", err)

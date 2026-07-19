@@ -228,6 +228,25 @@ func TestResolveAPIKeyPrefersEnv(t *testing.T) {
 	}
 }
 
+func TestRedactedCopyMasksProviderAndMCPSecretsWithoutMutation(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{"remote": {APIKey: "provider-marker-secret"}},
+		MCP: MCPConfig{Servers: map[string]MCPServerConfig{
+			"jira": {Env: map[string]string{"TOKEN": "mcp-marker-secret"}},
+		}},
+	}
+	shown := RedactedCopy(cfg)
+	if shown.Providers["remote"].APIKey == "provider-marker-secret" {
+		t.Fatal("provider API key was not redacted")
+	}
+	if shown.MCP.Servers["jira"].Env["TOKEN"] != "***" {
+		t.Fatalf("MCP secret = %q, want redacted", shown.MCP.Servers["jira"].Env["TOKEN"])
+	}
+	if cfg.Providers["remote"].APIKey != "provider-marker-secret" || cfg.MCP.Servers["jira"].Env["TOKEN"] != "mcp-marker-secret" {
+		t.Fatal("RedactedCopy mutated the live configuration")
+	}
+}
+
 func TestWriteDefaultRefusesOverwrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := WriteDefault(path); err != nil {

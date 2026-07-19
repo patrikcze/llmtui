@@ -385,9 +385,14 @@ func TestConfigCommandRedactsSecrets(t *testing.T) {
 	m.cfg.Providers = map[string]config.ProviderConfig{
 		"lmstudio": {Type: "openai_compatible", APIKey: "super-secret-key-value"},
 	}
+	m.cfg.MCP.Servers = map[string]config.MCPServerConfig{
+		"jira": {Env: map[string]string{"TOKEN": "mcp-secret-marker"}},
+	}
 	content := m.configOverlay()
-	if strings.Contains(content, "super-secret-key-value") {
-		t.Error("config overlay must redact API keys")
+	for _, secret := range []string{"super-secret-key-value", "mcp-secret-marker"} {
+		if strings.Contains(content, secret) {
+			t.Errorf("config overlay leaked %q", secret)
+		}
 	}
 }
 
