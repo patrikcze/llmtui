@@ -81,6 +81,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Test Windows process containment
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: go test ./internal/procutil ./internal/tools ./internal/mcp
+
       # macOS uses the real cgo runtime because Metal creates native threads;
       # Linux and Windows keep the portable no-cgo release configuration.
       - name: Build release platform
