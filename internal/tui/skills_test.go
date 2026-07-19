@@ -220,6 +220,7 @@ func TestSkillLoadToolLoop(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("skill_load must continue the loop without approval")
 	}
+	finishToolBatch(t, m, cmd)
 
 	// Activated for the run.
 	active := m.skillMgr.Active()
@@ -269,20 +270,22 @@ func TestSkillLoadThenNormalTool(t *testing.T) {
 	m := agentModel(t)
 	m.session.AddUser("review it")
 	m.thinking = true
-	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
 		Type:      provider.EventDone,
 		ToolCalls: []provider.ToolCall{{ID: "c1", Name: tools.ToolSkillLoad, Arguments: `{"skill":"go-agent-loop-review"}`}},
 	}, ok: true, gen: m.streamGen})
+	finishToolBatch(t, m, cmd)
 
 	// Next round: a read-only list_dir call runs and the skill stays active.
 	m.thinking = true
-	_, cmd := m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+	_, cmd = m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
 		Type:      provider.EventDone,
 		ToolCalls: []provider.ToolCall{{ID: "c2", Name: tools.ToolListDir, Arguments: `{}`}},
 	}, ok: true, gen: m.streamGen})
 	if cmd == nil {
 		t.Fatal("list_dir continuation missing")
 	}
+	finishToolBatch(t, m, cmd)
 	if len(m.skillMgr.Active()) != 1 {
 		t.Error("skill deactivated mid-run")
 	}
@@ -303,6 +306,7 @@ func TestSkillLoadUnknownSkillRecoverable(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("an unknown skill must produce a recoverable tool error, not a dead end")
 	}
+	finishToolBatch(t, m, cmd)
 	if len(m.skillMgr.Active()) != 0 {
 		t.Error("unknown skill activated something")
 	}
@@ -324,6 +328,7 @@ func TestSkillLoadMalformedArguments(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("malformed arguments must still answer the call")
 	}
+	finishToolBatch(t, m, cmd)
 	if len(m.skillMgr.Active()) != 0 {
 		t.Error("malformed arguments activated a skill")
 	}
@@ -338,10 +343,11 @@ func TestSkillLoadRepeatedIsIdempotent(t *testing.T) {
 	m.session.AddUser("go")
 	for i := 0; i < 3; i++ {
 		m.thinking = true
-		m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		_, cmd := m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
 			Type:      provider.EventDone,
 			ToolCalls: []provider.ToolCall{{Name: tools.ToolSkillLoad, Arguments: `{"skill":"go-agent-loop-review"}`}},
 		}, ok: true, gen: m.streamGen})
+		finishToolBatch(t, m, cmd)
 	}
 	if len(m.skillMgr.Active()) != 1 {
 		t.Errorf("repeated loads produced %d activations", len(m.skillMgr.Active()))
@@ -368,9 +374,11 @@ func TestFencedSkillLoadWorksAndPlainTextDoesNot(t *testing.T) {
 
 	// The validated fenced protocol does work.
 	m.session.AddAssistant("```tool skill_load go-agent-loop-review\n```")
-	if cmd := m.maybeRunTools(); cmd == nil {
+	cmd := m.maybeRunTools()
+	if cmd == nil {
 		t.Fatal("fenced skill_load did not run")
 	}
+	finishToolBatch(t, m, cmd)
 	active := m.skillMgr.Active()
 	if len(active) != 1 || active[0].Scope != skill.ScopeRun {
 		t.Fatalf("active = %+v", active)
@@ -693,9 +701,11 @@ func TestWorkspaceSkillLoadRequiresContentScopedSessionApproval(t *testing.T) {
 		t.Fatalf("approval prompt lacks skill provenance:\n%s", prompt)
 	}
 
-	if cmd := m.resolveApproval(approvalYes); cmd == nil {
+	cmd := m.resolveApproval(approvalYes)
+	if cmd == nil {
 		t.Fatal("approved skill load did not continue the tool loop")
 	}
+	finishToolBatch(t, m, cmd)
 	if len(m.skillMgr.Active()) != 1 {
 		t.Fatal("approved workspace skill did not activate")
 	}
@@ -750,6 +760,7 @@ func TestSkillLoadBatchWithWriteWaitsForApproval(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("approval did not run the batch")
 	}
+	finishToolBatch(t, m, cmd)
 	if len(m.skillMgr.Active()) != 1 {
 		t.Error("skill not activated after approval")
 	}

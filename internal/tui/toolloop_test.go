@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,19 @@ import (
 func withToolReply(m *Model, reply string) {
 	m.session.AddUser("make me a script")
 	m.session.AddAssistant(reply)
+}
+
+func finishToolBatch(t *testing.T, m *Model, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected async tool batch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(mcpToolResultsMsg); !ok {
+		t.Fatalf("tool command returned %T, want mcpToolResultsMsg", msg)
+	}
+	_, next := m.Update(msg)
+	return next
 }
 
 func TestMaybeRunToolsAsksBeforeWriting(t *testing.T) {
@@ -43,7 +57,11 @@ func TestMaybeRunToolsAsksBeforeWriting(t *testing.T) {
 	// Approve with y.
 	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if cmd == nil {
-		t.Fatal("expected a follow-up dispatch command after approval")
+		t.Fatal("expected an async tool command after approval")
+	}
+	cmd = finishToolBatch(t, m, cmd)
+	if cmd == nil {
+		t.Fatal("expected a follow-up dispatch after tool results")
 	}
 	data, err := os.ReadFile(filepath.Join(root, "hello.sh"))
 	if err != nil {
@@ -74,9 +92,14 @@ func TestMaybeRunToolsAutoApproveSkipsPrompt(t *testing.T) {
 	m.toolRunner = tools.NewRunner(root, 64)
 	withToolReply(m, "```tool write_file a.txt\ndata\n```")
 
-	if cmd := m.maybeRunTools(); cmd == nil {
+	cmd := m.maybeRunTools()
+	if cmd == nil {
 		t.Fatal("auto mode should execute without prompting")
 	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err == nil {
+		t.Fatal("native tool executed on the UI update goroutine")
+	}
+	finishToolBatch(t, m, cmd)
 	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
 		t.Errorf("file not written in auto mode: %v", err)
 	}
@@ -278,6 +301,7 @@ func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("native tool calls did not trigger execution")
 	}
+	finishToolBatch(t, m, cmd)
 
 	n := len(m.session.Messages)
 	if n < 2 {
@@ -365,6 +389,7 @@ func TestNativeToolCallsRespectApproval(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected a continuation command after approval")
 	}
+	finishToolBatch(t, m, cmd)
 	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
 		t.Fatalf("file not written after approval: %v", err)
 	}
@@ -630,7 +655,7 @@ func TestMCPCallNeedsApprovalPerServerConfig(t *testing.T) {
 	}
 }
 
-func TestPureNativeBatchStaysSynchronous(t *testing.T) {
+func TestPureNativeBatchRunsAsync(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
 	m.toolsOn = true
@@ -638,14 +663,68 @@ func TestPureNativeBatchStaysSynchronous(t *testing.T) {
 	m.toolRunner = tools.NewRunner(root, 64)
 	withToolReply(m, "```tool write_file a.txt\ndata\n```")
 
-	// Unchanged behavior: the write already happened by the time
-	// maybeRunTools returns, before its returned cmd is ever invoked.
 	cmd := m.maybeRunTools()
 	if cmd == nil {
-		t.Fatal("expected a follow-up dispatch command")
+		t.Fatal("expected an async tool command")
 	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err == nil {
+		t.Fatal("pure-native batch froze the update path by executing synchronously")
+	}
+	msg := cmd()
+	if _, ok := msg.(mcpToolResultsMsg); !ok {
+		t.Fatalf("cmd() = %T, want tool results", msg)
+	}
+	m.Update(msg)
 	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
-		t.Fatalf("pure-native batch must still execute synchronously: %v", err)
+		t.Fatalf("async pure-native batch did not execute: %v", err)
+	}
+}
+
+func TestNativeCommandBatchCancelViaEsc(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	cmd := m.startToolBatch([]tools.Call{{
+		ID: "native-1", Tool: tools.ToolRunCommand,
+		Body: "touch started; sleep 30; touch must-not-exist",
+	}})
+	if cmd == nil || m.mcpBatchCancel == nil {
+		t.Fatal("expected cancellable native batch")
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(root, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("native command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mcpBatchCancel != nil {
+		t.Fatal("Esc did not clear the native batch cancellation handle")
+	}
+
+	select {
+	case msg := <-done:
+		if _, ok := msg.(mcpToolResultsMsg); !ok {
+			t.Fatalf("cmd() = %T, want tool results", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled native batch did not return promptly")
+	}
+	if _, err := os.Stat(filepath.Join(root, "must-not-exist")); err == nil {
+		t.Fatal("native command continued after Esc cancellation")
 	}
 }
 
@@ -1024,9 +1103,11 @@ func TestToolCallIDsBackfilledConsistently(t *testing.T) {
 	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
 		{Name: "list_dir", Arguments: `{"path":""}`}, // no ID, like Ollama
 	}}
-	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true}); cmd == nil {
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+	if cmd == nil {
 		t.Fatal("native tool call did not trigger execution")
 	}
+	finishToolBatch(t, m, cmd)
 
 	n := len(m.session.Messages)
 	assistant, result := m.session.Messages[n-2], m.session.Messages[n-1]
@@ -1049,9 +1130,11 @@ func TestToolCallIDsBackfilledConsistently(t *testing.T) {
 	done2 := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
 		{Name: "list_dir", Arguments: `{"path":""}`},
 	}}
-	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done2, ok: true, gen: m.streamGen}); cmd == nil {
+	_, cmd = m.handleStreamEvent(streamEventMsg{event: done2, ok: true, gen: m.streamGen})
+	if cmd == nil {
 		t.Fatal("second native tool call did not trigger execution")
 	}
+	finishToolBatch(t, m, cmd)
 	n = len(m.session.Messages)
 	second := m.session.Messages[n-2]
 	if second.ToolCalls[0].ID == firstID {

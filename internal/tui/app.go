@@ -595,7 +595,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activity = nil
 				m.relayout()
 				m.endAgentRun()
-				m.errText = "mcp tool batch cancelled"
+				m.errText = "tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
 				m.input.Reset()
@@ -1007,28 +1007,12 @@ func (m *Model) useNativeTools() bool {
 	return m.toolsOn && m.toolRunner != nil && m.toolsNative
 }
 
-// runToolCalls executes an approved batch and feeds the results back.
-// Pure-native batches run synchronously, exactly as before. A batch
-// containing any MCP call runs asynchronously instead: an MCP call is a
-// subprocess round-trip that can itself block on a network service (unlike
-// a local file op), so it must not freeze the UI for however long that
-// takes.
+// runToolCalls executes an approved batch asynchronously and feeds the
+// results back. Native file and command operations can block just as MCP
+// round-trips can; keeping every kind on one cancellable path prevents UI
+// freezes and preserves ordering for mixed batches.
 func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.toolDepth++
-	if !containsMCPCall(calls) {
-		results := make([]tools.Result, 0, len(calls))
-		for _, c := range calls {
-			res := annotateUnknownTool(m.toolRunner.Execute(c), m.mcpRegistry)
-			if res.Err != nil {
-				m.toolErr++
-			} else {
-				m.toolOK++
-			}
-			results = append(results, res)
-		}
-		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(calls), m.toolDepth, m.toolMaxIter())
-		return m.sendToolResults(results)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mcpBatchCancel = cancel
 	m.mcpBatchGen++

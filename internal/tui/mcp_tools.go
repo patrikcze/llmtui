@@ -255,7 +255,7 @@ func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Re
 				results = append(results, executeMCPCall(ctx, mcpReg, c, maxBytes))
 				continue
 			}
-			results = append(results, annotateUnknownTool(runner.Execute(c), mcpReg))
+			results = append(results, annotateUnknownTool(runner.ExecuteContext(ctx, c), mcpReg))
 		}
 		return mcpToolResultsMsg{results: results}
 	}

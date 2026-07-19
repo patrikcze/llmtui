@@ -126,6 +126,11 @@ func joinBody(lines []string) string {
 type Runner struct {
 	root  string
 	maxKB int
+	// execution serializes calls made through this runner. A tool batch is
+	// ordered, but cancellation/resend can briefly leave an old command
+	// goroutine alive while a new batch starts; allowing both to mutate the
+	// workspace would make their effects race.
+	execution chan struct{}
 
 	// CommandTimeout bounds run_command execution (default 30s).
 	CommandTimeout time.Duration
@@ -163,6 +168,7 @@ func NewRunner(root string, maxKB int) *Runner {
 	return &Runner{
 		root:           root,
 		maxKB:          maxKB,
+		execution:      make(chan struct{}, 1),
 		CommandTimeout: 30 * time.Second,
 		Guardrails:     DefaultGuardrails(),
 	}
@@ -227,7 +233,27 @@ func (r *Runner) checkSymlinkEscape(abs string) error {
 
 // Execute runs one call and never panics; errors land in Result.Err.
 func (r *Runner) Execute(c Call) Result {
+	return r.ExecuteContext(context.Background(), c)
+}
+
+// ExecuteContext runs one serialized call. Cancellation is honored while a
+// call waits for the runner and is propagated to commands and web requests.
+func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	res := Result{Call: c}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case r.execution <- struct{}{}:
+		defer func() { <-r.execution }()
+	case <-ctx.Done():
+		res.Err = fmt.Errorf("tool call cancelled: %w", ctx.Err())
+		return res
+	}
+	if err := ctx.Err(); err != nil {
+		res.Err = fmt.Errorf("tool call cancelled: %w", err)
+		return res
+	}
 	if c.InputErr != "" {
 		res.Err = fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr)
 		return res
@@ -240,11 +266,11 @@ func (r *Runner) Execute(c Call) Result {
 	case ToolWriteFile:
 		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
 	case ToolRunCommand:
-		res.Output, res.Err = r.runCommand(c.Body)
+		res.Output, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
-		res.Output, res.Err = r.webSearch(c)
+		res.Output, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
-		res.Output, res.Err = r.webFetch(c)
+		res.Output, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, res.Err = r.skillLoad(c)
 	default:
@@ -375,6 +401,10 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 // the parent process never reach the command (or, through its output, the
 // model).
 func (r *Runner) runCommand(body string) (string, error) {
+	return r.runCommandContext(context.Background(), body)
+}
+
+func (r *Runner) runCommandContext(parent context.Context, body string) (string, error) {
 	cmdline := strings.TrimSpace(body)
 	if cmdline == "" {
 		return "", fmt.Errorf("run_command needs a command in the block body")
@@ -387,7 +417,7 @@ func (r *Runner) runCommand(body string) (string, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -414,6 +444,9 @@ func (r *Runner) runCommand(body string) (string, error) {
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return output, fmt.Errorf("command timed out after %s", timeout)
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return output, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 	if err != nil {
 		return output, fmt.Errorf("command failed: %w", err)

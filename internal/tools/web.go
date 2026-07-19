@@ -19,7 +19,7 @@ type WebClient interface {
 
 var errWebDisabled = errors.New("web tools are disabled (enable with /web on or tools.web.enabled)")
 
-func (r *Runner) webSearch(c Call) (string, error) {
+func (r *Runner) webSearch(ctx context.Context, c Call) (string, error) {
 	if r.Web == nil {
 		return "", errWebDisabled
 	}
@@ -34,7 +34,7 @@ func (r *Runner) webSearch(c Call) (string, error) {
 	if c.Max > 0 && c.Max < max {
 		max = c.Max
 	}
-	results, err := r.Web.Search(context.Background(), query, max)
+	results, err := r.Web.Search(ctx, query, max)
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +52,7 @@ func (r *Runner) webSearch(c Call) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func (r *Runner) webFetch(c Call) (string, error) {
+func (r *Runner) webFetch(ctx context.Context, c Call) (string, error) {
 	if r.Web == nil {
 		return "", errWebDisabled
 	}
@@ -60,7 +60,7 @@ func (r *Runner) webFetch(c Call) (string, error) {
 	if rawURL == "" {
 		return "", fmt.Errorf("web_fetch needs a URL (info string: tool web_fetch <url>)")
 	}
-	page, err := r.Web.Fetch(context.Background(), rawURL)
+	page, err := r.Web.Fetch(ctx, rawURL)
 	if err != nil {
 		return terminaltext.Sanitize(page.Content), err
 	}

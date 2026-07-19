@@ -170,6 +170,7 @@ func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected execution after confirming Yes")
 	}
+	finishToolBatch(t, m, cmd)
 	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
 		t.Fatalf("file not written after Yes: %v", err)
 	}
@@ -244,9 +245,11 @@ func TestWriteFileDiffRenderedInChat(t *testing.T) {
 	done := provider.ChatEvent{Type: provider.EventDone, ToolCalls: []provider.ToolCall{
 		{ID: "c1", Name: "write_file", Arguments: `{"path":"f.txt","content":"new line\nkeep\n"}`},
 	}}
-	if _, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true}); cmd == nil {
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+	if cmd == nil {
 		t.Fatal("write did not execute")
 	}
+	finishToolBatch(t, m, cmd)
 	m.refreshViewport()
 
 	joined := strings.Join(strings.Fields(m.viewport.View()), " ")

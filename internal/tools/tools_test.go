@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -229,6 +230,87 @@ func TestRunCommandTimeout(t *testing.T) {
 	res := r.Execute(Call{Tool: ToolRunCommand, Body: "sleep 5"})
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "timed out") {
 		t.Errorf("timeout not enforced: %v", res.Err)
+	}
+}
+
+func TestExecuteContextCancelsRunCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	root := t.TempDir()
+	r := NewRunner(root, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Result, 1)
+	go func() {
+		done <- r.ExecuteContext(ctx, Call{
+			Tool: ToolRunCommand,
+			Body: "touch started; sleep 30; touch must-not-exist",
+		})
+	}()
+
+	started := filepath.Join(root, "started")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case res := <-done:
+		if res.Err == nil || !strings.Contains(res.Err.Error(), "cancelled") {
+			t.Fatalf("cancelled result error = %v", res.Err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled command did not return promptly")
+	}
+	if _, err := os.Stat(filepath.Join(root, "must-not-exist")); err == nil {
+		t.Fatal("command continued mutating the workspace after cancellation")
+	}
+}
+
+func TestRunnerSerializesConcurrentCalls(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	root := t.TempDir()
+	r := NewRunner(root, 64)
+	firstDone := make(chan Result, 1)
+	go func() {
+		firstDone <- r.Execute(Call{
+			Tool: ToolRunCommand,
+			Body: "touch started; sleep 0.2; printf first > order.txt",
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(root, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first call did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	second := r.Execute(Call{Tool: ToolWriteFile, Path: "order.txt", Body: "second"})
+	if second.Err != nil {
+		t.Fatalf("second call: %v", second.Err)
+	}
+	if first := <-firstDone; first.Err != nil {
+		t.Fatalf("first call: %v", first.Err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "order.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "second" {
+		t.Fatalf("calls interleaved; final content = %q, want second", data)
 	}
 }
 
