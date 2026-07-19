@@ -564,7 +564,7 @@ func TestCatalogText(t *testing.T) {
 	}
 
 	// Budget: entries over budget are counted, not silently dropped.
-	small := m.CatalogText(len("Available optional skills (activate one with the skill_load tool when it clearly matches the task):\n") + 40)
+	small := m.CatalogText(240)
 	if !strings.Contains(small, "more (catalog size budget reached)") {
 		t.Errorf("budget note missing: %q", small)
 	}

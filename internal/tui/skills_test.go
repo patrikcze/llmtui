@@ -89,7 +89,8 @@ func TestComposeIncludesActiveSkillWithProvenance(t *testing.T) {
 	if !strings.Contains(sys, "Verify message ordering.") {
 		t.Error("active skill body missing from the composed system prompt")
 	}
-	if !strings.Contains(sys, `<skill id="go-agent-loop-review" source="user:go-agent-loop-review" version="1.0.0">`) {
+	if !strings.Contains(sys, `<skill id="go-agent-loop-review" source="user:go-agent-loop-review" path="`) ||
+		!strings.Contains(sys, `version="1.0.0">`) {
 		t.Errorf("skill provenance missing:\n%s", sys)
 	}
 	if !strings.Contains(sys, "do not grant permissions") &&

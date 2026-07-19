@@ -56,6 +56,7 @@ func (m *Model) promptSkills() []prompt.SkillPrompt {
 		out = append(out, prompt.SkillPrompt{
 			ID:      a.Skill.Meta.ID,
 			Source:  a.Skill.QualifiedID(),
+			Path:    a.Skill.Path,
 			Version: a.Skill.Meta.Version,
 			Body:    a.Skill.Body,
 		})

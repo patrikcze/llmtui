@@ -773,7 +773,7 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 		t.Errorf("toolOK = %d, want 1", m.toolOK)
 	}
 	last := m.session.Messages[len(m.session.Messages)-1]
-	if last.Role != provider.RoleTool || last.Content != "session started" {
+	if last.Role != provider.RoleTool || !strings.HasSuffix(last.Content, "\nsession started") {
 		t.Errorf("tool result message = %+v", last)
 	}
 }

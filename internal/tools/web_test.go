@@ -55,7 +55,10 @@ func TestWebSearchFormatsResults(t *testing.T) {
 	if res.Err != nil {
 		t.Fatal(res.Err)
 	}
-	first := strings.Split(res.Output, "\n")[0]
+	if !strings.HasPrefix(res.Output, untrustedWebPreamble) {
+		t.Fatal("web search result lacks untrusted-content provenance")
+	}
+	first := strings.Split(res.Output, "\n")[1]
 	if first != `2 results for "some query"` {
 		t.Errorf("first line %q", first)
 	}
@@ -94,7 +97,10 @@ func TestWebFetchFormatsPage(t *testing.T) {
 	if res.Err != nil {
 		t.Fatal(res.Err)
 	}
-	first := strings.Split(res.Output, "\n")[0]
+	if !strings.HasPrefix(res.Output, untrustedWebPreamble) {
+		t.Fatal("web page lacks untrusted-content provenance")
+	}
+	first := strings.Split(res.Output, "\n")[1]
 	if first != "fetched https://a.example/x — 45.2 KB, status 200" {
 		t.Errorf("first line %q", first)
 	}

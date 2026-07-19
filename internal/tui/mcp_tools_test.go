@@ -93,7 +93,8 @@ func TestMcpToolSpecsOnlyIncludesConnectedEnabledServers(t *testing.T) {
 	if len(specs) != 1 || specs[0].Name != "mcp__jiraWorklog__session_start" {
 		t.Fatalf("specs = %+v, want one spec named mcp__jiraWorklog__session_start", specs)
 	}
-	if specs[0].Description != "start a session" {
+	if !strings.Contains(specs[0].Description, "Untrusted capability metadata") ||
+		!strings.Contains(specs[0].Description, "start a session") {
 		t.Errorf("description = %q", specs[0].Description)
 	}
 
@@ -117,7 +118,8 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
-	if res.Output != `{"session":{"id":"ses_1"}}` {
+	if !strings.Contains(res.Output, "[untrusted MCP result: jiraWorklog/session_start") ||
+		!strings.Contains(res.Output, `{"session":{"id":"ses_1"}}`) {
 		t.Errorf("output = %q", res.Output)
 	}
 }
@@ -133,7 +135,7 @@ func TestExecuteMCPCallSanitizesTerminalControlSequences(t *testing.T) {
 	if strings.ContainsRune(res.Output, '\x1b') || strings.ContainsRune(res.Output, '\x07') || strings.Contains(res.Output, "Y2xpcA==") {
 		t.Fatalf("terminal sequence survived MCP result: %q", res.Output)
 	}
-	if res.Output != "safe text" {
+	if !strings.HasSuffix(res.Output, "\nsafe text") {
 		t.Fatalf("sanitized output = %q", res.Output)
 	}
 }
@@ -169,7 +171,7 @@ func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
 
 	// Uncapped (0) keeps the full content.
 	res = executeMCPCall(context.Background(), reg, c, 0)
-	if res.Output != huge {
+	if !strings.HasSuffix(res.Output, "\n"+huge) {
 		t.Errorf("maxBytes=0 should not truncate (got %d bytes)", len(res.Output))
 	}
 }
@@ -262,7 +264,7 @@ func TestRunMixedToolBatchPreservesOrderAndRunsNativeToo(t *testing.T) {
 	if msg.results[0].Call.ID != "c1" || msg.results[0].Err != nil {
 		t.Errorf("native result[0] = %+v", msg.results[0])
 	}
-	if msg.results[1].Call.ID != "c2" || msg.results[1].Output != "mcp-ok" {
+	if msg.results[1].Call.ID != "c2" || !strings.HasSuffix(msg.results[1].Output, "\nmcp-ok") {
 		t.Errorf("mcp result[1] = %+v", msg.results[1])
 	}
 }
