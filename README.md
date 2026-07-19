@@ -285,17 +285,20 @@ what it already has — the turn never dead-ends in an error.
   automatically.
 - **Writes and every other command stop and ask first** with a
   Claude-Code-style menu — the exact command or file is shown, then
-  `Yes` / `Yes, and don't ask again this session` / `No`, picked with
+  `Yes` / `Yes, allow these exact actions for 15 minutes` / `No`, picked with
   `↑`/`↓` + `Enter` (or `1`/`2`/`3`; `y`/`a`/`n` still work). `Esc`
-  denies — the model is told and continues without the action. Set
-  `approve: auto` or `/tools auto` to skip prompts entirely.
+  denies — the model is told and continues without the action. Temporary
+  grants are scoped to the exact tool and file/command or MCP server/tool;
+  `/tools ask` revokes them. Global `approve: auto` and `/tools auto`
+  remain available for fully trusted workspaces, but `ask` is recommended.
 
-Safety: tools are **off by default**; everything is confined to the launch
-directory (absolute paths, `..`, and symlink escapes rejected); writes into
+Safety: tools are **off by default**; file tools are confined to the launch
+directory (absolute paths, `..`, and symlink escapes rejected), while
+external/secret command path arguments can never auto-run; writes into
 `.git/` are blocked (a written git hook would be code execution); command
 environments are stripped of secrets (`*_API_KEY`, tokens, passwords, all
 `LLMTUI_*` vars); commands are time-limited; file sizes and outputs are
-capped; and there is no delete tool. Works with any local model — models
+capped; side effects are crash-journaled; and there is no delete tool. Works with any local model — models
 with native tool support interact most reliably; for the rest the fenced
 fallback needs an instruction-tuned model (≥7B recommended).
 

@@ -84,20 +84,19 @@ call can never be routed to the wrong server. This is **native
 function-calling only** — a model without native tool-calling support won't
 see MCP tools, the same as today.
 
-**Approval.** MCP calls have their own "always approve" state, kept
-separate from the workspace-tools one: accepting "Always" on a file write
-never silently starts auto-approving an MCP call with real external side
-effects (e.g. submitting a Jira worklog), and vice versa. Per-call approval
-is otherwise governed by each server's own `approve: ask | auto` config.
+**Approval.** The second approval choice grants only that exact MCP
+server/tool pair for 15 minutes. It never covers a workspace tool, another
+server, or another tool on the same server; `/tools ask` revokes temporary
+grants. Per-call approval is otherwise governed by each server's own
+`approve: ask | auto` config.
 
-**Execution.** Unlike native tools (which run synchronously), a batch
-containing any MCP call runs asynchronously and is bounded by that server's
-`timeout` (default 30s) — an MCP call is a subprocess round-trip that can
-itself block on a real network service, and must not freeze the UI. Press
-Esc or Ctrl+C to cancel an in-flight batch, the same as an in-flight
-streaming response.
+**Execution.** Native and MCP batches share one asynchronous, serialized,
+cancellable executor. Each MCP call is bounded by that server's `timeout`
+(default 30s). Press Esc or Ctrl+C to cancel an in-flight batch, the same as
+an in-flight streaming response.
 
-MCP results share the workspace tools' output cap (`tools.max_file_kb`,
+MCP results are labeled as untrusted external data and share the workspace
+tools' output cap (`tools.max_file_kb`,
 default 512 KB): an oversized reply is truncated with a marker rather than
 flooding the model's context.
 
@@ -133,14 +132,18 @@ tools) if that matters for what you're doing.
   `SHELL`, `LANG`, `TMPDIR`, `TERM`) plus the values you configure under
   `env`, so unrelated host secrets are not exposed to the server.
 - **Clean shutdown.** Connected servers are stopped when you disconnect,
-  disable them, or quit llmtui.
+  disable them, or quit llmtui. Unix process groups and Windows Job Objects
+  terminate descendant processes as well as the direct server.
+- **Bounded framing.** One newline-delimited JSON-RPC frame may be at most
+  4 MiB; an oversized or unterminated frame disconnects instead of growing
+  memory without bound.
 - **Invalid config never blocks startup.** `/doctor mcp` reports config-shape
   problems for every server, but a malformed **disabled** server does not
   affect normal chat. Command existence on `PATH` is only checked for servers
   that are enabled while `mcp.enabled` is true.
 - **Environments are redacted.** MCP server environments often carry
-  credentials; `/mcp inspect` shows only the variable names, never values,
-  and env values are never logged.
+  credentials; `/mcp inspect` shows only variable names, and both config
+  display commands redact every env value. Values are never logged.
 
 ## Disabling everything
 

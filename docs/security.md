@@ -29,6 +29,7 @@ you configure, and it sends no telemetry of any kind.
 | Config | `~/.config/llmtui/config.yaml` (file `0600`) | — |
 | Sessions (messages + token totals) | `chat.history_dir` (dir `0700`, files `0600`) | `chat.save_history: false` |
 | Usage log (timestamps, provider, model, token counts — no message content) | `usage.jsonl` in the history dir | `chat.save_history: false` |
+| Tool operation journal (hashed idempotency keys, tool name, start/completion status; no paths, commands, arguments, or output) | `.operations/<session>.jsonl` under `chat.history_dir`, or the platform config directory when no history path is configured (dir `0700`, files `0600`) | Required while side-effecting tools are enabled; independent of transcript saving |
 | Response cache | `cache.path` (dir `0700`, files `0600`) | `cache.enabled: false` or `/cache off` |
 | Memory snippets | `memory.path` (file `0600`) | disabled by default; `/memory off` |
 
@@ -70,6 +71,12 @@ add` reminds you).
     a trusted system libffi as described in the troubleshooting guide.
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
+- Provider responses, streaming tool-call arguments, and MCP JSON-RPC frames
+  have fixed byte/count limits. Oversized input fails instead of growing
+  memory without bound.
+- All provider, tool, MCP, RAG, and web text crosses a terminal-sanitization
+  boundary that strips C0/C1 controls and CSI/OSC/DCS sequences before
+  rendering, including OSC 52 clipboard writes.
 - Skills and plugins ([docs](skills.md)) are declarative text treated as
   potentially untrusted local input: strict schema and ID validation, size
   caps, UTF-8 and hidden-control-character rejection, and plugin manifest
@@ -93,6 +100,11 @@ add` reminds you).
     commands without shell metacharacters run unprompted. Run `/tools check
     "<command>"` to preview how any command line would be classified and
     why.
+    Choosing the second approval row creates a 15-minute grant for only the
+    exact tool and target (file path, command hash, URL, or MCP server/tool);
+    it never enables session-wide approval. `/tools ask` revokes all such
+    grants. Global auto mode is an explicit high-trust override, not the
+    recommended default.
   - **Command classifier** — a command is auto-approved only when it is an
     allowlisted read-only program (`ls`, `cat`, `grep`, `rg`, `find`,
     `git status/log/diff`, `go test/vet/fmt/list`, …) with no shell
@@ -100,9 +112,11 @@ add` reminds you).
     escalating arguments (`find -delete/-exec`). Known-dangerous programs
     (`rm`, `mv`, `chmod`, `sudo`, `curl`, package managers, cloud/container
     CLIs) always ask, as does anything unrecognized.
-  - **Confinement** — absolute paths, `..`, and symlinks resolving outside
-    the launch directory are rejected; commands run with the workspace as
-    their working directory.
+  - **Confinement** — file tools reject absolute paths, `..`, and symlinks
+    resolving outside the launch directory. Commands run with the workspace
+    as their working directory; path-like arguments are symlink-resolved
+    before classification, and external/secret paths, quoted/globbed paths,
+    and `git diff --no-index` always require explicit approval.
   - **Write guardrails** — writes into `.git/` (a model-written git hook
     would otherwise execute on your next git command), key-material
     directories (`.ssh`, `.gnupg`), and shell startup files (`.bashrc`,
@@ -119,6 +133,13 @@ add` reminds you).
     (`tools.command_timeout`), reads/writes/outputs are size-capped, the
     tool loop stops after `tools.max_iterations` rounds per message, and
     there is no delete tool.
+  - **Cancellation and crash recovery** — native and MCP batches run off the
+    UI loop through one serialized, cancellable executor. Esc cancels shell
+    process trees. Each write, command, and MCP call is fsynced to an
+    append-only per-session journal before and after execution; a completed
+    idempotency key is not run twice, and an ambiguous crash record fails
+    closed. On Windows, child trees are contained in kill-on-close Job
+    Objects; Unix uses process groups.
   - **Residual risk to know about** — content the model reads (files,
     command output) re-enters its context; a malicious file could try to
     instruct the model to take actions (prompt injection). The approval
@@ -139,7 +160,7 @@ add` reminds you).
     to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
     before reaching the model; binary content types are refused.
   - **Prompt-injection posture** — fetched pages are untrusted input. The
-    system prompt says so explicitly, and the fetch approval plus the
+    result itself and the system prompt say so explicitly, and the fetch approval plus the
     write/command approvals mean injected instructions still cannot mutate
     anything without you seeing it.
   - **No API keys involved** — search uses DuckDuckGo's public HTML
@@ -173,14 +194,16 @@ add` reminds you).
     `timeout`, default 30s) and its result is size-capped at
     `tools.max_file_kb` with a visible truncation marker, so an external
     server cannot flood the model's context or block the app indefinitely.
-    Server names may not contain `__` (the tool-name separator), so a tool
+    Stdio JSON-RPC frames are capped at 4 MiB. Server names may not contain
+    `__` (the tool-name separator), so a tool
     call can never be routed to a different server than the one that
     advertised it.
   - **Invalid config never blocks startup** — `/doctor mcp` validates config,
     but a malformed disabled server does not affect normal chat; command
     existence is only probed for enabled servers while MCP is enabled.
   - **Environments are redacted** — `/mcp inspect` shows only env variable
-    names, never their values, and env values are never logged.
+    names, never their values; `config show` and `/config show` redact
+    every MCP env value, and env values are never logged.
 - Debug output (`/debug last`) shows request shape, sections, token/category
   estimates, tool-spec counts and hashes, and privacy-safe tool-call metadata
   (name, argument byte count, JSON validity, and hash), never arguments or

@@ -72,7 +72,7 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | --- | --- |
 | `/tools` · `/tools status` | Workspace tools overlay: state, approval mode, workspace root, limits |
 | `/tools on` / `/tools off` | Let the model list/read/write files and run commands under the launch directory |
-| `/tools ask` / `/tools auto` | Require y/n approval for writes & commands (default), or run them unprompted |
+| `/tools ask` / `/tools auto` | Require approval and revoke temporary scoped grants (default), or explicitly run workspace tools unprompted in a fully trusted workspace |
 
 ## Skills
 | Command | Description |
