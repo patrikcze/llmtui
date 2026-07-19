@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/patrikcze/llmtui/internal/tools"
 )
 
 // fakeCSI mimics Bubble Tea's unexported unknownCSISequenceMsg, which prints
@@ -76,6 +78,21 @@ func TestShiftEnterSequenceInsertsNewline(t *testing.T) {
 	}
 	if m.inputLines != 2 {
 		t.Errorf("inputLines = %d, want 2", m.inputLines)
+	}
+}
+
+func TestShiftEnterIsSwallowedDuringToolApproval(t *testing.T) {
+	m := newTestModel(t)
+	typeText(m, "unchanged")
+	m.pendingCalls = []tools.Call{{ID: "call-1", Tool: tools.ToolWriteFile, Path: "a.txt", Body: "x"}}
+
+	m.Update(fakeCSI("27;2;13~"))
+
+	if got := m.input.Value(); got != "unchanged" {
+		t.Errorf("input = %q, pending approval must own modified key events", got)
+	}
+	if len(m.pendingCalls) != 1 {
+		t.Fatal("modified key unexpectedly resolved the approval")
 	}
 }
 

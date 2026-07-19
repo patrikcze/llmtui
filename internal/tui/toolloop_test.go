@@ -152,6 +152,28 @@ func TestPendingApprovalClosesOpenOverlay(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalClosesKeysInspector(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.keysMode = true
+
+	withToolReply(m, "```tool write_file approval.txt\napproved\n```")
+	m.maybeRunTools()
+
+	if len(m.pendingCalls) != 1 {
+		t.Fatalf("pendingCalls = %d, want 1", len(m.pendingCalls))
+	}
+	if m.keysMode {
+		t.Fatal("keys inspector must close once a tool approval is pending")
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil || len(m.pendingCalls) != 0 {
+		t.Fatal("approval key was not routed to the pending tool prompt")
+	}
+}
+
 func TestApprovalSwallowsOtherKeys(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true

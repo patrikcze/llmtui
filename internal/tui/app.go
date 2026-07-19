@@ -475,7 +475,20 @@ func waitForEvent(stream <-chan provider.ChatEvent, gen int) tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// The /keys inspector sees every input event before normal handling.
+	// A pending tool approval owns the keyboard until answered.
+	if len(m.pendingCalls) > 0 {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			return m.updateToolApproval(key)
+		}
+		// Modified keys arrive as terminal-specific CSI messages rather than
+		// tea.KeyMsg values. Swallow them too: in particular, Shift+Enter
+		// must never edit the composer behind an approval prompt.
+		if _, ok := extendedKeySeq(msg); ok {
+			return m, nil
+		}
+	}
+
+	// The /keys inspector sees every input event when no approval is pending.
 	if m.keysMode {
 		switch msg.(type) {
 		case tea.KeyMsg:
@@ -484,13 +497,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if _, ok := extendedKeySeq(msg); ok {
 				return m.updateKeysMode(msg)
 			}
-		}
-	}
-
-	// A pending tool approval owns the keyboard until answered.
-	if len(m.pendingCalls) > 0 {
-		if key, ok := msg.(tea.KeyMsg); ok {
-			return m.updateToolApproval(key)
 		}
 	}
 
@@ -968,6 +974,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		// command (e.g. /help) would otherwise still be "the thing on
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
+		m.keysMode = false
 		m.pendingCalls = calls
 		m.pendingBudget = true
 		m.approvalIdx = 0
@@ -977,6 +984,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	for _, c := range calls {
 		if m.callNeedsApproval(c) {
 			m.overlayOpen = false
+			m.keysMode = false
 			m.pendingCalls = calls
 			m.approvalIdx = 0
 			m.refreshViewport()
