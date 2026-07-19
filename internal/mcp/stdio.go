@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,7 +25,10 @@ const protocolVersion = "2024-11-05"
 const (
 	clientName    = "llmtui"
 	clientVersion = "0.9.5"
+	maxFrameBytes = 4 << 20
 )
+
+var ErrFrameTooLarge = errors.New("mcp: JSON-RPC frame exceeds the 4 MiB limit")
 
 // StdioClient speaks MCP (JSON-RPC 2.0 over newline-delimited stdio) to a
 // subprocess. Requests and responses are correlated by id via a background
@@ -311,7 +315,7 @@ func (c *StdioClient) write(msg rpcRequest) error {
 // Notifications from the server (no matching pending id) are ignored.
 func (c *StdioClient) readLoop() {
 	for {
-		line, err := c.r.ReadBytes('\n')
+		line, err := readBoundedLine(c.r, maxFrameBytes)
 		if len(line) > 0 {
 			var resp rpcResponse
 			if json.Unmarshal(line, &resp) == nil && resp.ID != nil {
@@ -337,6 +341,29 @@ func (c *StdioClient) readLoop() {
 				c.mu.Unlock()
 			}
 			return
+		}
+	}
+}
+
+// readBoundedLine reads one newline-delimited JSON-RPC frame while capping
+// allocation even when a compromised server never sends a newline. ReadSlice
+// exposes the reader's bounded internal fragments; we stop as soon as their
+// aggregate crosses the protocol limit instead of buffering to EOF.
+func readBoundedLine(r *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		fragment, err := r.ReadSlice('\n')
+		if len(line)+len(fragment) > max {
+			return nil, ErrFrameTooLarge
+		}
+		line = append(line, fragment...)
+		switch err {
+		case nil:
+			return line, nil
+		case bufio.ErrBufferFull:
+			continue
+		default:
+			return line, err
 		}
 	}
 }

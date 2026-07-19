@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -220,5 +221,37 @@ func TestServerStderrIsBoundedAndRedacted(t *testing.T) {
 	}
 	if len(msg) > 4200 {
 		t.Fatalf("server stderr error was not bounded: %d bytes", len(msg))
+	}
+}
+
+func TestStdioReadLoopRejectsOversizedUnterminatedFrame(t *testing.T) {
+	c := &StdioClient{
+		r:       bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", maxFrameBytes+1)), 1024),
+		pending: map[int]chan rpcResponse{},
+		closed:  make(chan struct{}),
+	}
+	go c.readLoop()
+
+	select {
+	case <-c.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("read loop did not reject the oversized frame")
+	}
+	c.mu.Lock()
+	err := c.readErr
+	c.mu.Unlock()
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("read error = %v, want ErrFrameTooLarge", err)
+	}
+}
+
+func TestReadBoundedLineAllowsFrameAtLimit(t *testing.T) {
+	payload := strings.Repeat("x", maxFrameBytes-1) + "\n"
+	line, err := readBoundedLine(bufio.NewReaderSize(strings.NewReader(payload), 1024), maxFrameBytes)
+	if err != nil {
+		t.Fatalf("readBoundedLine: %v", err)
+	}
+	if len(line) != maxFrameBytes {
+		t.Fatalf("line bytes = %d, want %d", len(line), maxFrameBytes)
 	}
 }
