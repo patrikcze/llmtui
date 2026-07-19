@@ -104,6 +104,16 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	if strings.ContainsAny(cmdline, "|;&<>`$\\") {
 		return CommandClass{VerdictAsk, "shell metacharacters (pipes, redirects, chaining, or substitution)"}
 	}
+	if strings.ContainsAny(cmdline, "*?[]{}") {
+		return CommandClass{VerdictAsk, "shell wildcard expansion requires approval"}
+	}
+	// Auto-approval must not attempt to partially emulate shell quote removal.
+	// Embedded or outer quotes can concatenate tokens into a different logical
+	// path at execution time (for example i\"\"d_rsa). A quoted command is still
+	// available after explicit approval, but it is never silently executed.
+	if strings.ContainsAny(cmdline, "\"'") {
+		return CommandClass{VerdictAsk, "quoted arguments require approval"}
+	}
 	fields := strings.Fields(cmdline)
 	prog := fields[0]
 	if reason, ok := riskyPrograms[prog]; ok {
@@ -112,20 +122,29 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	if strings.ContainsAny(prog, "/\\") {
 		return CommandClass{VerdictAsk, "explicit program path (not an allowlisted command)"}
 	}
+	classReason := "allowlisted read-only command"
 	switch prog {
 	case "git":
-		if gitSubcommandIsReadOnly(fields) {
-			return CommandClass{VerdictAuto, "read-only git subcommand"}
+		if !gitSubcommandIsReadOnly(fields) {
+			return CommandClass{VerdictAsk, "git subcommand can modify the repository"}
 		}
-		return CommandClass{VerdictAsk, "git subcommand can modify the repository"}
+		if fields[1] == "diff" {
+			for _, f := range fields[2:] {
+				if f == "--no-index" {
+					return CommandClass{VerdictAsk, "git diff --no-index can read arbitrary filesystem paths"}
+				}
+			}
+		}
+		classReason = "read-only git subcommand"
 	case "go":
-		if len(fields) > 1 && autoAllowedGoSubcommands[fields[1]] {
-			return CommandClass{VerdictAuto, "go toolchain check"}
+		if len(fields) <= 1 || !autoAllowedGoSubcommands[fields[1]] {
+			return CommandClass{VerdictAsk, "go subcommand can modify files or fetch modules"}
 		}
-		return CommandClass{VerdictAsk, "go subcommand can modify files or fetch modules"}
-	}
-	if !autoAllowedCommands[prog] {
-		return CommandClass{VerdictAsk, "not an allowlisted read-only command"}
+		classReason = "go toolchain check"
+	default:
+		if !autoAllowedCommands[prog] {
+			return CommandClass{VerdictAsk, "not an allowlisted read-only command"}
+		}
 	}
 	for _, f := range fields[1:] {
 		switch f {
@@ -137,33 +156,21 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 		if strings.HasPrefix(f, "-") {
 			continue // a flag, not a path argument
 		}
-		if looksLikePathEscape(unquoteArg(f), root) {
+		if looksLikePathEscape(f, root) {
 			return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
+		}
+		if p.BlockSymlinkEscape && pathResolvesOutsideWorkspace(f, root) {
+			return CommandClass{VerdictAsk, "argument " + f + " resolves outside the workspace"}
 		}
 	}
 	if p.RequireApprovalForSecretReads {
 		for _, f := range fields[1:] {
-			if IsSecretPath(unquoteArg(f)) {
+			if !strings.HasPrefix(f, "-") && IsSecretPath(f) {
 				return CommandClass{VerdictAsk, "reads a likely secret file (" + f + ")"}
 			}
 		}
 	}
-	return CommandClass{VerdictAuto, "allowlisted read-only command"}
-}
-
-// unquoteArg strips one layer of matching straight quotes some shells accept
-// around a bare argument, so classification sees the logical path a quoted
-// argument like "\".env\"" or "'id_rsa'" actually refers to. Without this,
-// strings.Fields keeps the quote characters, so IsSecretPath(".env") is true
-// but IsSecretPath("\".env\"") is false — quoting a filename silently
-// dodges both the secret-read and workspace-escape checks.
-func unquoteArg(f string) string {
-	if len(f) >= 2 {
-		if (f[0] == '"' && f[len(f)-1] == '"') || (f[0] == '\'' && f[len(f)-1] == '\'') {
-			return f[1 : len(f)-1]
-		}
-	}
-	return f
+	return CommandClass{VerdictAuto, classReason}
 }
 
 // ClassifyCommand classifies with every protection enabled, using "." as the
@@ -200,6 +207,41 @@ func looksLikePathEscape(f, root string) bool {
 		abs = filepath.Clean(filepath.Join(rootAbs, f))
 	}
 	return abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(filepath.Separator))
+}
+
+// pathResolvesOutsideWorkspace checks the deepest existing portion of a
+// command argument. This catches both a bare filename symlink and a path to a
+// not-yet-existing child below an escaping symlink, matching Runner.resolve.
+// Non-path arguments normally have no existing ancestor below root and are
+// therefore harmless here.
+func pathResolvesOutsideWorkspace(f, root string) bool {
+	if f == "" || strings.HasPrefix(f, "-") {
+		return false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return false
+	}
+	candidate := f
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(rootAbs, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		if resolveErr == nil {
+			return resolved != rootResolved && !strings.HasPrefix(resolved, rootResolved+string(filepath.Separator))
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate || candidate == rootAbs {
+			return false
+		}
+		candidate = parent
+	}
 }
 
 // secretNameWords are word-boundary–sensitive credential markers.
@@ -276,7 +318,7 @@ func IsShellStartupPath(path string) bool {
 func (p GuardrailPolicy) checkWritePath(rel string) string {
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
 	for _, part := range parts {
-		if p.BlockGitDirWrites && part == ".git" {
+		if p.BlockGitDirWrites && strings.EqualFold(part, ".git") {
 			return "writing inside .git is not allowed"
 		}
 		if p.ProtectSecretFiles && secretDirs[strings.ToLower(part)] {

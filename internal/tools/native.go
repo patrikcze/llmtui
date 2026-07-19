@@ -142,7 +142,7 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			// missing (e.g. "read_file needs a path") and the model retries.
 			_ = json.Unmarshal([]byte(tc.Arguments), &args)
 		}
-		c.Path = args.Path
+		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
 		case ToolWriteFile:
 			c.Body = args.Content

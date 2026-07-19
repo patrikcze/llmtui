@@ -311,9 +311,11 @@ func (r *Runner) readFile(rel string) (string, error) {
 }
 
 func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {
+	rel = strings.TrimSpace(rel)
 	if rel == "" {
 		return "", "", fmt.Errorf("write_file needs a path")
 	}
+	rel = filepath.Clean(rel)
 	// Block writes into .git (a hook would execute on the next git command),
 	// key-material directories, and shell startup files.
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
@@ -434,7 +436,13 @@ func (r *Runner) skillLoad(c Call) (string, error) {
 
 // secretEnvPattern matches environment variable names that likely hold
 // credentials; those never reach commands the model runs.
-var secretEnvPattern = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|credential|passphrase)`)
+var secretEnvPattern = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|credential|passphrase|(^|_)pass(_|$)|(^|_)(url|dsn)(_|$)|conn(ection)?_?string)`)
+
+var sensitiveEnvNames = map[string]bool{
+	"SSH_AUTH_SOCK": true,
+	"KUBECONFIG":    true,
+	"VAULT_ADDR":    true,
+}
 
 func sanitizedEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
@@ -443,7 +451,7 @@ func sanitizedEnv(environ []string) []string {
 		if !ok {
 			continue
 		}
-		if strings.HasPrefix(name, "LLMTUI_") || secretEnvPattern.MatchString(name) {
+		if strings.HasPrefix(name, "LLMTUI_") || sensitiveEnvNames[strings.ToUpper(name)] || secretEnvPattern.MatchString(name) {
 			continue
 		}
 		out = append(out, kv)

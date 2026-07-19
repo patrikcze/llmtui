@@ -47,7 +47,7 @@ func TestCallsFromNative(t *testing.T) {
 		},
 		{
 			name: "write_file",
-			in:   provider.ToolCall{ID: "c2", Name: ToolWriteFile, Arguments: `{"path":"b.txt","content":"data"}`},
+			in:   provider.ToolCall{ID: "c2", Name: ToolWriteFile, Arguments: `{"path":" b.txt ","content":"data"}`},
 			want: Call{ID: "c2", Tool: ToolWriteFile, Path: "b.txt", Body: "data"},
 		},
 		{

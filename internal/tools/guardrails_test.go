@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -10,7 +13,7 @@ func TestSafeCommands(t *testing.T) {
 	safe := []string{
 		"ls", "ls -la", "cat README.md", "head -20 main.go",
 		"tail -5 server.log", "grep -rn TODO .", "rg pattern src/",
-		"wc -l *.go", "pwd", "find . -name '*.go'",
+		"wc -l main.go", "pwd", "find . -name main.go",
 		"git status", "git log --oneline", "git diff HEAD",
 		"go test ./...", "go vet ./...", "go fmt ./...", "go list ./...",
 	}
@@ -57,6 +60,8 @@ func TestShellMetacharactersAlwaysAsk(t *testing.T) {
 		"curl http://x.com > /tmp/f",
 		"ls `pwd`",
 		"echo $HOME",
+		"cat *.txt",
+		"cat n[otes].txt",
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range meta {
@@ -170,7 +175,7 @@ func TestSecretReadAutoWithPolicyOff(t *testing.T) {
 
 func TestClassifyCommandQuotedSecretPathStillAsks(t *testing.T) {
 	p := DefaultGuardrails()
-	for _, cmd := range []string{`cat ".env"`, `cat 'id_rsa'`} {
+	for _, cmd := range []string{`cat ".env"`, `cat 'id_rsa'`, `cat i""d_rsa`, `cat 'i'd_rsa`, `cat .e""nv`} {
 		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("%s = %v (%s), want ask (quoting must not bypass secret detection)", cmd, cl.Verdict, cl.Reason)
@@ -225,6 +230,44 @@ func TestClassifyCommandAllowsInWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestClassifyCommandBareSymlinkEscapeAsks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "notes.txt")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("cat notes.txt", root)
+	if cl.Verdict != VerdictAsk {
+		t.Fatalf("cat escaping symlink = %v (%s), want ask", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandInWorkspaceSymlinkIsAuto(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(target, []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "notes.txt")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	p := DefaultGuardrails()
+	cl := p.ClassifyCommand("cat notes.txt", root)
+	if cl.Verdict != VerdictAuto {
+		t.Fatalf("cat in-workspace symlink = %v (%s), want auto", cl.Verdict, cl.Reason)
+	}
+}
+
 // ---- git subcommand classification -----------------------------------------
 
 func TestClassifyCommandGitBranchDeleteAsks(t *testing.T) {
@@ -264,5 +307,21 @@ func TestClassifyCommandGitRemoteListIsAuto(t *testing.T) {
 	cl := p.ClassifyCommand("git remote -v", ".")
 	if cl.Verdict != VerdictAuto {
 		t.Errorf("git remote -v = %v (%s), want auto", cl.Verdict, cl.Reason)
+	}
+}
+
+func TestClassifyCommandGitNoIndexAndSensitivePathsAsk(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	for _, cmd := range []string{
+		"git diff --no-index empty.txt /etc/passwd",
+		"git show id_rsa",
+		"git log .env",
+		"git blame ../outside.txt",
+	} {
+		cl := p.ClassifyCommand(cmd, root)
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%q = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
 	}
 }

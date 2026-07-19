@@ -15,14 +15,16 @@ func writeThrough(r *Runner, path, body string) error {
 
 func TestRunnerBlocksGitWrites(t *testing.T) {
 	r := NewRunner(t.TempDir(), 64)
-	if err := writeThrough(r, ".git/hooks/pre-commit", "#!/bin/sh\n"); err == nil {
-		t.Fatal("write into .git allowed, want blocked")
+	for _, path := range []string{".git/hooks/pre-commit", " .git/hooks/pre-commit", ".GIT/hooks/pre-commit "} {
+		if err := writeThrough(r, path, "#!/bin/sh\n"); err == nil {
+			t.Errorf("write into %q allowed, want blocked", path)
+		}
 	}
 }
 
 func TestRunnerBlocksShellStartupWrites(t *testing.T) {
 	r := NewRunner(t.TempDir(), 64)
-	for _, p := range []string{".zshrc", ".bashrc", "config.fish"} {
+	for _, p := range []string{".zshrc", ".bashrc", "config.fish", " .zshrc ", " .ZSHRC"} {
 		if err := writeThrough(r, p, "evil\n"); err == nil {
 			t.Errorf("write to %s allowed, want blocked", p)
 		}
@@ -31,8 +33,10 @@ func TestRunnerBlocksShellStartupWrites(t *testing.T) {
 
 func TestRunnerBlocksSecretDirWrites(t *testing.T) {
 	r := NewRunner(t.TempDir(), 64)
-	if err := writeThrough(r, ".ssh/authorized_keys", "ssh-rsa AAAA\n"); err == nil {
-		t.Fatal("write into .ssh allowed, want blocked")
+	for _, path := range []string{".ssh/authorized_keys", " .ssh/authorized_keys", ".GNUPG/private.key "} {
+		if err := writeThrough(r, path, "secret\n"); err == nil {
+			t.Errorf("write into %q allowed, want blocked", path)
+		}
 	}
 }
 
