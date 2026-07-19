@@ -17,8 +17,12 @@ import (
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	cfg := &config.Config{
-		Chat: config.ChatConfig{Stream: true, MaxTokens: 128, SystemPrompt: "You are a helpful local assistant.", StripLeakedThinking: true},
-		UI:   config.UIConfig{Markdown: false},
+		Chat: config.ChatConfig{
+			Stream: true, MaxTokens: 128,
+			SystemPrompt: "You are a helpful local assistant.", StripLeakedThinking: true,
+			HistoryDir: filepath.Join(t.TempDir(), "history"),
+		},
+		UI: config.UIConfig{Markdown: false},
 		Memory: config.MemoryConfig{
 			Path:        filepath.Join(t.TempDir(), "memory.yaml"),
 			MaxSnippets: 10,

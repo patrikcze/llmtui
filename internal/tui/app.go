@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -134,14 +135,16 @@ type Model struct {
 	// paste-image gate can use real data instead of the SupportsVision
 	// heuristic even after the model picker overlay closes and clears
 	// pickerModels.
-	visionByID  map[string]bool
-	sugs        []slashCommand
-	sugIdx      int
-	historyDir  string
-	sessionName string
-	inputLines  int
-	ctrlCAt     time.Time
-	quitting    bool
+	visionByID      map[string]bool
+	sugs            []slashCommand
+	sugIdx          int
+	historyDir      string
+	sessionName     string
+	operationLog    *history.OperationLog
+	operationLogErr error
+	inputLines      int
+	ctrlCAt         time.Time
+	quitting        bool
 
 	// Exit summary bookkeeping, reported after the TUI closes.
 	startedAt  time.Time
@@ -313,6 +316,7 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.TotalCompletionTokens = s.Reply
 	m.session.AnyEstimated = s.Estimated
 	m.sessionName = name
+	m.configureOperationLog()
 	m.summary = ""
 	m.workspaceSkillApprovals = nil
 	// Restore session-scoped skills, re-resolving each against the current
@@ -337,6 +341,7 @@ func (m *Model) rebuildFromConfig() {
 			m.historyDir = dir
 		}
 	}
+	m.configureOperationLog()
 
 	m.responseCache = nil
 	if dir, err := history.ExpandHome(cfg.Cache.Path); err == nil && dir != "" {
@@ -419,6 +424,30 @@ func (m *Model) rebuildFromConfig() {
 		})
 	}
 	m.profiles = append(profiles, modelprofile.BuiltIn()...)
+}
+
+// configureOperationLog keeps crash recovery independent from transcript
+// saving: disabling chat.save_history must not make tool side effects
+// unrecorded. The configured history root is reused when present; otherwise
+// a private user-config location is used.
+func (m *Model) configureOperationLog() {
+	m.operationLog = nil
+	m.operationLogErr = nil
+	dir := strings.TrimSpace(m.cfg.Chat.HistoryDir)
+	if dir == "" {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			m.operationLogErr = fmt.Errorf("resolve operation log directory: %w", err)
+			return
+		}
+		dir = filepath.Join(configDir, "llmtui", "history")
+	}
+	expanded, err := history.ExpandHome(dir)
+	if err != nil {
+		m.operationLogErr = err
+		return
+	}
+	m.operationLog, m.operationLogErr = history.OpenOperationLog(expanded, m.sessionName)
 }
 
 // sessionRecord builds the persistable form of the current session.
@@ -1021,7 +1050,10 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.relayout()
 	m.refreshViewport() // suppress the batch's static ⚒ lines while it runs live
 	m.notice = mcpBatchNotice(calls)
-	cmd := runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls)
+	cmd := runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls, operationGuard{
+		log: m.operationLog,
+		err: m.operationLogErr,
+	})
 	return func() tea.Msg {
 		res := cmd()
 		if resultsMsg, ok := res.(mcpToolResultsMsg); ok {

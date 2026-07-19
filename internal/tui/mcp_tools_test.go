@@ -7,10 +7,62 @@ import (
 	"testing"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
+
+func TestDurableCallIsNotReexecutedAfterRecovery(t *testing.T) {
+	dir := t.TempDir()
+	call := tools.Call{ID: "call-once", Tool: tools.ToolRunCommand, Body: "non-idempotent"}
+	log, err := history.OpenOperationLog(dir, "session-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executions := 0
+	result := executeDurableCall(call, operationGuard{log: log}, func() tools.Result {
+		executions++
+		return tools.Result{Call: call, Output: "done"}
+	})
+	if result.Err != nil || executions != 1 {
+		t.Fatalf("first result = %+v, executions = %d", result, executions)
+	}
+
+	recovered, err := history.OpenOperationLog(dir, "session-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = executeDurableCall(call, operationGuard{log: recovered}, func() tools.Result {
+		executions++
+		return tools.Result{Call: call, Output: "ran twice"}
+	})
+	if result.Err != nil || executions != 1 {
+		t.Fatalf("replayed result = %+v, executions = %d", result, executions)
+	}
+	if !strings.Contains(result.Output, "already completed") {
+		t.Fatalf("replayed output = %q", result.Output)
+	}
+}
+
+func TestDurableCallBlocksAmbiguousCrashRecord(t *testing.T) {
+	log, err := history.OpenOperationLog(t.TempDir(), "session-ambiguous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := tools.Call{ID: "call-ambiguous", Tool: tools.ToolRunCommand, Body: "maybe-ran"}
+	if _, err := log.Begin(call); err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	result := executeDurableCall(call, operationGuard{log: log}, func() tools.Result {
+		executed = true
+		return tools.Result{Call: call}
+	})
+	if result.Err == nil || executed {
+		t.Fatalf("ambiguous result = %+v, executed = %v", result, executed)
+	}
+}
 
 // newConnectedMCPRegistry builds a registry with one server already
 // connected via a MockClient advertising the given tools.

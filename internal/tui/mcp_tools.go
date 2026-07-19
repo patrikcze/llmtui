@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
@@ -233,14 +234,18 @@ func mcpBatchNotice(calls []tools.Call) string {
 	return "⚒ running tool call(s)…"
 }
 
-// runMixedToolBatch executes a batch that contains at least one MCP call as
-// a single async tea.Cmd: every call in the batch runs sequentially, in
-// order — including the native ones, so ordering is never split across
-// messages — because MCP servers commonly serialize session state
+// runMixedToolBatch executes every native/MCP batch as a single async
+// tea.Cmd. Calls run sequentially and in order because MCP servers commonly
+// serialize session state
 // (jiraWorklog sets allow_parallel: false) and the latency cost of
 // sequential execution is negligible next to model-inference time for the
 // handful of calls a typical turn makes.
-func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Registry, calls []tools.Call) tea.Cmd {
+type operationGuard struct {
+	log *history.OperationLog
+	err error
+}
+
+func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Registry, calls []tools.Call, guards ...operationGuard) tea.Cmd {
 	// MCP results share the native tools' output cap so an external server
 	// can't flood the context. Falls back to the NewRunner default when no
 	// runner is available.
@@ -251,14 +256,53 @@ func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Re
 	return func() tea.Msg {
 		results := make([]tools.Result, 0, len(calls))
 		for _, c := range calls {
-			if c.MCPServer != "" {
-				results = append(results, executeMCPCall(ctx, mcpReg, c, maxBytes))
+			execute := func() tools.Result {
+				if c.MCPServer != "" {
+					return executeMCPCall(ctx, mcpReg, c, maxBytes)
+				}
+				return annotateUnknownTool(runner.ExecuteContext(ctx, c), mcpReg)
+			}
+			if len(guards) == 0 || !history.IsDurableSideEffect(c) {
+				results = append(results, execute())
 				continue
 			}
-			results = append(results, annotateUnknownTool(runner.ExecuteContext(ctx, c), mcpReg))
+			results = append(results, executeDurableCall(c, guards[0], execute))
 		}
 		return mcpToolResultsMsg{results: results}
 	}
+}
+
+func executeDurableCall(c tools.Call, guard operationGuard, execute func() tools.Result) tools.Result {
+	if guard.err != nil {
+		return tools.Result{Call: c, Err: fmt.Errorf("operation journal unavailable; side effect not executed: %w", guard.err)}
+	}
+	if guard.log == nil {
+		return tools.Result{Call: c, Err: errors.New("operation journal unavailable; side effect not executed")}
+	}
+	decision, err := guard.log.Begin(c)
+	if err != nil {
+		return tools.Result{Call: c, Err: fmt.Errorf("record operation intent; side effect not executed: %w", err)}
+	}
+	switch decision.State {
+	case history.OperationStarted:
+		return tools.Result{Call: c, Err: errors.New("operation may have run before an interruption; refusing to execute it again")}
+	case history.OperationCompleted:
+		if decision.Succeeded {
+			return tools.Result{Call: c, Output: "operation was already completed and was not executed again"}
+		}
+		return tools.Result{Call: c, Err: errors.New("operation previously completed with an error and was not executed again")}
+	}
+
+	result := execute()
+	if err := guard.log.Complete(c, result.Err == nil); err != nil {
+		journalErr := fmt.Errorf("side effect finished but its completion record could not be persisted; do not retry automatically: %w", err)
+		if result.Err == nil {
+			result.Err = journalErr
+		} else {
+			result.Err = errors.Join(result.Err, journalErr)
+		}
+	}
+	return result
 }
 
 // registerMCPCapabilities adds every connected server's tools into reg so
