@@ -126,6 +126,7 @@ func (m *Model) skillsUse(rest string) tea.Cmd {
 	if err != nil {
 		return m.fail(err.Error())
 	}
+	m.approveWorkspaceSkill(s)
 	label := "for this session (/skills disable " + s.Meta.ID + " to remove)"
 	if scope == skill.ScopeRun {
 		label = "for the next run"

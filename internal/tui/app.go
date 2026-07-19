@@ -184,6 +184,10 @@ type Model struct {
 	// discovery, validation, and run/session activation state; it is
 	// mutex-protected because skill_load executes on tool goroutines.
 	skillMgr *skill.Manager
+	// workspaceSkillApprovals records explicit per-session opt-ins for
+	// workspace-sourced skill content. Keys include the content hash so a
+	// changed SKILL.md is never covered by an earlier approval.
+	workspaceSkillApprovals map[string]bool
 
 	// Optional MCP servers (config/interfaces only; no transport wired yet).
 	mcpRegistry    *mcp.Registry
@@ -310,6 +314,7 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.AnyEstimated = s.Estimated
 	m.sessionName = name
 	m.summary = ""
+	m.workspaceSkillApprovals = nil
 	// Restore session-scoped skills, re-resolving each against the current
 	// registry. Missing or changed skills are surfaced, never substituted.
 	if m.skillMgr != nil {
@@ -932,6 +937,9 @@ func (m *Model) maybeRunTools() tea.Cmd {
 // toolsAutoApprove (see the Model.mcpAutoApprove comment).
 func (m *Model) callNeedsApproval(c tools.Call) bool {
 	if c.MCPServer == "" {
+		if m.workspaceSkillNeedsApproval(c) {
+			return true
+		}
 		if m.toolsAutoApprove {
 			return false
 		}
@@ -1144,10 +1152,14 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 	case approvalYes:
 		calls := m.pendingCalls
 		m.pendingCalls = nil
+		m.approveWorkspaceSkills(calls)
 		return m.runToolCalls(calls)
 	case approvalAlways:
 		hasNative, hasMCP := false, false
 		for _, c := range m.pendingCalls {
+			if c.Tool == tools.ToolSkillLoad {
+				continue
+			}
 			if c.MCPServer == "" {
 				hasNative = true
 			} else {
@@ -1165,7 +1177,12 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		}
 		calls := m.pendingCalls
 		m.pendingCalls = nil
-		m.notice = fmt.Sprintf("⚒ tool approvals set to auto (%s) for this session (/tools ask to revert)", strings.Join(granted, " + "))
+		m.approveWorkspaceSkills(calls)
+		if len(granted) == 0 {
+			m.notice = "◈ workspace skill approved for this session"
+		} else {
+			m.notice = fmt.Sprintf("⚒ tool approvals set to auto (%s) for this session (/tools ask to revert)", strings.Join(granted, " + "))
+		}
 		return m.runToolCalls(calls)
 	default:
 		return m.denyPendingTools()
@@ -2041,6 +2058,18 @@ func (m *Model) renderApprovalPrompt() string {
 
 	for _, c := range m.pendingCalls {
 		switch c.Tool {
+		case tools.ToolSkillLoad:
+			if s, ok := m.workspaceSkillForCall(c); ok {
+				b.WriteString(m.theme.BadgeWarn.Render("◈ load workspace skill"))
+				b.WriteString("\n")
+				b.WriteString(text.Render("    " + terminaltext.Sanitize(s.Meta.Name) + " (" + s.QualifiedID() + ")"))
+				b.WriteString("\n")
+				b.WriteString(text.Render("    source: " + terminaltext.Sanitize(s.Path)))
+				b.WriteString("\n")
+				continue
+			}
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + terminaltext.Sanitize(c.Describe())))
+			b.WriteString("\n")
 		case tools.ToolRunCommand:
 			b.WriteString(m.theme.BadgeWarn.Render("⚒ run command"))
 			b.WriteString("\n")

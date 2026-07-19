@@ -354,6 +354,25 @@ func TestSessionRefsAndRestore(t *testing.T) {
 	if len(warns) != 1 || !strings.Contains(warns[0], "changed since") {
 		t.Errorf("warns = %v", warns)
 	}
+
+	// Workspace skills require a fresh interactive opt-in in each session and
+	// therefore are never activated merely by loading a saved session.
+	workspace := t.TempDir()
+	writeSkill(t, workspace, "repo-skill", "workspace instructions")
+	m3 := newTestManager(t, Options{Paths: Paths{WorkspaceDir: workspace}})
+	workspaceSkill, err := m3.Resolve("repo-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warns = m3.RestoreSession([]Ref{{
+		ID: "repo-skill", Scope: "session", Source: string(SourceWorkspace), Hash: workspaceSkill.Hash,
+	}})
+	if len(warns) != 1 || !strings.Contains(warns[0], "fresh approval") {
+		t.Fatalf("workspace restore warnings = %v", warns)
+	}
+	if len(m3.Active()) != 0 {
+		t.Fatal("workspace skill restored without fresh approval")
+	}
 }
 
 func TestPluginLifecycle(t *testing.T) {

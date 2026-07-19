@@ -540,6 +540,10 @@ func (m *Manager) RestoreSession(refs []Ref) (warnings []string) {
 		return warnings
 	}
 	for _, r := range refs {
+		if r.Source == string(SourceWorkspace) {
+			warnings = append(warnings, fmt.Sprintf("saved workspace skill workspace:%s requires fresh approval in this session — not restored; use /skills use %s", r.ID, r.ID))
+			continue
+		}
 		qid := r.Source + ":" + r.ID
 		if r.Source == string(SourcePlugin) && r.PluginID != "" {
 			qid = string(SourcePlugin) + ":" + r.PluginID + "/" + r.ID

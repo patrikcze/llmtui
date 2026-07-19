@@ -8,6 +8,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/skill"
+	"github.com/patrikcze/llmtui/internal/tools"
 )
 
 // skillCatalogMaxBytes bounds the compact catalog text added to prompts.
@@ -93,6 +94,48 @@ func (m *Model) endAgentRun() {
 	}
 	if cleared := m.skillMgr.ClearRun(); len(cleared) > 0 {
 		m.notice = fmt.Sprintf("◈ run finished — run-scoped skill(s) deactivated: %s", strings.Join(cleared, ", "))
+	}
+}
+
+func workspaceSkillApprovalKey(s skill.Skill) string {
+	return s.QualifiedID() + "@" + s.Hash
+}
+
+// workspaceSkillForCall resolves only model-driven workspace skill loads.
+// User and explicitly configured extra-path skills keep their existing
+// approval-free behavior.
+func (m *Model) workspaceSkillForCall(c tools.Call) (skill.Skill, bool) {
+	if c.Tool != tools.ToolSkillLoad || m.skillMgr == nil || c.InputErr != "" {
+		return skill.Skill{}, false
+	}
+	id := strings.TrimSpace(c.Path)
+	if id == "" {
+		id = strings.TrimSpace(c.Body)
+	}
+	s, err := m.skillMgr.Resolve(id)
+	return s, err == nil && s.Source == skill.SourceWorkspace
+}
+
+func (m *Model) workspaceSkillNeedsApproval(c tools.Call) bool {
+	s, ok := m.workspaceSkillForCall(c)
+	return ok && !m.workspaceSkillApprovals[workspaceSkillApprovalKey(s)]
+}
+
+func (m *Model) approveWorkspaceSkill(s skill.Skill) {
+	if s.Source != skill.SourceWorkspace {
+		return
+	}
+	if m.workspaceSkillApprovals == nil {
+		m.workspaceSkillApprovals = make(map[string]bool)
+	}
+	m.workspaceSkillApprovals[workspaceSkillApprovalKey(s)] = true
+}
+
+func (m *Model) approveWorkspaceSkills(calls []tools.Call) {
+	for _, c := range calls {
+		if s, ok := m.workspaceSkillForCall(c); ok {
+			m.approveWorkspaceSkill(s)
+		}
 	}
 }
 

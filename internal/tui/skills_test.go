@@ -44,6 +44,21 @@ func setupSkills(t *testing.T, m *Model, skills map[string]string) string {
 	return dir
 }
 
+func setupWorkspaceSkills(t *testing.T, m *Model, skills map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for id, body := range skills {
+		writeTestSkill(t, dir, id, body)
+	}
+	m.skillMgr.Configure(skill.Options{
+		Enabled:       true,
+		ExposeCatalog: true,
+		Paths:         skill.Paths{WorkspaceDir: dir},
+	})
+	m.syncSkillLoader()
+	return dir
+}
+
 // agentModel returns a test model with tools on and one skill available.
 func agentModel(t *testing.T) *Model {
 	t.Helper()
@@ -652,6 +667,62 @@ func TestSkillLoadApprovalFree(t *testing.T) {
 	calls := tools.CallsFromNative([]provider.ToolCall{{ID: "c", Name: tools.ToolSkillLoad, Arguments: `{"skill":"go-agent-loop-review"}`}})
 	if m.callNeedsApproval(calls[0]) {
 		t.Error("skill_load must not require approval — it grants nothing")
+	}
+}
+
+func TestWorkspaceSkillLoadRequiresContentScopedSessionApproval(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsAutoApprove = true // workspace skill trust must override global auto.
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	dir := setupWorkspaceSkills(t, m, map[string]string{"repo-review": "Inspect repository instructions."})
+	calls := tools.CallsFromNative([]provider.ToolCall{{
+		ID: "c1", Name: tools.ToolSkillLoad, Arguments: `{"skill":"repo-review"}`,
+	}})
+	if !m.callNeedsApproval(calls[0]) {
+		t.Fatal("workspace skill load bypassed one-time approval")
+	}
+	if cmd := m.startToolBatch(calls); cmd != nil {
+		t.Fatal("workspace skill executed before approval")
+	}
+	if len(m.skillMgr.Active()) != 0 || len(m.pendingCalls) != 1 {
+		t.Fatalf("active=%v pending=%v before approval", m.skillMgr.Active(), m.pendingCalls)
+	}
+	prompt := m.renderApprovalPrompt()
+	if !strings.Contains(prompt, "load workspace skill") || !strings.Contains(prompt, "repo-review") || !strings.Contains(prompt, dir) {
+		t.Fatalf("approval prompt lacks skill provenance:\n%s", prompt)
+	}
+
+	if cmd := m.resolveApproval(approvalYes); cmd == nil {
+		t.Fatal("approved skill load did not continue the tool loop")
+	}
+	if len(m.skillMgr.Active()) != 1 {
+		t.Fatal("approved workspace skill did not activate")
+	}
+	if m.callNeedsApproval(calls[0]) {
+		t.Fatal("unchanged workspace skill asked twice in one session")
+	}
+
+	// A changed instruction body gets a different hash and must be reviewed
+	// again even though the qualified ID is unchanged.
+	writeTestSkill(t, dir, "repo-review", "Changed repository instructions.")
+	m.skillMgr.Reload()
+	if !m.callNeedsApproval(calls[0]) {
+		t.Fatal("changed workspace skill inherited approval for old content")
+	}
+}
+
+func TestExplicitWorkspaceSkillUseRecordsOptIn(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	setupWorkspaceSkills(t, m, map[string]string{"repo-review": "Review it."})
+	if cmd := m.skillsUse("repo-review"); cmd != nil {
+		t.Fatal("explicit skill activation returned an unexpected command")
+	}
+	call := tools.CallsFromNative([]provider.ToolCall{{Name: tools.ToolSkillLoad, Arguments: `{"skill":"repo-review"}`}})[0]
+	if m.callNeedsApproval(call) {
+		t.Fatal("explicit /skills use did not count as workspace opt-in")
 	}
 }
 
