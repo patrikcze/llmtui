@@ -3,6 +3,8 @@ package rag
 import (
 	"fmt"
 	"strings"
+
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
 // FormatContext renders retrieval results as a labeled reference block for
@@ -27,15 +29,17 @@ func FormatContext(results []Result, maxChars int) string {
 }
 
 func formatEntry(r Result) string {
+	path := terminaltext.Sanitize(r.Chunk.Path)
+	text := terminaltext.Sanitize(r.Chunk.Text)
 	reason := "keyword match"
 	if len(r.MatchedTerms) > 0 {
-		reason = fmt.Sprintf("matched %q", strings.Join(r.MatchedTerms, ", "))
+		reason = fmt.Sprintf("matched %q", terminaltext.Sanitize(strings.Join(r.MatchedTerms, ", ")))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "- file: %s lines %d-%d\n", r.Chunk.Path, r.Chunk.StartLine, r.Chunk.EndLine)
+	fmt.Fprintf(&b, "- file: %s lines %d-%d\n", path, r.Chunk.StartLine, r.Chunk.EndLine)
 	fmt.Fprintf(&b, "  reason: %s\n", reason)
 	b.WriteString("  content:\n")
-	for _, line := range strings.Split(r.Chunk.Text, "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		b.WriteString("    " + line + "\n")
 	}
 	return b.String()

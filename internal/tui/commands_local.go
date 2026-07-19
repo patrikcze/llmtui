@@ -23,6 +23,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/rag"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
@@ -272,9 +273,9 @@ func (m *Model) promptPreviewOverlay(rawOnly bool) string {
 		if rawOnly && s.Title != "Raw User Message" {
 			continue
 		}
-		b.WriteString(m.theme.UserLabel.Render(s.Title) + "\n")
+		b.WriteString(m.theme.UserLabel.Render(terminaltext.Sanitize(s.Title)) + "\n")
 		for _, line := range strings.Split(s.Content, "\n") {
-			b.WriteString("  " + m.theme.StatusValue.Render(line) + "\n")
+			b.WriteString("  " + m.theme.StatusValue.Render(terminaltext.Sanitize(line)) + "\n")
 		}
 		b.WriteString("\n")
 	}

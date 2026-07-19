@@ -103,6 +103,21 @@ func TestWebFetchFormatsPage(t *testing.T) {
 	}
 }
 
+func TestWebResultsSanitizeTerminalControlSequences(t *testing.T) {
+	stub := &stubWeb{
+		results: []web.SearchResult{{Title: "safe\x1b]0;title\x07", URL: "https://example.com", Snippet: "clip\x1b]52;c;YQ==\x07"}},
+		page:    web.Page{URL: "https://example.com", Content: "body\x1b[2J"},
+	}
+	for _, res := range []Result{
+		webRunner(t, stub).Execute(Call{Tool: ToolWebSearch, Body: "q"}),
+		webRunner(t, stub).Execute(Call{Tool: ToolWebFetch, Path: "https://example.com"}),
+	} {
+		if strings.ContainsRune(res.Output, '\x1b') || strings.ContainsRune(res.Output, '\x07') || strings.Contains(res.Output, "YQ==") {
+			t.Fatalf("terminal sequence survived web tool result: %q", res.Output)
+		}
+	}
+}
+
 func TestWebFetchErrorKeepsBody(t *testing.T) {
 	stub := &stubWeb{page: web.Page{Status: 404, Content: "gone"}, err: errors.New("fetch failed: status 404")}
 	res := webRunner(t, stub).Execute(Call{Tool: ToolWebFetch, Path: "https://a.example/x"})

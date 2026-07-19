@@ -12,6 +12,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
 
@@ -446,21 +447,22 @@ func (m *Model) helpOverlay(topic string) string {
 
 func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
 	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("models on "+m.prov.Name()) + "\n\n")
+	b.WriteString(m.theme.Badge.Render("models on "+terminaltext.Sanitize(m.prov.Name())) + "\n\n")
 
 	if len(models) == 0 {
 		b.WriteString(m.theme.SystemNote.Render("no models found") + "\n")
 	}
 	for i, mi := range models {
 		marker := "  "
-		label := m.theme.StatusValue.Render(mi.ID)
+		id := terminaltext.Sanitize(mi.ID)
+		label := m.theme.StatusValue.Render(id)
 		if m.pickerKind == pickerModel && i == m.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(mi.ID)
+			label = m.theme.BadgeOK.Render(id)
 		}
 		line := marker + label
 		if mi.Description != "" {
-			line += "  " + m.theme.StatusBar.Render(mi.Description)
+			line += "  " + m.theme.StatusBar.Render(terminaltext.Sanitize(mi.Description))
 		}
 		b.WriteString(line + "\n")
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/web"
 )
 
@@ -38,14 +39,14 @@ func (r *Runner) webSearch(c Call) (string, error) {
 		return "", err
 	}
 	if len(results) == 0 {
-		return fmt.Sprintf("no results for %q", query), nil
+		return fmt.Sprintf("no results for %q", terminaltext.Sanitize(query)), nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d results for %q\n", len(results), query)
+	fmt.Fprintf(&b, "%d results for %q\n", len(results), terminaltext.Sanitize(query))
 	for i, res := range results {
-		fmt.Fprintf(&b, "\n%d. %s — %s\n", i+1, res.Title, res.URL)
+		fmt.Fprintf(&b, "\n%d. %s — %s\n", i+1, terminaltext.Sanitize(res.Title), terminaltext.Sanitize(res.URL))
 		if res.Snippet != "" {
-			fmt.Fprintf(&b, "   %s\n", res.Snippet)
+			fmt.Fprintf(&b, "   %s\n", terminaltext.Sanitize(res.Snippet))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
@@ -61,13 +62,13 @@ func (r *Runner) webFetch(c Call) (string, error) {
 	}
 	page, err := r.Web.Fetch(context.Background(), rawURL)
 	if err != nil {
-		return page.Content, err
+		return terminaltext.Sanitize(page.Content), err
 	}
-	head := fmt.Sprintf("fetched %s — %.1f KB, status %d", page.URL, float64(page.Bytes)/1024, page.Status)
+	head := fmt.Sprintf("fetched %s — %.1f KB, status %d", terminaltext.Sanitize(page.URL), float64(page.Bytes)/1024, page.Status)
 	if page.Truncated {
 		head += ", truncated"
 	}
-	return head + "\n\n" + page.Content, nil
+	return head + "\n\n" + terminaltext.Sanitize(page.Content), nil
 }
 
 // webInstructions is the guidance shared by both protocols when web access

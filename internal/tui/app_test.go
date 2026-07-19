@@ -63,6 +63,28 @@ func TestCtrlVAttachesClipboardImage(t *testing.T) {
 	}
 }
 
+func TestProviderAndTranscriptTerminalContentIsSanitized(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type:  provider.EventDelta,
+		Delta: "safe\x1b]52;c;Y2xpcA==\x07 text\x1b[2J",
+	}, ok: true, gen: m.streamGen})
+	if got := m.streamBuf.String(); got != "safe text" {
+		t.Fatalf("stream buffer = %q, want sanitized provider text", got)
+	}
+
+	m.session.Messages = append(m.session.Messages,
+		provider.Message{Role: provider.RoleUser, Content: "user\x1b]0;spoof\x07"},
+		provider.Message{Role: provider.RoleTool, ToolName: "mcp", Content: "tool\x1b[2J"},
+	)
+	m.refreshViewport()
+	view := m.viewport.View()
+	if strings.Contains(view, "spoof") || strings.ContainsRune(view, '\x07') {
+		t.Fatalf("terminal payload survived transcript rendering: %q", view)
+	}
+}
+
 func TestCtrlVRefusedForNonVisionModel(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "qwen3:8b"

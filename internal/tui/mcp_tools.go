@@ -12,6 +12,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -105,7 +106,7 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 		}
 		return res
 	}
-	content := out.Content
+	content := terminaltext.Sanitize(out.Content)
 	if maxBytes > 0 && len(content) > maxBytes {
 		content = content[:maxBytes] + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", maxBytes, len(out.Content))
 	}

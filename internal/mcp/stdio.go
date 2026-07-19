@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/procutil"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
 // protocolVersion is the MCP revision llmtui speaks during initialize.
@@ -198,10 +199,14 @@ func (c *StdioClient) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 	out := make([]Tool, 0, len(payload.Tools))
 	for _, t := range payload.Tools {
+		name := terminaltext.Sanitize(t.Name)
+		if name == "" {
+			return nil, fmt.Errorf("mcp: tools/list returned a tool without a printable name")
+		}
 		out = append(out, Tool{
 			Server:      c.cfg.Name,
-			Name:        t.Name,
-			Description: t.Description,
+			Name:        name,
+			Description: terminaltext.Sanitize(t.Description),
 			Schema:      t.InputSchema,
 		})
 	}

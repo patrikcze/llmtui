@@ -70,6 +70,22 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 	}
 }
 
+func TestExecuteMCPCallSanitizesTerminalControlSequences(t *testing.T) {
+	reg := newConnectedMCPRegistry(t, "hostile", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: "safe\x1b]52;c;Y2xpcA==\x07 text\x1b[2J"}, nil
+	})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "hostile", MCPTool: "result", MCPArgs: `{}`}, 0)
+	if res.Err != nil {
+		t.Fatalf("executeMCPCall: %v", res.Err)
+	}
+	if strings.ContainsRune(res.Output, '\x1b') || strings.ContainsRune(res.Output, '\x07') || strings.Contains(res.Output, "Y2xpcA==") {
+		t.Fatalf("terminal sequence survived MCP result: %q", res.Output)
+	}
+	if res.Output != "safe text" {
+		t.Fatalf("sanitized output = %q", res.Output)
+	}
+}
+
 func TestExecuteMCPCallServerReportsIsError(t *testing.T) {
 	reg := newConnectedMCPRegistry(t, "jiraWorklog", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
 		return mcp.Result{Content: "issue key not found", IsError: true}, nil

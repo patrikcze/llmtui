@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
@@ -77,7 +78,7 @@ func (m *Model) renderActivity() string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(m.theme.Spinner.Render(glyph) + " " + m.theme.SystemNote.Render(e.call.Describe()))
+		b.WriteString(m.theme.Spinner.Render(glyph) + " " + m.theme.SystemNote.Render(terminaltext.Sanitize(e.call.Describe())))
 	}
 	if overflow > 0 {
 		b.WriteString("\n" + m.theme.SystemNote.Render(fmt.Sprintf("  … +%d more call(s)", overflow)))

@@ -38,6 +38,24 @@ func TestBuildIndexesTextFiles(t *testing.T) {
 	}
 }
 
+func TestFormatContextSanitizesTerminalControlSequences(t *testing.T) {
+	out := FormatContext([]Result{{
+		Chunk: DocumentChunk{
+			Path:      "docs/\x1b]0;title\x07readme.md",
+			StartLine: 1,
+			EndLine:   1,
+			Text:      "safe \x1b]52;c;Y2xpcA==\x07 text \x1b[2J",
+		},
+		MatchedTerms: []string{"\x1b[31mterm"},
+	}}, 4096)
+	if strings.ContainsRune(out, '\x1b') || strings.ContainsRune(out, '\x07') || strings.Contains(out, "Y2xpcA==") {
+		t.Fatalf("terminal sequence survived RAG formatting: %q", out)
+	}
+	if !strings.Contains(out, "safe  text") {
+		t.Fatalf("safe content was lost: %q", out)
+	}
+}
+
 func TestBuildSkipsBinary(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "text.txt", "hello world readable")

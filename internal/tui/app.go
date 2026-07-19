@@ -31,6 +31,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/skill"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
@@ -1541,7 +1542,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDelta:
-		delta := msg.event.Delta
+		delta := terminaltext.Sanitize(msg.event.Delta)
 		if m.thinkFilter != nil {
 			answer, reasoning := m.thinkFilter.Feed(delta)
 			if reasoning != "" {
@@ -1785,6 +1786,7 @@ func (m *Model) resize(w, h int) {
 }
 
 func (m *Model) renderMarkdown(s string) string {
+	s = terminaltext.Sanitize(s)
 	if !m.cfg.UI.Markdown || m.renderer == nil {
 		return s
 	}
@@ -1817,7 +1819,7 @@ func (m *Model) refreshViewport() {
 			mode = "auto-approve"
 		}
 		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
-			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, m.toolRunner.Root())))
+			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
 		b.WriteString("\n\n")
 	}
 
@@ -1850,10 +1852,10 @@ func (m *Model) refreshViewport() {
 				if m.toolsShowOutput {
 					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
 					b.WriteString("\n")
-					b.WriteString(m.theme.SystemNote.Render(msg.Content))
+					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
 					b.WriteString("\n")
 				} else {
-					b.WriteString(m.theme.SystemNote.Render(tools.CollapseResults(msg.Content)))
+					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
 					b.WriteString("\n")
 				}
 				if msg.Display != "" {
@@ -1864,7 +1866,7 @@ func (m *Model) refreshViewport() {
 			}
 			b.WriteString(m.theme.UserLabel.Render("you"))
 			b.WriteString("\n")
-			b.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(msg.Content))
+			b.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(terminaltext.Sanitize(msg.Content)))
 			for i := range msg.Images {
 				if i == 0 && msg.Content != "" {
 					b.WriteString(" ")
@@ -1903,7 +1905,7 @@ func (m *Model) refreshViewport() {
 							line, style = "● "+c.Describe(), okGlyph
 						}
 					}
-					b.WriteString(style.Render(line))
+					b.WriteString(style.Render(terminaltext.Sanitize(line)))
 					b.WriteString("\n")
 				}
 			}
@@ -1918,13 +1920,13 @@ func (m *Model) refreshViewport() {
 			case msg.Display != "":
 				b.WriteString(m.renderToolDiff(msg.Display))
 			case m.toolsShowOutput:
-				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + msg.ToolName))
+				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + terminaltext.Sanitize(msg.ToolName)))
 				b.WriteString("\n")
-				b.WriteString(m.theme.SystemNote.Render(msg.Content))
+				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
 				b.WriteString("\n")
 			default:
-				b.WriteString(m.theme.SystemNote.Render(
-					"  ⎿ " + tools.SummarizeOutput(msg.Content)))
+				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
+					"  ⎿ " + tools.SummarizeOutput(msg.Content))))
 				b.WriteString("\n")
 			}
 			b.WriteString("\n")
@@ -1936,7 +1938,7 @@ func (m *Model) refreshViewport() {
 		b.WriteString("\n")
 		switch {
 		case m.streamBuf.Len() > 0:
-			b.WriteString(m.streamBuf.String())
+			b.WriteString(terminaltext.Sanitize(m.streamBuf.String()))
 			b.WriteString("\n")
 		case m.reasoningLen > 0:
 			// Reasoning model is still thinking; show progress so the wait
@@ -1948,7 +1950,7 @@ func (m *Model) refreshViewport() {
 	}
 
 	if m.errText != "" {
-		b.WriteString(m.theme.ErrorText.Render("✗ " + m.errText))
+		b.WriteString(m.theme.ErrorText.Render(terminaltext.Sanitize("✗ " + m.errText)))
 		b.WriteString("\n")
 	}
 
@@ -1967,6 +1969,7 @@ func (m *Model) refreshViewport() {
 // context dim. In compact mode long diffs are capped; /tools output lifts
 // the cap.
 func (m *Model) renderToolDiff(display string) string {
+	display = terminaltext.Sanitize(display)
 	lines := strings.Split(display, "\n")
 	const maxRows = 24
 	truncated := 0
@@ -2013,7 +2016,7 @@ func (m *Model) renderApprovalPrompt() string {
 		b.WriteString(text.Render("  the model wants to keep going:"))
 		b.WriteString("\n")
 		for _, c := range m.pendingCalls {
-			b.WriteString(text.Render("    " + c.Describe()))
+			b.WriteString(text.Render("    " + terminaltext.Sanitize(c.Describe())))
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
@@ -2041,15 +2044,15 @@ func (m *Model) renderApprovalPrompt() string {
 		case tools.ToolRunCommand:
 			b.WriteString(m.theme.BadgeWarn.Render("⚒ run command"))
 			b.WriteString("\n")
-			b.WriteString(text.Render("    " + strings.TrimSpace(c.Body)))
+			b.WriteString(text.Render("    " + terminaltext.Sanitize(strings.TrimSpace(c.Body))))
 			b.WriteString("\n")
 		case tools.ToolWriteFile:
 			b.WriteString(m.theme.BadgeWarn.Render("⚒ write file"))
 			b.WriteString("\n")
-			b.WriteString(text.Render(fmt.Sprintf("    %s (%d bytes)", c.Path, len(c.Body))))
+			b.WriteString(text.Render(fmt.Sprintf("    %s (%d bytes)", terminaltext.Sanitize(c.Path), len(c.Body))))
 			b.WriteString("\n")
 		default:
-			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + c.Describe()))
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + terminaltext.Sanitize(c.Describe())))
 			b.WriteString("\n")
 		}
 	}
@@ -2106,16 +2109,16 @@ func (m *Model) View() string {
 	}
 	ctxWindow, _ := m.contextWindow()
 	status := components.StatusBar(m.theme, components.StatusBarData{
-		Provider:     m.prov.Name(),
-		Model:        m.model,
+		Provider:     terminaltext.Sanitize(m.prov.Name()),
+		Model:        terminaltext.Sanitize(m.model),
 		Connected:    m.connected,
 		DemoMode:     m.demoMode,
 		TotalTokens:  m.session.TotalTokens(),
 		LastTPS:      m.lastTPS,
 		Estimated:    m.session.AnyEstimated,
-		Profile:      profileLabel,
+		Profile:      terminaltext.Sanitize(profileLabel),
 		PromptMode:   m.effectivePromptMode(),
-		Template:     m.template,
+		Template:     terminaltext.Sanitize(m.template),
 		ContextUsed:  contextmgr.EstimateTokens(m.session.Messages),
 		ContextLimit: ctxWindow,
 		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
@@ -2130,7 +2133,7 @@ func (m *Model) View() string {
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
-		help = m.theme.BadgeOK.Render(m.notice)
+		help = m.theme.BadgeOK.Render(terminaltext.Sanitize(m.notice))
 	}
 	if len(m.pendingCalls) > 0 {
 		if m.pendingBudget {
