@@ -137,6 +137,11 @@ func (c *StdioClient) Connect(ctx context.Context) error {
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("mcp: start %q: %w", c.cfg.Command, err)
 		}
+		if err := procutil.TrackProcess(cmd); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return fmt.Errorf("mcp: contain %q process tree: %w", c.cfg.Command, err)
+		}
 		c.cmd = cmd
 		c.w = stdin
 		c.r = bufio.NewReader(stdout)

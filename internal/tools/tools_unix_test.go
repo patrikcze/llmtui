@@ -33,3 +33,24 @@ func TestRunCommandKillsBackgroundDescendants(t *testing.T) {
 	}
 	t.Fatalf("background process pid %d outlived run_command", pid)
 }
+
+func TestRunCommandTimeoutReapsGrandchild(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	r.CommandTimeout = 100 * time.Millisecond
+	out, err := r.runCommand(`sleep 30 & echo $!; wait`)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(strings.Split(out, "\n")[0]))
+	if parseErr != nil {
+		t.Fatalf("no grandchild pid in output %q: %v", out, parseErr)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %d survived the run_command timeout", pid)
+}

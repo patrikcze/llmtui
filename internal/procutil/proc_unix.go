@@ -11,6 +11,10 @@ import (
 // SetupProcAttr puts the subprocess in its own process group.
 func SetupProcAttr(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
 
+// TrackProcess is a no-op on Unix: SetupProcAttr establishes containment
+// before Start.
+func TrackProcess(cmd *exec.Cmd) error { return nil }
+
 // Terminate asks the process group to exit, gives it a grace period, then
 // forces it and reaps the direct child.
 //

@@ -13,6 +13,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -433,12 +434,23 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	// blocked indefinitely after the context kills the direct shell.
 	cmd.WaitDelay = time.Second
 
-	out, err := cmd.CombinedOutput()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start command: %w", err)
+	}
+	if err := procutil.TrackProcess(cmd); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", fmt.Errorf("contain command process tree: %w", err)
+	}
+	err := cmd.Wait()
 	// Commands are synchronous by contract (one command per block), so any
 	// process still in the group — a backgrounded `cmd &`, a timed-out tree —
 	// must not outlive the tool call.
 	procutil.KillGroup(cmd)
-	output := strings.TrimRight(string(out), "\n")
+	output := strings.TrimRight(out.String(), "\n")
 	if limit := r.maxKB * 1024; len(output) > limit {
 		output = output[:limit] + "\n… output truncated"
 	}
