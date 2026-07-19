@@ -1066,7 +1066,8 @@ func cmdTools(m *Model, args string) tea.Cmd {
 		m.notice = "workspace tools disabled"
 	case "ask":
 		m.toolsAutoApprove = false
-		m.notice = "⚒ tools will ask before writes and non-read-only commands"
+		m.approvalPolicy.Clear()
+		m.notice = "⚒ tools will ask before writes and non-read-only commands; temporary grants revoked"
 	case "auto":
 		m.toolsAutoApprove = true
 		m.notice = "⚒ tool approvals set to auto — writes and commands run without asking"
@@ -1530,6 +1531,8 @@ func (m *Model) toolsOverlay() string {
 	approval := "ask (y/n before writes & commands)"
 	if m.toolsAutoApprove {
 		approval = "auto (no confirmation)"
+	} else if n := m.approvalPolicy.Active(time.Now()); n > 0 {
+		approval = fmt.Sprintf("ask + %d scoped grant(s), each expiring within 15 min", n)
 	}
 	protocol := "prompt-based (fenced blocks)"
 	if m.toolsNative {

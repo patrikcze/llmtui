@@ -733,7 +733,6 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 	root := t.TempDir()
 	m.toolsOn = true
 	m.toolsAutoApprove = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(root, 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
@@ -741,7 +740,7 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 		}}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -782,13 +781,12 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 func TestMCPBatchCancelViaEsc(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -829,13 +827,12 @@ func TestMCPBatchCancelViaEsc(t *testing.T) {
 func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -889,7 +886,6 @@ func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
 func TestMCPStaleBatchDoesNotClobberResendBatch(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, Delay: 50 * time.Millisecond, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
@@ -897,7 +893,7 @@ func TestMCPStaleBatchDoesNotClobberResendBatch(t *testing.T) {
 		}}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -961,7 +957,7 @@ func TestMCPStaleBatchDoesNotClobberResendBatch(t *testing.T) {
 	}
 }
 
-func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
+func TestApprovalAlwaysScopesToExactCapability(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
 	m.toolsOn = true
@@ -974,26 +970,28 @@ func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	// A pure-native batch: "Always" must not grant mcpAutoApprove.
-	m.pendingCalls = []tools.Call{{ID: "c1", Tool: tools.ToolWriteFile, Path: "a.txt", Body: "x"}}
+	writeA := tools.Call{ID: "c1", Tool: tools.ToolWriteFile, Path: "a.txt", Body: "x"}
+	m.pendingCalls = []tools.Call{writeA}
 	m.resolveApproval(approvalAlways)
-	if !m.toolsAutoApprove {
-		t.Error("native Always did not set toolsAutoApprove")
+	if m.callNeedsApproval(writeA) {
+		t.Error("matching write did not receive a scoped grant")
 	}
-	if m.mcpAutoApprove {
-		t.Error("native-only Always must not also grant mcpAutoApprove")
+	if !m.callNeedsApproval(tools.Call{Tool: tools.ToolWriteFile, Path: "b.txt", Body: "x"}) {
+		t.Error("write grant escaped to a different path")
+	}
+	if !m.callNeedsApproval(tools.Call{MCPServer: "srv", MCPTool: "t", MCPArgs: "{}"}) {
+		t.Error("native grant escaped to MCP")
 	}
 
-	// Reset and check the reverse: a pure-MCP batch must not grant toolsAutoApprove.
-	m.toolsAutoApprove = false
-	m.mcpAutoApprove = false
-	m.pendingCalls = []tools.Call{{ID: "c2", MCPServer: "srv", MCPTool: "t", MCPArgs: "{}"}}
+	m.approvalPolicy.Clear()
+	mcpCall := tools.Call{ID: "c2", MCPServer: "srv", MCPTool: "t", MCPArgs: "{}"}
+	m.pendingCalls = []tools.Call{mcpCall}
 	m.resolveApproval(approvalAlways)
-	if m.toolsAutoApprove {
-		t.Error("mcp-only Always must not also grant toolsAutoApprove")
+	if m.callNeedsApproval(mcpCall) {
+		t.Error("matching MCP call did not receive a scoped grant")
 	}
-	if !m.mcpAutoApprove {
-		t.Error("mcp Always did not set mcpAutoApprove")
+	if !m.callNeedsApproval(tools.Call{MCPServer: "srv", MCPTool: "other", MCPArgs: "{}"}) {
+		t.Error("MCP grant escaped to a different tool")
 	}
 }
 
@@ -1007,13 +1005,12 @@ func TestApprovalAlwaysScopesToBatchKinds(t *testing.T) {
 func TestSendBlockedDuringAsyncMCPBatch(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, Delay: time.Second}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)

@@ -14,19 +14,18 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
-// newActivityTestModel wires a model with tools on, MCP auto-approved, and
+// newActivityTestModel wires a model with tools on, an auto-approved MCP
 // one connected mock server whose calls block for delay (0 = instant echo).
 func newActivityTestModel(t *testing.T, delay time.Duration) *Model {
 	t.Helper()
 	m := newTestModel(t)
 	m.toolsOn = true
-	m.mcpAutoApprove = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
 		return &mcp.MockClient{ServerName: c.Name, Delay: delay}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
-		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Timeout: 5 * time.Second,
+		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,
 	}}, factory)
 	if err := m.mcpRegistry.Connect(context.Background(), "jiraWorklog"); err != nil {
 		t.Fatalf("connect: %v", err)

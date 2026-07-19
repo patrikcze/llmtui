@@ -185,8 +185,12 @@ func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected execution after choosing 2")
 	}
-	if !m.toolsAutoApprove {
-		t.Error("row 2 must enable session auto-approve")
+	call := tools.Call{Tool: tools.ToolWriteFile, Path: "a.txt", Body: "data\n"}
+	if m.callNeedsApproval(call) {
+		t.Error("row 2 must grant the matching action")
+	}
+	if !m.callNeedsApproval(tools.Call{Tool: tools.ToolWriteFile, Path: "other.txt", Body: "data\n"}) {
+		t.Error("row 2 grant must not cover a different path")
 	}
 }
 
@@ -221,7 +225,7 @@ func TestApprovalMenuRendering(t *testing.T) {
 	for _, want := range []string{
 		"run command", "rm -i old.txt",
 		"Do you want to proceed?",
-		"❯ 1. Yes", "2. Yes, and don't ask again this session", "3. No",
+		"❯ 1. Yes", "2. Yes, allow these exact actions for 15 minutes", "3. No",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("approval prompt missing %q", want)
