@@ -100,18 +100,35 @@ func SplitMCPToolName(name string) (server, tool string, ok bool) {
 	return server, tool, true
 }
 
-// EnsureToolCallIDs fills in IDs for native tool calls whose backend supplied
-// none (Ollama's native API carries no call IDs; some OpenAI-compatible
-// servers omit them). It must run before the calls are stored on the
+// EnsureToolCallIDs fills in missing IDs and rewrites duplicates in a native
+// tool-call batch (Ollama carries no call IDs; some OpenAI-compatible servers
+// omit or reuse them). It must run before the calls are stored on the
 // assistant message, so the stored message and the role:"tool" results built
 // from these same calls always agree on IDs — a result answering an ID the
 // assistant message doesn't carry is protocol-invalid for strict backends.
 // seq persists across rounds so generated IDs never collide within a session.
 func EnsureToolCallIDs(tcs []provider.ToolCall, seq *int) {
+	reserved := make(map[string]bool, len(tcs))
+	for _, tc := range tcs {
+		if tc.ID != "" {
+			reserved[tc.ID] = true
+		}
+	}
+	seen := make(map[string]bool, len(tcs))
 	for i := range tcs {
-		if tcs[i].ID == "" {
+		if tcs[i].ID != "" && !seen[tcs[i].ID] {
+			seen[tcs[i].ID] = true
+			continue
+		}
+		for {
 			*seq++
-			tcs[i].ID = fmt.Sprintf("call_%d", *seq)
+			candidate := fmt.Sprintf("call_%d", *seq)
+			if seen[candidate] || reserved[candidate] {
+				continue
+			}
+			tcs[i].ID = candidate
+			seen[candidate] = true
+			break
 		}
 	}
 }
@@ -138,9 +155,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		var args nativeArgs
 		if strings.TrimSpace(tc.Arguments) != "" {
-			// A decode error leaves the fields empty; Execute reports what is
-			// missing (e.g. "read_file needs a path") and the model retries.
-			_ = json.Unmarshal([]byte(tc.Arguments), &args)
+			if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+				c.InputErr = err.Error()
+				out = append(out, c)
+				continue
+			}
 		}
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {

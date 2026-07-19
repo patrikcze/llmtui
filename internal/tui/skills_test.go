@@ -313,7 +313,7 @@ func TestSkillLoadMalformedArguments(t *testing.T) {
 		t.Error("malformed arguments activated a skill")
 	}
 	last := m.session.Messages[len(m.session.Messages)-1]
-	if !strings.Contains(last.Content, "skill_load needs a skill id") {
+	if !strings.Contains(last.Content, "invalid arguments for skill_load") {
 		t.Errorf("tool result = %q", last.Content)
 	}
 }

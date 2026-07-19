@@ -54,6 +54,10 @@ type Call struct {
 	Tool string
 	Path string
 	Body string
+	// InputErr records malformed native JSON arguments. The call remains in
+	// the batch so the model receives a correlated tool error, but Execute
+	// must not run a zero-valued approximation of the requested operation.
+	InputErr string
 	// Max caps web_search results (native max_results argument).
 	Max int
 
@@ -224,6 +228,10 @@ func (r *Runner) checkSymlinkEscape(abs string) error {
 // Execute runs one call and never panics; errors land in Result.Err.
 func (r *Runner) Execute(c Call) Result {
 	res := Result{Call: c}
+	if c.InputErr != "" {
+		res.Err = fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr)
+		return res
+	}
 	switch c.Tool {
 	case ToolListDir:
 		res.Output, res.Err = r.listDir(c.Path)

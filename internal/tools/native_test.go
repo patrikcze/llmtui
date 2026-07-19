@@ -2,6 +2,8 @@ package tools
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,7 +65,7 @@ func TestCallsFromNative(t *testing.T) {
 		{
 			name: "malformed arguments still produce a call",
 			in:   provider.ToolCall{ID: "c4", Name: ToolReadFile, Arguments: `{not json`},
-			want: Call{ID: "c4", Tool: ToolReadFile},
+			want: Call{ID: "c4", Tool: ToolReadFile, InputErr: "invalid character 'n' looking for beginning of object key string"},
 		},
 		{
 			name: "unknown tool passes through for the runner to report",
@@ -291,5 +293,48 @@ func TestEnsureToolCallIDs(t *testing.T) {
 	EnsureToolCallIDs(batch2, &seq)
 	if batch2[0].ID == batch1[0].ID || batch2[0].ID == batch1[2].ID {
 		t.Errorf("generated ID %q collides across rounds", batch2[0].ID)
+	}
+}
+
+func TestEnsureToolCallIDsRewritesDuplicates(t *testing.T) {
+	seq := 0
+	calls := []provider.ToolCall{
+		{ID: "duplicate", Name: ToolReadFile},
+		{ID: "duplicate", Name: ToolListDir},
+		{ID: "call_1", Name: ToolRunCommand},
+		{Name: ToolWriteFile},
+	}
+	EnsureToolCallIDs(calls, &seq)
+	seen := map[string]bool{}
+	for _, call := range calls {
+		if call.ID == "" || seen[call.ID] {
+			t.Fatalf("IDs are not unique: %+v", calls)
+		}
+		seen[call.ID] = true
+	}
+	if calls[0].ID != "duplicate" {
+		t.Fatalf("first backend ID changed to %q", calls[0].ID)
+	}
+	if calls[2].ID != "call_1" {
+		t.Fatalf("unique backend ID changed to %q", calls[2].ID)
+	}
+}
+
+func TestMalformedNativeArgumentsNeverExecute(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	calls := CallsFromNative([]provider.ToolCall{{
+		ID:        "bad",
+		Name:      ToolWriteFile,
+		Arguments: `{"path":"created.txt","content":"oops"`,
+	}})
+	if len(calls) != 1 || calls[0].InputErr == "" {
+		t.Fatalf("malformed call = %+v", calls)
+	}
+	res := r.Execute(calls[0])
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "invalid arguments") {
+		t.Fatalf("execute error = %v, want invalid arguments", res.Err)
+	}
+	if _, err := os.Stat(filepath.Join(r.Root(), "created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("malformed write created a file: %v", err)
 	}
 }
