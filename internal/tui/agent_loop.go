@@ -379,13 +379,26 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	return m, persist
 }
 
+// verifierRetryPrefix marks an objective as a verifier-failure retry. It is
+// stripped from the incoming objective before being reapplied so repeated
+// verifier failures on the same underlying objective produce an identical
+// RecommendedNext string instead of nesting a new prefix every cycle — an
+// ever-growing string would defeat agent.failureKey's repeated-failure dedup
+// (each cycle would look like a "new" failure) and never trip
+// MaxRepeatedFailures.
+const verifierRetryPrefix = "Retry the bounded objective with a concise observable evidence summary: "
+
 func verificationFailureResult(runErr agent.RunError, objective string) agent.VerificationResult {
+	base := strings.TrimSpace(objective)
+	for strings.HasPrefix(base, verifierRetryPrefix) {
+		base = strings.TrimSpace(strings.TrimPrefix(base, verifierRetryPrefix))
+	}
 	result := agent.VerificationResult{
 		Verdict:         agent.VerificationInconclusive,
 		Summary:         "verifier failed: " + runErr.Message,
 		Evidence:        []string{"verifier error: " + string(runErr.Kind)},
 		Retryable:       true,
-		RecommendedNext: "Retry the bounded objective with a concise observable evidence summary: " + objective,
+		RecommendedNext: verifierRetryPrefix + base,
 		StrategyChanged: true,
 	}
 	if runErr.Kind == agent.ErrorTimeout || runErr.Kind == agent.ErrorProvider {
