@@ -82,6 +82,57 @@ func TestChatStreamingNDJSON(t *testing.T) {
 	}
 }
 
+// collectDoneEvent drains the channel and returns the last EventDone seen,
+// so tests can inspect fields (like Truncated) that the plain collect
+// helper above doesn't expose.
+func collectDoneEvent(t *testing.T, events <-chan provider.ChatEvent) provider.ChatEvent {
+	t.Helper()
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	return done
+}
+
+func TestChatStreamingSurfacesTruncation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprintln(w, `{"message":{"content":"partial"},"done":false}`)
+		fmt.Fprintln(w, `{"message":{"content":""},"done":true,"done_reason":"length"}`)
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.Truncated {
+		t.Fatal("Truncated = false, want true for done_reason=length")
+	}
+}
+
+func TestChatStreamingDoneReasonStopIsNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprintln(w, `{"message":{"content":"done"},"done":true,"done_reason":"stop"}`)
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if done.Truncated {
+		t.Fatal("Truncated = true, want false for done_reason=stop")
+	}
+}
+
 func TestChatStreamError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"error":"model not loaded"}`)
