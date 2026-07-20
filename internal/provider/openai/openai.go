@@ -362,6 +362,7 @@ type chatCompletionResponse struct {
 			ReasoningContent string         `json:"reasoning_content"`
 			ToolCalls        []wireToolCall `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *usagePayload `json:"usage"`
 }
@@ -412,7 +413,9 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	if usage == nil {
 		usage = estimateUsage(req, content)
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls})
+	finishReason := out.Choices[0].FinishReason
+	truncated := finishReason != nil && *finishReason == "length"
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated})
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {

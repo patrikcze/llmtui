@@ -141,6 +141,103 @@ func TestChatNonStreaming(t *testing.T) {
 	}
 }
 
+// collectDoneEvent drains the channel and returns the last EventDone seen,
+// so tests can inspect fields (like Truncated) that the plain collect
+// helper above doesn't expose.
+func collectDoneEvent(t *testing.T, events <-chan provider.ChatEvent) provider.ChatEvent {
+	t.Helper()
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	return done
+}
+
+func TestChatStreamingSurfacesTruncation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.Truncated {
+		t.Fatal("Truncated = false, want true for finish_reason=length")
+	}
+}
+
+func TestChatStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if done.Truncated {
+		t.Fatal("Truncated = true, want false for finish_reason=stop")
+	}
+}
+
+func TestChatNonStreamingSurfacesTruncation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": "cut off mid-"},
+				"finish_reason": "length",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.Truncated {
+		t.Fatal("Truncated = false, want true for finish_reason=length")
+	}
+}
+
+func TestChatNonStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": "complete reply"},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if done.Truncated {
+		t.Fatal("Truncated = true, want false for finish_reason=stop")
+	}
+}
+
 func TestChatHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)

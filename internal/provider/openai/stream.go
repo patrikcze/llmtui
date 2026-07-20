@@ -106,6 +106,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		reasoning   strings.Builder
 		toolCalls   toolCallAccumulator
 		streamBytes int
+		finishLen   bool
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -139,6 +140,9 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			usage = chunk.Usage.toUsage()
 		}
 		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason == "length" {
+				finishLen = true
+			}
 			// Tool-call fragments carry no visible text; reassemble them and
 			// report them with the Done event.
 			if err := toolCalls.add(choice.Delta.ToolCalls); err != nil {
@@ -191,5 +195,5 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if usage == nil {
 		usage = estimateUsage(req, completion.String())
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls})
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls, Truncated: finishLen})
 }
