@@ -174,6 +174,12 @@ type ChatEvent struct {
 	// ToolCalls is set on EventDone when the model requested tool execution
 	// via native function calling.
 	ToolCalls []ToolCall
+	// Truncated is set on EventDone when the backend's finish/done reason
+	// indicates the completion was cut off by max_tokens rather than
+	// stopping naturally. A truncated turn's Delta/ToolCalls may be partial
+	// or malformed (e.g. a dropped, half-emitted tool call) and must not be
+	// treated as a normal completed answer.
+	Truncated bool
 }
 
 // Provider is implemented by every LLM backend.
