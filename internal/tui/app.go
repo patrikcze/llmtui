@@ -236,6 +236,11 @@ type Model struct {
 	keysRaw       bool
 	keyLog        []string
 	cfgPath       string
+
+	// Optional bounded verified loop. The implementation lives in
+	// agent_loop.go so ordinary chat remains a direct compatibility path.
+	agentOn   bool
+	agentLoop *agentLoopState
 }
 
 // New builds the chat model.
@@ -285,6 +290,7 @@ func New(opts Options) *Model {
 		ctxStrategy: ctxStrategy,
 		cfgPath:     opts.ConfigPath,
 		toolsOn:     cfg.Tools.Enabled,
+		agentOn:     cfg.Agent.Enabled,
 
 		toolsAutoApprove: cfg.Tools.Approve == "auto",
 		toolsNative:      cfg.Tools.Native != "off",
@@ -420,6 +426,7 @@ func (m *Model) rebuildFromConfig() {
 		})
 	}
 	m.profiles = append(profiles, modelprofile.BuiltIn()...)
+	m.configureAgentLoop()
 }
 
 // configureOperationLog keeps crash recovery independent from transcript
@@ -606,10 +613,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "text selection on — select & copy with your terminal, ctrl+o to switch back"
 			return m, tea.DisableMouse
 		case tea.KeyEsc:
-			if m.thinking && m.cancelStream != nil {
+			if m.agentVerifying() {
+				m.cancelVerifiedRun("verification cancelled by the user")
+				m.endAgentRun()
+				m.errText = "agent verification stopped"
+				m.refreshViewport()
+			} else if m.thinking && m.cancelStream != nil {
 				// Stop generation, keeping the partial reply.
 				m.cancelStream()
 				m.finishStream(nil)
+				m.cancelVerifiedRun("execution cancelled by the user")
 				m.endAgentRun() // a cancelled run clears run-scoped skills
 				m.errText = "generation stopped"
 				m.refreshViewport()
@@ -619,6 +632,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mcpBatchGen++
 				m.activity = nil
 				m.relayout()
+				m.cancelVerifiedRun("tool batch cancelled by the user")
 				m.endAgentRun()
 				m.errText = "tool batch cancelled"
 				m.refreshViewport()
@@ -712,6 +726,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStreamEvent(msg)
 
+	case agentVerificationMsg:
+		return m.handleAgentVerification(msg)
+
+	case agentPersistedMsg:
+		if msg.err != nil && m.agentLoop != nil && msg.runID == m.agentRunID() {
+			m.agentLoop.persistErr = msg.err
+			m.errText = "agent memory: " + msg.err.Error()
+			m.refreshViewport()
+		}
+		return m, nil
+
+	case agentResumeMsg:
+		return m.handleAgentResume(msg)
+
 	case clipboardImageMsg:
 		if msg.err != nil {
 			m.errText = msg.err.Error()
@@ -779,6 +807,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolOK++
 			}
 		}
+		m.recordAgentToolResults(msg.results, false)
 		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.results), m.toolDepth, m.toolMaxIter())
 		return m, m.sendToolResults(msg.results)
 
@@ -918,7 +947,7 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // second, concurrent dispatch would corrupt session.Messages ordering and
 // the in-flight request's own state (m.stream, m.cancelStream, m.toolDepth).
 func (m *Model) busy() bool {
-	return m.thinking || m.mcpBatchCancel != nil
+	return m.thinking || m.mcpBatchCancel != nil || m.agentVerifying()
 }
 
 func (m *Model) send() tea.Cmd {
@@ -943,6 +972,9 @@ func (m *Model) send() tea.Cmd {
 	m.relayout()
 	m.sentCount++
 	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
+	if m.agentOn {
+		return m.startVerifiedRun(text, images)
+	}
 	return m.dispatch(text, images)
 }
 
@@ -989,6 +1021,11 @@ func (m *Model) callNeedsApproval(c tools.Call) bool {
 func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
+	}
+	if m.agentToolBudgetExceeded(len(calls)) {
+		results := m.agentToolLimitResults(calls)
+		m.recordAgentToolResults(results, false)
+		return m.sendToolResults(results)
 	}
 	if m.toolDepth >= m.toolMaxIter() {
 		// A pending approval must own the next keypress and be visibly on
@@ -1065,7 +1102,9 @@ func (m *Model) denyPendingTools() tea.Cmd {
 	m.toolDepth++
 	m.toolErr += len(calls)
 	m.notice = fmt.Sprintf("✗ denied %d tool call(s)", len(calls))
-	return m.sendToolResults(tools.DeniedResults(calls))
+	results := tools.DeniedResults(calls)
+	m.recordAgentToolResults(results, true)
+	return m.sendToolResults(results)
 }
 
 func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
@@ -1329,9 +1368,16 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	}
 	m.ctrlCAt = time.Now()
 	switch {
+	case m.agentVerifying():
+		m.cancelVerifiedRun("verification cancelled by the user")
+		m.endAgentRun()
+		m.errText = "agent verification stopped"
+		m.notice = "press ctrl+c again to exit"
+		m.refreshViewport()
 	case m.thinking && m.cancelStream != nil:
 		m.cancelStream()
 		m.finishStream(nil)
+		m.cancelVerifiedRun("execution cancelled by the user")
 		m.endAgentRun()
 		m.errText = "generation stopped"
 		m.notice = "press ctrl+c again to exit"
@@ -1342,6 +1388,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.mcpBatchGen++
 		m.activity = nil
 		m.relayout()
+		m.cancelVerifiedRun("tool batch cancelled by the user")
 		m.endAgentRun()
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
@@ -1370,6 +1417,7 @@ func (m *Model) quit() tea.Cmd {
 	if m.cancelStream != nil {
 		m.cancelStream()
 	}
+	m.cancelVerifiedRun("application shutdown")
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(); err == nil { // best effort on exit
 			m.savedPath = path
@@ -1612,6 +1660,9 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// means the run is still in flight — cleanup happens on its own
 		// completion or denial path.)
 		if len(m.pendingCalls) == 0 {
+			if m.agentRunActive() {
+				return m, m.startAgentVerification()
+			}
 			m.endAgentRun()
 		}
 		return m, nil
@@ -1657,6 +1708,7 @@ func (m *Model) streamFailed(err error) {
 	}
 	m.idleWatchdog = nil
 	m.drainStream()
+	m.failVerifiedRun(err)
 	m.endAgentRun() // a failed run clears run-scoped skills
 	m.refreshViewport()
 }
@@ -1717,6 +1769,9 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	}
 
 	if usage != nil {
+		if m.agentRunActive() {
+			m.agentLoop.run.RecordUsage(usage.PromptTokens, usage.CompletionTokens, time.Now())
+		}
 		duration := time.Since(m.streamStart)
 		st := m.session.RecordUsage(*usage, duration)
 		m.lastTPS = st.TokensPerSec

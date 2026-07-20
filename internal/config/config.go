@@ -175,6 +175,7 @@ type AgentConfig struct {
 	Enabled             bool                `mapstructure:"enabled" yaml:"enabled"`
 	MaxCycles           int                 `mapstructure:"max_cycles" yaml:"max_cycles"`
 	MaxToolCalls        int                 `mapstructure:"max_tool_calls" yaml:"max_tool_calls"`
+	MaxTokens           int                 `mapstructure:"max_tokens" yaml:"max_tokens"`
 	MaxElapsed          string              `mapstructure:"max_elapsed" yaml:"max_elapsed"`
 	MaxRepeatedFailures int                 `mapstructure:"max_repeated_failures" yaml:"max_repeated_failures"`
 	Persist             bool                `mapstructure:"persist" yaml:"persist"`
@@ -520,7 +521,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"context_size", "gpu_layers",
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
-		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_elapsed",
+		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
 	} {
 		if err := v.BindEnv(key); err != nil {
 			return nil, fmt.Errorf("bind env %s: %w", key, err)
@@ -651,6 +652,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.enabled", false)
 	v.SetDefault("agent.max_cycles", 8)
 	v.SetDefault("agent.max_tool_calls", 32)
+	v.SetDefault("agent.max_tokens", 100000)
 	v.SetDefault("agent.max_elapsed", "30m")
 	v.SetDefault("agent.max_repeated_failures", 3)
 	v.SetDefault("agent.persist", true)
@@ -816,6 +818,7 @@ agent:
   enabled: false
   max_cycles: 8
   max_tool_calls: 32
+  max_tokens: 100000
   max_elapsed: "30m"
   max_repeated_failures: 3
   persist: true

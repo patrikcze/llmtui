@@ -58,7 +58,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Skills", "Plugins", "RAG", "MCP", "Diagnostics", "Session",
+	"Chat", "Agent", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Skills", "Plugins", "RAG", "MCP", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -97,6 +97,9 @@ func slashCommands() []slashCommand {
 		{name: "quit", aliases: []string{"exit"}, usage: "/quit", desc: "save session and exit llmtui", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			return m.quit()
 		}},
+
+		// --- Agent ---
+		{name: "agent", usage: "/agent [on|off|status|cancel|resume [run-id]]", desc: "bounded multi-cycle mode with fresh verification", category: "Agent", run: cmdAgent},
 
 		// --- Provider ---
 		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, run: cmdProvider},
@@ -238,8 +241,8 @@ func (m *Model) runSlashCommand() tea.Cmd {
 
 	for _, c := range slashCommands() {
 		if c.is(name) {
-			if m.thinking && c.blockWhileThinking {
-				m.errText = fmt.Sprintf("/%s is unavailable while a reply is streaming — esc to stop it first", c.name)
+			if m.busy() && c.blockWhileThinking {
+				m.errText = fmt.Sprintf("/%s is unavailable while work is in progress — esc to stop it first", c.name)
 				m.refreshViewport()
 				return nil
 			}

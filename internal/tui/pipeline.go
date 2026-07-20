@@ -56,6 +56,11 @@ type debugInfo struct {
 	WebEnabled    bool
 	RAGEnabled    bool
 	Reasoning     string
+	AgentRunID    string
+	AgentCycle    int
+	AgentStage    string
+	AgentStatus   string
+	AgentVerdict  string
 }
 
 type toolCallDiagnostic struct {
@@ -214,6 +219,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			RawMessage:       raw,
 			Images:           images,
 			SystemPrompt:     systemPrompt,
+			AgentDirective:   m.agentDirective(),
 			TemplateName:     m.template,
 			TemplatePrompt:   templatePrompt,
 			Mode:             m.effectivePromptMode(),
@@ -500,6 +506,7 @@ func toolSpecsFingerprint(specs []provider.ToolSpec) string {
 // dispatch sends a raw user message through composition, cache, and the
 // provider (with retry). Used by send() and /retry.
 func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
+	defer m.syncAgentDebug()
 	m.lastUserMsg = raw
 	m.lastImages = images
 	skipCache := m.bypassCache
@@ -673,6 +680,7 @@ func (m *Model) buildRequestWithTools(messages []provider.Message, specs []provi
 // session (native function-calling protocol). No user message is added and
 // the cache is not consulted: the conversation simply continues.
 func (m *Model) continueChat() tea.Cmd {
+	defer m.syncAgentDebug()
 	m.bypassCache = false // consumed: continuations never touch the cache
 	prepared, err := m.prepareRequest("", nil, true)
 	if err != nil {

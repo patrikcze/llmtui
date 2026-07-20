@@ -90,6 +90,9 @@ func (m *Model) activeSkillIDs() []string {
 // endAgentRun clears run-scoped skill activations. Called when a run reaches
 // its final answer, fails, is cancelled, or is answered from the cache.
 func (m *Model) endAgentRun() {
+	if m.agentRunActive() {
+		return
+	}
 	if m.skillMgr == nil {
 		return
 	}

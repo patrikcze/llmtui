@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,13 @@ var (
 	ErrRunNotFound = errors.New("agent run not found")
 	// ErrCorruptRun is returned for invalid, unsupported, or oversized state.
 	ErrCorruptRun = errors.New("corrupt agent run state")
+)
+
+var (
+	secretAssignmentPattern = regexp.MustCompile(`(?i)((?:token|secret|password|passwd|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;}]+`)
+	bearerPattern           = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
+	keyPattern              = regexp.MustCompile(`\b(?:sk|ghp|github_pat)-[A-Za-z0-9_-]{8,}\b`)
+	privateKeyPattern       = regexp.MustCompile(`(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----`)
 )
 
 // Store persists bounded run state. Implementations must be safe for use by
@@ -62,7 +70,7 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 	if run == nil || !validRunID(run.ID) {
 		return NewError(ErrorMemoryWrite, "save run", fmt.Errorf("%w: invalid run ID", ErrCorruptRun))
 	}
-	data, err := json.MarshalIndent(run, "", "  ")
+	data, err := encodePersistedRun(run, true)
 	if err != nil {
 		return NewError(ErrorMemoryWrite, "encode run", err)
 	}
@@ -277,7 +285,7 @@ func (s *MemoryStore) Save(ctx context.Context, run *AgentRun) error {
 	if run == nil || !validRunID(run.ID) {
 		return NewError(ErrorMemoryWrite, "save run", fmt.Errorf("%w: invalid run", ErrCorruptRun))
 	}
-	data, err := json.Marshal(run)
+	data, err := encodePersistedRun(run, false)
 	if err != nil {
 		return err
 	}
@@ -321,3 +329,47 @@ func (s *MemoryStore) Latest(ctx context.Context) (*AgentRun, error) {
 
 var _ Store = (*FileStore)(nil)
 var _ Store = (*MemoryStore)(nil)
+
+func encodePersistedRun(run *AgentRun, indent bool) ([]byte, error) {
+	data, err := json.Marshal(run)
+	if err != nil {
+		return nil, err
+	}
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	redactJSONStrings(value)
+	if indent {
+		return json.MarshalIndent(value, "", "  ")
+	}
+	return json.Marshal(value)
+}
+
+func redactJSONStrings(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if text, ok := item.(string); ok {
+				typed[key] = redactSecrets(text)
+				continue
+			}
+			redactJSONStrings(item)
+		}
+	case []any:
+		for i, item := range typed {
+			if text, ok := item.(string); ok {
+				typed[i] = redactSecrets(text)
+				continue
+			}
+			redactJSONStrings(item)
+		}
+	}
+}
+
+func redactSecrets(value string) string {
+	value = privateKeyPattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
+	value = bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
+	value = secretAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	return keyPattern.ReplaceAllString(value, "[REDACTED KEY]")
+}

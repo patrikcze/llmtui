@@ -42,7 +42,7 @@ func NewRun(id, request string, limits Limits, now time.Time) (*AgentRun, error)
 }
 
 func validateLimits(l Limits) error {
-	if l.MaxCycles <= 0 || l.MaxToolCalls <= 0 || l.MaxElapsed <= 0 || l.MaxRepeatedFailures <= 0 {
+	if l.MaxCycles <= 0 || l.MaxToolCalls <= 0 || l.MaxTokens <= 0 || l.MaxElapsed <= 0 || l.MaxRepeatedFailures <= 0 {
 		return fmt.Errorf("%w: all limits must be positive", ErrBudgetExhausted)
 	}
 	return nil
@@ -177,6 +177,45 @@ func (r *AgentRun) Cancel(reason string, now time.Time) {
 	r.StopReason = truncate(reason, 1024)
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "run_cancelled", r.StopReason)
+}
+
+// Terminate records an exceptional terminal outcome from any active stage.
+// Normal cycle completion must still use Decide and ApplyStop.
+func (r *AgentRun) Terminate(decision Decision, reason string, now time.Time) error {
+	if r == nil || r.Status != DecisionRunning || !isTerminal(decision) {
+		return fmt.Errorf("%w: cannot terminate as %s", ErrInvalidTransition, decision)
+	}
+	r.Status = decision
+	r.StopReason = truncate(reason, 1024)
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "run_"+string(decision), r.StopReason)
+	return nil
+}
+
+// Resume normalizes a persisted parked, input-blocked, or interrupted run to
+// the stop-check boundary so the caller can begin a fresh cycle. It never
+// replays an incomplete executor or tool call.
+func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
+	if r == nil {
+		return fmt.Errorf("%w: cannot resume a nil run", ErrInvalidTransition)
+	}
+	switch r.Status {
+	case DecisionRunning, DecisionParked, DecisionNeedsUserInput:
+	default:
+		return fmt.Errorf("%w: run status %s is terminal", ErrInvalidTransition, r.Status)
+	}
+	if r.Cycle >= r.Limits.MaxCycles {
+		return fmt.Errorf("%w: maximum %d cycles reached", ErrBudgetExhausted, r.Limits.MaxCycles)
+	}
+	r.Status = DecisionRunning
+	r.Stage = StageStopCheck
+	r.StopReason = ""
+	if nextObjective = strings.TrimSpace(nextObjective); nextObjective != "" {
+		r.Objective = truncate(nextObjective, 4096)
+	}
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "run_resumed", "resumed with a fresh cycle; incomplete execution was not replayed")
+	return nil
 }
 
 // RecordUsage accounts provider usage for hard or diagnostic budgets.

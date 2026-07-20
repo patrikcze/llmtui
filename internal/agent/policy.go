@@ -31,8 +31,11 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 	if hasErrorKind(exec.Errors, ErrorPermissionDenied) || exec.NeedsUserInput {
 		return StopResult{Decision: DecisionNeedsUserInput, Reason: "execution requires explicit user input or permission"}
 	}
-	if run.ToolCalls >= run.Limits.MaxToolCalls {
+	if run.ToolCalls > run.Limits.MaxToolCalls {
 		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum %d tool calls reached", run.Limits.MaxToolCalls)}
+	}
+	if run.PromptTokens+run.CompletionTokens > run.Limits.MaxTokens {
+		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum %d tokens reached", run.Limits.MaxTokens)}
 	}
 	if now.Sub(run.CreatedAt) >= run.Limits.MaxElapsed {
 		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum elapsed time %s reached", run.Limits.MaxElapsed)}

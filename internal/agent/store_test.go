@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,5 +99,34 @@ func TestStoreHonorsCancellation(t *testing.T) {
 	run, _ := newTestRun(t, DefaultLimits())
 	if err := NewMemoryStore().Save(ctx, run); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStoreRedactsLikelySecrets(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	run, err := NewRun("secret-run", "use token=supersecret and Authorization: Bearer abcdefghijklmnop", DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Objective = "do not persist sk-abcdefghijklmnop"
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "secret-run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"supersecret", "abcdefghijklmnop"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("persisted run leaked %q: %s", secret, data)
+		}
+	}
+	loaded, err := store.Load(context.Background(), "secret-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(loaded.Request, "[REDACTED]") {
+		t.Fatalf("request was not redacted: %q", loaded.Request)
 	}
 }

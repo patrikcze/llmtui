@@ -127,7 +127,7 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if cfg.Agent.Enabled {
 		t.Fatal("verified agent loop must be disabled by default")
 	}
-	if cfg.Agent.MaxCycles != 8 || cfg.Agent.MaxToolCalls != 32 || cfg.Agent.MaxRepeatedFailures != 3 {
+	if cfg.Agent.MaxCycles != 8 || cfg.Agent.MaxToolCalls != 32 || cfg.Agent.MaxTokens != 100000 || cfg.Agent.MaxRepeatedFailures != 3 {
 		t.Fatalf("agent limits = %+v", cfg.Agent)
 	}
 	if cfg.Agent.MaxElapsed != "30m" || !cfg.Agent.Persist || !cfg.Agent.Verifier.Enabled {

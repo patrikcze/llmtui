@@ -694,6 +694,10 @@ func (m *Model) debugOverlay() string {
 	m.kv(&b, "modes", fmt.Sprintf("native tools %s · web %s · RAG %s · reasoning %s",
 		onOff(d.NativeTools), onOff(d.WebEnabled), onOff(d.RAGEnabled), d.Reasoning))
 	m.kv(&b, "retries", fmt.Sprintf("%d", d.Retries))
+	if d.AgentRunID != "" {
+		m.kv(&b, "agent run", fmt.Sprintf("%s · cycle %d · %s/%s · verdict %s",
+			shortRunID(d.AgentRunID), d.AgentCycle, d.AgentStage, d.AgentStatus, orNone(d.AgentVerdict)))
+	}
 	if d.Duration > 0 {
 		m.kv(&b, "duration", d.Duration.Round(10*time.Millisecond).String())
 	}

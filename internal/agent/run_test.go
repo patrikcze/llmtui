@@ -119,7 +119,10 @@ func TestBudgetsAndPermissionDenial(t *testing.T) {
 		if err := run.BeginCycle("read one file", nil, now); err != nil {
 			t.Fatal(err)
 		}
-		exec := ExecutionResult{Summary: "read", ToolCalls: []ToolCallRecord{{Name: "read_file", Succeeded: true}}}
+		exec := ExecutionResult{Summary: "read", ToolCalls: []ToolCallRecord{
+			{Name: "read_file", Succeeded: true},
+			{Name: "read_file", Succeeded: false, ErrorKind: ErrorBudget},
+		}}
 		if err := run.CompleteExecution(exec, now); err != nil {
 			t.Fatal(err)
 		}
@@ -199,6 +202,53 @@ func TestCancellationTimeoutAndMaximumCycle(t *testing.T) {
 			t.Fatalf("decision = %q", stop.Decision)
 		}
 	})
+}
+
+func TestTokenBudgetEnforcement(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxTokens = 10
+	run, now := newTestRun(t, limits)
+	run.RecordUsage(8, 4, now)
+	if err := run.BeginCycle("work", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteExecution(ExecutionResult{Summary: "work"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteVerification(VerificationResult{Verdict: VerificationFailed, Retryable: true, TransientFailure: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WriteMemory(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := Decide(run, now).Decision; got != DecisionBudgetExhausted {
+		t.Fatalf("decision = %q", got)
+	}
+}
+
+func TestResumeStartsFreshCycleWithoutReplayingWork(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	stop := completeCycle(t, run, now, "inspect missing input", VerificationResult{
+		Verdict: VerificationBlocked, Summary: "required input is missing", Retryable: false,
+	})
+	if stop.Decision != DecisionParked {
+		t.Fatalf("decision = %q", stop.Decision)
+	}
+	if err := run.ApplyStop(stop, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Resume("use the newly supplied input", now.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle(run.Objective, []string{"new_user_input"}, now.Add(7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Cycle != 2 || run.Status != DecisionRunning || run.Stage != StageExecutor {
+		t.Fatalf("run = %+v", run)
+	}
+	if run.Cycles[0].Execution == nil || run.Cycles[1].Execution != nil {
+		t.Fatal("resume replayed or discarded prior observable execution")
+	}
 }
 
 func TestInvalidTransitionAndMalformedVerdict(t *testing.T) {

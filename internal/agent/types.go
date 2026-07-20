@@ -55,6 +55,7 @@ const (
 type Limits struct {
 	MaxCycles           int           `json:"max_cycles"`
 	MaxToolCalls        int           `json:"max_tool_calls"`
+	MaxTokens           int           `json:"max_tokens"`
 	MaxElapsed          time.Duration `json:"max_elapsed"`
 	MaxRepeatedFailures int           `json:"max_repeated_failures"`
 }
@@ -64,6 +65,7 @@ func DefaultLimits() Limits {
 	return Limits{
 		MaxCycles:           8,
 		MaxToolCalls:        32,
+		MaxTokens:           100_000,
 		MaxElapsed:          30 * time.Minute,
 		MaxRepeatedFailures: 3,
 	}
