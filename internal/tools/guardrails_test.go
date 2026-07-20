@@ -197,9 +197,35 @@ func TestClassifyCommandQuotedPathEscapeStillAsks(t *testing.T) {
 func TestClassifyCommandRejectsAbsolutePathArgument(t *testing.T) {
 	p := DefaultGuardrails()
 	root := t.TempDir()
-	cl := p.ClassifyCommand("cat /etc/hosts", root)
-	if cl.Verdict != VerdictAsk {
-		t.Errorf("cat /etc/hosts = %v (%s), want ask", cl.Verdict, cl.Reason)
+	for _, command := range []string{
+		"cat /etc/hosts",
+		"cat C:/Windows/System32/drivers/etc/hosts",
+		"cat C:notes.txt",
+	} {
+		cl := p.ClassifyCommand(command, root)
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%s = %v (%s), want ask", command, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+func TestAbsoluteCommandPathUsesPortableSyntax(t *testing.T) {
+	for _, value := range []string{
+		"/etc/hosts",
+		`\Windows\System32\drivers\etc\hosts`,
+		"C:/Windows/System32/drivers/etc/hosts",
+		`C:\Windows\System32\drivers\etc\hosts`,
+		"C:notes.txt",
+		`\\server\share\notes.txt`,
+	} {
+		if !isAbsoluteCommandPath(value) {
+			t.Errorf("isAbsoluteCommandPath(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"notes.txt", "docs/notes.txt", "./notes.txt"} {
+		if isAbsoluteCommandPath(value) {
+			t.Errorf("isAbsoluteCommandPath(%q) = true", value)
+		}
 	}
 }
 

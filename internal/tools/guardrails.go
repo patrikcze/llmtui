@@ -193,6 +193,14 @@ func looksLikePathEscape(f, root string) bool {
 	if strings.HasPrefix(f, "~") {
 		return true
 	}
+	// The command may be inspected on one OS and later run on another (for
+	// example, tests and release builds). Native filepath.IsAbs alone treats
+	// "/etc/hosts" as relative on Windows and "C:/..." as relative on Unix.
+	// Drive-relative paths such as "C:notes.txt" are also unsafe because cmd
+	// resolves them against process state outside the workspace root.
+	if isAbsoluteCommandPath(f) {
+		return true
+	}
 	if !strings.ContainsAny(f, "/\\") && !filepath.IsAbs(f) {
 		return false
 	}
@@ -200,13 +208,19 @@ func looksLikePathEscape(f, root string) bool {
 	if err != nil {
 		return false
 	}
-	var abs string
-	if filepath.IsAbs(f) {
-		abs = filepath.Clean(f)
-	} else {
-		abs = filepath.Clean(filepath.Join(rootAbs, f))
-	}
+	abs := filepath.Clean(filepath.Join(rootAbs, f))
 	return abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(filepath.Separator))
+}
+
+func isAbsoluteCommandPath(value string) bool {
+	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
+		return true
+	}
+	return len(value) >= 2 && isASCIILetter(value[0]) && value[1] == ':'
+}
+
+func isASCIILetter(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
 }
 
 // pathResolvesOutsideWorkspace checks the deepest existing portion of a

@@ -351,6 +351,7 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 		return "", "", fmt.Errorf("write_file needs a path")
 	}
 	rel = filepath.Clean(rel)
+	displayPath := filepath.ToSlash(rel)
 	// Block writes into .git (a hook would execute on the next git command),
 	// key-material directories, and shell startup files.
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
@@ -389,11 +390,11 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 		return "", "", fmt.Errorf("write file: %w", err)
 	}
 	if oldTooBig {
-		diff = fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", rel)
+		diff = fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath)
 	} else {
-		diff = RenderWriteDiff(rel, oldContent, content, existed)
+		diff = RenderWriteDiff(displayPath, oldContent, content, existed)
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), rel), diff, nil
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), displayPath), diff, nil
 }
 
 // runCommand executes one shell command in the workspace directory. The
