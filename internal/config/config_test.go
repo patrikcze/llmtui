@@ -94,6 +94,7 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 func TestNestedEnvOverrides(t *testing.T) {
 	t.Setenv("LLMTUI_NETWORK_TIMEOUT", "600s")
 	t.Setenv("LLMTUI_CHAT_MAX_TOKENS", "8192")
+	t.Setenv("LLMTUI_AGENT_MAX_CYCLES", "5")
 
 	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -108,6 +109,29 @@ func TestNestedEnvOverrides(t *testing.T) {
 	}
 	if cfg.Chat.MaxTokens != 8192 {
 		t.Errorf("Chat.MaxTokens = %d, want 8192 from env", cfg.Chat.MaxTokens)
+	}
+	if cfg.Agent.MaxCycles != 5 {
+		t.Errorf("Agent.MaxCycles = %d, want 5 from env", cfg.Agent.MaxCycles)
+	}
+}
+
+func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Enabled {
+		t.Fatal("verified agent loop must be disabled by default")
+	}
+	if cfg.Agent.MaxCycles != 8 || cfg.Agent.MaxToolCalls != 32 || cfg.Agent.MaxRepeatedFailures != 3 {
+		t.Fatalf("agent limits = %+v", cfg.Agent)
+	}
+	if cfg.Agent.MaxElapsed != "30m" || !cfg.Agent.Persist || !cfg.Agent.Verifier.Enabled {
+		t.Fatalf("agent defaults = %+v", cfg.Agent)
 	}
 }
 

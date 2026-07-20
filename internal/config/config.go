@@ -169,6 +169,30 @@ type ContextConfig struct {
 	SummaryMaxTokens       int    `mapstructure:"summary_max_tokens" yaml:"summary_max_tokens"`
 }
 
+// AgentConfig controls the optional bounded and verified multi-cycle loop.
+// It is disabled by default so ordinary chat retains its existing behavior.
+type AgentConfig struct {
+	Enabled             bool                `mapstructure:"enabled" yaml:"enabled"`
+	MaxCycles           int                 `mapstructure:"max_cycles" yaml:"max_cycles"`
+	MaxToolCalls        int                 `mapstructure:"max_tool_calls" yaml:"max_tool_calls"`
+	MaxElapsed          string              `mapstructure:"max_elapsed" yaml:"max_elapsed"`
+	MaxRepeatedFailures int                 `mapstructure:"max_repeated_failures" yaml:"max_repeated_failures"`
+	Persist             bool                `mapstructure:"persist" yaml:"persist"`
+	Path                string              `mapstructure:"path" yaml:"path"`
+	MaxMemoryKB         int                 `mapstructure:"max_memory_kb" yaml:"max_memory_kb"`
+	MaxRuns             int                 `mapstructure:"max_runs" yaml:"max_runs"`
+	Verifier            AgentVerifierConfig `mapstructure:"verifier" yaml:"verifier"`
+}
+
+// AgentVerifierConfig bounds the independent evaluator request. Model is an
+// optional model ID on the active provider; empty reuses the executor model.
+type AgentVerifierConfig struct {
+	Enabled   bool   `mapstructure:"enabled" yaml:"enabled"`
+	Model     string `mapstructure:"model" yaml:"model,omitempty"`
+	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"`
+	Timeout   string `mapstructure:"timeout" yaml:"timeout"`
+}
+
 // ToolsConfig configures workspace tools for the chat (the model can list,
 // read, and write files and run commands under the directory llmtui was
 // started from).
@@ -366,6 +390,7 @@ type Config struct {
 	Memory          MemoryConfig                  `mapstructure:"memory" yaml:"memory"`
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
+	Agent           AgentConfig                   `mapstructure:"agent" yaml:"agent"`
 	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
 	Skills          SkillsConfig                  `mapstructure:"skills" yaml:"skills"`
 	Plugins         PluginsConfig                 `mapstructure:"plugins" yaml:"plugins"`
@@ -495,6 +520,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"context_size", "gpu_layers",
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
+		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_elapsed",
 	} {
 		if err := v.BindEnv(key); err != nil {
 			return nil, fmt.Errorf("bind env %s: %w", key, err)
@@ -621,6 +647,20 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context.summarize_after_messages", 12)
 	v.SetDefault("context.keep_last_messages", 8)
 	v.SetDefault("context.summary_max_tokens", 1200)
+
+	v.SetDefault("agent.enabled", false)
+	v.SetDefault("agent.max_cycles", 8)
+	v.SetDefault("agent.max_tool_calls", 32)
+	v.SetDefault("agent.max_elapsed", "30m")
+	v.SetDefault("agent.max_repeated_failures", 3)
+	v.SetDefault("agent.persist", true)
+	v.SetDefault("agent.path", "~/.local/share/llmtui/agent-runs")
+	v.SetDefault("agent.max_memory_kb", 64)
+	v.SetDefault("agent.max_runs", 32)
+	v.SetDefault("agent.verifier.enabled", true)
+	v.SetDefault("agent.verifier.model", "")
+	v.SetDefault("agent.verifier.max_tokens", 1024)
+	v.SetDefault("agent.verifier.timeout", "120s")
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -769,6 +809,24 @@ context:
   summarize_after_messages: 12
   keep_last_messages: 8
   summary_max_tokens: 1200
+
+# Optional bounded multi-cycle mode. Ordinary chat is unchanged until enabled
+# here or for the current session with /agent on.
+agent:
+  enabled: false
+  max_cycles: 8
+  max_tool_calls: 32
+  max_elapsed: "30m"
+  max_repeated_failures: 3
+  persist: true
+  path: "~/.local/share/llmtui/agent-runs"
+  max_memory_kb: 64
+  max_runs: 32
+  verifier:
+    enabled: true
+    model: "" # empty uses the active executor model in a fresh context
+    max_tokens: 1024
+    timeout: "120s"
 
 # Workspace tools: lets the model list, read, and write files and run
 # commands under the directory llmtui was started from. Off by default —
