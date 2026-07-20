@@ -170,6 +170,21 @@ verifier protocol, choose a stronger `agent.verifier.model`, disable model
 verification for deterministic-only conversational checks, or return to
 ordinary chat with `/agent off`.
 
+A response cut off by `max_tokens` (the backend's `finish_reason`/`done_reason`
+equals `"length"`) is never accepted as a normal completion. This matters most
+for a `write_file` tool call rewriting a large file: if the backend's own
+tool-call grammar can't close in the remaining budget, it falls back to
+emitting the partial call as plain, often broken, text. That turn is recorded
+as deterministic evidence (`ErrorTruncated`) and forces a retryable failure
+regardless of what the verifier's own read of the text concludes — raise
+`chat.max_tokens` (and `agent.verifier.max_tokens`, if the verifier itself gets
+cut off mid-JSON) for models or tasks that rewrite large files.
+
+Repeated verifier-protocol failures on the *same* underlying objective are
+deduplicated by a stable retry instruction rather than a growing one, so
+`agent.max_repeated_failures` reliably stops the run instead of the objective
+text nesting a new "retry" prefix every cycle.
+
 ## Commands
 
 | Command | Effect |

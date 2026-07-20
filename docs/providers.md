@@ -92,3 +92,28 @@ the supported family from the model path; explicit values are available for
 unconventional filenames. Calls enter the same approval/execution loop as
 remote-provider calls. Unknown families fall back synchronously to the fenced
 prompt protocol instead of executing unrecognized output.
+
+## Weak or inconsistent tool-calling
+
+Some local models — observed with a Qwen 3.6 MoE build served by LM Studio —
+intermittently emit tool calls the *backend's own* grammar fails to close:
+malformed JSON escaping, or a hybrid pseudo-XML form
+(`<tool_call><function=…><parameter=…>`) that leaks into plain answer text
+instead of a structured tool call. This happens inside the backend, before
+llmtui ever sees a native `tool_calls` field, so llmtui cannot safely
+reconstruct or execute text that never arrived as valid tool-call syntax —
+guessing at repair risks running a corrupted command.
+
+What to do instead:
+
+- Raise `chat.max_tokens`: the same failure mode is often a *truncated* call
+  (the backend ran out of budget mid-JSON and fell back to raw text). A
+  truncated turn is now flagged directly in the transcript and, in agent
+  mode, forces a retry instead of being accepted as a complete answer — see
+  [agent-loop.md](agent-loop.md#local-model-behavior).
+- Prefer smaller, incremental edits over full-file rewrites for models prone
+  to this; a large `write_file` call is the most likely one to run out of
+  budget before its JSON closes.
+- If it recurs on ordinary chat (no agent mode), treat the reply as
+  untrusted and re-ask rather than trusting a garbled or half-finished
+  tool-call-shaped answer.
