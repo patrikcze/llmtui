@@ -8,7 +8,8 @@ filters.
 
 Commands that would change what an in-flight request depends on (`/clear`,
 `/provider`, `/model`, `/config reload`, `/history load|clear`) are
-unavailable while a reply is streaming — press `Esc` to stop it first.
+unavailable while a reply, tool batch, or verification is in progress — press
+`Esc` to stop it first.
 
 ## Chat
 | Command | Description |
@@ -18,6 +19,18 @@ unavailable while a reply is streaming — press `Esc` to stop it first.
 | `/clear` | Clear the conversation (and session summary) |
 | `/retry` | Retry the last user message with current settings |
 | `/quit` (alias `/exit`) | Save the session and exit |
+
+## Agent
+
+| Command | Description |
+| --- | --- |
+| `/agent` · `/agent status` | Show mode and current run/cycle/stage/status |
+| `/agent on` / `/agent off` | Enable bounded verified runs for new messages, or restore ordinary chat |
+| `/agent cancel` | Cancel the active executor, tool batch, or verifier |
+| `/agent resume [run-id]` | Resume the latest or selected resumable run with a fresh cycle (never replay incomplete work) |
+
+Agent orchestration is separate from tool authority: use `/tools on` when a run
+needs workspace tools. See [agent-loop.md](agent-loop.md).
 
 ## Provider
 | Command | Description |

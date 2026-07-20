@@ -28,6 +28,11 @@ API keys never logged — see [docs/security.md](docs/security.md).
 llmtui can also run a local GGUF directly in-process through llama.cpp—no
 separate model server required. See [Embedded GGUF inference](docs/embedded.md).
 
+For longer tasks, optional `/agent on` mode performs bounded executor cycles,
+fresh-context verification, concise recoverable run memory, and deterministic
+stop checks. It is disabled by default and never enables tools or bypasses
+approvals. See [Bounded verified agent loop](docs/agent-loop.md).
+
 ## Install
 
 Requires Go 1.26+.
@@ -169,6 +174,7 @@ navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
 | `/help` | Show all keyboard shortcuts and commands (scrollable overlay) |
 | `/copy` | Copy the last reply to the clipboard |
 | `/clear` | Clear the conversation |
+| `/agent [on\|off\|status\|cancel\|resume]` | Opt-in bounded multi-cycle execution with fresh verification |
 | `/models` | List models on the current provider |
 | `/model <id>` | Switch to a different model |
 | `/providers` | List configured providers |
@@ -191,7 +197,7 @@ Local-LLM experience helpers:
 | `/prompt preview` | See exactly what will be sent — the raw message is never rewritten ([docs](docs/prompt-composition.md)) |
 | `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
 | `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
-| `/tools` | Opt-in agent mode — the model can create/read files and run commands in your current directory, with y/n approval |
+| `/tools` | Opt-in workspace tools — the model can create/read files and run commands in your current directory, with y/n approval |
 | `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
 | `/skills` | Declarative task-instruction packages (SKILL.md) — activate per run or session; tool-capable models can load them via `skill_load` ([docs](docs/skills.md)) |
 | `/plugins` | Local declarative packages that contribute skills; inert until explicitly enabled ([docs](docs/skills.md)) |
@@ -420,9 +426,11 @@ internal/app/             config → provider factory
 internal/chat/            session state + usage statistics
 internal/cache/           local response cache (/cache)
 internal/contextmgr/      context-window budgeting + heuristic summaries
+internal/agent/           provider-neutral verified-run state, policy, memory
+internal/agentverify/     fresh-context provider verifier adapter
 internal/memory/          opt-in local memory snippets (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
-internal/tools/           workspace file tools for agent mode (/tools)
+internal/tools/           opt-in workspace file/command tools (/tools)
 internal/skill/           declarative skills + plugin packages (/skills, /plugins)
 internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log

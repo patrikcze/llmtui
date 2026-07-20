@@ -96,10 +96,11 @@ than one model.
 
 ## Limits and failure policy
 
-Defaults are eight cycles, 32 total tool calls, 30 minutes elapsed time, three
-repeated equivalent failures, 1,024 verifier output tokens, and 64 KiB of
-persisted run memory. Limits are validated at the boundary. The run never asks
-the model to extend them. A permission denial produces `needs_user_input`; an
+Defaults are eight cycles, 32 total tool calls, 100,000 executor/verifier
+tokens, 30 minutes elapsed time, three repeated equivalent failures, 1,024
+verifier output tokens, and 64 KiB of persisted run memory. Limits are
+validated at the boundary. The run never asks the model to extend them. A
+permission denial produces `needs_user_input`; an
 unsafe action or non-retryable invariant produces `failed`/`escalated`; user
 cancellation produces `cancelled`; cycle/tool/time exhaustion produces
 `budget_exhausted`.

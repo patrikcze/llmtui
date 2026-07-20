@@ -96,6 +96,30 @@ vision pairing, image limits, native tools/reasoning, and limitations.
 `save_history` value, since they only read existing files rather than write
 new ones.
 
+### `agent`
+
+Optional bounded multi-cycle execution with independent verification. Disabled
+by default; `/agent on` toggles it for the current session. Agent mode does not
+enable tools or change approvals. See [agent-loop.md](agent-loop.md) for the
+lifecycle, stop policy, persistence, cancellation, and local-model behavior.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Start verified runs for user messages (`/agent on|off` overrides for the session) |
+| `max_cycles` | `8` | Maximum executor/verifier cycles per run |
+| `max_tool_calls` | `32` | Hard total tool calls across all cycles |
+| `max_tokens` | `100000` | Executor plus verifier token budget when usage is available |
+| `max_elapsed` | `30m` | Wall-clock run limit |
+| `max_repeated_failures` | `3` | Identical verification failures before stopping |
+| `persist` | `true` | Atomically store bounded resumable run state; forced off by `privacy.store_prompts: false` |
+| `path` | `~/.local/share/llmtui/agent-runs` | Private versioned run-record directory |
+| `max_memory_kb` | `64` | Maximum serialized bytes per run |
+| `max_runs` | `32` | Number of newest records retained |
+| `verifier.enabled` | `true` | Run a fresh tool-free evaluator request; false uses deterministic checks only |
+| `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
+| `verifier.max_tokens` | `1024` | Evaluator response cap |
+| `verifier.timeout` | `120s` | Whole evaluator-request deadline |
+
 ### `tools`
 
 Workspace file tools let the model list, read, and write files under the
