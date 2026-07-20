@@ -196,6 +196,42 @@ func TestVerifiedAgentRepeatedFailureStops(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentVerifierParseFailureRepeatedStops guards against a
+// regression where verificationFailureResult nested a new
+// "Retry the bounded objective..." prefix onto the objective every time the
+// verifier's own response failed to parse. That growth made RecommendedNext
+// (and therefore agent.failureKey) different on every cycle, so the
+// repeated-failure dedup never fired and the run looped until an unrelated
+// budget (cycles/elapsed/tokens) finally stopped it.
+func TestVerifiedAgentVerifierParseFailureRepeatedStops(t *testing.T) {
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{text: "Attempt one."},
+		agentScriptStep{text: "not a json object at all"},
+		agentScriptStep{text: "Attempt two."},
+		agentScriptStep{text: "not a json object at all"},
+	)
+	m.cfg.Agent.MaxRepeatedFailures = 2
+	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionFailed || m.agentLoop.run.RepeatedFailures != 2 {
+		t.Fatalf("run = %+v", m.agentLoop.run)
+	}
+	if len(m.agentLoop.run.Cycles) != 2 {
+		t.Fatalf("cycles = %+v", m.agentLoop.run.Cycles)
+	}
+	first := m.agentLoop.run.Cycles[0].Verification
+	second := m.agentLoop.run.Cycles[1].Verification
+	if first == nil || second == nil {
+		t.Fatalf("missing verification: first=%+v second=%+v", first, second)
+	}
+	if first.RecommendedNext != second.RecommendedNext {
+		t.Fatalf("recommended_next grew across cycles: first=%q second=%q", first.RecommendedNext, second.RecommendedNext)
+	}
+	if n := strings.Count(second.RecommendedNext, "Retry the bounded objective"); n != 1 {
+		t.Fatalf("recommended_next nested the retry prefix %d times: %q", n, second.RecommendedNext)
+	}
+}
+
 func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-1", Name: tools.ToolWriteFile, Arguments: `{"path":"x.txt","content":"x"}`}}},
