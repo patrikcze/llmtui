@@ -82,7 +82,7 @@ vision pairing, image limits, native tools/reasoning, and limitations.
 | `system_prompt` | helpful-assistant text | First system section of every request |
 | `temperature` | `0.7` | Sampling temperature; `0` is honored (deterministic) |
 | `top_p` | `0.9` | Nucleus sampling |
-| `max_tokens` | `4096` | Maximum response budget; embedded requests clamp it to the positions remaining after the prompt |
+| `max_tokens` | `4096` | Maximum response budget; embedded requests clamp it to the positions remaining after the prompt. A response cut off by this limit is flagged (not silently accepted) — raise it for models/tasks that rewrite large files with `write_file` |
 | `stream` | `true` | Stream tokens (`--no-stream` overrides) |
 | `save_history` | `true` | Enables sessions + `usage.jsonl` under `history_dir` |
 | `history_dir` | `~/.local/share/llmtui/history` | Where history lives |
@@ -117,7 +117,7 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `max_runs` | `32` | Number of newest records retained |
 | `verifier.enabled` | `true` | Run a fresh tool-free evaluator request; false uses deterministic checks only |
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
-| `verifier.max_tokens` | `1024` | Evaluator response cap |
+| `verifier.max_tokens` | `1024` | Evaluator response cap; raise it if the verifier itself gets cut off mid-JSON on a slower/weaker model |
 | `verifier.timeout` | `120s` | Whole evaluator-request deadline |
 
 ### `tools`
