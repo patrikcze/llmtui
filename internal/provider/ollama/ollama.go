@@ -248,7 +248,10 @@ type chatChunk struct {
 		Thinking  string         `json:"thinking"`
 		ToolCalls []wireToolCall `json:"tool_calls"`
 	} `json:"message"`
-	Done            bool   `json:"done"`
+	Done bool `json:"done"`
+	// DoneReason is Ollama's finish-reason equivalent: "stop" for a natural
+	// completion, "length" when max_tokens (num_predict) cut it off.
+	DoneReason      string `json:"done_reason"`
 	Error           string `json:"error"`
 	PromptEvalCount int    `json:"prompt_eval_count"`
 	EvalCount       int    `json:"eval_count"`
@@ -312,6 +315,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		completion  strings.Builder
 		toolCalls   []provider.ToolCall
 		streamBytes int
+		truncated   bool
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -359,6 +363,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			}
 		}
 		if chunk.Done {
+			truncated = chunk.DoneReason == "length"
 			if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {
 				usage = &provider.Usage{
 					PromptTokens:     chunk.PromptEvalCount,
@@ -389,7 +394,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			Estimated:        true,
 		}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls})
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated})
 }
 
 // Capabilities describes the native Ollama API.
