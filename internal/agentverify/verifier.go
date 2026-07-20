@@ -199,6 +199,13 @@ func ApplyDeterministicEvidence(result agent.VerificationResult, execution agent
 			result = deterministicFailure(result, "deterministic execution timeout", true)
 			result.TransientFailure = true
 			return result
+		case agent.ErrorTruncated:
+			// The reply was cut off by max_tokens: it may be garbled or a
+			// dropped tool call reduced to plain text. Never trust the
+			// verifier's own read of a possibly-incomplete answer as success.
+			result = deterministicFailure(result, "deterministic execution error: response truncated by max_tokens", true)
+			result.TransientFailure = true
+			return result
 		case agent.ErrorToolValidation, agent.ErrorToolExecution, agent.ErrorProvider, agent.ErrorInvariant:
 			return deterministicFailure(result, "deterministic execution error: "+string(runErr.Kind), true)
 		}

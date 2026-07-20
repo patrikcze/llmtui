@@ -97,6 +97,21 @@ func TestDeterministicFailureOverridesOptimisticModel(t *testing.T) {
 	}
 }
 
+func TestDeterministicFailureOverridesTruncatedExecutorReply(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	exec := agent.ExecutionResult{
+		Summary: "wrote the file successfully",
+		Errors:  []agent.RunError{agent.NewError(agent.ErrorTruncated, "executor", errors.New("response was cut off by max_tokens"))},
+	}
+	out, err := Verify(context.Background(), client, Config{Timeout: time.Second}, Input{Task: "fix", Objective: "test", Execution: exec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Result.Verdict != agent.VerificationFailed || !out.Result.Retryable || !out.Result.TransientFailure {
+		t.Fatalf("result = %+v, want deterministic retryable transient failure despite an optimistic model verdict", out.Result)
+	}
+}
+
 func TestVerifierTimeoutAndCancellation(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
 		client := &recordingClient{block: true}

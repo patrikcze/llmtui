@@ -1660,6 +1660,9 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
 		m.streamToolCalls = msg.event.ToolCalls
 		m.finishStream(msg.event.Usage, msg.event.Truncated)
+		if msg.event.Truncated {
+			m.recordAgentTruncation()
+		}
 		if emptyToolContinuation {
 			m.errText = "Model returned an empty completion after tool execution."
 			m.failVerifiedRun(errors.New(m.errText))
