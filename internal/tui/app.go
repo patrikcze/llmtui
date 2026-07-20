@@ -624,7 +624,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.thinking && m.cancelStream != nil {
 				// Stop generation, keeping the partial reply.
 				m.cancelStream()
-				m.finishStream(nil)
+				m.finishStream(nil, false)
 				m.cancelVerifiedRun("execution cancelled by the user")
 				m.endAgentRun() // a cancelled run clears run-scoped skills
 				agentSave = m.persistAgentRun()
@@ -1386,7 +1386,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case m.thinking && m.cancelStream != nil:
 		m.cancelStream()
-		m.finishStream(nil)
+		m.finishStream(nil, false)
 		m.cancelVerifiedRun("execution cancelled by the user")
 		m.endAgentRun()
 		agentSave = m.persistAgentRun()
@@ -1617,7 +1617,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.streamFailed(errors.New("provider stream closed without a terminal event"))
 			return m, m.persistAgentRun()
 		} else {
-			m.finishStream(nil)
+			m.finishStream(nil, false)
 		}
 		return m, nil
 	}
@@ -1659,7 +1659,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
 		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
 		m.streamToolCalls = msg.event.ToolCalls
-		m.finishStream(msg.event.Usage)
+		m.finishStream(msg.event.Usage, msg.event.Truncated)
 		if emptyToolContinuation {
 			m.errText = "Model returned an empty completion after tool execution."
 			m.failVerifiedRun(errors.New(m.errText))
@@ -1755,7 +1755,15 @@ func (m *Model) drainStream() {
 	m.stream = nil
 }
 
-func (m *Model) finishStream(usage *provider.Usage) {
+// truncatedResponseNotice is appended to a reply that the backend cut off by
+// max_tokens (finish_reason/done_reason == "length") instead of stopping
+// naturally. It lands in the transcript and saved history, not just a
+// transient status line, since a truncated reply — especially a dropped,
+// half-emitted tool call reduced to garbled text — can otherwise look like a
+// deliberate, complete answer.
+const truncatedResponseNotice = "\n\n_(response was cut off by max_tokens — raise max_tokens or ask again; the answer above may be incomplete or broken)_"
+
+func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	m.thinking = false
 	m.flushThinkFilter()
 	reply := m.streamBuf.String()
@@ -1768,6 +1776,9 @@ func (m *Model) finishStream(usage *provider.Usage) {
 	}
 	m.idleWatchdog = nil
 	m.drainStream()
+	if truncated && reply != "" {
+		reply += truncatedResponseNotice
+	}
 	if reply != "" || len(toolCalls) > 0 {
 		m.session.AddMessage(provider.Message{
 			Role:      provider.RoleAssistant,
@@ -1776,9 +1787,10 @@ func (m *Model) finishStream(usage *provider.Usage) {
 		})
 		m.replyCount++
 	}
-	// Cache the successful response (never failures, empty replies, or
-	// tool-calling turns — those depend on live workspace state).
-	if reply != "" && len(toolCalls) == 0 && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
+	// Cache the successful response (never failures, empty replies,
+	// truncated/incomplete replies, or tool-calling turns — those depend on
+	// live workspace state or are known-incomplete).
+	if reply != "" && !truncated && len(toolCalls) == 0 && usage != nil && m.responseCache != nil && m.responseCache.Enabled() &&
 		m.lastDebug.CacheStatus != "bypass" &&
 		len(m.lastImages) == 0 && (!m.lastDebug.Stream || m.cfg.Cache.CacheStreamedResponses) {
 		if err := m.responseCache.Put(m.lastDebug.CacheKey, cache.Entry{
