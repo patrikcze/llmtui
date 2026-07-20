@@ -524,9 +524,10 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			SummaryActive: prepared.estimate.SummaryToken > 0,
 			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 		}
+		m.failVerifiedRun(prepareErr)
 		m.endAgentRun()
 		m.refreshViewport()
-		return nil
+		return m.persistAgentRun()
 	}
 
 	key := m.cacheKeyFromPrepared(raw, prepared)
@@ -685,9 +686,10 @@ func (m *Model) continueChat() tea.Cmd {
 	prepared, err := m.prepareRequest("", nil, true)
 	if err != nil {
 		m.errText = err.Error()
+		m.failVerifiedRun(err)
 		m.endAgentRun()
 		m.refreshViewport()
-		return nil
+		return m.persistAgentRun()
 	}
 	m.commitPrepared(prepared)
 	m.thinking = true
@@ -735,7 +737,7 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 	// the watchdog fires only when no token has arrived for that long, and
 	// handleStreamEvent resets it on every delta.
 	idle := app.RequestTimeout(m.cfg.Network)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(m.agentContext())
 	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
 	m.streamCtx = ctx
 	m.idleWatchdog = watchdog

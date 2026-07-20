@@ -83,6 +83,13 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Bubble Tea commands complete asynchronously. Never let a delayed older
+	// snapshot overwrite a newer lifecycle transition for the same run.
+	if existing, loadErr := readLimited(filepath.Join(s.dir, run.ID+".json"), s.maxBytes); loadErr == nil {
+		if saved, decodeErr := decodeRun(existing); decodeErr == nil && saved.UpdatedAt.After(run.UpdatedAt) {
+			return nil
+		}
+	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return NewError(ErrorMemoryWrite, "create run directory", err)
 	}
@@ -113,7 +120,7 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 	if err := tmp.Close(); err != nil {
 		return NewError(ErrorMemoryWrite, "close run", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFile(tmpPath, path); err != nil {
 		return NewError(ErrorMemoryWrite, "finalize run", err)
 	}
 	removeTemp = false
@@ -262,7 +269,8 @@ func validRunID(id string) bool {
 		return false
 	}
 	for _, r := range id {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-'
+		if !valid {
 			return false
 		}
 	}
@@ -291,6 +299,11 @@ func (s *MemoryStore) Save(ctx context.Context, run *AgentRun) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.runs[run.ID]; ok {
+		if saved, decodeErr := decodeRun(existing); decodeErr == nil && saved.UpdatedAt.After(run.UpdatedAt) {
+			return nil
+		}
+	}
 	s.runs[run.ID] = append([]byte(nil), data...)
 	return nil
 }

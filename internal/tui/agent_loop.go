@@ -23,6 +23,8 @@ const maxAgentDirectiveBytes = 12 * 1024
 type agentLoopState struct {
 	run          *agent.AgentRun
 	store        agent.Store
+	ctx          context.Context
+	runCancel    context.CancelFunc
 	execution    agent.ExecutionResult
 	verifying    bool
 	verifyCancel context.CancelFunc
@@ -152,6 +154,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 		return nil
 	}
 	m.agentLoop.run = run
+	m.resetAgentContext()
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
@@ -200,6 +203,23 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · executing", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
 	return m.dispatch("Continue the active verified run. Execute only the controller's current bounded objective, then report observable results.", nil)
+}
+
+func (m *Model) resetAgentContext() {
+	if m.agentLoop.runCancel != nil {
+		m.agentLoop.runCancel()
+	}
+	remaining := m.agentLoop.run.Limits.MaxElapsed - time.Since(m.agentLoop.run.CreatedAt)
+	ctx, cancel := context.WithTimeout(context.Background(), remaining)
+	m.agentLoop.ctx = ctx
+	m.agentLoop.runCancel = cancel
+}
+
+func (m *Model) agentContext() context.Context {
+	if m.agentRunActive() && m.agentLoop.ctx != nil {
+		return m.agentLoop.ctx
+	}
+	return context.Background()
 }
 
 // agentDirective supplies only bounded controller state. The prompt composer
@@ -266,7 +286,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		return m.persistAgentRun()
 	}
 	m.agentLoop.execution = execution
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
 	m.agentLoop.verifying = true
 	m.agentLoop.verifyGen++
@@ -346,7 +366,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
 	case agent.DecisionNeedsUserInput:
-		m.errText = "agent needs user input: " + stop.Reason
+		m.errText = "agent needs user input: " + stop.Reason + ". What permitted alternative or missing fact should the next cycle use?"
 		m.notice = fmt.Sprintf("agent %s stopped for user input", shortRunID(run.ID))
 	case agent.DecisionParked:
 		m.notice = fmt.Sprintf("agent %s parked: %s", shortRunID(run.ID), stop.Reason)
@@ -414,6 +434,22 @@ func (m *Model) cancelVerifiedRun(reason string) {
 	if m.agentRunActive() {
 		m.agentLoop.run.Cancel(reason, time.Now())
 	}
+	if m.agentLoop.runCancel != nil {
+		m.agentLoop.runCancel()
+		m.agentLoop.runCancel = nil
+		m.agentLoop.ctx = nil
+	}
+}
+
+func (m *Model) releaseAgentContext() {
+	if m.agentLoop == nil {
+		return
+	}
+	if m.agentLoop.runCancel != nil {
+		m.agentLoop.runCancel()
+		m.agentLoop.runCancel = nil
+	}
+	m.agentLoop.ctx = nil
 }
 
 func (m *Model) failVerifiedRun(err error) {
@@ -458,6 +494,10 @@ func (m *Model) recordAgentToolResults(results []tools.Result, denied bool) {
 }
 
 func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {
+	errorText := ""
+	if result.Err != nil {
+		errorText = strings.ToLower(result.Err.Error())
+	}
 	switch {
 	case denied || errors.Is(result.Err, tools.ErrDenied):
 		return agent.ErrorPermissionDenied
@@ -467,6 +507,8 @@ func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {
 		return agent.ErrorCancelled
 	case errors.Is(result.Err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(result.Err.Error()), "timed out"):
 		return agent.ErrorTimeout
+	case strings.Contains(errorText, "outside the workspace") || strings.Contains(errorText, " is not allowed"):
+		return agent.ErrorSafety
 	default:
 		return agent.ErrorToolExecution
 	}
@@ -519,13 +561,16 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 		if !m.agentRunActive() && !m.agentVerifying() {
 			return m.fail("no active agent run")
 		}
-		if m.cancelStream != nil {
+		if m.thinking && m.cancelStream != nil {
 			m.cancelStream()
+			m.finishStream(nil)
 		}
 		if m.mcpBatchCancel != nil {
 			m.mcpBatchCancel()
 			m.mcpBatchCancel = nil
 			m.mcpBatchGen++
+			m.activity = nil
+			m.relayout()
 		}
 		m.cancelVerifiedRun("cancelled by /agent cancel")
 		m.endAgentRun()
@@ -576,6 +621,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.agentLoop.run = msg.run
+	m.resetAgentContext()
 	m.agentOn = true
 	return m, tea.Batch(m.persistAgentRun(), m.startNextAgentCycle(next))
 }

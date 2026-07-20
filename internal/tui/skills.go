@@ -93,6 +93,7 @@ func (m *Model) endAgentRun() {
 	if m.agentRunActive() {
 		return
 	}
+	m.releaseAgentContext()
 	if m.skillMgr == nil {
 		return
 	}

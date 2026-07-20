@@ -60,6 +60,9 @@ func (r *AgentRun) BeginCycle(objective string, sources []string, now time.Time)
 	if r.Cycle >= r.Limits.MaxCycles {
 		return fmt.Errorf("%w: maximum %d cycles reached", ErrBudgetExhausted, r.Limits.MaxCycles)
 	}
+	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
+	}
 	r.Cycle++
 	r.Objective = truncate(objective, 4096)
 	r.Stage = StageRulesLoad
@@ -206,6 +209,9 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 	}
 	if r.Cycle >= r.Limits.MaxCycles {
 		return fmt.Errorf("%w: maximum %d cycles reached", ErrBudgetExhausted, r.Limits.MaxCycles)
+	}
+	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
 	r.Status = DecisionRunning
 	r.Stage = StageStopCheck

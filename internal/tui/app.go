@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/chat"
 	"github.com/patrikcze/llmtui/internal/clipboard"
@@ -613,9 +614,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "text selection on — select & copy with your terminal, ctrl+o to switch back"
 			return m, tea.DisableMouse
 		case tea.KeyEsc:
+			var agentSave tea.Cmd
 			if m.agentVerifying() {
 				m.cancelVerifiedRun("verification cancelled by the user")
 				m.endAgentRun()
+				agentSave = m.persistAgentRun()
 				m.errText = "agent verification stopped"
 				m.refreshViewport()
 			} else if m.thinking && m.cancelStream != nil {
@@ -624,6 +627,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.finishStream(nil)
 				m.cancelVerifiedRun("execution cancelled by the user")
 				m.endAgentRun() // a cancelled run clears run-scoped skills
+				agentSave = m.persistAgentRun()
 				m.errText = "generation stopped"
 				m.refreshViewport()
 			} else if m.mcpBatchCancel != nil {
@@ -634,6 +638,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.relayout()
 				m.cancelVerifiedRun("tool batch cancelled by the user")
 				m.endAgentRun()
+				agentSave = m.persistAgentRun()
 				m.errText = "tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
@@ -641,7 +646,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateSuggestions()
 				m.syncInputHeight()
 			}
-			return m, nil
+			return m, agentSave
 		case tea.KeyEnter:
 			// Alt/Option+Enter inserts a newline (with "Option as Meta"
 			// enabled on macOS terminals; see README).
@@ -1075,7 +1080,7 @@ func (m *Model) useNativeTools() bool {
 // freezes and preserves ordering for mixed batches.
 func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.toolDepth++
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.agentContext())
 	m.mcpBatchCancel = cancel
 	m.mcpBatchGen++
 	gen := m.mcpBatchGen
@@ -1370,10 +1375,12 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		return m, m.quit()
 	}
 	m.ctrlCAt = time.Now()
+	var agentSave tea.Cmd
 	switch {
 	case m.agentVerifying():
 		m.cancelVerifiedRun("verification cancelled by the user")
 		m.endAgentRun()
+		agentSave = m.persistAgentRun()
 		m.errText = "agent verification stopped"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1382,6 +1389,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.finishStream(nil)
 		m.cancelVerifiedRun("execution cancelled by the user")
 		m.endAgentRun()
+		agentSave = m.persistAgentRun()
 		m.errText = "generation stopped"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1393,6 +1401,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.relayout()
 		m.cancelVerifiedRun("tool batch cancelled by the user")
 		m.endAgentRun()
+		agentSave = m.persistAgentRun()
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
@@ -1404,7 +1413,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	default:
 		m.notice = "press ctrl+c again to exit (session auto-saves)"
 	}
-	return m, nil
+	return m, agentSave
 }
 
 type sigQuitMsg struct{}
@@ -1429,9 +1438,16 @@ func (m *Model) quit() tea.Cmd {
 	m.notice = "shutting down…"
 	reg := m.mcpRegistry
 	prov := m.prov
+	persist := m.persistAgentRun()
 	return func() tea.Msg {
+		var persistErr error
+		if persist != nil {
+			if msg, ok := persist().(agentPersistedMsg); ok {
+				persistErr = msg.err
+			}
+		}
 		reg.Close()
-		return quitDoneMsg{err: provider.CloseProvider(prov)}
+		return quitDoneMsg{err: errors.Join(persistErr, provider.CloseProvider(prov))}
 	}
 }
 
@@ -1596,6 +1612,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// tripped, say so; otherwise treat it as a clean finish.
 		if m.streamCanceledByIdle() {
 			m.streamFailed(m.idleError())
+			return m, m.persistAgentRun()
+		} else if m.agentRunActive() {
+			m.streamFailed(errors.New("provider stream closed without a terminal event"))
+			return m, m.persistAgentRun()
 		} else {
 			m.finishStream(nil)
 		}
@@ -1642,9 +1662,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.finishStream(msg.event.Usage)
 		if emptyToolContinuation {
 			m.errText = "Model returned an empty completion after tool execution."
+			m.failVerifiedRun(errors.New(m.errText))
 			m.endAgentRun()
 			m.refreshViewport()
-			return m, nil
+			return m, m.persistAgentRun()
 		}
 		// Tools only run on a clean finish, never on Esc/Ctrl+C partials.
 		// Native calls arrive structured on the Done event; otherwise fall
@@ -1677,7 +1698,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.streamFailed(msg.event.Err)
 		}
-		return m, nil
+		return m, m.persistAgentRun()
 	}
 	return m, nil
 }
@@ -1711,7 +1732,11 @@ func (m *Model) streamFailed(err error) {
 	}
 	m.idleWatchdog = nil
 	m.drainStream()
-	m.failVerifiedRun(err)
+	if m.agentRunActive() && m.agentLoop.ctx != nil && errors.Is(m.agentLoop.ctx.Err(), context.DeadlineExceeded) {
+		_ = m.agentLoop.run.Terminate(agent.DecisionBudgetExhausted, "maximum elapsed time reached", time.Now())
+	} else {
+		m.failVerifiedRun(err)
+	}
 	m.endAgentRun() // a failed run clears run-scoped skills
 	m.refreshViewport()
 }

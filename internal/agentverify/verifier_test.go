@@ -71,7 +71,7 @@ func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
 }
 
 func TestMalformedControlOutput(t *testing.T) {
-	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`} {
+	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`, validReply("passed") + validReply("failed")} {
 		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
 			t.Errorf("Parse(%q) error = %v", raw, err)
 		}

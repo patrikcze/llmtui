@@ -93,6 +93,55 @@ func TestFileStoreAtomicPermissionsAndBounds(t *testing.T) {
 	}
 }
 
+func TestFileStoreAtomicallyReplacesExistingRun(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	run, now := newTestRun(t, DefaultLimits())
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run.Objective = "updated objective"
+	run.UpdatedAt = now.Add(time.Second)
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Objective != "updated objective" {
+		t.Fatalf("objective = %q", loaded.Objective)
+	}
+}
+
+func TestStoresRejectDelayedOlderSnapshot(t *testing.T) {
+	stores := map[string]Store{
+		"memory": NewMemoryStore(),
+		"file":   NewFileStore(t.TempDir(), 64*1024, 4),
+	}
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			older, now := newTestRun(t, DefaultLimits())
+			newer := *older
+			newer.Objective = "newer state"
+			newer.UpdatedAt = now.Add(time.Second)
+			if err := store.Save(context.Background(), &newer); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(context.Background(), older); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Load(context.Background(), older.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Objective != "newer state" {
+				t.Fatalf("delayed save replaced newer state: %+v", loaded)
+			}
+		})
+	}
+}
+
 func TestStoreHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

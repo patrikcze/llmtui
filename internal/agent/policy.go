@@ -31,6 +31,9 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 	if hasErrorKind(exec.Errors, ErrorPermissionDenied) || exec.NeedsUserInput {
 		return StopResult{Decision: DecisionNeedsUserInput, Reason: "execution requires explicit user input or permission"}
 	}
+	if hasErrorKind(exec.Errors, ErrorSafety, ErrorInvariant) {
+		return StopResult{Decision: DecisionEscalated, Reason: "execution encountered a safety constraint or internal invariant failure"}
+	}
 	if run.ToolCalls > run.Limits.MaxToolCalls {
 		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum %d tool calls reached", run.Limits.MaxToolCalls)}
 	}

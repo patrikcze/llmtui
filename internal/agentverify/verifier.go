@@ -183,6 +183,12 @@ func ApplyDeterministicEvidence(result agent.VerificationResult, execution agent
 			result.Retryable = false
 			result.Evidence = append(result.Evidence, "deterministic permission denial")
 			return result
+		case agent.ErrorSafety:
+			result.Verdict = agent.VerificationBlocked
+			result.Summary = "execution encountered a safety constraint"
+			result.Retryable = false
+			result.Evidence = append(result.Evidence, "deterministic safety constraint")
+			return result
 		case agent.ErrorCancelled:
 			result.Verdict = agent.VerificationBlocked
 			result.Summary = "execution was cancelled"
@@ -223,9 +229,10 @@ func firstJSONObject(raw string) (string, error) {
 				escaped = false
 				continue
 			}
-			if c == '\\' {
+			switch c {
+			case '\\':
 				escaped = true
-			} else if c == '"' {
+			case '"':
 				inString = false
 			}
 			continue
@@ -238,6 +245,9 @@ func firstJSONObject(raw string) (string, error) {
 		case '}':
 			depth--
 			if depth == 0 {
+				if strings.Contains(raw[i+1:], "{") {
+					return "", fmt.Errorf("%w: multiple JSON objects", agent.ErrMalformedControl)
+				}
 				return raw[start : i+1], nil
 			}
 		}

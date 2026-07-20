@@ -39,6 +39,11 @@ Every provider request and tool batch returns control to the event loop, which
 keeps rendering and cancellation responsive and makes stale completions
 detectable by run/cycle/generation IDs.
 
+The persisted `AgentRun` is data only; it cannot safely serialize a Go
+`context.Context`. The TUI adapter owns a run-scoped deadline and derives each
+executor, tool, and verifier context from it. Resuming reconstructs that
+process-local context using only the elapsed budget that remains.
+
 ## Instruction precedence and trust
 
 Agent mode reuses the normal composition order. The configured system prompt
@@ -113,8 +118,9 @@ Passing all observable criteria ends as `done`. Verified progress with
 remaining criteria becomes `continue`. A failed/inconclusive but meaningfully
 changed attempt becomes `retry`. Missing user permission/input becomes
 `needs_user_input`; an external block may become `parked`; cancellation and
-hard-budget exhaustion are terminal. Provider/invariant failures are explicit
-and never swallowed to keep the loop running.
+hard-budget exhaustion are terminal. Safety constraints and internal
+invariants escalate; provider failures are explicit and never swallowed merely
+to keep the loop running.
 
 ## Run memory, privacy, and resume
 

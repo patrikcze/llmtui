@@ -14,6 +14,7 @@ const (
 	ErrorToolValidation    ErrorKind = "tool_validation"
 	ErrorToolExecution     ErrorKind = "tool_execution"
 	ErrorPermissionDenied  ErrorKind = "permission_denied"
+	ErrorSafety            ErrorKind = "safety_constraint"
 	ErrorCancelled         ErrorKind = "cancelled"
 	ErrorTimeout           ErrorKind = "timeout"
 	ErrorVerification      ErrorKind = "verification"

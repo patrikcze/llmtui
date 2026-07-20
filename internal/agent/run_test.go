@@ -161,6 +161,26 @@ func TestBudgetsAndPermissionDenial(t *testing.T) {
 	})
 }
 
+func TestSafetyConstraintEscalates(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("inspect protected path", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	safetyErr := NewError(ErrorSafety, "read_file", errors.New("path resolves outside the workspace"))
+	if err := run.CompleteExecution(ExecutionResult{Errors: []RunError{safetyErr}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteVerification(VerificationResult{Verdict: VerificationBlocked, Summary: "workspace boundary held"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WriteMemory(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := Decide(run, now).Decision; got != DecisionEscalated {
+		t.Fatalf("decision = %q, want escalated", got)
+	}
+}
+
 func TestCancellationTimeoutAndMaximumCycle(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
 		run, now := newTestRun(t, DefaultLimits())
@@ -188,6 +208,15 @@ func TestCancellationTimeoutAndMaximumCycle(t *testing.T) {
 		}
 		if got := Decide(run, now.Add(time.Second)).Decision; got != DecisionBudgetExhausted {
 			t.Fatalf("decision = %q", got)
+		}
+	})
+
+	t.Run("elapsed run cannot resume", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.MaxElapsed = time.Second
+		run, now := newTestRun(t, limits)
+		if err := run.Resume("retry", now.Add(time.Second)); !errors.Is(err, ErrBudgetExhausted) {
+			t.Fatalf("resume error = %v", err)
 		}
 	})
 

@@ -51,6 +51,10 @@ chat but not for an autonomous run.
   atomic replacement, size/count limits, and an in-memory implementation for
   tests. Corrupt records are reported and ignored; they never prevent chat from
   starting.
+- Serializable run records deliberately do not contain `context.Context`.
+  The TUI adapter owns one run-scoped deadline/cancel function and derives the
+  executor, tool-batch, and verifier contexts from it. Reloading a persisted
+  run creates a fresh process-local context for the remaining elapsed budget.
 
 ## Adaptation of the six stages
 

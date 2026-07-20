@@ -12,6 +12,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/provider"
+	providermock "github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -250,6 +251,28 @@ func TestNonAgentChatPathRemainsUnchanged(t *testing.T) {
 	}
 }
 
+func TestVerifiedAgentCompatibleWithExistingProviderMock(t *testing.T) {
+	m := newTestModel(t)
+	prov := providermock.New()
+	prov.Delay = 0
+	m.prov = prov
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Enabled = false
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+	driveAgentCommands(t, m, m.startVerifiedRun("exercise the offline provider", nil))
+	if m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("status = %q, want done", m.agentLoop.run.Status)
+	}
+}
+
+func TestToolSafetyFailureIsClassifiedForEscalation(t *testing.T) {
+	result := tools.Result{Call: tools.Call{Tool: tools.ToolReadFile}, Err: errors.New(`path "../secret" is outside the workspace`)}
+	if got := classifyToolError(result, false); got != agent.ErrorSafety {
+		t.Fatalf("kind = %q, want safety constraint", got)
+	}
+}
+
 type blockingAgentProvider struct {
 	started chan struct{}
 }
@@ -292,5 +315,52 @@ func TestAgentLifecycleCommandIsNonBlockingAndCancellationResponsive(t *testing.
 	}
 	if m.agentLoop.run.Status != agent.DecisionCancelled {
 		t.Fatalf("status = %q, want cancelled", m.agentLoop.run.Status)
+	}
+}
+
+func TestAgentElapsedBudgetCancelsExecution(t *testing.T) {
+	m := newTestModel(t)
+	m.prov = &blockingAgentProvider{started: make(chan struct{})}
+	m.agentOn = true
+	m.cfg.Agent.MaxElapsed = "20ms"
+	driveAgentCommands(t, m, m.startVerifiedRun("wait beyond the run deadline", nil))
+	if m.agentLoop.run.Status != agent.DecisionBudgetExhausted {
+		t.Fatalf("status = %q, want budget_exhausted", m.agentLoop.run.Status)
+	}
+}
+
+func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
+	m := newTestModel(t)
+	m.prov = &blockingAgentProvider{started: make(chan struct{})}
+	m.agentOn = true
+	_ = m.startVerifiedRun("cancel this run", nil)
+	if !m.thinking {
+		t.Fatal("agent executor did not enter streaming state")
+	}
+	cmd := cmdAgent(m, "cancel")
+	if cmd != nil {
+		_ = cmd()
+	}
+	if m.thinking || m.agentLoop.run.Status != agent.DecisionCancelled {
+		t.Fatalf("thinking=%v status=%q", m.thinking, m.agentLoop.run.Status)
+	}
+}
+
+func TestQuitPersistsCancelledAgentRun(t *testing.T) {
+	m := newTestModel(t)
+	store := agent.NewMemoryStore()
+	m.agentLoop.store = store
+	m.agentOn = true
+	_ = m.startVerifiedRun("persist on shutdown", nil)
+	runID := m.agentLoop.run.ID
+	if _, ok := m.quit()().(quitDoneMsg); !ok {
+		t.Fatal("quit did not complete")
+	}
+	loaded, err := store.Load(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != agent.DecisionCancelled {
+		t.Fatalf("persisted status = %q, want cancelled", loaded.Status)
 	}
 }
