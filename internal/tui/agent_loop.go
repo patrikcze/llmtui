@@ -123,6 +123,10 @@ func (m *Model) agentVerifying() bool {
 	return m.agentLoop != nil && m.agentLoop.verifying
 }
 
+func (m *Model) agentNeedsUserInput() bool {
+	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
+}
+
 func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cmd {
 	if m.agentLoop == nil {
 		m.configureAgentLoop()
@@ -153,6 +157,30 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(id), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
+}
+
+func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image) tea.Cmd {
+	if !m.agentNeedsUserInput() {
+		return m.startVerifiedRun(input, images)
+	}
+	run := m.agentLoop.run
+	objective := "Continue the original request using the user's new input: " + input
+	if err := run.Resume(objective, time.Now()); err != nil {
+		m.errText = "resume agent run: " + err.Error()
+		m.refreshViewport()
+		return nil
+	}
+	if err := run.BeginCycle(objective, append(m.agentContextSources(), "new_user_input"), time.Now()); err != nil {
+		m.failVerifiedRun(err)
+		m.errText = "resume agent run: " + err.Error()
+		m.refreshViewport()
+		return m.persistAgentRun()
+	}
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.toolDepth = 0
+	m.bypassCache = true
+	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · resumed with user input", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
+	return tea.Batch(m.dispatch(input, images), m.persistAgentRun())
 }
 
 func (m *Model) startNextAgentCycle(objective string) tea.Cmd {

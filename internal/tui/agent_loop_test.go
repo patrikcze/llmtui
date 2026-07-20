@@ -200,6 +200,8 @@ func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-1", Name: tools.ToolWriteFile, Arguments: `{"path":"x.txt","content":"x"}`}}},
 		agentScriptStep{text: "The write was denied; I cannot complete it."},
 		agentScriptStep{text: verifierJSON("passed", "looks complete", "", false, false)},
+		agentScriptStep{text: "Used the user's alternative and completed without the denied write."},
+		agentScriptStep{text: verifierJSON("passed", "alternative satisfies the request", "", false, false)},
 	)
 	m.toolsOn = true
 	m.toolsNative = true
@@ -217,6 +219,12 @@ func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 	cycle := m.agentLoop.run.LatestCycle()
 	if cycle.Verification.Verdict != agent.VerificationBlocked {
 		t.Fatalf("verdict = %+v", cycle.Verification)
+	}
+	runID := m.agentLoop.run.ID
+	m.input.SetValue("skip the write and provide the content inline")
+	driveAgentCommands(t, m, m.send())
+	if m.agentLoop.run.ID != runID || m.agentLoop.run.Cycle != 2 || m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("user input did not resume the same run: %+v", m.agentLoop.run)
 	}
 }
 

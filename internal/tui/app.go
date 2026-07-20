@@ -973,6 +973,9 @@ func (m *Model) send() tea.Cmd {
 	m.sentCount++
 	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
 	if m.agentOn {
+		if m.agentNeedsUserInput() {
+			return m.resumeVerifiedRunWithInput(text, images)
+		}
 		return m.startVerifiedRun(text, images)
 	}
 	return m.dispatch(text, images)
