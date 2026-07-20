@@ -17,6 +17,7 @@ const (
 	ErrorSafety            ErrorKind = "safety_constraint"
 	ErrorCancelled         ErrorKind = "cancelled"
 	ErrorTimeout           ErrorKind = "timeout"
+	ErrorTruncated         ErrorKind = "truncated_response"
 	ErrorVerification      ErrorKind = "verification"
 	ErrorMemoryRead        ErrorKind = "memory_read"
 	ErrorMemoryWrite       ErrorKind = "memory_write"

@@ -472,6 +472,19 @@ func (m *Model) failVerifiedRun(err error) {
 	_ = m.agentLoop.run.Terminate(agent.DecisionFailed, err.Error(), time.Now())
 }
 
+// recordAgentTruncation notes that the current cycle's executor turn was cut
+// off by max_tokens, so ApplyDeterministicEvidence treats it as a
+// deterministic, retryable, transient failure rather than trusting the
+// verifier's read of a possibly garbled or incomplete reply.
+func (m *Model) recordAgentTruncation() {
+	if !m.agentRunActive() {
+		return
+	}
+	m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors,
+		agent.NewError(agent.ErrorTruncated, "executor", errors.New("response was cut off by max_tokens")))
+	m.agentLoop.execution.NewEvidence = true
+}
+
 func (m *Model) recordAgentToolResults(results []tools.Result, denied bool) {
 	if !m.agentRunActive() {
 		return

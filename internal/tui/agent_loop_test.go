@@ -20,6 +20,7 @@ type agentScriptStep struct {
 	text      string
 	toolCalls []provider.ToolCall
 	err       error
+	truncated bool
 }
 
 type scriptedAgentProvider struct {
@@ -53,7 +54,7 @@ func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatReque
 	if step.text != "" {
 		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: step.text}
 	}
-	events <- provider.ChatEvent{Type: provider.EventDone, ToolCalls: step.toolCalls, Usage: &provider.Usage{
+	events <- provider.ChatEvent{Type: provider.EventDone, ToolCalls: step.toolCalls, Truncated: step.truncated, Usage: &provider.Usage{
 		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
 	}}
 	close(events)
@@ -156,6 +157,35 @@ func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	cycle := m.agentLoop.run.LatestCycle()
 	if cycle.Execution == nil || len(cycle.Execution.ToolCalls) != 1 || !cycle.Execution.ToolCalls[0].Succeeded {
 		t.Fatalf("execution = %+v", cycle.Execution)
+	}
+}
+
+// TestVerifiedAgentTruncatedExecutorReplyForcesRetry guards the wiring that
+// treats a truncated executor turn as deterministic evidence: even when the
+// verifier's own (possibly fooled) read of a garbled/incomplete reply claims
+// "passed", ApplyDeterministicEvidence must force a retryable failure so the
+// run doesn't accept a cut-off answer as done.
+func TestVerifiedAgentTruncatedExecutorReplyForcesRetry(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "partial write attempt", truncated: true},
+		agentScriptStep{text: verifierJSON("passed", "looks complete", "", false, false)},
+		agentScriptStep{text: "completed the write this time"},
+		agentScriptStep{text: verifierJSON("passed", "complete", "", false, false)},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("write the file", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
+		t.Fatalf("run = %+v, want a forced retry cycle after the truncated reply", m.agentLoop.run)
+	}
+	first := m.agentLoop.run.Cycles[0]
+	if first.Execution == nil || len(first.Execution.Errors) != 1 || first.Execution.Errors[0].Kind != agent.ErrorTruncated {
+		t.Fatalf("first cycle execution errors = %+v, want one ErrorTruncated entry", first.Execution)
+	}
+	if first.Verification == nil || first.Verification.Verdict != agent.VerificationFailed || !first.Verification.Retryable {
+		t.Fatalf("first cycle verification = %+v, want deterministic failed/retryable despite the verifier saying passed", first.Verification)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want executor+verifier for two cycles", len(prov.requests))
 	}
 }
 
