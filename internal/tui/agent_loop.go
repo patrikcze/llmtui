@@ -576,7 +576,7 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 		}
 		if m.thinking && m.cancelStream != nil {
 			m.cancelStream()
-			m.finishStream(nil)
+			m.finishStream(nil, false)
 		}
 		if m.mcpBatchCancel != nil {
 			m.mcpBatchCancel()

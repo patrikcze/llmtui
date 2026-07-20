@@ -85,7 +85,7 @@ func TestCachedResponseRoundTrip(t *testing.T) {
 	}
 	m.streamBuf.WriteString("Go is a language.")
 	m.thinking = true
-	m.finishStream(&provider.Usage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12})
+	m.finishStream(&provider.Usage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12}, false)
 	if m.lastDebug.CacheStatus != "write" {
 		t.Fatalf("CacheStatus = %q, want write", m.lastDebug.CacheStatus)
 	}
@@ -156,7 +156,7 @@ func TestCacheWriteFailureIsVisible(t *testing.T) {
 	}
 	m.streamBuf.WriteString("successful provider response")
 	m.thinking = true
-	m.finishStream(&provider.Usage{PromptTokens: 2, CompletionTokens: 3})
+	m.finishStream(&provider.Usage{PromptTokens: 2, CompletionTokens: 3}, false)
 
 	if !strings.Contains(m.errText, "cache write failed") {
 		t.Errorf("errText = %q, want visible cache write failure", m.errText)
@@ -190,7 +190,7 @@ func TestMidStreamModelSwitchDoesNotPoisonCache(t *testing.T) {
 	}
 	m.model = "model-b" // simulate any other path that changes the model
 
-	m.finishStream(&provider.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3})
+	m.finishStream(&provider.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3}, false)
 
 	if entry, ok, err := m.responseCache.Get(keyA); err != nil || !ok {
 		t.Fatal("reply should be cached under the dispatch-time key")

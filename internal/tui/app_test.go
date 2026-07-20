@@ -609,7 +609,7 @@ func TestFinishStreamAppendsUsageRecord(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	m.streamBuf.WriteString("reply")
-	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8})
+	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8}, false)
 
 	records, err := history.ReadUsage(m.historyDir)
 	if err != nil || len(records) != 1 {
@@ -617,6 +617,39 @@ func TestFinishStreamAppendsUsageRecord(t *testing.T) {
 	}
 	if records[0].PromptTokens != 3 || records[0].CompletionTokens != 5 {
 		t.Errorf("record = %+v", records[0])
+	}
+}
+
+func TestFinishStreamWarnsOnTruncatedReply(t *testing.T) {
+	m := newTestModel(t)
+	m.streamBuf.WriteString("partial reply")
+	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8}, true)
+
+	msgs := m.session.Messages
+	if len(msgs) == 0 {
+		t.Fatal("no assistant message was recorded")
+	}
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last.Content, "partial reply") {
+		t.Fatalf("assistant content lost the original reply: %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "cut off by max_tokens") {
+		t.Fatalf("assistant content missing truncation notice: %q", last.Content)
+	}
+}
+
+func TestFinishStreamNoWarningWhenNotTruncated(t *testing.T) {
+	m := newTestModel(t)
+	m.streamBuf.WriteString("complete reply")
+	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8}, false)
+
+	msgs := m.session.Messages
+	if len(msgs) == 0 {
+		t.Fatal("no assistant message was recorded")
+	}
+	last := msgs[len(msgs)-1]
+	if strings.Contains(last.Content, "cut off by max_tokens") {
+		t.Fatalf("assistant content unexpectedly has truncation notice: %q", last.Content)
 	}
 }
 

@@ -23,7 +23,7 @@ func TestLeakedThinkBlockIsStrippedFromReplyAndHistory(t *testing.T) {
 	for _, d := range []string{"<think>because", " reasons</think>", "42"} {
 		feedDelta(t, m, d)
 	}
-	m.finishStream(&provider.Usage{})
+	m.finishStream(&provider.Usage{}, false)
 	msgs := m.session.Messages
 	last := msgs[len(msgs)-1]
 	if last.Role != provider.RoleAssistant || last.Content != "42" {
@@ -39,7 +39,7 @@ func TestUnclosedThinkBlockIsSalvaged(t *testing.T) {
 	m := newTestModel(t)
 	m.resetThinkFilter()
 	feedDelta(t, m, "<think>ran out of tokens mid-thought")
-	m.finishStream(&provider.Usage{})
+	m.finishStream(&provider.Usage{}, false)
 	msgs := m.session.Messages
 	last := msgs[len(msgs)-1]
 	if !strings.Contains(last.Content, "ran out of tokens mid-thought") {
@@ -53,7 +53,7 @@ func TestStripLeakedThinkingCanBeDisabled(t *testing.T) {
 	m.cfg.Chat.StripLeakedThinking = false
 	m.resetThinkFilter()
 	feedDelta(t, m, "<think>x</think>y")
-	m.finishStream(&provider.Usage{})
+	m.finishStream(&provider.Usage{}, false)
 	msgs := m.session.Messages
 	if last := msgs[len(msgs)-1]; last.Content != "<think>x</think>y" {
 		t.Fatalf("content = %q", last.Content)
