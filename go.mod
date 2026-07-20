@@ -1,6 +1,6 @@
 module github.com/patrikcze/llmtui
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/charmbracelet/x/ansi v0.11.6
+	github.com/ebitengine/purego v0.10.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/hybridgroup/yzma v1.19.0
 	github.com/spf13/cobra v1.10.2
@@ -35,7 +36,6 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
-	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
