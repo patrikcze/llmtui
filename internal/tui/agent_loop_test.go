@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -392,6 +393,45 @@ func TestAgentElapsedBudgetCancelsExecution(t *testing.T) {
 	driveAgentCommands(t, m, m.startVerifiedRun("wait beyond the run deadline", nil))
 	if m.agentLoop.run.Status != agent.DecisionBudgetExhausted {
 		t.Fatalf("status = %q, want budget_exhausted", m.agentLoop.run.Status)
+	}
+}
+
+// TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary guards
+// the fix for docs/architecture/v1-audit.md §4.2: agent.Decide()'s hard
+// tool-call budget was previously only checked at a cycle boundary reached
+// when the executor produces a turn with no tool calls. An executor that
+// keeps requesting tools every turn never reached that boundary, so the
+// documented run-level max_tool_calls ceiling (docs/agent-loop.md: "Agent
+// mode adds a total run-level tool-call limit... further calls are
+// rejected") could be exceeded well past the configured limit. This
+// scripts an executor that always returns a tool call and asserts real
+// tool execution stops at the limit itself, not merely that the run
+// eventually reports budget_exhausted at some later cycle boundary.
+func TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary(t *testing.T) {
+	steps := make([]agentScriptStep, 0, 10)
+	for i := 0; i < 10; i++ {
+		steps = append(steps, agentScriptStep{toolCalls: []provider.ToolCall{
+			{ID: fmt.Sprintf("call-%d", i), Name: tools.ToolListDir, Arguments: `{}`},
+		}})
+	}
+	m, prov := configureAgentTestModel(t, steps...)
+	m.cfg.Agent.MaxToolCalls = 3
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("keep listing the workspace", nil))
+
+	if m.toolOK != 3 {
+		t.Fatalf("toolOK = %d, want exactly 3 real executions (the live budget check should cap it)", m.toolOK)
+	}
+	if m.agentLoop.run.Status == agent.DecisionDone {
+		t.Fatal("run should not report done: the executor never produced a final answer")
+	}
+	if m.agentLoop.run.Cycle > 1 {
+		t.Fatalf("cycle = %d, want the live check to fire within cycle 1, before any cycle boundary is ever reached", m.agentLoop.run.Cycle)
+	}
+	if len(prov.requests) >= len(steps)+1 {
+		t.Fatalf("provider requests = %d: all %d scripted steps were consumed without the live budget check ever intervening", len(prov.requests), len(steps))
 	}
 }
 

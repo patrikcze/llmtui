@@ -30,6 +30,13 @@ type agentLoopState struct {
 	verifyCancel context.CancelFunc
 	verifyGen    int
 	persistErr   error
+	// liveToolCalls is the run's true cumulative tool-call count, updated as
+	// each round completes. Unlike execution.ToolCalls (reset every cycle by
+	// startNextAgentCycle), this never resets for the life of the run, so
+	// the live budget check in agentHardBudgetExceeded compares against the
+	// same run-level ceiling agent.Decide would eventually enforce at a
+	// cycle boundary — without waiting for that boundary to be reached.
+	liveToolCalls int
 }
 
 type agentVerificationMsg struct {
@@ -156,6 +163,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.run = run
 	m.resetAgentContext()
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.agentLoop.liveToolCalls = 0
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(id), run.Limits.MaxCycles)
@@ -489,6 +497,7 @@ func (m *Model) recordAgentToolResults(results []tools.Result, denied bool) {
 	if !m.agentRunActive() {
 		return
 	}
+	m.agentLoop.liveToolCalls += len(results)
 	for _, result := range results {
 		kind := agent.ErrorKind("")
 		if result.Err != nil {
@@ -547,18 +556,63 @@ func looksLikeTestCommand(command string) bool {
 		strings.HasPrefix(command, "pytest") || strings.HasPrefix(command, "cargo test")
 }
 
-func (m *Model) agentToolBudgetExceeded(incoming int) bool {
-	return m.agentRunActive() && len(m.agentLoop.execution.ToolCalls)+incoming > m.agentLoop.run.Limits.MaxToolCalls
+// agentHardBudgetExceeded reports whether executing incoming more tool
+// calls would already cross the run's hard tool-call or token ceiling,
+// using true run-level running totals (m.agentLoop.liveToolCalls, and
+// run.PromptTokens+CompletionTokens, both updated live every round) rather
+// than the per-cycle execution.ToolCalls counter. That per-cycle counter
+// resets every cycle, so on its own it cannot catch a tool-calling spree
+// that never reaches the cycle-boundary agent.Decide() check — see
+// docs/architecture/v1-audit.md §4.2 and
+// docs/architecture/decisions/0002-live-progress-ledger-and-budget-enforcement.md.
+func (m *Model) agentHardBudgetExceeded(incoming int) (exceeded bool, reason string) {
+	if !m.agentRunActive() {
+		return false, ""
+	}
+	run := m.agentLoop.run
+	if m.agentLoop.liveToolCalls+incoming > run.Limits.MaxToolCalls {
+		return true, fmt.Sprintf("agent tool-call budget exhausted (maximum %d)", run.Limits.MaxToolCalls)
+	}
+	if run.Limits.MaxTokens > 0 && run.PromptTokens+run.CompletionTokens >= run.Limits.MaxTokens {
+		return true, fmt.Sprintf("agent token budget exhausted (maximum %d)", run.Limits.MaxTokens)
+	}
+	return false, ""
 }
 
-func (m *Model) agentToolLimitResults(calls []tools.Call) []tools.Result {
-	limit := m.agentLoop.run.Limits.MaxToolCalls
-	err := fmt.Errorf("agent tool-call budget exhausted (maximum %d); this call was not executed. Stop requesting tools and report the observable state", limit)
+// terminateAgentBudget stops the run immediately when a hard tool-call or
+// token ceiling is crossed mid-cycle, rather than rejecting the call and
+// asking the model to try again. The reject-and-continue shape was tried
+// first and rejected: since the executor keeps offering tool calls every
+// turn in exactly the failure mode this guards against, rejecting one call
+// only invited another rejected attempt next turn, so the loop kept
+// consuming provider round-trips (the token-burn part of the reported
+// failure) even though no tool was actually executing anymore. Terminating
+// outright matches master-prompt §7.1's "maximum tool calls"/"maximum
+// tokens" deterministic terminal outcomes.
+//
+// The rejected calls still get a structured result appended to the
+// session so native tool-call/result correlation holds for the persisted
+// transcript (master-prompt §7.3: never silently drop a result) — the run
+// just doesn't continue past it.
+func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd {
+	err := fmt.Errorf("%s; this call was not executed. Stop requesting tools and report the observable state", reason)
 	results := make([]tools.Result, len(calls))
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	return results
+	m.recordAgentToolResults(results, false)
+	if len(results) > 0 && results[0].Call.ID != "" {
+		for _, msg := range tools.NativeResults(results) {
+			m.session.AddMessage(msg)
+		}
+	}
+	m.toolErr += len(results)
+	run := m.agentLoop.run
+	_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
+	m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
+	m.endAgentRun()
+	m.refreshViewport()
+	return m.persistAgentRun()
 }
 
 func cmdAgent(m *Model, args string) tea.Cmd {

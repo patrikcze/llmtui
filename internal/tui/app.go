@@ -171,6 +171,14 @@ type Model struct {
 	webOn            bool         // web tools (web_search/web_fetch) enabled
 	webClient        *web.Client  // shared web client; nil if the runner is unavailable
 
+	// progress tracks tool-call fingerprints across the current run (both
+	// ordinary tool chat and /agent on share the same kernel — see
+	// docs/architecture/decisions/0001-single-orchestration-kernel.md — so
+	// they share this ledger too) to detect a batch that only repeats
+	// already-seen, evidence-unchanged calls. See internal/tui/progress.go
+	// and docs/architecture/v1-agent-runtime.md §3.
+	progress *progressLedger
+
 	// Optional local RAG (disabled by default).
 	ragOn      bool         // retrieval enabled for the current session
 	ragIndex   *rag.Index   // loaded/built workspace index; nil until indexed
@@ -295,6 +303,8 @@ func New(opts Options) *Model {
 
 		toolsAutoApprove: cfg.Tools.Approve == "auto",
 		toolsNative:      cfg.Tools.Native != "off",
+
+		progress: newProgressLedger(0),
 	}
 	m.rebuildFromConfig()
 	if opts.ResumeSession != nil {
@@ -813,6 +823,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.recordAgentToolResults(msg.results, false)
+		m.progress.observeResults(msg.results)
 		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.results), m.toolDepth, m.toolMaxIter())
 		return m, m.sendToolResults(msg.results)
 
@@ -979,10 +990,16 @@ func (m *Model) send() tea.Cmd {
 	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
+			// Resuming an in-progress run: it never replays incomplete work
+			// and the ledger must keep the evidence it already collected in
+			// this run, so a stuck pattern from before the input pause is
+			// still recognized after it (docs/architecture/v1-agent-runtime.md §3).
 			return m.resumeVerifiedRunWithInput(text, images)
 		}
+		m.progress = newProgressLedger(0)
 		return m.startVerifiedRun(text, images)
 	}
+	m.progress = newProgressLedger(0)
 	return m.dispatch(text, images)
 }
 
@@ -1030,10 +1047,11 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
-	if m.agentToolBudgetExceeded(len(calls)) {
-		results := m.agentToolLimitResults(calls)
-		m.recordAgentToolResults(results, false)
-		return m.sendToolResults(results)
+	if exceeded, reason := m.agentHardBudgetExceeded(len(calls)); exceeded {
+		return m.terminateAgentBudget(calls, reason)
+	}
+	if blocked, terminal, reason := m.progress.blockBatch(calls); blocked {
+		return m.handleBlockedProgress(calls, reason, terminal)
 	}
 	if m.toolDepth >= m.toolMaxIter() {
 		// A pending approval must own the next keypress and be visibly on
@@ -1100,6 +1118,47 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 		}
 		return res
 	}
+}
+
+// handleBlockedProgress handles a batch the progress ledger has blocked as
+// a repeat with no new evidence (docs/architecture/v1-agent-runtime.md §3).
+// A single block is fed back to the model as a forcing function to change
+// strategy — legitimate repetition (polling, freshness, retries) never
+// reaches here, since progressLedger.observe resets the streak whenever a
+// result's digest actually changes. A second consecutive block on the same
+// pattern (terminal) ends the turn or run instead of continuing to ask the
+// provider for a completion that will just be blocked again — see
+// progressLedger's blockedStreak doc comment for why that distinction
+// matters for the token-burn failure this closes.
+func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, terminal bool) tea.Cmd {
+	err := fmt.Errorf("%s. Use different arguments, a different approach, or report the observable state", reason)
+	results := make([]tools.Result, len(calls))
+	for i, call := range calls {
+		results[i] = tools.Result{Call: call, Err: err}
+	}
+	m.recordAgentToolResults(results, false)
+	m.toolErr += len(results)
+	m.notice = "Repeated tool call blocked: no new evidence"
+
+	if !terminal {
+		return m.sendToolResults(results)
+	}
+	if len(results) > 0 && results[0].Call.ID != "" {
+		for _, msg := range tools.NativeResults(results) {
+			m.session.AddMessage(msg)
+		}
+	}
+	if m.agentRunActive() {
+		run := m.agentLoop.run
+		_ = run.Terminate(agent.DecisionFailed, "no_progress: "+reason, time.Now())
+		m.notice = fmt.Sprintf("agent %s · no_progress: %s", shortRunID(run.ID), reason)
+		m.endAgentRun()
+		m.refreshViewport()
+		return m.persistAgentRun()
+	}
+	m.errText = "Repeated tool call blocked twice in a row: no new evidence. Try a different approach."
+	m.refreshViewport()
+	return nil
 }
 
 // denyPendingTools rejects the pending batch and tells the model, so it can
@@ -1278,6 +1337,7 @@ func (m *Model) retryLast() tea.Cmd {
 		}
 	}
 	m.toolDepth = 0 // a retry is a fresh turn and gets a fresh tool budget
+	m.progress = newProgressLedger(0)
 	m.notice = "retrying last message"
 	m.sentCount++
 	return m.dispatch(m.lastUserMsg, m.lastImages)
