@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -103,6 +104,94 @@ func TestBuildSkipsGitAndSecrets(t *testing.T) {
 	}
 	if !found {
 		t.Error("clean file keep.md was not indexed")
+	}
+}
+
+func TestBuildSkipsFilesContainingHighConfidenceSecrets(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "private key", content: "notes\n-----BEGIN PRIVATE KEY-----\nabc"},
+		{name: "AWS access key", content: "aws_access_key_id = AKIAIOSFODNN7EXAMPLE"},
+		{name: "authorization bearer", content: "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345"},
+		{name: "x-api-key header", content: "x-api-key: abcdefghijklmnopqrstuvwxyz012345"},
+		{name: "GitHub token", content: "token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, "ordinary-config.txt", tt.content)
+			writeFile(t, root, "safe.txt", "ordinary documentation")
+			idx, skipped, err := Build(BuildConfig{Root: root, Include: []string{"**/*.txt"}})
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if skipped == 0 {
+				t.Fatal("secret-bearing file was not counted as skipped")
+			}
+			for _, source := range idx.Sources() {
+				if source == "ordinary-config.txt" {
+					t.Fatalf("secret-bearing file was indexed for %s", tt.name)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildKeepsSecretPatternNearMisses(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "examples.txt", strings.Join([]string{
+		"aws_access_key_id = AKIA...",
+		"Authorization: Bearer <token>",
+		"x-api-key: ${API_KEY}",
+		"-----BEGIN PUBLIC KEY-----",
+	}, "\n"))
+	idx, _, err := Build(BuildConfig{Root: root, Include: []string{"**/*.txt"}})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(idx.Sources()) != 1 || idx.Sources()[0] != "examples.txt" {
+		t.Fatalf("near-miss documentation was unexpectedly skipped: %v", idx.Sources())
+	}
+}
+
+func TestStoreRejectsSecretBearingPersistedIndex(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	data, err := json.Marshal(persisted{
+		Version: currentIndexVersion,
+		Root:    "/workspace",
+		Chunks: []DocumentChunk{{
+			ID:   "config.txt#1-1",
+			Path: "config.txt",
+			Text: "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, indexFileName), data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if idx, _, _, err := store.Load(); err == nil || idx != nil {
+		t.Fatalf("Load = (%v, %v), want secret-bearing index rejection", idx, err)
+	}
+}
+
+func TestStoreRejectsUnversionedLegacyIndex(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := os.WriteFile(
+		filepath.Join(dir, indexFileName),
+		[]byte(`{"root":"/workspace","chunks":[]}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if idx, _, _, err := store.Load(); err == nil || idx != nil {
+		t.Fatalf("Load = (%v, %v), want reindex-required error", idx, err)
 	}
 }
 

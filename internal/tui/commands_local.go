@@ -542,6 +542,7 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 		name = rest
 	}
 	prov := m.prov
+	ownedProvider := false
 	// The report must show the checked provider's own config; the active
 	// provider's includes any base-url/api-key overrides.
 	pc, configured := m.cfg.Providers[name]
@@ -557,13 +558,20 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 			return m.fail(err.Error())
 		}
 		prov = p
+		ownedProvider = true
 	}
 	model := m.model
+	if ownedProvider && strings.TrimSpace(pc.DefaultModel) != "" {
+		model = pc.DefaultModel
+	}
 	cfg := m.cfg
-	window, source := m.contextWindow()
+	window, source := m.contextWindowFor(prov, model)
 	m.notice = "running diagnostics…"
 
 	return func() tea.Msg {
+		if ownedProvider {
+			defer func() { _ = provider.CloseProvider(prov) }()
+		}
 		return doctorResultMsg{report: doctorReport(prov, pc, model, cfg, window, source)}
 	}
 }
@@ -572,7 +580,7 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
-	caps := provider.CapabilitiesOf(prov)
+	caps := provider.CapabilitiesFor(prov, model)
 	var lines []string
 	add := func(k, v string) { lines = append(lines, fmt.Sprintf("%-18s %s", k, v)) }
 
@@ -620,6 +628,10 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 		usage = "not reported — using estimates"
 	}
 	add("token usage", usage)
+	add("native tools", caps.NativeTools.String())
+	add("parallel calls", caps.ParallelToolCalls.String()+" (emission; host execution stays ordered)")
+	add("reasoning events", caps.ReasoningEvents.String())
+	add("structured output", caps.StructuredOutput.String())
 	add("context window", fmt.Sprintf("%d from %s", window, windowSource))
 	add("timeout", cfg.Network.Timeout+" (connect "+cfg.Network.ConnectTimeout+")")
 	retry := "off"
@@ -821,6 +833,7 @@ func cmdConfig(m *Model, args string) tea.Cmd {
 				m.prov = prov
 				m.demoMode = false
 				m.connected = false
+				m.resetNativeToolMode()
 				if wasDemo {
 					m.model = cfg.ActiveModel()
 				}

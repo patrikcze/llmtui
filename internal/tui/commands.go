@@ -299,6 +299,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 	} else if pc.DefaultModel != "" {
 		m.model = pc.DefaultModel
 	}
+	m.resetNativeToolMode()
 	m.demoMode = false
 	m.connected = false
 	m.notice = fmt.Sprintf("switched to %s (%s)", name, m.model)
@@ -328,6 +329,7 @@ func (m *Model) clearPicker() {
 
 func (m *Model) setModel(id string) {
 	m.model = id
+	m.resetNativeToolMode()
 	m.notice = "model set to " + id
 }
 

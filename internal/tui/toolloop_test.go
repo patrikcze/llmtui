@@ -15,6 +15,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -320,6 +321,41 @@ func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
 	}
 }
 
+func TestNativeToolCapabilityOverrideAndLearnedRejectionAreModelScoped(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.cfg.Tools.Native = "auto"
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	unsupported := false
+	m.prov = provider.WithCapabilityOverrides(m.prov, provider.CapabilityOverrides{NativeTools: &unsupported})
+	m.resetNativeToolMode()
+	if m.useNativeTools() || len(m.activeToolSpecs()) != 0 {
+		t.Fatal("explicit native_tools:false should select fallback without offering schemas")
+	}
+
+	supported := true
+	m.prov = provider.WithCapabilityOverrides(mock.New(), provider.CapabilityOverrides{NativeTools: &supported})
+	m.model = "capable-a"
+	m.resetNativeToolMode()
+	if !m.useNativeTools() || len(m.activeToolSpecs()) == 0 {
+		t.Fatal("explicit native_tools:true should offer native schemas")
+	}
+	m.nativeToolRejections[m.nativeToolCapabilityKey()] = true
+	m.resetNativeToolMode()
+	if m.useNativeTools() {
+		t.Fatal("learned rejection was not applied to the current provider/model")
+	}
+	m.setModel("capable-b")
+	if !m.useNativeTools() {
+		t.Fatal("one model's rejection leaked to a different model")
+	}
+	m.setModel("capable-a")
+	if m.useNativeTools() {
+		t.Fatal("returning to the rejected model forgot learned capability state")
+	}
+}
+
 func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true
@@ -343,6 +379,39 @@ func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
 	}
 	if len(m.session.Messages) != messagesBefore {
 		t.Errorf("messages = %d, want %d (no empty assistant message)", len(m.session.Messages), messagesBefore)
+	}
+}
+
+// TestTruncatedNativeToolCallIsNotExecuted guards the fix for
+// docs/architecture/v1-agent-runtime.md §2: a tool call truncated by
+// max_tokens must never be executed, in ordinary tool chat just as much as
+// in /agent on. Before this fix, only /agent on recorded truncation as
+// evidence (and only for its own verifier, after the fact) — the ordinary
+// tool loop had no check at all and would have run the call.
+func TestTruncatedNativeToolCallIsNotExecuted(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, Truncated: true, ToolCalls: []provider.ToolCall{
+		{ID: "call_1", Name: "write_file", Arguments: `{"path":"out.txt","content":"truncated conte`},
+	}}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+
+	if cmd != nil {
+		t.Fatal("a truncated tool call must not start execution")
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); err == nil {
+		t.Fatal("truncated write_file call must not have executed")
+	}
+	if m.errText == "" || !strings.Contains(m.errText, "cut off") {
+		t.Errorf("errText = %q, want an explanation that the call was cut off", m.errText)
+	}
+	if m.toolOK != 0 {
+		t.Errorf("toolOK = %d, want 0: nothing should have run", m.toolOK)
 	}
 }
 
@@ -773,7 +842,8 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 		t.Errorf("toolOK = %d, want 1", m.toolOK)
 	}
 	last := m.session.Messages[len(m.session.Messages)-1]
-	if last.Role != provider.RoleTool || !strings.HasSuffix(last.Content, "\nsession started") {
+	if last.Role != provider.RoleTool ||
+		!strings.Contains(last.Content, "\nsession started\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("tool result message = %+v", last)
 	}
 }

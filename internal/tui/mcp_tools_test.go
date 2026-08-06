@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +66,32 @@ func TestDurableCallBlocksAmbiguousCrashRecord(t *testing.T) {
 	}
 }
 
+func TestRunPlannedToolBatchMergesBlockedAndExecutedResultsInOrder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "fresh.txt"), []byte("fresh evidence"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runner := tools.NewRunner(root, 64)
+	stuck := tools.Call{ID: "stuck", Tool: tools.ToolReadFile, Path: "blocked.txt"}
+	fresh := tools.Call{ID: "fresh", Tool: tools.ToolReadFile, Path: "fresh.txt"}
+	plan := newToolBatchPlan([]tools.Call{stuck, fresh})
+	plan.block(0, "repeated tool call blocked: no new evidence")
+
+	msg, ok := runPlannedToolBatch(context.Background(), runner, nil, plan)().(mcpToolResultsMsg)
+	if !ok {
+		t.Fatal("planned batch returned the wrong message type")
+	}
+	if len(msg.results) != 2 || msg.results[0].Call.ID != "stuck" || msg.results[1].Call.ID != "fresh" {
+		t.Fatalf("ordered results = %+v", msg.results)
+	}
+	if msg.results[0].Err == nil || msg.results[1].Err != nil || !strings.Contains(msg.results[1].Output, "fresh evidence") {
+		t.Fatalf("merged results = %+v", msg.results)
+	}
+	if len(msg.observed) != 1 || msg.observed[0].Call.ID != "fresh" {
+		t.Fatalf("observed results = %+v, want only the executed call", msg.observed)
+	}
+}
+
 // newConnectedMCPRegistry builds a registry with one server already
 // connected via a MockClient advertising the given tools.
 func newConnectedMCPRegistry(t *testing.T, serverName string, mockTools []mcp.Tool, callFunc func(name string, input json.RawMessage) (mcp.Result, error)) *mcp.Registry {
@@ -119,7 +147,9 @@ func TestExecuteMCPCallSuccess(t *testing.T) {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
 	if !strings.Contains(res.Output, "[untrusted MCP result: jiraWorklog/session_start") ||
-		!strings.Contains(res.Output, `{"session":{"id":"ses_1"}}`) {
+		!strings.Contains(res.Output, `{"session":{"id":"ses_1"}}`) ||
+		!strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_BEGIN ") ||
+		!strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("output = %q", res.Output)
 	}
 }
@@ -135,7 +165,7 @@ func TestExecuteMCPCallSanitizesTerminalControlSequences(t *testing.T) {
 	if strings.ContainsRune(res.Output, '\x1b') || strings.ContainsRune(res.Output, '\x07') || strings.Contains(res.Output, "Y2xpcA==") {
 		t.Fatalf("terminal sequence survived MCP result: %q", res.Output)
 	}
-	if !strings.HasSuffix(res.Output, "\nsafe text") {
+	if !strings.Contains(res.Output, "\nsafe text\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Fatalf("sanitized output = %q", res.Output)
 	}
 }
@@ -162,7 +192,7 @@ func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
-	if len(res.Output) > 1024+128 {
+	if len(res.Output) > 1024+512 {
 		t.Fatalf("output not capped: %d bytes", len(res.Output))
 	}
 	if !strings.Contains(res.Output, "truncated (1024 of 4096 bytes shown)") {
@@ -171,7 +201,7 @@ func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
 
 	// Uncapped (0) keeps the full content.
 	res = executeMCPCall(context.Background(), reg, c, 0)
-	if !strings.HasSuffix(res.Output, "\n"+huge) {
+	if !strings.Contains(res.Output, "\n"+huge+"\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("maxBytes=0 should not truncate (got %d bytes)", len(res.Output))
 	}
 }
@@ -189,7 +219,7 @@ func TestRunMixedToolBatchCapsMCPResultAtRunnerLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", cmd())
 	}
-	if got := len(msg.results[0].Output); got > 64*1024+128 {
+	if got := len(msg.results[0].Output); got > 64*1024+512 {
 		t.Errorf("MCP result not capped at the runner's limit: %d bytes", got)
 	}
 	if !strings.Contains(msg.results[0].Output, "truncated") {
@@ -264,7 +294,8 @@ func TestRunMixedToolBatchPreservesOrderAndRunsNativeToo(t *testing.T) {
 	if msg.results[0].Call.ID != "c1" || msg.results[0].Err != nil {
 		t.Errorf("native result[0] = %+v", msg.results[0])
 	}
-	if msg.results[1].Call.ID != "c2" || !strings.HasSuffix(msg.results[1].Output, "\nmcp-ok") {
+	if msg.results[1].Call.ID != "c2" ||
+		!strings.Contains(msg.results[1].Output, "\nmcp-ok\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("mcp result[1] = %+v", msg.results[1])
 	}
 }

@@ -23,6 +23,9 @@ type ProviderConfig struct {
 	APIKey       string `mapstructure:"api_key" yaml:"api_key"`
 	APIKeyEnv    string `mapstructure:"api_key_env" yaml:"api_key_env"`
 	DefaultModel string `mapstructure:"default_model" yaml:"default_model"`
+	// Capabilities overrides backend/model discovery. Pointer booleans keep
+	// omitted (auto/unknown) distinct from an explicit false.
+	Capabilities ProviderCapabilitiesConfig `mapstructure:"capabilities" yaml:"capabilities,omitempty"`
 
 	// The fields below configure the embedded (in-process) provider only;
 	// other provider types ignore them.
@@ -64,6 +67,16 @@ type ProviderConfig struct {
 	FlashAttention string `mapstructure:"flash_attention" yaml:"flash_attention,omitempty"`
 	// Sampling configures the native token sampler chain.
 	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
+}
+
+// ProviderCapabilitiesConfig supplies authoritative capability overrides for
+// backends that cannot advertise them reliably. Omitted fields remain auto.
+type ProviderCapabilitiesConfig struct {
+	NativeTools         *bool `mapstructure:"native_tools" yaml:"native_tools,omitempty"`
+	ParallelToolCalls   *bool `mapstructure:"parallel_tool_calls" yaml:"parallel_tool_calls,omitempty"`
+	ReasoningEvents     *bool `mapstructure:"reasoning_events" yaml:"reasoning_events,omitempty"`
+	StructuredOutput    *bool `mapstructure:"structured_output" yaml:"structured_output,omitempty"`
+	ContextWindowTokens *int  `mapstructure:"context_window_tokens" yaml:"context_window_tokens,omitempty"`
 }
 
 // SamplingConfig configures the embedded provider's native sampler chain.
@@ -183,6 +196,12 @@ type AgentConfig struct {
 	MaxMemoryKB         int                 `mapstructure:"max_memory_kb" yaml:"max_memory_kb"`
 	MaxRuns             int                 `mapstructure:"max_runs" yaml:"max_runs"`
 	Verifier            AgentVerifierConfig `mapstructure:"verifier" yaml:"verifier"`
+	// EnforceBudgetsLive checks max_tool_calls/max_tokens on every tool
+	// round using the run's true running totals, not only when a cycle
+	// completes (see docs/architecture/v1-audit.md §4.2). Defaults on; set
+	// false to fall back to the pre-v1 cycle-boundary-only check if this
+	// causes an unexpected early stop.
+	EnforceBudgetsLive bool `mapstructure:"enforce_budgets_live" yaml:"enforce_budgets_live"`
 }
 
 // AgentVerifierConfig bounds the independent evaluator request. Model is an
@@ -215,6 +234,25 @@ type ToolsConfig struct {
 	// Guardrails hardens the workspace tools (write blocks, command
 	// classification, secret-read approval). All protections default on.
 	Guardrails GuardrailsConfig `mapstructure:"guardrails" yaml:"guardrails"`
+	// NoProgress configures repeated-tool-call/no-progress detection (see
+	// docs/architecture/v1-agent-runtime.md §3). Applies to both ordinary
+	// tool-enabled chat and /agent on, since both share the same
+	// tool-execution kernel.
+	NoProgress NoProgressConfig `mapstructure:"no_progress" yaml:"no_progress"`
+}
+
+// NoProgressConfig toggles and tunes the progress ledger that blocks an
+// individual tool call after it repeatedly produces no new evidence. Fresh
+// calls in a mixed batch still execute. Defaults on; set enabled: false to
+// revert to the pre-v1 pass-through behavior if it produces a false positive
+// in practice — legitimate repetition (polling, pagination, retries) is
+// designed to never trip it, but Threshold can also be raised instead of
+// disabling the protection outright.
+type NoProgressConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Threshold is how many consecutive no-new-evidence repeats of the
+	// same call are allowed before the next one is blocked.
+	Threshold int `mapstructure:"threshold" yaml:"threshold"`
 }
 
 // GuardrailsConfig toggles the workspace-tool protections. Every field
@@ -663,6 +701,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.model", "")
 	v.SetDefault("agent.verifier.max_tokens", 1024)
 	v.SetDefault("agent.verifier.timeout", "120s")
+	v.SetDefault("agent.enforce_budgets_live", true)
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -679,6 +718,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.guardrails.protect_secret_files", true)
 	v.SetDefault("tools.guardrails.protect_shell_startup_files", true)
 	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
+	v.SetDefault("tools.no_progress.enabled", true)
+	v.SetDefault("tools.no_progress.threshold", 3)
 
 	v.SetDefault("skills.enabled", true)
 	v.SetDefault("skills.expose_catalog_to_model", true)
@@ -732,6 +773,14 @@ providers:
     # api_key_env: LLMTUI_API_KEY
     api_key: ""
     default_model: local-model
+    # Optional capability overrides. Omit a boolean to leave it unknown;
+    # explicit false is authoritative and selects the safe fallback.
+    # capabilities:
+    #   native_tools: true
+    #   parallel_tool_calls: false
+    #   reasoning_events: false
+    #   structured_output: true
+    #   context_window_tokens: 32768
 
   # Embedded (in-process) inference: loads a local .gguf model directly,
   # with no separate server. Opt-in and inert until you configure it or run
@@ -825,6 +874,10 @@ agent:
   path: "~/.local/share/llmtui/agent-runs"
   max_memory_kb: 64
   max_runs: 32
+  # Checks max_tool_calls/max_tokens on every tool round, not only when a
+  # cycle completes. Set false to fall back to the cycle-boundary-only
+  # check if this causes an unexpected early stop.
+  enforce_budgets_live: true
   verifier:
     enabled: true
     model: "" # empty uses the active executor model in a fresh context
@@ -864,6 +917,13 @@ tools:
     protect_secret_files: true # reject writes into .ssh, .gnupg
     protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
     require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
+  # Blocks stuck calls individually after repeated unchanged results;
+  # fresh calls in the same batch still execute. Applies to ordinary tool
+  # chat and /agent on. Legitimate repetition (polling, pagination, retries)
+  # never trips it when the result changes. Set enabled: false to revert.
+  no_progress:
+    enabled: true
+    threshold: 3 # consecutive no-new-evidence repeats allowed before blocking
 
 # Skills: declarative task-instruction packages (SKILL.md files with YAML
 # front matter) discovered from <user-config>/llmtui/skills/<id>/ and

@@ -58,7 +58,11 @@ func TestWebSearchFormatsResults(t *testing.T) {
 	if !strings.HasPrefix(res.Output, untrustedWebPreamble) {
 		t.Fatal("web search result lacks untrusted-content provenance")
 	}
-	first := strings.Split(res.Output, "\n")[1]
+	if !strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_BEGIN ") ||
+		!strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_END ") {
+		t.Fatal("web search result lacks structural untrusted-content framing")
+	}
+	first := strings.Split(res.Output, "\n")[2]
 	if first != `2 results for "some query"` {
 		t.Errorf("first line %q", first)
 	}
@@ -100,7 +104,11 @@ func TestWebFetchFormatsPage(t *testing.T) {
 	if !strings.HasPrefix(res.Output, untrustedWebPreamble) {
 		t.Fatal("web page lacks untrusted-content provenance")
 	}
-	first := strings.Split(res.Output, "\n")[1]
+	if !strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_BEGIN ") ||
+		!strings.Contains(res.Output, "<<<LLMTUI_UNTRUSTED_END ") {
+		t.Fatal("web page lacks structural untrusted-content framing")
+	}
+	first := strings.Split(res.Output, "\n")[2]
 	if first != "fetched https://a.example/x — 45.2 KB, status 200" {
 		t.Errorf("first line %q", first)
 	}

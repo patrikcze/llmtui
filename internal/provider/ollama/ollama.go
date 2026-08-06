@@ -405,5 +405,9 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		SupportsTokenUsage:   true, // prompt_eval_count / eval_count
 		SupportsJSONMode:     true, // format: json
 		SupportsSystemPrompt: true,
+		// Support is selected-model dependent. Until model metadata is
+		// available, keep it unknown and learn from the first real request.
+		NativeTools:     provider.CapabilityUnknown,
+		ReasoningEvents: provider.CapabilityUnknown,
 	}
 }

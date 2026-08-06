@@ -11,9 +11,15 @@ import (
 // indexFileName is the on-disk index inside the configured index directory.
 const indexFileName = "index.json"
 
+// currentIndexVersion invalidates indexes created before content-based
+// secret scanning existed. Loading those raw chunks would bypass the scanner
+// until the user happened to rebuild the index.
+const currentIndexVersion = 1
+
 // persisted is the serialized form. BM25 statistics are not stored; they are
 // recomputed on Load, so the file stays small and format-stable.
 type persisted struct {
+	Version int             `json:"version"`
 	Root    string          `json:"root"`
 	BuiltAt time.Time       `json:"built_at"`
 	Chunks  []DocumentChunk `json:"chunks"`
@@ -32,10 +38,21 @@ func (s *Store) path() string { return filepath.Join(s.dir, indexFileName) }
 // Save writes the index for root to disk with owner-only permissions (the
 // index may contain workspace source excerpts).
 func (s *Store) Save(idx *Index, root string) error {
+	if idx == nil {
+		return fmt.Errorf("rag: save nil index")
+	}
+	if containsSecretChunk(idx.Chunks) {
+		return fmt.Errorf("rag: refusing to save an index containing likely secret material")
+	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("rag: create index dir: %w", err)
 	}
-	data, err := json.Marshal(persisted{Root: root, BuiltAt: time.Now(), Chunks: idx.Chunks})
+	data, err := json.Marshal(persisted{
+		Version: currentIndexVersion,
+		Root:    root,
+		BuiltAt: time.Now(),
+		Chunks:  idx.Chunks,
+	})
 	if err != nil {
 		return fmt.Errorf("rag: encode index: %w", err)
 	}
@@ -63,7 +80,22 @@ func (s *Store) Load() (idx *Index, root string, builtAt time.Time, err error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, "", time.Time{}, fmt.Errorf("rag: decode index: %w", err)
 	}
+	if p.Version != currentIndexVersion {
+		return nil, "", time.Time{}, fmt.Errorf("rag: index format changed; run /rag index to rebuild it")
+	}
+	if containsSecretChunk(p.Chunks) {
+		return nil, "", time.Time{}, fmt.Errorf("rag: persisted index contains likely secret material; run /rag index to rebuild it safely")
+	}
 	return NewIndex(p.Chunks), p.Root, p.BuiltAt, nil
+}
+
+func containsSecretChunk(chunks []DocumentChunk) bool {
+	for _, chunk := range chunks {
+		if containsLikelySecret([]byte(chunk.Text)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Clear removes the on-disk index. A missing file is not an error.

@@ -23,6 +23,7 @@ are separate sections you can always inspect with `/prompt preview`.
 9. **Relevant Memory** — up to 3 keyword-matched snippets (opt-in), labeled
    as user-authored reference that cannot override the current request
 10. **Retrieved Workspace Context** — opt-in RAG snippets, clearly labeled
+    and enclosed in collision-checked untrusted-content boundaries
 11. **Recent Messages** — recent conversation, verbatim
 12. **Raw User Message** — your text, untouched
 
@@ -37,6 +38,13 @@ are separate sections you can always inspect with `/prompt preview`.
 
 Active skills are included in **every** mode — you activated them
 explicitly, so `minimal` and `strict` never drop them silently.
+
+Retrieved RAG snippets, web results, and MCP results are wrapped in matching,
+content-derived begin/end markers before they re-enter model context. This
+structural framing supplements the prose warning and prevents content from
+closing its own wrapper by copying a fixed delimiter. It is defense in depth,
+not an authorization boundary: tool policy and approval checks remain the
+authority for every action.
 
 Set per session with `/prompt mode <m>`, per template via `prompt_mode`,
 or globally via `prompt.mode` in the config. Individual helpers toggle with

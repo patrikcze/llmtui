@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -392,6 +394,106 @@ func TestAgentElapsedBudgetCancelsExecution(t *testing.T) {
 	driveAgentCommands(t, m, m.startVerifiedRun("wait beyond the run deadline", nil))
 	if m.agentLoop.run.Status != agent.DecisionBudgetExhausted {
 		t.Fatalf("status = %q, want budget_exhausted", m.agentLoop.run.Status)
+	}
+}
+
+// TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary guards
+// the fix for docs/architecture/v1-audit.md §4.2: agent.Decide()'s hard
+// tool-call budget was previously only checked at a cycle boundary reached
+// when the executor produces a turn with no tool calls. An executor that
+// keeps requesting tools every turn never reached that boundary, so the
+// documented run-level max_tool_calls ceiling (docs/agent-loop.md: "Agent
+// mode adds a total run-level tool-call limit... further calls are
+// rejected") could be exceeded well past the configured limit. This
+// scripts an executor that always returns a tool call and asserts real
+// tool execution stops at the limit itself, not merely that the run
+// eventually reports budget_exhausted at some later cycle boundary.
+func TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary(t *testing.T) {
+	steps := make([]agentScriptStep, 0, 10)
+	for i := 0; i < 10; i++ {
+		steps = append(steps, agentScriptStep{toolCalls: []provider.ToolCall{
+			{ID: fmt.Sprintf("call-%d", i), Name: tools.ToolListDir, Arguments: `{}`},
+		}})
+	}
+	m, prov := configureAgentTestModel(t, steps...)
+	m.cfg.Agent.MaxToolCalls = 3
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("keep listing the workspace", nil))
+
+	if m.toolOK != 3 {
+		t.Fatalf("toolOK = %d, want exactly 3 real executions (the live budget check should cap it)", m.toolOK)
+	}
+	if m.agentLoop.run.Status == agent.DecisionDone {
+		t.Fatal("run should not report done: the executor never produced a final answer")
+	}
+	if m.agentLoop.run.Cycle > 1 {
+		t.Fatalf("cycle = %d, want the live check to fire within cycle 1, before any cycle boundary is ever reached", m.agentLoop.run.Cycle)
+	}
+	if len(prov.requests) >= len(steps)+1 {
+		t.Fatalf("provider requests = %d: all %d scripted steps were consumed without the live budget check ever intervening", len(prov.requests), len(steps))
+	}
+}
+
+// TestLiveToolBudgetEnforcementCanBeDisabledViaConfig proves
+// agent.enforce_budgets_live actually reverts to the pre-v1
+// cycle-boundary-only check, per the rollback story in
+// docs/architecture/v1-migration-plan.md: the same scenario
+// TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary proves
+// gets capped at the limit must run past it once the toggle is off,
+// reproducing the original confirmed defect (v1-audit.md §4.2) on demand.
+func TestLiveToolBudgetEnforcementCanBeDisabledViaConfig(t *testing.T) {
+	steps := make([]agentScriptStep, 0, 10)
+	for i := 0; i < 10; i++ {
+		steps = append(steps, agentScriptStep{toolCalls: []provider.ToolCall{
+			{ID: fmt.Sprintf("call-%d", i), Name: tools.ToolListDir, Arguments: `{}`},
+		}})
+	}
+	m, _ := configureAgentTestModel(t, steps...)
+	m.cfg.Agent.MaxToolCalls = 3
+	m.cfg.Agent.EnforceBudgetsLive = false
+	// Isolate this test to the live-budget toggle: the progress ledger
+	// would independently block this same identical-call pattern after
+	// its own threshold, which would mask what this test is checking.
+	m.cfg.Tools.NoProgress.Enabled = false
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("keep listing the workspace", nil))
+
+	if m.toolOK != 10 {
+		t.Fatalf("toolOK = %d, want all 10 scripted calls to execute (live check disabled, only the cycle boundary would apply — and it's never reached here)", m.toolOK)
+	}
+}
+
+// TestVerifiedAgentTruncatedToolCallIsNotExecuted is the /agent on
+// counterpart to TestTruncatedNativeToolCallIsNotExecuted. Before this
+// fix, recordAgentTruncation only recorded truncation as evidence for the
+// *next* verification step — it did not itself stop the truncated call
+// from being executed first. A write_file call cut off mid-arguments
+// could already have written incomplete content to disk before the
+// verifier ever saw the truncation evidence.
+func TestVerifiedAgentTruncatedToolCallIsNotExecuted(t *testing.T) {
+	m, prov := configureAgentTestModel(t, agentScriptStep{
+		toolCalls: []provider.ToolCall{{ID: "call_1", Name: tools.ToolWriteFile, Arguments: `{"path":"out.txt","content":"cut off mid-conte`}},
+		truncated: true,
+	})
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("write the file", nil))
+
+	if _, err := os.Stat(root + "/out.txt"); err == nil {
+		t.Fatal("truncated write_file call must not have executed")
+	}
+	if m.agentLoop.run.Status == agent.DecisionDone {
+		t.Fatal("run must not report done from a truncated tool call")
+	}
+	if len(prov.requests) != 1 {
+		t.Fatalf("provider requests = %d, want exactly 1 (the run should stop, not retry blindly)", len(prov.requests))
 	}
 }
 

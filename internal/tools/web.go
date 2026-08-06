@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/patrikcze/llmtui/internal/terminaltext"
+	"github.com/patrikcze/llmtui/internal/untrusted"
 	"github.com/patrikcze/llmtui/internal/web"
 )
 
@@ -41,10 +42,10 @@ func (r *Runner) webSearch(ctx context.Context, c Call) (string, error) {
 		return "", err
 	}
 	if len(results) == 0 {
-		return untrustedWebPreamble + fmt.Sprintf("no results for %q", terminaltext.Sanitize(query)), nil
+		content := fmt.Sprintf("no results for %q", terminaltext.Sanitize(query))
+		return untrustedWebPreamble + untrusted.Frame("web_search", query, content), nil
 	}
 	var b strings.Builder
-	b.WriteString(untrustedWebPreamble)
 	fmt.Fprintf(&b, "%d results for %q\n", len(results), terminaltext.Sanitize(query))
 	for i, res := range results {
 		fmt.Fprintf(&b, "\n%d. %s — %s\n", i+1, terminaltext.Sanitize(res.Title), terminaltext.Sanitize(res.URL))
@@ -52,7 +53,8 @@ func (r *Runner) webSearch(ctx context.Context, c Call) (string, error) {
 			fmt.Fprintf(&b, "   %s\n", terminaltext.Sanitize(res.Snippet))
 		}
 	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	content := strings.TrimRight(b.String(), "\n")
+	return untrustedWebPreamble + untrusted.Frame("web_search", query, content), nil
 }
 
 func (r *Runner) webFetch(ctx context.Context, c Call) (string, error) {
@@ -65,13 +67,15 @@ func (r *Runner) webFetch(ctx context.Context, c Call) (string, error) {
 	}
 	page, err := r.Web.Fetch(ctx, rawURL)
 	if err != nil {
-		return untrustedWebPreamble + terminaltext.Sanitize(page.Content), err
+		content := terminaltext.Sanitize(page.Content)
+		return untrustedWebPreamble + untrusted.Frame("web_fetch", rawURL, content), err
 	}
 	head := fmt.Sprintf("fetched %s — %.1f KB, status %d", terminaltext.Sanitize(page.URL), float64(page.Bytes)/1024, page.Status)
 	if page.Truncated {
 		head += ", truncated"
 	}
-	return untrustedWebPreamble + head + "\n\n" + terminaltext.Sanitize(page.Content), nil
+	content := head + "\n\n" + terminaltext.Sanitize(page.Content)
+	return untrustedWebPreamble + untrusted.Frame("web_fetch", page.URL, content), nil
 }
 
 // webInstructions is the guidance shared by both protocols when web access

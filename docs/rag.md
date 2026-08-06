@@ -13,7 +13,8 @@ This first version is deliberately simple:
 - **Reference, not instruction.** Retrieved snippets are added to the system
   prompt under a "Retrieved Workspace Context" section that explicitly tells
   the model to treat them as reference material, to prefer the user request
-  on any conflict, and to flag possible staleness.
+  on any conflict, and to flag possible staleness. The whole retrieved block
+  is enclosed in matching, collision-checked untrusted-content markers.
 - **Your message is never rewritten.** Retrieval never modifies or replaces
   the raw user message; it only adds a separate, clearly-labeled section.
 
@@ -44,6 +45,9 @@ Indexing walks the configured workspace root and applies these rules:
 - **Likely secret files are never indexed** — `.env`, `*.pem`, `*.key`,
   `id_rsa`, `.netrc`, credential-named files, and the contents of `.ssh` /
   `.gnupg`.
+- **Likely secret content is never indexed** — high-confidence private-key,
+  cloud-token, bearer-token, and API-key patterns cause the whole file to be
+  skipped even when its filename looks harmless.
 - **Nothing outside the workspace root is indexed.** Symlinks that resolve
   outside the root are rejected.
 - Files larger than `rag.workspace.max_file_kb` are skipped, and indexing
@@ -77,6 +81,10 @@ rag:
 The on-disk index (`index_path/index.json`) stores workspace source excerpts
 and is written with owner-only permissions. Delete it any time with
 `/rag clear`.
+
+Indexes are schema-versioned and re-scanned for secret content when loaded.
+Unversioned legacy indexes are rejected; rebuild them with `/rag index` so
+old persisted excerpts cannot bypass current scanning rules.
 
 ## Disabling everything
 

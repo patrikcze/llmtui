@@ -95,8 +95,9 @@ cancellable executor. Each MCP call is bounded by that server's `timeout`
 (default 30s). Press Esc or Ctrl+C to cancel an in-flight batch, the same as
 an in-flight streaming response.
 
-MCP results are labeled as untrusted external data and share the workspace
-tools' output cap (`tools.max_file_kb`,
+MCP results are labeled as untrusted external data, enclosed in matching
+collision-checked begin/end markers, and share the workspace tools' output
+cap (`tools.max_file_kb`,
 default 512 KB): an oversized reply is truncated with a marker rather than
 flooding the model's context.
 

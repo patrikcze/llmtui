@@ -43,6 +43,11 @@ func newTestModel(t *testing.T) *Model {
 		},
 		Network: config.NetworkConfig{Timeout: "120s", ConnectTimeout: "10s"},
 		Cache:   config.CacheConfig{TTL: "1h", MaxSizeMB: 16, CacheStreamedResponses: true},
+		// Mirrors the production viper defaults (config.setDefaults) for the
+		// two v1 protection toggles, since this harness builds Config
+		// directly rather than through viper.
+		Agent: config.AgentConfig{EnforceBudgetsLive: true},
+		Tools: config.ToolsConfig{NoProgress: config.NoProgressConfig{Enabled: true, Threshold: 3}},
 	}
 	m := New(Options{Config: cfg, Provider: mock.New(), Model: "demo-model"})
 	m.resize(80, 24)

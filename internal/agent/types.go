@@ -38,6 +38,12 @@ const (
 	DecisionCancelled       Decision = "cancelled"
 	DecisionFailed          Decision = "failed"
 	DecisionBudgetExhausted Decision = "budget_exhausted"
+	// DecisionNoProgress is a terminal outcome distinct from DecisionFailed:
+	// the run stopped because a batch of tool calls repeated with no new
+	// evidence twice in a row (see internal/tui's progressLedger and
+	// docs/architecture/v1-agent-runtime.md §3), not because a verifier
+	// rejected the work or an unexpected error occurred.
+	DecisionNoProgress Decision = "no_progress"
 )
 
 // VerificationVerdict is the verifier's assessment of observable evidence.

@@ -104,13 +104,22 @@ func (m *Model) activeProfile() (modelprofile.Profile, bool) {
 // capabilities, then model profile, then a safe fallback.
 // The source string feeds /doctor.
 func (m *Model) contextWindow() (tokens int, source string) {
+	return m.contextWindowFor(m.prov, m.model)
+}
+
+func (m *Model) contextWindowFor(prov provider.Provider, model string) (tokens int, source string) {
 	if m.cfg.Context.MaxContextTokens > 0 {
 		return m.cfg.Context.MaxContextTokens, "config"
 	}
-	if caps := provider.CapabilitiesOf(m.prov); caps.ContextWindowTokens > 0 {
+	if caps := provider.CapabilitiesFor(prov, model); caps.ContextWindowTokens > 0 {
 		return caps.ContextWindowTokens, "provider"
 	}
-	prof, _ := m.activeProfile()
+	var prof modelprofile.Profile
+	if m.profileMode != "" && m.profileMode != "auto" {
+		prof, _ = modelprofile.ByName(m.profiles, m.profileMode)
+	} else {
+		prof, _ = modelprofile.Match(m.profiles, model)
+	}
 	if prof.ContextWindow > 0 {
 		return prof.ContextWindow, "model profile " + prof.Name
 	}

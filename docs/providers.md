@@ -8,9 +8,16 @@
 | Anything OpenAI-compatible | `openai_compatible` | — | `api_key_env` keeps secrets out of YAML |
 | Embedded GGUF | `embedded` | — | In-process llama.cpp; no server or network; [setup](embedded.md) |
 
-Each provider reports **capabilities** (streaming, model listing, token
-usage, JSON mode, system prompt) used by `/doctor` and prompt composition.
-Unknown backends get conservative defaults.
+Each provider reports **capabilities** used by `/doctor` and request shaping:
+streaming, model listing, token usage, JSON mode, system prompts, native tool
+calls, parallel tool emission, reasoning events, structured output, and the
+context window. Tool/reasoning/structured-output support is tri-state
+(`unknown`, `supported`, or `unsupported`), so an unknown OpenAI-compatible
+backend can still be tried optimistically. Explicit per-provider config wins;
+then model-specific evidence, provider-wide evidence, and safe defaults apply.
+If a backend rejects native tools, only that provider/model pair learns the
+fenced fallback. See
+[v1-provider-capabilities.md](architecture/v1-provider-capabilities.md).
 
 The embedded provider reports prompt/vision processing as activity, streams
 exact token usage, supports a configured main-GGUF + mmproj vision pair and
