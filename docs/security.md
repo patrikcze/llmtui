@@ -3,6 +3,11 @@
 llmtui is local-first. It makes no network calls except to the LLM backends
 you configure, and it sends no telemetry of any kind.
 
+See [`docs/architecture/v1-security-review.md`](architecture/v1-security-review.md)
+for the v1.0.0 stabilization security review: prior-finding remediation
+status with commit references, and carried-forward accepted-risk items
+(untrusted-content framing, RAG content-secret scanning) not yet closed.
+
 ## Secrets
 
 - Prefer `api_key_env` in the config so keys never live in a file:
