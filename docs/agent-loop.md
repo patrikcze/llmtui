@@ -72,10 +72,35 @@ least one of these is true:
 
 Tools use exactly the same native or fenced protocol as ordinary chat. Agent
 mode adds a total run-level tool-call limit above the existing per-turn
-`tools.max_iterations` limit. Reaching the run limit does not display a budget
-renewal prompt: further calls are rejected and the stop check reports
-`budget_exhausted`. Approval denial is deterministic evidence and stops with
-`needs_user_input`; the verifier cannot turn it into success.
+`tools.max_iterations` limit, checked on every round — not only when a cycle
+completes — so an executor that keeps requesting tools every turn cannot run
+past it before the boundary that would otherwise catch it. Reaching the run
+limit does not display a budget renewal prompt: the run terminates
+immediately as `budget_exhausted`, with a structured tool result recorded so
+the transcript stays consistent, rather than rejecting the call and asking
+the model to try again. Approval denial is deterministic evidence and stops
+with `needs_user_input`; the verifier cannot turn it into success.
+
+## Repeated tool calls and no-progress detection
+
+A run-scoped ledger fingerprints every tool call by its tool identity and
+the resource it actually acts on (search query, fetch URL, file path,
+command line), independent of incidental formatting differences. If a
+batch of calls only repeats fingerprints that already produced the same
+result as last time — no new evidence — the batch is blocked instead of
+executed, and the model sees a structured explanation. A single block is a
+forcing function: the model gets one chance to change strategy. If the
+very next round repeats the same blocked pattern instead, the turn or run
+ends rather than continuing to spend requests on calls that will just be
+blocked again.
+
+Legitimate repetition is never blocked: polling, pagination, and retries
+all produce a changing result, and any change in the recorded outcome
+resets the streak for that fingerprint. This mechanism applies identically
+to ordinary tool-enabled chat and to `/agent on` — it lives in the shared
+request/tool-execution path both use, not in the agent state machine — so
+a stuck pattern is caught the same way whether or not agent mode is
+active.
 
 ## Verification
 

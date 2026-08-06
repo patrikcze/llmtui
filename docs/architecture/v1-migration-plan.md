@@ -1,5 +1,14 @@
 # v1 Migration Plan
 
+> **Status update**: the progress ledger, live budget enforcement, and the
+> `golang.org/x/text` dependency bump described below have landed
+> (`fix(agent): block no-progress tool-call repetition and enforce budgets
+> live`, `security(deps): bump golang.org/x/text to close GO-2026-5970`, on
+> `feat/v1-agent-runtime`). The rest of this document was written
+> prospectively, before implementation, and is left largely as originally
+> written since the design it anticipated is what shipped — this note is
+> the only change needed to bring it up to date.
+
 ## Summary
 
 Based on the audit (`v1-audit.md`), v1.0.0 is a **behavior-hardening**
@@ -86,14 +95,21 @@ dependency bump with no expected API surface change.
 
 ## Recommended follow-up issues (ordered by priority)
 
-1. Implement the §9.2 regression fixtures (`v1-test-matrix.md`) — blocks
-   everything else.
-2. Implement the progress ledger and live budget enforcement
-   (`v1-agent-runtime.md` §3-4, ADR 0002).
-3. Close ordinary-tool-loop truncation blindness (`v1-agent-runtime.md`
-   §2).
-4. Bump `golang.org/x/text` (`v1-security-review.md` §3.1) — trivial,
-   independent, can land immediately.
+1. ~~Implement the §9.2 regression fixtures (`v1-test-matrix.md`).~~ **Done**
+   — `internal/tui/toolloop_progress_test.go`, plus the agent-mode variant
+   and the legitimate-repetition counter-fixture.
+2. ~~Implement the progress ledger and live budget enforcement
+   (`v1-agent-runtime.md` §3-4, ADR 0002).~~ **Done** —
+   `internal/tui/progress.go`, `agentHardBudgetExceeded`,
+   `terminateAgentBudget`.
+3. **Still open**: close ordinary-tool-loop truncation blindness
+   (`v1-agent-runtime.md` §2) — the ordinary (non-agent) tool-continuation
+   path still does not consult `ChatEvent.Truncated` when deciding whether
+   to continue. Not required to close the reported failure mode (the
+   progress ledger and live budget enforcement do that independently), so
+   it was correctly deferred out of this slice, but it remains a real gap.
+4. ~~Bump `golang.org/x/text`.~~ **Done**
+   (`security(deps): bump golang.org/x/text to close GO-2026-5970`).
 5. Extend `provider.Capabilities` per `v1-provider-capabilities.md` —
    independent of the critical path, can be parallelized.
 6. Structural untrusted-content delimiter, replacing the prose preamble
@@ -103,5 +119,16 @@ dependency bump with no expected API surface change.
 8. Re-verify `approval_policy.go` against the original per-tool/per-path
    granularity goal (`v1-security-review.md` §2 item 1) — needs a direct
    read, not re-derivation.
-9. Provider conformance fixtures and TUI test gaps (`v1-test-matrix.md`
-   §9.3, §9.5) — breadth work, not urgent for the release gate.
+9. Promote the progress ledger's "no_progress" outcome from a reused
+   `DecisionFailed` (with a `no_progress:` reason prefix) to a dedicated
+   `agent.DecisionNoProgress` value, if a distinct terminal state proves
+   useful for TUI/debug-view purposes beyond the `StopReason` string. This
+   session deliberately reused `DecisionFailed` rather than extending
+   `internal/agent`'s persisted `Decision` enum, to keep the fix's blast
+   radius small — the enum change is a reasonable but separable follow-up,
+   not a correctness gap.
+10. Consider per-call (not per-batch) progress-ledger filtering for mixed
+    batches — see the scoping note in `internal/tui/progress.go`'s package
+    doc comment.
+11. Provider conformance fixtures and TUI test gaps (`v1-test-matrix.md`
+    §9.3, §9.5) — breadth work, not urgent for the release gate.
