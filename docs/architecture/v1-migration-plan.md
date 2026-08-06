@@ -1,13 +1,18 @@
 # v1 Migration Plan
 
-> **Status update**: the progress ledger, live budget enforcement, and the
-> `golang.org/x/text` dependency bump described below have landed
-> (`fix(agent): block no-progress tool-call repetition and enforce budgets
-> live`, `security(deps): bump golang.org/x/text to close GO-2026-5970`, on
-> `feat/v1-agent-runtime`). The rest of this document was written
-> prospectively, before implementation, and is left largely as originally
-> written since the design it anticipated is what shipped — this note is
-> the only change needed to bring it up to date.
+> **Status update**: the progress ledger, live budget enforcement, the
+> `golang.org/x/text` dependency bump, independent config toggles for both
+> new mechanisms, the ordinary-tool-loop truncation fix, and the dedicated
+> `agent.DecisionNoProgress` outcome have all landed on
+> `feat/v1-agent-runtime` (`fix(agent): block no-progress tool-call
+> repetition and enforce budgets live`, `security(deps): bump
+> golang.org/x/text to close GO-2026-5970`, `fix(agent): close remaining
+> findings — config toggles, truncation, no_progress`). The rest of this
+> document was written prospectively, before implementation, and is left
+> largely as originally written since the design it anticipated is what
+> shipped — this note is the only change needed to bring it up to date.
+> The rollback story below (previously "planned") is implemented and
+> tested, not merely described.
 
 ## Summary
 
@@ -64,15 +69,24 @@ which this release does not change.
 ## Rollback
 
 Both new mechanisms (progress ledger, live budget enforcement) are
-kernel-level additions, not replacements of existing code paths — they can
-each be gated behind a config flag defaulting to enabled, so a user who
-hits an unexpected false positive can disable the specific mechanism
-(e.g. `agent.progress_ledger.enabled: false` or equivalent naming decided
-at implementation time) without reverting the release. This is a
-deliberate implementation requirement carried from master-prompt §13's
-release-gate checklist ("explain how to disable new optional behavior or
-revert safely") and should be treated as a hard requirement of the
-implementation slice, not an afterthought.
+kernel-level additions, not replacements of existing code paths, and each
+is gated behind its own config flag, defaulting to enabled:
+
+- `tools.no_progress.enabled: false` disables the progress ledger,
+  reverting to pre-v1 pass-through behavior. `tools.no_progress.threshold`
+  is the softer alternative — raise it instead of disabling outright if a
+  legitimate pattern is being blocked.
+- `agent.enforce_budgets_live: false` disables the live budget check,
+  reverting to the pre-v1 cycle-boundary-only check `agent.Decide()`
+  already performs.
+
+A user who hits an unexpected false positive can disable the specific
+mechanism without reverting the release. Both toggles are proven to
+actually disable their mechanism by dedicated tests
+(`TestNoProgressDetectionCanBeDisabledViaConfig`,
+`TestLiveToolBudgetEnforcementCanBeDisabledViaConfig`), fulfilling
+master-prompt §13's release-gate requirement to "explain how to disable
+new optional behavior or revert safely."
 
 ## Dependency changes
 
@@ -102,12 +116,11 @@ dependency bump with no expected API surface change.
    (`v1-agent-runtime.md` §3-4, ADR 0002).~~ **Done** —
    `internal/tui/progress.go`, `agentHardBudgetExceeded`,
    `terminateAgentBudget`.
-3. **Still open**: close ordinary-tool-loop truncation blindness
-   (`v1-agent-runtime.md` §2) — the ordinary (non-agent) tool-continuation
-   path still does not consult `ChatEvent.Truncated` when deciding whether
-   to continue. Not required to close the reported failure mode (the
-   progress ledger and live budget enforcement do that independently), so
-   it was correctly deferred out of this slice, but it remains a real gap.
+3. ~~Close ordinary-tool-loop truncation blindness (`v1-agent-runtime.md`
+   §2).~~ **Done** — a tool call truncated by `max_tokens` is now rejected
+   before execution in both ordinary tool chat and `/agent on`
+   (`TestTruncatedNativeToolCallIsNotExecuted`,
+   `TestVerifiedAgentTruncatedToolCallIsNotExecuted`).
 4. ~~Bump `golang.org/x/text`.~~ **Done**
    (`security(deps): bump golang.org/x/text to close GO-2026-5970`).
 5. Extend `provider.Capabilities` per `v1-provider-capabilities.md` —
@@ -119,14 +132,10 @@ dependency bump with no expected API surface change.
 8. Re-verify `approval_policy.go` against the original per-tool/per-path
    granularity goal (`v1-security-review.md` §2 item 1) — needs a direct
    read, not re-derivation.
-9. Promote the progress ledger's "no_progress" outcome from a reused
-   `DecisionFailed` (with a `no_progress:` reason prefix) to a dedicated
-   `agent.DecisionNoProgress` value, if a distinct terminal state proves
-   useful for TUI/debug-view purposes beyond the `StopReason` string. This
-   session deliberately reused `DecisionFailed` rather than extending
-   `internal/agent`'s persisted `Decision` enum, to keep the fix's blast
-   radius small — the enum change is a reasonable but separable follow-up,
-   not a correctness gap.
+9. ~~Promote the progress ledger's "no_progress" outcome to a dedicated
+   `agent.DecisionNoProgress` value.~~ **Done** — a run blocked by the
+   progress ledger's terminal streak now reports status `no_progress`,
+   distinct from `failed` and `budget_exhausted`.
 10. Consider per-call (not per-batch) progress-ledger filtering for mixed
     batches — see the scoping note in `internal/tui/progress.go`'s package
     doc comment.
