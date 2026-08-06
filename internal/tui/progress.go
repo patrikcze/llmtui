@@ -3,32 +3,24 @@ package tui
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
-// progressLedger tracks tool-call fingerprints across a run so a batch that
-// only repeats already-seen, evidence-unchanged calls can be blocked
-// instead of executed indefinitely. It is the fix for the confirmed gap in
+// progressLedger tracks tool-call fingerprints across a run so repeated,
+// evidence-unchanged calls can be blocked before execution, including when
+// they travel alongside fresh calls in a mixed batch. It is the fix for the confirmed gap in
 // docs/architecture/v1-audit.md §4.1: no tool-call-level repeated-call or
 // no-progress detection existed anywhere in the codebase, in either the
 // ordinary tool loop or /agent on. See
 // docs/architecture/decisions/0002-live-progress-ledger-and-budget-enforcement.md
 // and docs/architecture/v1-agent-runtime.md §3 for the design.
-//
-// Scope, deliberately narrower than a per-call filter: blockBatch only
-// blocks when EVERY call in an incoming batch already has a no-new-evidence
-// fingerprint at or past the threshold. The failure mode this fixes
-// (docs/architecture/LLMTUI_V1_MASTER_REFACTOR_PROMPT.md §2) presents as a
-// sequence of single-call batches — web_search alone, then web_fetch alone,
-// then web_search alone again — so an all-blocked-batch check catches it
-// without the added complexity of splitting a mixed batch and merging
-// partial results back into the async tool-execution pipeline. A mixed
-// batch containing at least one fresh call is not blocked; that call's own
-// repetition is caught on a later round once it, too, stops producing new
-// evidence. This scoping limitation is recorded in
-// docs/architecture/v1-migration-plan.md as a candidate follow-up.
 type progressLedger struct {
 	threshold int
 	entries   map[string]*progressEntry
@@ -53,6 +45,83 @@ type progressEntry struct {
 	lastDigest string
 }
 
+// toolBatchPlan is an immutable, position-based execution plan. Blocked
+// slots receive synthetic results; runnable slots execute in their original
+// order. Position, not call ID, is authoritative because fenced-protocol
+// calls do not carry IDs.
+type toolBatchPlan struct {
+	calls   []tools.Call
+	blocked []string
+}
+
+func newToolBatchPlan(calls []tools.Call) toolBatchPlan {
+	return toolBatchPlan{
+		calls:   append([]tools.Call{}, calls...),
+		blocked: make([]string, len(calls)),
+	}
+}
+
+func (p *toolBatchPlan) block(index int, reason string) {
+	if index >= 0 && index < len(p.blocked) {
+		p.blocked[index] = reason
+	}
+}
+
+func (p toolBatchPlan) blockedCount() int {
+	count := 0
+	for _, reason := range p.blocked {
+		if reason != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func (p toolBatchPlan) runnableCalls() []tools.Call {
+	out := make([]tools.Call, 0, len(p.calls)-p.blockedCount())
+	for i, call := range p.calls {
+		if p.blocked[i] == "" {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+// mergeResults restores one result per original call and separately returns
+// only real execution outcomes for progress observation. Observing synthetic
+// block errors would change the digest and accidentally re-enable a stuck
+// fingerprint on the next round.
+func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed []tools.Result) {
+	merged = make([]tools.Result, 0, len(p.calls))
+	observed = make([]tools.Result, 0, len(executed))
+	executedIndex := 0
+	for i, call := range p.calls {
+		if reason := p.blocked[i]; reason != "" {
+			merged = append(merged, tools.Result{
+				Call: call,
+				Err: fmt.Errorf(
+					"%s. Use different arguments, a different approach, or report the observable state",
+					reason,
+				),
+			})
+			continue
+		}
+		if executedIndex >= len(executed) {
+			merged = append(merged, tools.Result{
+				Call: call,
+				Err:  fmt.Errorf("tool result missing for accepted call; it was not reported as completed"),
+			})
+			continue
+		}
+		result := executed[executedIndex]
+		executedIndex++
+		result.Call = call
+		merged = append(merged, result)
+		observed = append(observed, result)
+	}
+	return merged, observed
+}
+
 // defaultProgressThreshold matches agent.max_repeated_failures' default so
 // the two related "how many times before we stop" knobs stay consistent
 // for anyone reasoning about run behavior.
@@ -70,13 +139,22 @@ func newProgressLedger(threshold int) *progressLedger {
 // that differ only in incidental formatting collide to the same
 // fingerprint; two calls to a genuinely different resource do not.
 func progressFingerprint(c tools.Call) string {
+	if c.InputErr != "" {
+		return strings.Join([]string{c.Tool, "invalid", digestText(c.InputErr)}, "\x1f")
+	}
 	if strings.TrimSpace(c.MCPServer) != "" {
 		return strings.Join([]string{"mcp", c.MCPServer, c.MCPTool, canonicalizeArgs(c.MCPArgs)}, "\x1f")
 	}
 	resource := strings.TrimSpace(c.Path)
 	switch c.Tool {
-	case tools.ToolWebSearch, tools.ToolRunCommand:
-		resource = normalizeText(c.Body)
+	case tools.ToolWebSearch:
+		resource = normalizeText(c.Body) + "\x1e" + strconv.Itoa(c.Max)
+	case tools.ToolRunCommand:
+		// Shell whitespace can be semantic inside quoted arguments. Only trim
+		// the block edges; do not collapse or case-fold the command itself.
+		resource = strings.TrimSpace(c.Body)
+	case tools.ToolWriteFile:
+		resource += "\x1e" + digestText(c.Body)
 	case tools.ToolWebFetch:
 		resource = normalizeURL(c.Path)
 	default:
@@ -88,20 +166,54 @@ func progressFingerprint(c tools.Call) string {
 }
 
 func normalizeText(s string) string {
-	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	return strings.ToLower(normalizeWhitespace(s))
 }
 
-func normalizeURL(u string) string {
-	return strings.ToLower(strings.TrimRight(strings.TrimSpace(u), "/"))
+func normalizeWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
-// canonicalizeArgs is intentionally simple (trim + lowercase) rather than a
-// full JSON key-sort: MCP argument shapes are arbitrary and unknown to this
-// package (see tools.Call's MCPArgs doc comment), so byte-for-byte-modulo-
-// whitespace equality is the honest limit of what can be canonicalized
-// without a schema.
+func normalizeURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	if parsed.Path != "/" {
+		parsed.Path = strings.TrimRight(parsed.Path, "/")
+	}
+	parsed.RawQuery = parsed.Query().Encode()
+	return parsed.String()
+}
+
 func canonicalizeArgs(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "{}"
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return trimmed
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return trimmed
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return trimmed
+	}
+	return string(canonical)
+}
+
+func digestText(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
 
 // digest summarizes a completed call's observable outcome: the honest
@@ -153,17 +265,40 @@ func (l *progressLedger) observe(fingerprint, digest string) {
 // and if so, why, and whether this is the streak-limit-th consecutive
 // fully-blocked batch (terminal — see blockedStreakLimit).
 func (l *progressLedger) blockBatch(calls []tools.Call) (blocked, terminal bool, reason string) {
+	plan, terminal := l.planBatch(calls)
+	return len(calls) > 0 && plan.blockedCount() == len(calls), terminal, progressBlockReason(plan)
+}
+
+// planBatch classifies every call before approvals or execution. Mixed
+// batches keep fresh calls runnable while marking only stuck calls blocked.
+// The terminal streak remains batch-level: it advances only when every slot
+// is blocked, so a batch that can still produce evidence is never terminal.
+func (l *progressLedger) planBatch(calls []tools.Call) (toolBatchPlan, bool) {
+	plan := newToolBatchPlan(calls)
 	if len(calls) == 0 {
-		return false, false, ""
+		return plan, false
 	}
-	for _, c := range calls {
-		if !l.wouldBlock(progressFingerprint(c)) {
-			l.blockedStreak = 0
-			return false, false, ""
+	const reason = "repeated tool call blocked: no new evidence since the last identical call"
+	for i, call := range calls {
+		if l.wouldBlock(progressFingerprint(call)) {
+			plan.block(i, reason)
 		}
 	}
+	if plan.blockedCount() != len(calls) {
+		l.blockedStreak = 0
+		return plan, false
+	}
 	l.blockedStreak++
-	return true, l.blockedStreak >= blockedStreakLimit, "repeated tool call blocked: no new evidence since the last identical call"
+	return plan, l.blockedStreak >= blockedStreakLimit
+}
+
+func progressBlockReason(plan toolBatchPlan) string {
+	for _, reason := range plan.blocked {
+		if reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 // observeResults updates the ledger from a batch of completed results. Call

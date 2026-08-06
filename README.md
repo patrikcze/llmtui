@@ -201,7 +201,7 @@ Local-LLM experience helpers:
 | `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
 | `/skills` | Declarative task-instruction packages (SKILL.md) — activate per run or session; tool-capable models can load them via `skill_load` ([docs](docs/skills.md)) |
 | `/plugins` | Local declarative packages that contribute skills; inert until explicitly enabled ([docs](docs/skills.md)) |
-| `/rag` | Opt-in local workspace retrieval — index files and add keyword-matched snippets as labeled reference context; fully local, no embeddings ([docs](docs/rag.md)) |
+| `/rag` | Opt-in local workspace retrieval — index files locally and add keyword-matched snippets as labeled reference context; no embeddings (snippets go to your configured model provider) ([docs](docs/rag.md)) |
 | `/mcp` | Optional Model Context Protocol servers — declare, inspect, and toggle; off by default ([docs](docs/mcp.md)) |
 | `/template` | Reusable conversation templates from the config |
 | `/doctor` | Provider, model, and network diagnostics |
@@ -335,7 +335,8 @@ Requests to private and local addresses (localhost, 10.x, 192.168.x,
 link-local, …) are blocked by design, including via redirects and DNS
 tricks, so a hostile page cannot use the model to probe your LAN. The
 system prompt tells the model to treat fetched content as untrusted data
-and to cite its sources.
+and to cite its sources. Search/fetch bodies are also enclosed in matching,
+collision-checked untrusted-content markers before they enter model context.
 
 ## History & usage stats
 

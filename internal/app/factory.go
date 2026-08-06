@@ -71,22 +71,33 @@ func BuildProvider(name string, pc config.ProviderConfig, netCfg config.NetworkC
 		ov = overrides[0]
 	}
 	client := httpClient(netCfg)
+	var built provider.Provider
+	var err error
 	switch pc.Type {
 	case "ollama":
-		return ollama.New(pc.BaseURL, ollama.WithHTTPClient(client), ollama.WithName(name)), nil
+		built = ollama.New(pc.BaseURL, ollama.WithHTTPClient(client), ollama.WithName(name))
 	case "openai_compatible":
-		return openai.New(name, pc.BaseURL, pc.ResolveAPIKey(), openai.WithHTTPClient(client)), nil
+		built = openai.New(name, pc.BaseURL, pc.ResolveAPIKey(), openai.WithHTTPClient(client))
 	case "mock":
-		return mock.New(), nil
+		built = mock.New()
 	case "embedded":
-		opts, err := buildEmbeddedOptions(pc, ov)
+		var opts embedded.Options
+		opts, err = buildEmbeddedOptions(pc, ov)
 		if err != nil {
 			return nil, fmt.Errorf("configure embedded provider %q: %w", name, err)
 		}
-		return embedded.New(name, opts, NewEmbeddedRuntime), nil
+		built = embedded.New(name, opts, NewEmbeddedRuntime)
 	default:
 		return nil, fmt.Errorf("unknown provider type %q for provider %q", pc.Type, name)
 	}
+	capCfg := pc.Capabilities
+	return provider.WithCapabilityOverrides(built, provider.CapabilityOverrides{
+		NativeTools:         capCfg.NativeTools,
+		ParallelToolCalls:   capCfg.ParallelToolCalls,
+		ReasoningEvents:     capCfg.ReasoningEvents,
+		StructuredOutput:    capCfg.StructuredOutput,
+		ContextWindowTokens: capCfg.ContextWindowTokens,
+	}), nil
 }
 
 // BuildActiveProvider resolves and constructs the currently active provider,

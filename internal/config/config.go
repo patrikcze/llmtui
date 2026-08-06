@@ -23,6 +23,9 @@ type ProviderConfig struct {
 	APIKey       string `mapstructure:"api_key" yaml:"api_key"`
 	APIKeyEnv    string `mapstructure:"api_key_env" yaml:"api_key_env"`
 	DefaultModel string `mapstructure:"default_model" yaml:"default_model"`
+	// Capabilities overrides backend/model discovery. Pointer booleans keep
+	// omitted (auto/unknown) distinct from an explicit false.
+	Capabilities ProviderCapabilitiesConfig `mapstructure:"capabilities" yaml:"capabilities,omitempty"`
 
 	// The fields below configure the embedded (in-process) provider only;
 	// other provider types ignore them.
@@ -64,6 +67,16 @@ type ProviderConfig struct {
 	FlashAttention string `mapstructure:"flash_attention" yaml:"flash_attention,omitempty"`
 	// Sampling configures the native token sampler chain.
 	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
+}
+
+// ProviderCapabilitiesConfig supplies authoritative capability overrides for
+// backends that cannot advertise them reliably. Omitted fields remain auto.
+type ProviderCapabilitiesConfig struct {
+	NativeTools         *bool `mapstructure:"native_tools" yaml:"native_tools,omitempty"`
+	ParallelToolCalls   *bool `mapstructure:"parallel_tool_calls" yaml:"parallel_tool_calls,omitempty"`
+	ReasoningEvents     *bool `mapstructure:"reasoning_events" yaml:"reasoning_events,omitempty"`
+	StructuredOutput    *bool `mapstructure:"structured_output" yaml:"structured_output,omitempty"`
+	ContextWindowTokens *int  `mapstructure:"context_window_tokens" yaml:"context_window_tokens,omitempty"`
 }
 
 // SamplingConfig configures the embedded provider's native sampler chain.
@@ -228,13 +241,13 @@ type ToolsConfig struct {
 	NoProgress NoProgressConfig `mapstructure:"no_progress" yaml:"no_progress"`
 }
 
-// NoProgressConfig toggles and tunes the progress ledger that blocks a
-// batch of tool calls when every call in it only repeats a prior call with
-// no new evidence (an unchanged result). Defaults on; set enabled: false
-// to revert to the pre-v1 pass-through behavior if it produces a false
-// positive in practice — legitimate repetition (polling, pagination,
-// retries) is designed to never trip it, but Threshold can also be raised
-// instead of disabling the protection outright.
+// NoProgressConfig toggles and tunes the progress ledger that blocks an
+// individual tool call after it repeatedly produces no new evidence. Fresh
+// calls in a mixed batch still execute. Defaults on; set enabled: false to
+// revert to the pre-v1 pass-through behavior if it produces a false positive
+// in practice — legitimate repetition (polling, pagination, retries) is
+// designed to never trip it, but Threshold can also be raised instead of
+// disabling the protection outright.
 type NoProgressConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 	// Threshold is how many consecutive no-new-evidence repeats of the
@@ -760,6 +773,14 @@ providers:
     # api_key_env: LLMTUI_API_KEY
     api_key: ""
     default_model: local-model
+    # Optional capability overrides. Omit a boolean to leave it unknown;
+    # explicit false is authoritative and selects the safe fallback.
+    # capabilities:
+    #   native_tools: true
+    #   parallel_tool_calls: false
+    #   reasoning_events: false
+    #   structured_output: true
+    #   context_window_tokens: 32768
 
   # Embedded (in-process) inference: loads a local .gguf model directly,
   # with no separate server. Opt-in and inert until you configure it or run
@@ -896,11 +917,10 @@ tools:
     protect_secret_files: true # reject writes into .ssh, .gnupg
     protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
     require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
-  # Blocks a batch of tool calls when every call in it only repeats a
-  # prior call with no new evidence (an unchanged result) — applies to
-  # both ordinary tool chat and /agent on. Legitimate repetition (polling,
-  # pagination, retries) never trips it, since any change in the result
-  # resets the count. Set enabled: false to revert to pre-v1 behavior.
+  # Blocks stuck calls individually after repeated unchanged results;
+  # fresh calls in the same batch still execute. Applies to ordinary tool
+  # chat and /agent on. Legitimate repetition (polling, pagination, retries)
+  # never trips it when the result changes. Set enabled: false to revert.
   no_progress:
     enabled: true
     threshold: 3 # consecutive no-new-evidence repeats allowed before blocking

@@ -42,6 +42,27 @@ providers:
     api_key_env: LLMTUI_API_KEY
 ```
 
+Provider capability overrides are optional and tri-state. Omit a field to
+retain automatic/unknown behavior; set an explicit `true` or `false` when a
+backend is known to support or reject it:
+
+```yaml
+providers:
+  local_server:
+    type: openai_compatible
+    base_url: http://localhost:8080/v1
+    capabilities:
+      native_tools: true
+      parallel_tool_calls: false
+      reasoning_events: false
+      structured_output: true
+      context_window_tokens: 32768
+```
+
+The effective values are shown by `/doctor`. A runtime native-tool rejection
+is remembered only for the exact provider/model pair and switches that pair to
+the fenced fallback protocol; it does not disable native tools globally.
+
 `ollama`, `lmstudio`, `openai_compatible`, `embedded`, and `mock` are always
 available as built-ins even with an empty config. `default_provider` and
 `default_model` at the top level pick the starting point; a provider's
@@ -154,11 +175,12 @@ command line would be classified, and `/tools list` / `/tools inspect
 
 ### `tools.no_progress`
 
-Blocks a batch of tool calls when every call in it only repeats a prior
-call with no new evidence (an unchanged result), in both ordinary
-tool-enabled chat and `/agent on`. Legitimate repetition — polling,
-pagination, retries — never trips it, since any change in the result resets
-the count. See [agent-loop.md](agent-loop.md#repeated-tool-calls-and-no-progress-detection):
+Blocks repeated calls individually when they have produced no new evidence
+(an unchanged result), in both ordinary tool-enabled chat and `/agent on`.
+Fresh calls in the same batch still execute and results retain their original
+order. Legitimate repetition — polling, pagination, retries — never trips it,
+since any change in the result resets the count. See
+[agent-loop.md](agent-loop.md#repeated-tool-calls-and-no-progress-detection):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -199,7 +221,9 @@ contribute them. Documented in detail in [skills.md](skills.md).
 ### `rag`
 
 Optional local workspace index and keyword retrieval, off by default.
-Documented in detail in [rag.md](rag.md).
+Indexing skips likely secret filenames and high-confidence secret content;
+retrieved snippets are sent to the configured model provider as prompt
+context. Documented in detail in [rag.md](rag.md).
 
 ### `mcp`
 

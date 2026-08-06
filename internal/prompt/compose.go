@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/untrusted"
 )
 
 // Modes control how much helper context is added.
@@ -217,7 +218,8 @@ func Compose(in Input) Output {
 			add("Relevant Memory", memoryPreamble+"\n- "+strings.Join(in.MemorySnippets, "\n- "))
 		}
 		if strings.TrimSpace(in.RetrievedContext) != "" {
-			add("Retrieved Workspace Context", retrievedContextPreamble+"\n\n"+in.RetrievedContext)
+			framed := untrusted.Frame("rag", "workspace retrieval", in.RetrievedContext)
+			add("Retrieved Workspace Context", retrievedContextPreamble+"\n\n"+framed)
 		}
 	}
 

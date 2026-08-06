@@ -1,4 +1,9 @@
-# v1 Agent Runtime — Target Design
+# v1 Agent Runtime — Implemented Design
+
+> The progress ledger, dedicated `no_progress` outcome, ordinary-mode
+> truncation guard, and live budget enforcement described below are
+> implemented on `feat/v1-agent-runtime`. Historical “new”/“gap” wording is
+> retained where it explains the audit trail.
 
 This document defines the v1 target for the shared orchestration kernel
 identified in [`v1-audit.md`](v1-audit.md) §2-3 and
@@ -118,11 +123,10 @@ fingerprint:
 - the call is a retry immediately following a transient failure
   (network/timeout error class) on the same fingerprint.
 
-**Threshold and response.** A small bounded repeat count (proposed default:
-`3`, matching the existing `agent.max_repeated_failures` default for
-consistency — final value is an implementation-time tuning decision, not an
-architectural one). On threshold:
-1. the repeated call is not executed;
+**Threshold and response.** The default repeat count is `3`, matching
+`agent.max_repeated_failures`. On threshold:
+1. the repeated call is not executed; fresh calls in the same batch still
+   execute, and one result per original call is merged back in original order;
 2. a structured tool-result-shaped evidence entry is appended explaining
    the block (so the model sees it as part of normal tool-result flow, not
    a silent failure);
@@ -134,6 +138,10 @@ architectural one). On threshold:
 4. TUI notice: "Repeated tool call blocked: no new evidence" (master-prompt
    §7.2, verbatim wording as the baseline; final copy is a TUI-polish
    decision).
+
+Synthetic block results are never observed by the ledger. Only real executed
+results can change an evidence digest, preventing a blocked result from
+resetting the very fingerprint that caused it.
 
 **Scope.** Ledger state is per-run (ordinary chat: per user-turn/tool-batch
 sequence since the last final answer; `/agent on`: per `AgentRun`, spanning

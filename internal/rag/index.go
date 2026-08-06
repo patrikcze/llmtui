@@ -117,6 +117,10 @@ func Build(cfg BuildConfig) (*Index, int, error) {
 			skipped++
 			return nil
 		}
+		if containsLikelySecret(data) {
+			skipped++
+			return nil
+		}
 		if used+int64(len(data)) > budget {
 			return fs.SkipAll // total budget exhausted
 		}

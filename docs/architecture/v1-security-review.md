@@ -42,7 +42,7 @@ open.** This is an unusually clean result for a project of this scope; the
 commit-per-finding traceability is what makes it verifiable rather than
 merely asserted.
 
-## 2. Carried-forward accepted risk / partially open items
+## 2. Carried-forward items and closure status
 
 These are not part of the severity-scored 19 findings; they are
 lower-priority architectural items from `REMEDIATION_PLAN.md`'s "medium
@@ -56,40 +56,36 @@ term" table and `fix-security-and-correctness-bugs.md`'s stretch phase:
    **not independently re-verified** in this session — flagged as
    suspected-partial, not confirmed-complete. Not a v1 release blocker;
    recommended as a follow-up issue (see `v1-migration-plan.md`).
-2. **Untrusted-content framing is prose, not a structural delimiter**
+2. **Untrusted-content framing — closed in the final v1 slice.**
    (`AI_AGENT_GAP_ANALYSIS.md` Phase 11 item 2). `7934dc8 fix(prompt):
    label untrusted content provenance` (`internal/prompt/compose.go:45-57`)
-   uses a text preamble ("frames RAG snippets as untrusted reference...
-   skills do not grant permissions...") rather than a hard delimiter such
-   as `START_UNTRUSTED_CONTEXT`/`END_UNTRUSTED_CONTEXT`. This was
-   explicitly documented as a soft/prose control at the time, not silently
-   left incomplete — status unchanged at v1 baseline. Recommended follow-up
-   for a prompt-injection-resistant delimiter scheme, since master-prompt
-   §7.5 requires "untrusted content is clearly delimited" and a prose
-   preamble is weaker than a structural boundary a smaller/weaker local
-   model is less likely to respect.
-3. **RAG has no content-based secret scanner**
+   previously used prose only. `internal/untrusted.Frame` now adds a
+   deterministic, matching, collision-checked begin/end boundary around RAG,
+   web, and MCP content while retaining provenance and the existing prose
+   guidance. Tests cover an injected fake end marker. This is defense in
+   depth for model interpretation, not an authorization boundary; controller
+   approvals and tool policy remain authoritative.
+3. **RAG content-based secret scanner — closed in the final v1 slice.**
    (`fix-security-and-correctness-bugs.md` Phase 11 item 1, explicitly
-   flagged optional/stretch at the time). Confirmed still absent:
-   `internal/rag/*.go` has no `AKIA`/`BEGIN...PRIVATE KEY`/bearer-token
-   pattern scan; only filename-based `IsSecretPath` reuse exists
-   (`internal/rag/rag_test.go:81` exercises only the filename case). Low
-   severity — requires a user to deliberately index a secret-bearing file
-   into local RAG, which is itself an explicit opt-in action. Recommended
-   follow-up, not a v1 blocker.
+   flagged optional/stretch at the time). Filename filtering is now
+   supplemented by bounded, high-confidence
+   content patterns for private keys and common credential/token/header
+   shapes. A match drops the whole file without logging the value. The index
+   schema is versioned; pre-scanner indexes and tampered current indexes are
+   rejected on load so persistence cannot bypass the scanner. The heuristic
+   is deliberately not claimed to detect every possible secret.
 
 ## 3. New findings at v1 baseline
 
-### 3.1 Supply chain: `GO-2026-5970` (confirmed, this session)
+### 3.1 Supply chain: `GO-2026-5970` (fixed)
 
 `govulncheck ./...`: infinite loop on invalid input in
-`golang.org/x/text@v0.38.0`, fixed in `v0.39.0`. Reachable via
+`golang.org/x/text@v0.38.0`, fixed in `v0.39.0`. It was reachable via
 `internal/skill/manager.go:661` and `internal/history/usage.go:61`. A local
 denial-of-service on malformed input reaching Unicode normalization — not
-remotely triggerable without an attacker already able to feed
-skill-catalog text or history files, but a trivial fix (dependency bump).
-**Action for v1**: bump `golang.org/x/text` to `>= v0.39.0` as part of the
-security-hardening slice; re-run `govulncheck` to confirm clean.
+remotely triggerable without an attacker already able to feed skill-catalog
+text or history files. The dependency is now `v0.39.0`; the final
+`govulncheck ./...` reports no vulnerabilities.
 
 ### 3.2 Budget-exhaustion as a resource-exhaustion risk (new framing, not a new code finding)
 
@@ -117,8 +113,8 @@ truncation handling all show no security regression at this baseline.
 
 | Requirement | Status |
 | --- | --- |
-| `govulncheck` run and reviewed | Done this session — 1 finding, fix identified (§3.1) |
-| Direct dependencies reviewed | Not yet performed as a full pass — recommended before release, not blocking Phase 1 |
-| No secrets or generated local data committed | Confirmed: `git status` clean at baseline except this document set |
+| `govulncheck` run and reviewed | Done — clean after the `golang.org/x/text` bump (§3.1) |
+| Direct dependencies reviewed | Done — direct `go.mod` declarations reviewed; no new dependency was introduced by the final slice |
+| No secrets or generated local data committed | Re-checked in the final working tree; the user-supplied governing prompt remains intentionally untracked |
 | Prior security review findings re-verified, not just cited | Done (§1) |
 | New findings from this baseline documented | Done (§3) |

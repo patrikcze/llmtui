@@ -15,6 +15,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -317,6 +318,41 @@ func TestNativeToolCallsExecuteAndContinue(t *testing.T) {
 	}
 	if m.toolOK != 1 {
 		t.Errorf("toolOK = %d, want 1", m.toolOK)
+	}
+}
+
+func TestNativeToolCapabilityOverrideAndLearnedRejectionAreModelScoped(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.cfg.Tools.Native = "auto"
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	unsupported := false
+	m.prov = provider.WithCapabilityOverrides(m.prov, provider.CapabilityOverrides{NativeTools: &unsupported})
+	m.resetNativeToolMode()
+	if m.useNativeTools() || len(m.activeToolSpecs()) != 0 {
+		t.Fatal("explicit native_tools:false should select fallback without offering schemas")
+	}
+
+	supported := true
+	m.prov = provider.WithCapabilityOverrides(mock.New(), provider.CapabilityOverrides{NativeTools: &supported})
+	m.model = "capable-a"
+	m.resetNativeToolMode()
+	if !m.useNativeTools() || len(m.activeToolSpecs()) == 0 {
+		t.Fatal("explicit native_tools:true should offer native schemas")
+	}
+	m.nativeToolRejections[m.nativeToolCapabilityKey()] = true
+	m.resetNativeToolMode()
+	if m.useNativeTools() {
+		t.Fatal("learned rejection was not applied to the current provider/model")
+	}
+	m.setModel("capable-b")
+	if !m.useNativeTools() {
+		t.Fatal("one model's rejection leaked to a different model")
+	}
+	m.setModel("capable-a")
+	if m.useNativeTools() {
+		t.Fatal("returning to the rejected model forgot learned capability state")
 	}
 }
 
@@ -806,7 +842,8 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 		t.Errorf("toolOK = %d, want 1", m.toolOK)
 	}
 	last := m.session.Messages[len(m.session.Messages)-1]
-	if last.Role != provider.RoleTool || !strings.HasSuffix(last.Content, "\nsession started") {
+	if last.Role != provider.RoleTool ||
+		!strings.Contains(last.Content, "\nsession started\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("tool result message = %+v", last)
 	}
 }

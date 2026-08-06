@@ -92,14 +92,14 @@ how truncation is otherwise handled as deterministic evidence.
 
 A run-scoped ledger fingerprints every tool call by its tool identity and
 the resource it actually acts on (search query, fetch URL, file path,
-command line), independent of incidental formatting differences. If a
-batch of calls only repeats fingerprints that already produced the same
-result as last time — no new evidence — the batch is blocked instead of
-executed, and the model sees a structured explanation. A single block is a
-forcing function: the model gets one chance to change strategy. If the
-very next round repeats the same blocked pattern instead, the turn or run
-ends rather than continuing to spend requests on calls that will just be
-blocked again.
+command line, and state-changing arguments), independent of incidental
+formatting differences. Each call is filtered separately: in a mixed batch,
+a stuck call receives a structured blocked result while fresh calls still run,
+and all results are returned once in their original order. Synthetic blocked
+results are not recorded as new evidence, so they cannot accidentally reset
+the stuck call's counter. When every call is blocked, the model gets one chance
+to change strategy; repeating the same fully blocked pattern ends the turn or
+run instead of spending more provider requests on it.
 
 Legitimate repetition is never blocked: polling, pagination, and retries
 all produce a changing result, and any change in the recorded outcome

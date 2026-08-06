@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
 )
 
@@ -32,6 +33,29 @@ func TestBuildProviderUnknownTypeErrors(t *testing.T) {
 	_, err := BuildProvider("x", pc, config.NetworkConfig{})
 	if err == nil {
 		t.Fatal("expected error for unknown provider type")
+	}
+}
+
+func TestBuildProviderAppliesCapabilityOverrides(t *testing.T) {
+	nativeTools := false
+	reasoningEvents := true
+	pc := config.ProviderConfig{
+		Type: "openai_compatible",
+		Capabilities: config.ProviderCapabilitiesConfig{
+			NativeTools:     &nativeTools,
+			ReasoningEvents: &reasoningEvents,
+		},
+	}
+	prov, err := BuildProvider("local", pc, config.NetworkConfig{})
+	if err != nil {
+		t.Fatalf("BuildProvider: %v", err)
+	}
+	caps := provider.CapabilitiesFor(prov, "model-a")
+	if caps.NativeTools != provider.CapabilityUnsupported {
+		t.Errorf("NativeTools = %s, want unsupported", caps.NativeTools)
+	}
+	if caps.ReasoningEvents != provider.CapabilitySupported {
+		t.Errorf("ReasoningEvents = %s, want supported", caps.ReasoningEvents)
 	}
 }
 

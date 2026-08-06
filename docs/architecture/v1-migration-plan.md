@@ -13,6 +13,9 @@
 > shipped — this note is the only change needed to bring it up to date.
 > The rollback story below (previously "planned") is implemented and
 > tested, not merely described.
+> The final slice also adds tri-state provider capability overrides,
+> structural framing for RAG/web/MCP content, content-based RAG secret
+> scanning, and per-call filtering for mixed tool batches.
 
 ## Summary
 
@@ -65,6 +68,14 @@ providers, streaming, tools, approvals, skills, MCP, and RAG continue to
 follow their existing path unless a user has enabled tools/agent mode —
 consistent with `docs/agent-loop.md`'s existing compatibility statement,
 which this release does not change.
+
+Provider capability overrides under `providers.<name>.capabilities` are
+additive and optional. Omitted booleans retain the tri-state `unknown`
+behavior; explicit `false` is not conflated with omission.
+
+The RAG index schema is now versioned and secret-scanned during load.
+Unversioned pre-scanner indexes are intentionally rejected and must be
+rebuilt with `/rag index`; source files and configuration are unaffected.
 
 ## Rollback
 
@@ -123,12 +134,14 @@ dependency bump with no expected API surface change.
    `TestVerifiedAgentTruncatedToolCallIsNotExecuted`).
 4. ~~Bump `golang.org/x/text`.~~ **Done**
    (`security(deps): bump golang.org/x/text to close GO-2026-5970`).
-5. Extend `provider.Capabilities` per `v1-provider-capabilities.md` —
-   independent of the critical path, can be parallelized.
-6. Structural untrusted-content delimiter, replacing the prose preamble
-   (`v1-security-review.md` §2 item 2) — accepted risk, not urgent.
-7. RAG content-based secret scanner (`v1-security-review.md` §2 item 3) —
-   accepted risk, explicitly optional since the original review.
+5. ~~Extend `provider.Capabilities` per `v1-provider-capabilities.md`.~~
+   **Done** — tri-state model capabilities, explicit overrides, runtime
+   request shaping, selected-model embedded detection, and model-scoped
+   rejection learning.
+6. ~~Structural untrusted-content delimiter, replacing the prose preamble.~~
+   **Done** — deterministic collision-checked framing for RAG, web, and MCP.
+7. ~~RAG content-based secret scanner.~~ **Done** — high-confidence
+   content scanning plus persisted-index version/integrity enforcement.
 8. Re-verify `approval_policy.go` against the original per-tool/per-path
    granularity goal (`v1-security-review.md` §2 item 1) — needs a direct
    read, not re-derivation.
@@ -136,8 +149,9 @@ dependency bump with no expected API surface change.
    `agent.DecisionNoProgress` value.~~ **Done** — a run blocked by the
    progress ledger's terminal streak now reports status `no_progress`,
    distinct from `failed` and `budget_exhausted`.
-10. Consider per-call (not per-batch) progress-ledger filtering for mixed
-    batches — see the scoping note in `internal/tui/progress.go`'s package
-    doc comment.
+10. ~~Consider per-call (not per-batch) progress-ledger filtering for mixed
+    batches.~~ **Done** — immutable positional plans block only stuck calls,
+    execute fresh calls, and atomically merge exactly one ordered result per
+    call. Synthetic block results never reset the ledger.
 11. Provider conformance fixtures and TUI test gaps (`v1-test-matrix.md`
     §9.3, §9.5) — breadth work, not urgent for the release gate.

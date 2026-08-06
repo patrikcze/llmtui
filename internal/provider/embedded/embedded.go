@@ -206,11 +206,29 @@ func (p *Provider) effectiveContextLen() int {
 // reported authoritatively by ListModels, while tool and reasoning support is
 // selected per embedded model/template rather than advertised globally.
 func (p *Provider) Capabilities() provider.Capabilities {
+	return p.CapabilitiesFor("")
+}
+
+// CapabilitiesFor resolves selected-model tool support from the configured
+// grammar or the centralized model-family detector. This avoids optimistic
+// requests for an embedded model whose grammar is known to be unsupported.
+func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
+	opts := p.activeOptions()
+	if requested := expandHome(model); requested != "" {
+		opts.ModelPath = requested
+	}
+	nativeTools := provider.CapabilityUnsupported
+	if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); ok {
+		nativeTools = provider.CapabilitySupported
+	}
 	return provider.Capabilities{
 		SupportsStreaming:    true,
 		SupportsModelList:    true,
 		SupportsTokenUsage:   true,
 		SupportsSystemPrompt: true,
+		NativeTools:          nativeTools,
+		ParallelToolCalls:    nativeTools,
+		ReasoningEvents:      provider.CapabilitySupported,
 		ContextWindowTokens:  p.effectiveContextLen(),
 	}
 }

@@ -159,17 +159,22 @@ type Model struct {
 	toolsOn          bool
 	toolsAutoApprove bool // explicit config or /tools auto override
 	approvalPolicy   capabilityPolicy
-	toolsNative      bool // offer tools via native function calling
-	toolsShowOutput  bool // show full tool output instead of one-line summaries
-	toolRunner       *tools.Runner
-	toolDepth        int          // auto follow-up rounds for the current user turn
-	pendingCalls     []tools.Call // parsed calls awaiting the user's approval
-	pendingBudget    bool         // the pending prompt is "budget spent — continue?", not an approval
-	approvalIdx      int          // selected row in the approval menu (0 yes, 1 always, 2 no)
-	toolOK           int          // executed tool calls (exit summary)
-	toolErr          int          // failed or denied tool calls (exit summary)
-	webOn            bool         // web tools (web_search/web_fetch) enabled
-	webClient        *web.Client  // shared web client; nil if the runner is unavailable
+	toolsNative      bool // current provider/model may offer native function calling
+	// nativeToolRejections is learned negative capability state keyed by
+	// provider+model. One incapable model must not disable native tools for a
+	// different model or provider for the rest of the session.
+	nativeToolRejections map[string]bool
+	toolsShowOutput      bool // show full tool output instead of one-line summaries
+	toolRunner           *tools.Runner
+	toolDepth            int          // auto follow-up rounds for the current user turn
+	pendingCalls         []tools.Call // parsed calls awaiting the user's approval
+	pendingToolPlan      *toolBatchPlan
+	pendingBudget        bool        // the pending prompt is "budget spent — continue?", not an approval
+	approvalIdx          int         // selected row in the approval menu (0 yes, 1 always, 2 no)
+	toolOK               int         // executed tool calls (exit summary)
+	toolErr              int         // failed or denied tool calls (exit summary)
+	webOn                bool        // web tools (web_search/web_fetch) enabled
+	webClient            *web.Client // shared web client; nil if the runner is unavailable
 
 	// progress tracks tool-call fingerprints across the current run (both
 	// ordinary tool chat and /agent on share the same kernel — see
@@ -301,11 +306,12 @@ func New(opts Options) *Model {
 		toolsOn:     cfg.Tools.Enabled,
 		agentOn:     cfg.Agent.Enabled,
 
-		toolsAutoApprove: cfg.Tools.Approve == "auto",
-		toolsNative:      cfg.Tools.Native != "off",
+		toolsAutoApprove:     cfg.Tools.Approve == "auto",
+		nativeToolRejections: make(map[string]bool),
 
 		progress: newProgressLedger(cfg.Tools.NoProgress.Threshold),
 	}
+	m.resetNativeToolMode()
 	m.rebuildFromConfig()
 	if opts.ResumeSession != nil {
 		m.adoptSession(opts.ResumeSessionName, *opts.ResumeSession)
@@ -397,9 +403,15 @@ func (m *Model) rebuildFromConfig() {
 	// Optional RAG: prepare the store and load any existing index. Nothing is
 	// indexed here; the user runs /rag index. Retrieval stays off unless both
 	// the feature and the workspace are enabled in config.
+	m.ragStore = nil
+	m.ragIndex = nil
+	m.ragRoot = ""
+	m.ragBuiltAt = time.Time{}
 	if dir, err := history.ExpandHome(cfg.RAG.IndexPath); err == nil && dir != "" {
 		m.ragStore = rag.NewStore(dir)
-		if idx, root, builtAt, lerr := m.ragStore.Load(); lerr == nil && idx != nil {
+		if idx, root, builtAt, lerr := m.ragStore.Load(); lerr != nil {
+			m.errText = lerr.Error()
+		} else if idx != nil {
 			m.ragIndex = idx
 			m.ragRoot = root
 			m.ragBuiltAt = builtAt
@@ -731,7 +743,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastDebug.Retries = msg.retries
 		if msg.toolsFellBack && m.toolsNative {
 			// The backend rejected native tool calling; use the fenced-block
-			// prompt protocol from the next request on.
+			// prompt protocol for this provider/model from the next request on.
+			if m.nativeToolRejections == nil {
+				m.nativeToolRejections = make(map[string]bool)
+			}
+			m.nativeToolRejections[m.nativeToolCapabilityKey()] = true
 			m.toolsNative = false
 			m.lastDebug.CacheStatus = "bypass"
 			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
@@ -822,11 +838,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolOK++
 			}
 		}
-		m.recordAgentToolResults(msg.results, false)
+		m.recordAgentToolResultsCount(msg.results, false, len(msg.observed))
 		if m.cfg.Tools.NoProgress.Enabled {
-			m.progress.observeResults(msg.results)
+			m.progress.observeResults(msg.observed)
 		}
-		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.results), m.toolDepth, m.toolMaxIter())
+		blocked := len(msg.results) - len(msg.observed)
+		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.observed), m.toolDepth, m.toolMaxIter())
+		if blocked > 0 {
+			m.notice = fmt.Sprintf(
+				"⚒ ran %d tool call(s), blocked %d repeat(s) — round %d/%d",
+				len(msg.observed),
+				blocked,
+				m.toolDepth,
+				m.toolMaxIter(),
+			)
+		}
 		return m, m.sendToolResults(msg.results)
 
 	case modelsResultMsg:
@@ -1049,14 +1075,22 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
-	if exceeded, reason := m.agentHardBudgetExceeded(len(calls)); exceeded {
-		return m.terminateAgentBudget(calls, reason)
-	}
+	plan := newToolBatchPlan(calls)
 	if m.cfg.Tools.NoProgress.Enabled {
-		if blocked, terminal, reason := m.progress.blockBatch(calls); blocked {
-			return m.handleBlockedProgress(calls, reason, terminal)
+		var terminal bool
+		plan, terminal = m.progress.planBatch(calls)
+		if plan.blockedCount() == len(calls) {
+			return m.handleBlockedProgress(calls, progressBlockReason(plan), terminal)
 		}
 	}
+	if exceeded, reason := m.agentHardBudgetExceeded(len(plan.runnableCalls())); exceeded {
+		return m.terminateAgentBudget(calls, reason)
+	}
+	return m.startPlannedToolBatch(plan)
+}
+
+func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
+	runnable := plan.runnableCalls()
 	if m.toolDepth >= m.toolMaxIter() {
 		// A pending approval must own the next keypress and be visibly on
 		// screen — an overlay left open from an earlier, non-blocking
@@ -1064,23 +1098,25 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
 		m.keysMode = false
-		m.pendingCalls = calls
+		m.pendingCalls = runnable
+		m.pendingToolPlan = &plan
 		m.pendingBudget = true
 		m.approvalIdx = 0
 		m.refreshViewport()
 		return nil
 	}
-	for _, c := range calls {
+	for _, c := range runnable {
 		if m.callNeedsApproval(c) {
 			m.overlayOpen = false
 			m.keysMode = false
-			m.pendingCalls = calls
+			m.pendingCalls = runnable
+			m.pendingToolPlan = &plan
 			m.approvalIdx = 0
 			m.refreshViewport()
 			return nil
 		}
 	}
-	return m.runToolCalls(calls)
+	return m.runToolPlan(plan)
 }
 
 func (m *Model) toolMaxIter() int {
@@ -1096,11 +1132,34 @@ func (m *Model) useNativeTools() bool {
 	return m.toolsOn && m.toolRunner != nil && m.toolsNative
 }
 
-// runToolCalls executes an approved batch asynchronously and feeds the
-// results back. Native file and command operations can block just as MCP
-// round-trips can; keeping every kind on one cancellable path prevents UI
-// freezes and preserves ordering for mixed batches.
-func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
+func (m *Model) nativeToolCapabilityKey() string {
+	if m.prov == nil {
+		return "\x1f" + m.model
+	}
+	return m.prov.Name() + "\x1f" + m.model
+}
+
+// resetNativeToolMode re-resolves the current provider/model. Unknown keeps
+// the existing optimistic one-shot attempt; only explicit unsupported
+// capability or a rejection learned for this exact key selects fallback.
+func (m *Model) resetNativeToolMode() {
+	m.toolsNative = false
+	if m.cfg == nil || m.cfg.Tools.Native == "off" || m.prov == nil {
+		return
+	}
+	caps := provider.CapabilitiesFor(m.prov, m.model)
+	if caps.NativeTools == provider.CapabilityUnsupported {
+		return
+	}
+	m.toolsNative = !m.nativeToolRejections[m.nativeToolCapabilityKey()]
+}
+
+// runToolPlan executes an approved batch asynchronously and feeds the results
+// back. Native file and command operations can block just as MCP round-trips
+// can; keeping every kind on one cancellable path prevents UI freezes and
+// preserves ordering for mixed batches.
+func (m *Model) runToolPlan(plan toolBatchPlan) tea.Cmd {
+	calls := plan.runnableCalls()
 	m.toolDepth++
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.mcpBatchCancel = cancel
@@ -1110,7 +1169,7 @@ func (m *Model) runToolCalls(calls []tools.Call) tea.Cmd {
 	m.relayout()
 	m.refreshViewport() // suppress the batch's static ⚒ lines while it runs live
 	m.notice = mcpBatchNotice(calls)
-	cmd := runMixedToolBatch(ctx, m.toolRunner, m.mcpRegistry, calls, operationGuard{
+	cmd := runPlannedToolBatch(ctx, m.toolRunner, m.mcpRegistry, plan, operationGuard{
 		log: m.operationLog,
 		err: m.operationLogErr,
 	})
@@ -1140,18 +1199,14 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResults(results, false)
+	m.recordAgentToolResultsCount(results, false, 0)
 	m.toolErr += len(results)
 	m.notice = "Repeated tool call blocked: no new evidence"
 
 	if !terminal {
 		return m.sendToolResults(results)
 	}
-	if len(results) > 0 && results[0].Call.ID != "" {
-		for _, msg := range tools.NativeResults(results) {
-			m.session.AddMessage(msg)
-		}
-	}
+	m.appendTerminalToolResults(results)
 	if m.agentRunActive() {
 		run := m.agentLoop.run
 		_ = run.Terminate(agent.DecisionNoProgress, reason, time.Now())
@@ -1165,16 +1220,31 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	return nil
 }
 
+func (m *Model) pendingPlan() toolBatchPlan {
+	if m.pendingToolPlan != nil {
+		return *m.pendingToolPlan
+	}
+	return newToolBatchPlan(m.pendingCalls)
+}
+
+func (m *Model) clearPendingTools() {
+	m.pendingCalls = nil
+	m.pendingToolPlan = nil
+	m.pendingBudget = false
+}
+
 // denyPendingTools rejects the pending batch and tells the model, so it can
 // finish the task without the denied actions instead of waiting forever.
 func (m *Model) denyPendingTools() tea.Cmd {
-	calls := m.pendingCalls
-	m.pendingCalls = nil
+	plan := m.pendingPlan()
+	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.clearPendingTools()
 	m.toolDepth++
-	m.toolErr += len(calls)
+	denied := tools.DeniedResults(calls)
+	results, _ := plan.mergeResults(denied)
+	m.toolErr += len(results)
 	m.notice = fmt.Sprintf("✗ denied %d tool call(s)", len(calls))
-	results := tools.DeniedResults(calls)
-	m.recordAgentToolResults(results, true)
+	m.recordAgentToolResultsCount(results, true, 0)
 	return m.sendToolResults(results)
 }
 
@@ -1198,6 +1268,27 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		}
 	}
 	return cmd
+}
+
+// appendTerminalToolResults preserves exactly one result for every accepted
+// call when the controller terminates without another model round. Native
+// calls remain role:"tool" messages; fenced calls retain the protocol's
+// single [tool results] user message.
+func (m *Model) appendTerminalToolResults(results []tools.Result) {
+	if len(results) == 0 {
+		return
+	}
+	if results[0].Call.ID != "" {
+		for _, msg := range tools.NativeResults(results) {
+			m.session.AddMessage(msg)
+		}
+		return
+	}
+	m.session.AddMessage(provider.Message{
+		Role:    provider.RoleUser,
+		Content: tools.FormatResults(results),
+		Display: tools.CollectDiffs(results),
+	})
 }
 
 // Approval menu rows, Claude-Code style: pick with ↑/↓ + Enter, or jump
@@ -1277,10 +1368,11 @@ func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) resolveApproval(choice int) tea.Cmd {
 	switch choice {
 	case approvalYes:
-		calls := m.pendingCalls
-		m.pendingCalls = nil
+		plan := m.pendingPlan()
+		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
-		return m.runToolCalls(calls)
+		return m.runToolPlan(plan)
 	case approvalAlways:
 		var granted []string
 		now := time.Now()
@@ -1289,15 +1381,16 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 				granted = append(granted, scope)
 			}
 		}
-		calls := m.pendingCalls
-		m.pendingCalls = nil
+		plan := m.pendingPlan()
+		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
 		if len(granted) == 0 {
 			m.notice = "◈ workspace skill approved for this session"
 		} else {
 			m.notice = fmt.Sprintf("⚒ matching approval granted for 15 minutes: %s (/tools ask to revoke)", strings.Join(granted, " + "))
 		}
-		return m.runToolCalls(calls)
+		return m.runToolPlan(plan)
 	default:
 		return m.denyPendingTools()
 	}
@@ -1307,17 +1400,19 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 // fresh round budget and continues, 1 asks the model to answer with what it
 // already has (the pending calls are not executed).
 func (m *Model) resolveBudget(choice int) tea.Cmd {
-	calls := m.pendingCalls
-	m.pendingCalls = nil
-	m.pendingBudget = false
+	plan := m.pendingPlan()
+	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.clearPendingTools()
 	if choice == 0 {
 		m.toolDepth = 0
 		m.notice = fmt.Sprintf("⚒ tool budget renewed — up to %d more rounds", m.toolMaxIter())
-		return m.startToolBatch(calls)
+		return m.startPlannedToolBatch(plan)
 	}
-	m.toolErr += len(calls)
+	limited := tools.LimitResults(calls, m.toolMaxIter())
+	results, _ := plan.mergeResults(limited)
+	m.toolErr += len(results)
 	m.notice = "⚒ asking the model for its final answer without tools"
-	return m.sendToolResults(tools.LimitResults(calls, m.toolMaxIter()))
+	return m.sendToolResults(results)
 }
 
 // retryLast re-sends the last user message with current settings.

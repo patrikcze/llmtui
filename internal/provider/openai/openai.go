@@ -442,5 +442,10 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		SupportsTokenUsage:   true,
 		SupportsJSONMode:     true,
 		SupportsSystemPrompt: true,
+		// Generic OpenAI-compatible servers vary by implementation and model.
+		// Unknown preserves a bounded optimistic tool attempt; a config
+		// override or one real rejection supplies authoritative knowledge.
+		NativeTools:     provider.CapabilityUnknown,
+		ReasoningEvents: provider.CapabilityUnknown,
 	}
 }

@@ -5,8 +5,8 @@ you configure, and it sends no telemetry of any kind.
 
 See [`docs/architecture/v1-security-review.md`](architecture/v1-security-review.md)
 for the v1.0.0 stabilization security review: prior-finding remediation
-status with commit references, and carried-forward accepted-risk items
-(untrusted-content framing, RAG content-secret scanning) not yet closed.
+status with commit references and the follow-up closure of structural
+untrusted-content framing and RAG content-secret scanning.
 
 ## Secrets
 
@@ -165,24 +165,32 @@ add` reminds you).
     to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
     before reaching the model; binary content types are refused.
   - **Prompt-injection posture** — fetched pages are untrusted input. The
-    result itself and the system prompt say so explicitly, and the fetch approval plus the
-    write/command approvals mean injected instructions still cannot mutate
-    anything without you seeing it.
+    result itself and the system prompt say so explicitly, and the result body
+    is enclosed in matching, collision-checked untrusted-content markers. The
+    fetch approval plus the write/command approvals mean injected instructions
+    still cannot mutate anything without you seeing it.
   - **No API keys involved** — search uses DuckDuckGo's public HTML
     endpoint; nothing identifies you beyond the request itself.
-- Local RAG (`/rag`) is off by default and stays fully local (see
+- Local RAG (`/rag`) is off by default; indexing and retrieval stay local (see
   [rag.md](rag.md)):
-  - **No network, no third parties** — retrieval is local keyword scoring
-    (BM25-lite). There are no embeddings, no vector database, and no external
-    calls; enabling RAG does not cause any data to leave your machine.
+  - **Local indexing and retrieval** — keyword scoring (BM25-lite), index
+    construction, and storage use no embeddings, vector database, or external
+    retrieval service. Retrieved snippets are nevertheless included in the
+    prompt sent to the configured model provider; a remote provider therefore
+    receives those selected workspace excerpts.
   - **Indexing respects the same secret hygiene as the tools** — `.env`,
     `*.pem`, `*.key`, `id_rsa`, `.netrc`, and `.ssh`/`.gnupg` contents are
-    never indexed; binary files are skipped; nothing outside the workspace
-    root is read, and symlinks resolving outside it are rejected.
+    never indexed. High-confidence private-key, cloud-token, bearer-token,
+    and API-key content patterns also skip the whole file. Binary files are
+    skipped; nothing outside the workspace root is read, and symlinks
+    resolving outside it are rejected. Versioned indexes are re-scanned on
+    load, and unversioned legacy indexes must be rebuilt.
   - **Retrieved context cannot override you** — snippets are added as a
-    clearly-labeled reference section that instructs the model to prefer the
-    user request on any conflict; your raw message is never modified. What
-    was retrieved is visible in `/prompt preview` and `/debug last`.
+    clearly-labeled reference section enclosed by matching, collision-checked
+    untrusted-content markers. Those markers and the prose warning are defense
+    in depth; the tool controller and approval policy remain the authorization
+    boundary. Your raw message is never modified. What was retrieved is
+    visible in `/prompt preview` and `/debug last`.
   - **The on-disk index** (`rag.index_path`) may contain workspace source
     excerpts and is written owner-only; remove it with `/rag clear`.
 - MCP servers (`/mcp`) are off by default and connect over stdio only on an

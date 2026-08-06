@@ -69,6 +69,41 @@ chat:
 	}
 }
 
+func TestProviderCapabilityOverridesPreserveExplicitFalse(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  local:
+    type: openai_compatible
+    base_url: http://localhost:1234/v1
+    capabilities:
+      native_tools: false
+      parallel_tool_calls: true
+      reasoning_events: false
+      context_window_tokens: 32768
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	caps := cfg.Providers["local"].Capabilities
+	if caps.NativeTools == nil || *caps.NativeTools {
+		t.Fatalf("native_tools = %v, want explicit false", caps.NativeTools)
+	}
+	if caps.ParallelToolCalls == nil || !*caps.ParallelToolCalls {
+		t.Fatalf("parallel_tool_calls = %v, want explicit true", caps.ParallelToolCalls)
+	}
+	if caps.ReasoningEvents == nil || *caps.ReasoningEvents {
+		t.Fatalf("reasoning_events = %v, want explicit false", caps.ReasoningEvents)
+	}
+	if caps.ContextWindowTokens == nil || *caps.ContextWindowTokens != 32768 {
+		t.Fatalf("context_window_tokens = %v, want 32768", caps.ContextWindowTokens)
+	}
+}
+
 func TestEnvOverridesConfigFile(t *testing.T) {
 	path := writeConfig(t, "default_provider: lmstudio\n")
 	t.Setenv("LLMTUI_DEFAULT_PROVIDER", "openai_compatible")

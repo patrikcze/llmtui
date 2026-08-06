@@ -493,11 +493,21 @@ func (m *Model) recordAgentTruncation() {
 	m.agentLoop.execution.NewEvidence = true
 }
 
-func (m *Model) recordAgentToolResults(results []tools.Result, denied bool) {
+// recordAgentToolResultsCount records the complete tool-result-shaped
+// evidence while charging only calls that actually executed to the live
+// tool-call budget. Synthetic progress blocks, denials, and budget rejections
+// must preserve protocol correlation without pretending a side effect ran.
+func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool, liveCount int) {
 	if !m.agentRunActive() {
 		return
 	}
-	m.agentLoop.liveToolCalls += len(results)
+	if liveCount < 0 {
+		liveCount = 0
+	}
+	if liveCount > len(results) {
+		liveCount = len(results)
+	}
+	m.agentLoop.liveToolCalls += liveCount
 	for _, result := range results {
 		kind := agent.ErrorKind("")
 		if result.Err != nil {
@@ -608,12 +618,8 @@ func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd 
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResults(results, false)
-	if len(results) > 0 && results[0].Call.ID != "" {
-		for _, msg := range tools.NativeResults(results) {
-			m.session.AddMessage(msg)
-		}
-	}
+	m.recordAgentToolResultsCount(results, false, 0)
+	m.appendTerminalToolResults(results)
 	m.toolErr += len(results)
 	run := m.agentLoop.run
 	_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())

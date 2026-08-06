@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +13,91 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/web"
 )
+
+func TestMixedBatchApprovesAndExecutesOnlyFreshCalls(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = false
+	m.cfg.Tools.NoProgress.Enabled = true
+	m.progress = newProgressLedger(1)
+	m.toolRunner = tools.NewRunner(root, 64)
+	stuck := tools.Call{ID: "stuck", Tool: tools.ToolReadFile, Path: "stuck.txt"}
+	fresh := tools.Call{ID: "fresh", Tool: tools.ToolWriteFile, Path: "fresh.txt", Body: "new evidence"}
+	m.progress.observeResults([]tools.Result{{Call: stuck, Output: "unchanged"}})
+
+	if cmd := m.startToolBatch([]tools.Call{stuck, fresh}); cmd != nil {
+		t.Fatal("fresh write should wait for approval")
+	}
+	if len(m.pendingCalls) != 1 || m.pendingCalls[0].ID != "fresh" {
+		t.Fatalf("pending calls = %+v, want only the fresh call", m.pendingCalls)
+	}
+	if m.pendingToolPlan == nil || m.pendingToolPlan.blockedCount() != 1 {
+		t.Fatalf("pending plan = %+v, want one blocked slot", m.pendingToolPlan)
+	}
+	cmd := m.resolveApproval(approvalYes)
+	if cmd == nil {
+		t.Fatal("approved mixed plan did not start")
+	}
+	msg, ok := cmd().(mcpToolResultsMsg)
+	if !ok {
+		t.Fatal("mixed plan returned the wrong message type")
+	}
+	if len(msg.results) != 2 || msg.results[0].Call.ID != "stuck" || msg.results[0].Err == nil ||
+		msg.results[1].Call.ID != "fresh" || msg.results[1].Err != nil {
+		t.Fatalf("merged results = %+v", msg.results)
+	}
+	if len(msg.observed) != 1 || msg.observed[0].Call.ID != "fresh" {
+		t.Fatalf("observed results = %+v", msg.observed)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "fresh.txt"))
+	if err != nil || string(data) != "new evidence" {
+		t.Fatalf("fresh write = %q, %v", data, err)
+	}
+}
+
+func TestTerminalFallbackNoProgressAppendsStructuredResults(t *testing.T) {
+	m := newTestModel(t)
+	call := tools.Call{Tool: tools.ToolWebSearch, Body: "stuck query"}
+	before := len(m.session.Messages)
+	if cmd := m.handleBlockedProgress(
+		[]tools.Call{call},
+		"repeated tool call blocked: no new evidence",
+		true,
+	); cmd != nil {
+		t.Fatal("ordinary terminal no-progress should not dispatch another request")
+	}
+	if len(m.session.Messages) != before+1 {
+		t.Fatalf("messages = %d, want one terminal fallback result appended", len(m.session.Messages))
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleUser || !strings.HasPrefix(last.Content, tools.ResultsPrefix) ||
+		!strings.Contains(last.Content, "no new evidence") {
+		t.Fatalf("terminal fallback result = %+v", last)
+	}
+}
+
+func TestMixedBatchChargesOnlyExecutedCallsToAgentBudget(t *testing.T) {
+	m, _ := configureAgentTestModel(t, agentScriptStep{text: "unused"})
+	_ = m.startVerifiedRun("inspect two resources", nil)
+	blocked := tools.Result{
+		Call: tools.Call{ID: "blocked", Tool: tools.ToolReadFile, Path: "stuck.txt"},
+		Err:  errors.New("repeated tool call blocked: no new evidence"),
+	}
+	executed := tools.Result{
+		Call:   tools.Call{ID: "fresh", Tool: tools.ToolListDir},
+		Output: "README.md",
+	}
+
+	m.recordAgentToolResultsCount([]tools.Result{blocked, executed}, false, 1)
+	if m.agentLoop.liveToolCalls != 1 {
+		t.Fatalf("live tool calls = %d, want only the one executed call", m.agentLoop.liveToolCalls)
+	}
+	if len(m.agentLoop.execution.ToolCalls) != 2 {
+		t.Fatalf("evidence records = %d, want one correlated result per accepted call", len(m.agentLoop.execution.ToolCalls))
+	}
+}
 
 // scriptedWeb is a controllable tools.WebClient stub. Search/Fetch results
 // come from queued responses so a test can script "the same result every

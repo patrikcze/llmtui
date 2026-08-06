@@ -1,6 +1,9 @@
 # v1 Provider Capability Model
 
-## Current state (confirmed, `internal/provider/capabilities.go:13-20`)
+## Implemented state
+
+`internal/provider/capabilities.go` now distinguishes transport-wide booleans
+from model-dependent tri-state support:
 
 ```go
 type Capabilities struct {
@@ -9,76 +12,59 @@ type Capabilities struct {
     SupportsTokenUsage   bool
     SupportsJSONMode     bool
     SupportsSystemPrompt bool
+    NativeTools          CapabilitySupport // unknown | unsupported | supported
+    ParallelToolCalls    CapabilitySupport
+    ReasoningEvents      CapabilitySupport
+    StructuredOutput     CapabilitySupport
     ContextWindowTokens  int
 }
 ```
 
-Populated via `CapabilitiesOf(p Provider)`, which calls an optional
-`CapabilityReporter.Capabilities()` or falls back to a conservative
-`DefaultCapabilities()` (streaming + system prompt only). This is a real,
-if minimal, capability model — not absent, contrary to what a naive reading
-of "scattered model-name checks" might suggest. The gap is narrower than
-that: **native tool calling, parallel tool calls, reasoning/thinking
-events, and structured-output support are not represented in this struct at
-all.**
+The tri-state is load-bearing. A generic OpenAI-compatible endpoint often
+does not advertise whether its selected model supports native tools. Treating
+that unknown as `unsupported` would silently remove a feature that worked
+before; treating an explicit negative as unknown would cause a known-bad
+request. Unknown therefore keeps one optimistic real request, while an
+explicit negative selects the fenced compatibility protocol immediately.
 
-Native-tool-calling rejection is instead detected reactively, by
-string-matching a provider's HTTP error response (`toolsRejectedError`,
-`internal/tui/pipeline.go:794-805`) after a request has already failed, not
-by consulting a declared capability beforehand.
+`CapabilitiesFor(provider, model)` consults model-scoped reporters before
+provider-wide reports. The embedded provider uses its configured or
+centrally-detected tool grammar to report native/parallel tool-call support
+for the selected GGUF. Unknown remote backends stay honest rather than being
+declared universally capable.
 
-## Target (master-prompt §7.4)
+## Resolution and runtime use
 
-Extend `Capabilities` with the missing fields:
+Current resolution order is:
 
-```go
-type Capabilities struct {
-    SupportsStreaming     bool
-    SupportsModelList     bool
-    SupportsTokenUsage    bool
-    SupportsJSONMode      bool
-    SupportsSystemPrompt  bool
-    SupportsNativeTools   bool
-    SupportsParallelTools bool
-    SupportsReasoning     bool
-    ContextWindowTokens   int
-}
-```
+1. `providers.<name>.capabilities.*` explicit configuration override;
+2. selected-model implementation knowledge (`ModelCapabilityReporter`);
+3. provider/transport implementation knowledge (`CapabilityReporter`);
+4. bounded learning from a real native-tool request rejection, cached for
+   the current provider/model session key;
+5. `unknown`, which preserves the existing optimistic first attempt.
 
-Resolution order, per master-prompt §7.4 (highest to lowest precedence):
+The learned negative is keyed by provider and model. Switching away from an
+incapable model no longer leaves native tools disabled for an unrelated model
+or provider; switching back reuses the learned result. `/doctor` reports the
+new capability values, request assembly omits native schemas when support is
+known false, and context-window resolution uses the selected-model report.
 
-1. Explicit provider implementation knowledge (e.g. the OpenAI-compatible
-   provider knows its own request shape supports native tools when the
-   backend accepts a `tools` field without error).
-2. Server-advertised capability, where a backend exposes one (most
-   OpenAI-compatible local servers do not; Ollama's `/api/show` reports
-   some model metadata that can inform `ContextWindowTokens`).
-3. Configuration override (`providers.<name>.capabilities.*` in YAML, for
-   servers that don't self-report and the user knows the answer).
-4. Bounded probe: on first use, a single low-cost request that would
-   reveal the capability (e.g. an empty-tools-array request), cached for
-   the session — not repeated per turn.
-5. Model-name heuristics, **last resort only**, and confined to a single
-   lookup table/function, not scattered through orchestration code (this
-   preserves the one confirmed-good practice already in place:
-   `toolsRejectedError`'s reactive detection becomes a fallback path, not
-   the primary mechanism, once this exists).
+Configuration overrides use pointer booleans so omitted remains `unknown`
+while `false` remains an authoritative negative. The wrapper that applies
+them preserves provider shutdown and runtime-fingerprint behavior.
 
-## Migration note
+## Honest limits
 
-Adding fields to `Capabilities` with safe zero-value defaults
-(`SupportsNativeTools: false` etc. until proven otherwise) is additive and
-does not require a config migration. `DefaultCapabilities()` should remain
-conservative. No existing provider behavior changes until a provider
-package is updated to populate the new fields — this can land as an
-independent slice (master-prompt §11, slice 1) ahead of the progress-ledger
-work, since it is lower-risk and unblocks nothing else on the critical path
-to fixing the reported failure mode.
-
-This is explicitly **not** on the critical path for the reported
-repeated-tool-call bug (`v1-audit.md` §4.1-4.2 are the causal chain); it is
-tracked here because the master prompt requires a capability-matrix
-investigator workstream, and because a declared `SupportsNativeTools` flag
-will let the progress ledger's fingerprinting logic treat native vs.
-fenced-fallback tool calls uniformly without re-deriving that distinction
-itself.
+- “Parallel tool calls” means the backend/model may emit multiple calls in
+  one turn. llmtui intentionally executes the resulting batch sequentially
+  and in order, including mixed MCP/native batches.
+- `StructuredOutput` remains unknown unless explicitly configured because
+  `ChatRequest` does not yet expose a strict response-schema contract.
+- Ollama and generic OpenAI-compatible model advertisements are not
+  consistently available across server versions. llmtui therefore does not
+  add a speculative network probe or model-name heuristic; config and the
+  bounded real-request fallback cover those servers safely.
+- Live compatibility still requires the manual matrix in
+  `v1-test-matrix.md`; deterministic tests cannot prove a particular local
+  server/model installation.

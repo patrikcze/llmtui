@@ -24,6 +24,23 @@ func TestProgressFingerprintNormalizesIncidentalDifferences(t *testing.T) {
 	if a == e {
 		t.Fatal("distinct queries collided to the same fingerprint")
 	}
+
+	upperPath := progressFingerprint(tools.Call{Tool: tools.ToolWebFetch, Path: "https://example.com/Case"})
+	lowerPath := progressFingerprint(tools.Call{Tool: tools.ToolWebFetch, Path: "https://example.com/case"})
+	if upperPath == lowerPath {
+		t.Fatal("case-sensitive URL paths collapsed to one fingerprint")
+	}
+
+	upperCommand := progressFingerprint(tools.Call{Tool: tools.ToolRunCommand, Body: "cat README.md"})
+	lowerCommand := progressFingerprint(tools.Call{Tool: tools.ToolRunCommand, Body: "cat readme.md"})
+	if upperCommand == lowerCommand {
+		t.Fatal("case-sensitive command arguments collapsed to one fingerprint")
+	}
+	spacedCommand := progressFingerprint(tools.Call{Tool: tools.ToolRunCommand, Body: `printf '%s' "a  b"`})
+	compactCommand := progressFingerprint(tools.Call{Tool: tools.ToolRunCommand, Body: `printf '%s' "a b"`})
+	if spacedCommand == compactCommand {
+		t.Fatal("semantically significant quoted command whitespace collapsed")
+	}
 }
 
 func TestProgressLedgerBlocksOnlyAfterThreshold(t *testing.T) {
@@ -75,13 +92,67 @@ func TestProgressLedgerMixedBatchIsNotBlocked(t *testing.T) {
 	fresh := tools.Call{Tool: tools.ToolWebFetch, Path: "https://meteoblue.example/forecast"}
 	l.observeResults([]tools.Result{{Call: stuck, Output: "same result"}})
 
-	// stuck alone is over the threshold (threshold=1), but paired with a
-	// call the ledger has never seen, the batch must not be blocked — a
-	// stuck call travelling alongside a genuinely new one is not yet
-	// evidence the whole batch is a no-progress loop.
-	blocked, _, _ := l.blockBatch([]tools.Call{stuck, fresh})
-	if blocked {
-		t.Fatal("mixed batch (one stuck, one fresh) was blocked; only all-stuck batches should block")
+	plan, terminal := l.planBatch([]tools.Call{stuck, fresh})
+	if terminal {
+		t.Fatal("mixed batch must not terminate while one call can produce fresh evidence")
+	}
+	if plan.blockedCount() != 1 {
+		t.Fatalf("blocked calls = %d, want only the stuck call blocked", plan.blockedCount())
+	}
+	runnable := plan.runnableCalls()
+	if len(runnable) != 1 || progressFingerprint(runnable[0]) != progressFingerprint(fresh) {
+		t.Fatalf("runnable calls = %+v, want only the fresh call", runnable)
+	}
+}
+
+func TestProgressFingerprintIncludesStateChangingArguments(t *testing.T) {
+	writeA := progressFingerprint(tools.Call{Tool: tools.ToolWriteFile, Path: "same.txt", Body: "alpha"})
+	writeB := progressFingerprint(tools.Call{Tool: tools.ToolWriteFile, Path: "same.txt", Body: "bravo"})
+	if writeA == writeB {
+		t.Fatal("different write_file content collapsed to one fingerprint")
+	}
+
+	searchA := progressFingerprint(tools.Call{Tool: tools.ToolWebSearch, Body: "weather", Max: 2})
+	searchB := progressFingerprint(tools.Call{Tool: tools.ToolWebSearch, Body: "weather", Max: 8})
+	if searchA == searchB {
+		t.Fatal("different web_search max_results collapsed to one fingerprint")
+	}
+
+	mcpA := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"name":"CaseSensitive","page":1}`})
+	mcpB := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"page":1,"name":"CaseSensitive"}`})
+	if mcpA != mcpB {
+		t.Fatal("semantically identical MCP JSON arguments did not canonicalize")
+	}
+	mcpC := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"name":"casesensitive","page":1}`})
+	if mcpA == mcpC {
+		t.Fatal("case-sensitive MCP argument values were incorrectly collapsed")
+	}
+	mcpInvalidA := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"page":1} trailing`})
+	mcpInvalidB := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"page":1}`})
+	if mcpInvalidA == mcpInvalidB {
+		t.Fatal("invalid trailing MCP argument data was silently discarded")
+	}
+	invalidA := progressFingerprint(tools.Call{Tool: tools.ToolReadFile, InputErr: "invalid path field"})
+	invalidB := progressFingerprint(tools.Call{Tool: tools.ToolReadFile, InputErr: "path must be a string"})
+	if invalidA == invalidB {
+		t.Fatal("distinct malformed calls collapsed to one fingerprint")
+	}
+}
+
+func TestBlockedSyntheticResultDoesNotResetFingerprint(t *testing.T) {
+	l := newProgressLedger(1)
+	stuck := tools.Call{ID: "stuck", Tool: tools.ToolWebSearch, Body: "weather"}
+	fresh := tools.Call{ID: "fresh", Tool: tools.ToolListDir}
+	l.observeResults([]tools.Result{{Call: stuck, Output: "unchanged"}})
+
+	plan, _ := l.planBatch([]tools.Call{stuck, fresh})
+	merged, observed := plan.mergeResults([]tools.Result{{Call: fresh, Output: "README.md"}})
+	if len(merged) != 2 || merged[0].Err == nil || len(observed) != 1 {
+		t.Fatalf("merged=%+v observed=%+v", merged, observed)
+	}
+	l.observeResults(observed)
+	if !l.wouldBlock(progressFingerprint(stuck)) {
+		t.Fatal("synthetic blocked result reset the stuck fingerprint")
 	}
 }
 

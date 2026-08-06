@@ -6,6 +6,13 @@ of a vague "add more tests" instruction. Existing test names are cited
 directly (verified via `grep -n "^func Test"` against the actual test
 files, not reconstructed from memory).
 
+> **Final-slice update:** the ordinary/agent repeated-call fixtures,
+> legitimate-changing-evidence counter-fixture, live tool-budget fixture,
+> truncation-before-execution fixtures, mixed-batch filtering tests, provider
+> capability tests, structural framing tests, and RAG secret/index migration
+> tests now exist and pass. Rows below retain unrelated baseline gaps so the
+> document remains an honest release checklist.
+
 ## 9.1 State-machine / unit tests
 
 | Required case | Existing coverage | Status |
@@ -24,15 +31,15 @@ files, not reconstructed from memory).
 | Stale stream event | `TestStaleStreamEventIsDropped`, `TestStaleFirstStreamMsgNotAdopted` | Covered |
 | Stale tool completion | `TestMCPStaleResultsDroppedAfterPlainEsc`, `TestMCPStaleBatchDoesNotClobberResendBatch` | Covered |
 | Provider disconnect | covered at provider-package level (streaming parser tests), not re-verified in this pass | Needs confirmation |
-| Truncated tool call | agent-mode: covered by truncation-signal work (`ErrorTruncated`, commits `c5766af`…`0458b5f`). **Ordinary tool loop: not covered — the path doesn't consult `ChatEvent.Truncated` at all (`v1-audit.md` §2, `v1-agent-runtime.md` §2).** | **Gap (ordinary mode)** |
+| Truncated tool call | `TestTruncatedNativeToolCallIsNotExecuted`, `TestVerifiedAgentTruncatedToolCallIsNotExecuted` | Covered in ordinary and agent modes |
 | Context exhaustion | `contextmgr` package tests (not re-enumerated here) | Covered at package level |
 | Maximum turns | `TestIterationCapAsksUserToContinue`, `TestIterationCapDeclineAsksModelToWrapUp` | Covered |
 | Maximum cycles | `TestCancellationTimeoutAndMaximumCycle` | Covered |
-| Maximum tool calls | `TestBudgetsAndPermissionDenial` — but only exercises the cycle-boundary check, not the confirmed live-enforcement gap (`v1-audit.md` §4.2) | **Gap: no test for the live-enforcement defect itself** |
-| Token budget | `TestTokenBudgetEnforcement` — same caveat as above | **Gap: same** |
+| Maximum tool calls | `TestBudgetsAndPermissionDenial`, `TestVerifiedAgentLiveToolBudgetStopsExecutionBeforeCycleBoundary`, rollback-toggle fixture | Covered at cycle boundary and live |
+| Token budget | `TestTokenBudgetEnforcement`; live check shares the tested pre-execution gate | Covered |
 | Elapsed-time budget | covered via `resetAgentContext`'s live timeout; explicit test not confirmed by name in this pass | Needs confirmation |
-| No progress | none | **Gap — does not exist** (`v1-audit.md` §8) |
-| Repeated-call loop | `TestRepeatedFailureStopsAtBound` covers *verifier-failure* repetition, not *tool-call* repetition | **Gap — tool-call-level repetition untested** |
+| No progress | ordinary/agent bounded-loop fixtures plus terminal result-correlation tests in `toolloop_progress_test.go` | Covered |
+| Repeated-call loop | `TestRepeatedWebSearchFetchLoopIsBoundedInOrdinaryToolMode`, agent variant, and legitimate-changing-evidence counter-fixture | Covered |
 | Verifier malformed output | `TestMalformedControlOutput` | Covered |
 | Verifier contradiction with deterministic evidence | `TestDeterministicFailureOverridesOptimisticModel`, `TestDeterministicFailureOverridesTruncatedExecutorReply` | Covered |
 | Resume after input | `TestResumeStartsFreshCycleWithoutReplayingWork` | Covered |
@@ -42,33 +49,24 @@ files, not reconstructed from memory).
 
 ## 9.2 Regression scenario for the reported failure (master-prompt §9.2)
 
-**Does not exist.** This is the single most important item in this matrix
-— per master-prompt's operating principle §3.1 and §2, it must be written
-**before** the progress-ledger/live-budget implementation lands, not after.
-Required fixture, built against the **ordinary (non-agent) tool loop
-first** (`v1-agent-runtime.md` §6):
+**Implemented.** `internal/tui/toolloop_progress_test.go` contains the
+ordinary-mode fixture first, the `/agent on` variant, and the legitimate
+changing-evidence counter-fixture. Together they prove:
 
-1. Fake/mock provider (`internal/provider/mock` already exists as a test
-   double package) scripted to: request weather for Brno-Bystrc, call
+1. A scripted provider requests weather for Brno-Bystrc, calls
    `web_search`, fetch a result, then repeat the same search and fetch with
    only minor query variation, with materially unchanged tool output each
    time.
-2. Assert: duplicate/no-progress detection activates within a small bounded
+2. Duplicate/no-progress detection activates within a small bounded
    call count; identical search/fetch calls are not executed indefinitely;
    the model receives structured feedback (a `tools.Result` shaped block,
    not a silent drop); the run either changes strategy and produces a final
    answer, or terminates with a clear `no_progress` outcome; token/tool-call
    totals stay far below the global maximum; cancellation still works;
    the trace/notice clearly explains the decision.
-3. A second fixture must assert a **legitimate** polling/freshness scenario
-   is *not* blocked (master-prompt §9.2, "also test a legitimate polling or
-   freshness scenario") — e.g. a tool call whose result digest changes each
-   time, or one explicitly marked freshness-required, must not trip the
-   ledger.
-4. A third fixture should repeat scenario 1 inside `/agent on` mode, to
-   confirm the live budget check (`v1-agent-runtime.md` §4) actually stops
-   a tool-call spree before a cycle boundary, closing the specific gap
-   re-verified in `v1-audit.md` §4.2.
+3. A repeated search whose result changes each time is not blocked.
+4. The same stuck scenario inside `/agent on` terminates with the dedicated
+   `no_progress` outcome.
 
 ## 9.3 Provider conformance fixtures
 
@@ -94,31 +92,35 @@ itself).
 
 ## 9.5 TUI tests
 
-Not audited in this pass — `internal/tui/components` has its own test
-package (passes at baseline) but was not cross-checked against every UI
-scenario master-prompt §9.5 lists. Recommended as a follow-up once the
-progress-ledger TUI notice (`v1-agent-runtime.md` §3, "Repeated tool call
-blocked: no new evidence") is implemented, since that notice itself needs
-a rendering test.
+Not exhaustively audited in this pass — `internal/tui/components` has its own
+test package and the progress-ledger notice/controller behavior is covered,
+but every visual scenario in master-prompt §9.5 was not cross-checked. A
+dedicated rendered-notice test remains useful follow-up breadth work.
 
 ## 9.6 Manual compatibility matrix
 
-Not performed in this pass — requires live provider instances
-(Ollama/LM Studio/etc.) that are not available in this environment.
-Tracked as an explicit open item for whoever has access to those backends
-before the v1.0.0 release gate (master-prompt §13 requires this
-explicitly and requires it be reported honestly, not assumed).
+Attempted on 2026-08-06. The deterministic provider fixtures pass, but no
+live backend was available, so the release-gate matrix remains explicitly
+open rather than being inferred from unit tests:
 
-## Priority order for implementation
+| Provider | Environment evidence | Manual result |
+| --- | --- | --- |
+| Ollama | CLI installed; `127.0.0.1:11434` not listening | Not run |
+| LM Studio | `127.0.0.1:1234` not listening | Not run |
+| Generic OpenAI-compatible | `127.0.0.1:8080` not listening | Not run |
+| Embedded GGUF | no `.gguf` fixture in the repository; `YZMA_LIB` unset | Not run |
 
-1. §9.2 regression fixture (ordinary-mode repeated-call scenario) — must
-   exist before any implementation change, per master-prompt §3.1/§2.
-2. §9.2 legitimate-repetition fixture — prevents the fix from being
-   overzealous.
-3. §9.1 gaps directly tied to the confirmed defects (`v1-audit.md` §4.1,
-   §4.2): no-progress, tool-call-level repeated-call, live budget
-   enforcement, ordinary-mode truncation handling.
-4. §9.2 agent-mode variant of the regression fixture.
+Run the prompt/stream/tool/reasoning checks against real instances before
+v1.0.0. This is the sole environment-dependent item in this matrix; it is
+not silently marked complete.
+
+## Original priority order for implementation
+
+1. ~~§9.2 ordinary-mode repeated-call regression fixture.~~ Done.
+2. ~~§9.2 legitimate-repetition fixture.~~ Done.
+3. ~~Direct confirmed defects: no-progress, tool-call-level repetition,
+   live budget enforcement, ordinary-mode truncation handling.~~ Done.
+4. ~~§9.2 agent-mode variant.~~ Done.
 5. Everything else in this matrix (§9.3-9.6) — genuine gaps, but not on the
    critical path to closing the reported failure mode, and should not
    block the v1 slices that do close it.
