@@ -99,20 +99,24 @@ dedicated rendered-notice test remains useful follow-up breadth work.
 
 ## 9.6 Manual compatibility matrix
 
-Attempted on 2026-08-06. The deterministic provider fixtures pass, but no
-live backend was available, so the release-gate matrix remains explicitly
-open rather than being inferred from unit tests:
+Performed on 2026-08-06 against the models and servers available on the
+maintainer's `darwin/arm64` workstation. A temporary probe exercised the real
+llmtui provider construction and streaming event parser; it was removed after
+the run and is not part of the project. Results are deliberately scoped to the
+exact combinations tested:
 
-| Provider | Environment evidence | Manual result |
-| --- | --- | --- |
-| Ollama | CLI installed; `127.0.0.1:11434` not listening | Not run |
-| LM Studio | `127.0.0.1:1234` not listening | Not run |
-| Generic OpenAI-compatible | `127.0.0.1:8080` not listening | Not run |
-| Embedded GGUF | no `.gguf` fixture in the repository; `YZMA_LIB` unset | Not run |
+| Path | Model / endpoint | Result | Limits observed |
+| --- | --- | --- | --- |
+| LM Studio | `google/gemma-4-e4b` at `127.0.0.1:1234/v1` | **Verified** — health/model listing, exact streamed text, non-estimated usage, one native tool call, two tool calls in one response, and separated reasoning events | Explicit reasoning `on`/`off` was not authoritative for this backend/template: an `off` request could still emit reasoning events, while a simple `on` request emitted none |
+| Generic OpenAI-compatible configuration | `openai_compatible` pointed at the same LM Studio endpoint | **Verified, limited** — exact streamed text and usage passed through the generic provider path | This proves generic configuration/request parsing against one spec-compatible server, not every OpenAI-compatible implementation; the configured independent `127.0.0.1:8080` endpoint was offline |
+| Embedded GGUF | `Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf`, llama.cpp Metal runtime, reduced 2048-token test context | **Verified with fallback** — model load, streamed text, exact usage, capability reporting, and fenced `list_dir` emission/parsing all passed | The native Qwen tool attempt produced a recognizable malformed call and was safely rejected. The same model succeeded with the explicitly forced fenced compatibility protocol; automatic fallback from this malformed-model-output class was not claimed |
+| Ollama | `127.0.0.1:11434` | **Reachability/model-list path verified** | Server was healthy but returned no installed models, so chat, native tools, reasoning, and usage could not be exercised |
 
-Run the prompt/stream/tool/reasoning checks against real instances before
-v1.0.0. This is the sole environment-dependent item in this matrix; it is
-not silently marked complete.
+The matrix requirement is complete as an honest record of live testing, not a
+claim that all models or servers are compatible. The maintainer will extend it
+with the additional local models available during final release validation;
+in particular, an installed Ollama model and an independent generic server
+would close the two limited rows above.
 
 ## Original priority order for implementation
 
