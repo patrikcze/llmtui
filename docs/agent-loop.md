@@ -80,6 +80,13 @@ immediately as `budget_exhausted`, with a structured tool result recorded so
 the transcript stays consistent, rather than rejecting the call and asking
 the model to try again. Approval denial is deterministic evidence and stops
 with `needs_user_input`; the verifier cannot turn it into success.
+Set `agent.enforce_budgets_live: false` to fall back to checking these
+budgets only when a cycle completes, if live enforcement produces an
+unexpected early stop.
+
+A tool call cut off by `max_tokens` is never executed, in agent mode or
+ordinary chat — see [Local-model behavior](#local-model-behavior) below for
+how truncation is otherwise handled as deterministic evidence.
 
 ## Repeated tool calls and no-progress detection
 
@@ -100,7 +107,14 @@ resets the streak for that fingerprint. This mechanism applies identically
 to ordinary tool-enabled chat and to `/agent on` — it lives in the shared
 request/tool-execution path both use, not in the agent state machine — so
 a stuck pattern is caught the same way whether or not agent mode is
-active.
+active. A run stopped this way inside `/agent on` reports status
+`no_progress`, distinct from `failed` (a verifier rejection) or
+`budget_exhausted` (a hard limit).
+
+Set `tools.no_progress.enabled: false` to disable this detection entirely,
+or raise `tools.no_progress.threshold` (default `3`) if it blocks a
+legitimate pattern this fingerprinting doesn't yet recognize as
+progressing.
 
 ## Verification
 
@@ -196,14 +210,18 @@ verification for deterministic-only conversational checks, or return to
 ordinary chat with `/agent off`.
 
 A response cut off by `max_tokens` (the backend's `finish_reason`/`done_reason`
-equals `"length"`) is never accepted as a normal completion. This matters most
-for a `write_file` tool call rewriting a large file: if the backend's own
-tool-call grammar can't close in the remaining budget, it falls back to
-emitting the partial call as plain, often broken, text. That turn is recorded
-as deterministic evidence (`ErrorTruncated`) and forces a retryable failure
-regardless of what the verifier's own read of the text concludes — raise
-`chat.max_tokens` (and `agent.verifier.max_tokens`, if the verifier itself gets
-cut off mid-JSON) for models or tasks that rewrite large files.
+equals `"length"`) is never accepted as a normal completion, and a tool call
+truncated mid-arguments is never executed — this applies in ordinary
+tool-enabled chat too, not only inside a verified run. This matters most for
+a `write_file` tool call rewriting a large file: if the backend's own
+tool-call grammar can't close in the remaining budget, it usually falls back
+to emitting the partial call as plain, often broken, text instead of a
+structured tool call, but either shape is rejected before anything runs. In
+agent mode, that turn is also recorded as deterministic evidence
+(`ErrorTruncated`) and forces a retryable failure regardless of what the
+verifier's own read of the text concludes — raise `chat.max_tokens` (and
+`agent.verifier.max_tokens`, if the verifier itself gets cut off mid-JSON)
+for models or tasks that rewrite large files.
 
 Repeated verifier-protocol failures on the *same* underlying objective are
 deduplicated by a stable retry instruction rather than a growing one, so

@@ -304,7 +304,7 @@ func New(opts Options) *Model {
 		toolsAutoApprove: cfg.Tools.Approve == "auto",
 		toolsNative:      cfg.Tools.Native != "off",
 
-		progress: newProgressLedger(0),
+		progress: newProgressLedger(cfg.Tools.NoProgress.Threshold),
 	}
 	m.rebuildFromConfig()
 	if opts.ResumeSession != nil {
@@ -823,7 +823,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.recordAgentToolResults(msg.results, false)
-		m.progress.observeResults(msg.results)
+		if m.cfg.Tools.NoProgress.Enabled {
+			m.progress.observeResults(msg.results)
+		}
 		m.notice = fmt.Sprintf("⚒ ran %d tool call(s) — round %d/%d", len(msg.results), m.toolDepth, m.toolMaxIter())
 		return m, m.sendToolResults(msg.results)
 
@@ -996,10 +998,10 @@ func (m *Model) send() tea.Cmd {
 			// still recognized after it (docs/architecture/v1-agent-runtime.md §3).
 			return m.resumeVerifiedRunWithInput(text, images)
 		}
-		m.progress = newProgressLedger(0)
+		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
 		return m.startVerifiedRun(text, images)
 	}
-	m.progress = newProgressLedger(0)
+	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
 	return m.dispatch(text, images)
 }
 
@@ -1050,8 +1052,10 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if exceeded, reason := m.agentHardBudgetExceeded(len(calls)); exceeded {
 		return m.terminateAgentBudget(calls, reason)
 	}
-	if blocked, terminal, reason := m.progress.blockBatch(calls); blocked {
-		return m.handleBlockedProgress(calls, reason, terminal)
+	if m.cfg.Tools.NoProgress.Enabled {
+		if blocked, terminal, reason := m.progress.blockBatch(calls); blocked {
+			return m.handleBlockedProgress(calls, reason, terminal)
+		}
 	}
 	if m.toolDepth >= m.toolMaxIter() {
 		// A pending approval must own the next keypress and be visibly on
@@ -1150,7 +1154,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	}
 	if m.agentRunActive() {
 		run := m.agentLoop.run
-		_ = run.Terminate(agent.DecisionFailed, "no_progress: "+reason, time.Now())
+		_ = run.Terminate(agent.DecisionNoProgress, reason, time.Now())
 		m.notice = fmt.Sprintf("agent %s · no_progress: %s", shortRunID(run.ID), reason)
 		m.endAgentRun()
 		m.refreshViewport()
@@ -1337,7 +1341,7 @@ func (m *Model) retryLast() tea.Cmd {
 		}
 	}
 	m.toolDepth = 0 // a retry is a fresh turn and gets a fresh tool budget
-	m.progress = newProgressLedger(0)
+	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
 	m.notice = "retrying last message"
 	m.sentCount++
 	return m.dispatch(m.lastUserMsg, m.lastImages)
@@ -1713,6 +1717,15 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
 		emptyToolContinuation := m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
+		// A tool call truncated by max_tokens must never be executed: the
+		// backend's own grammar usually can't emit a structured ToolCalls
+		// entry from incomplete JSON, so this mainly guards a backend that
+		// reports finish_reason=length while still returning what looks
+		// like a complete call — treat it as untrustworthy either way
+		// (docs/architecture/v1-agent-runtime.md §2). This previously only
+		// applied inside /agent on (via recordAgentTruncation feeding the
+		// verifier); the ordinary tool loop had no equivalent check at all.
+		truncatedToolCall := msg.event.Truncated && len(msg.event.ToolCalls) > 0
 		// Backfill IDs a backend omitted (Ollama never sends any) before the
 		// calls are stored on the assistant message, so the stored message and
 		// the tool results always carry the same IDs.
@@ -1725,6 +1738,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		if emptyToolContinuation {
 			m.errText = "Model returned an empty completion after tool execution."
+			m.failVerifiedRun(errors.New(m.errText))
+			m.endAgentRun()
+			m.refreshViewport()
+			return m, m.persistAgentRun()
+		}
+		if truncatedToolCall {
+			m.errText = "Model's tool call was cut off by max_tokens before completing; it was not executed. Raise chat.max_tokens (and agent.verifier.max_tokens if applicable) or shorten the request."
 			m.failVerifiedRun(errors.New(m.errText))
 			m.endAgentRun()
 			m.refreshViewport()

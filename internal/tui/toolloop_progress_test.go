@@ -149,11 +149,10 @@ func TestRepeatedWebSearchFetchLoopIsBoundedInAgentMode(t *testing.T) {
 	if stub.searchCalls >= 4 || stub.fetchCalls >= 4 {
 		t.Errorf("searchCalls=%d fetchCalls=%d, want both capped below the round count", stub.searchCalls, stub.fetchCalls)
 	}
-	if m.agentLoop.run.Status == agent.DecisionDone {
-		t.Fatal("run should not report done: the executor never produced a final answer")
+	if m.agentLoop.run.Status != agent.DecisionNoProgress {
+		t.Fatalf("run status = %q, want %q", m.agentLoop.run.Status, agent.DecisionNoProgress)
 	}
-	if !strings.Contains(strings.ToLower(m.agentLoop.run.StopReason), "no_progress") &&
-		!strings.Contains(strings.ToLower(m.agentLoop.run.StopReason), "blocked") {
+	if !strings.Contains(strings.ToLower(m.agentLoop.run.StopReason), "blocked") {
 		t.Errorf("stop reason = %q, want it to reflect the no-progress block", m.agentLoop.run.StopReason)
 	}
 	if len(prov.requests) >= rounds {
@@ -213,5 +212,45 @@ func TestLegitimateRepeatedWebSearchIsNotBlocked(t *testing.T) {
 	}
 	if m.errText != "" {
 		t.Errorf("errText = %q, want empty: legitimate repetition must not be reported as a block", m.errText)
+	}
+}
+
+// TestNoProgressDetectionCanBeDisabledViaConfig proves tools.no_progress.enabled
+// actually reverts to pass-through behavior, per the rollback story in
+// docs/architecture/v1-migration-plan.md: the same stuck scenario that
+// TestRepeatedWebSearchFetchLoopIsBoundedInOrdinaryToolMode proves gets
+// blocked must run to completion unblocked once the toggle is off.
+func TestNoProgressDetectionCanBeDisabledViaConfig(t *testing.T) {
+	const rounds = 8
+	steps := make([]agentScriptStep, 0, rounds+1)
+	for i := 1; i <= rounds; i++ {
+		steps = append(steps, agentScriptStep{toolCalls: []provider.ToolCall{weatherToolCall(i)}})
+	}
+	steps = append(steps, agentScriptStep{text: "Consistently 18C, partly cloudy."})
+	m, _ := configureAgentTestModel(t, steps...)
+	m.agentOn = false
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.cfg.Tools.NoProgress.Enabled = false
+	stub := &scriptedWeb{
+		searchResults: [][]web.SearchResult{{
+			{Title: "Meteoblue — Brno-Bystrc", URL: "https://meteoblue.example/forecast/brno-bystrc", Snippet: "7-day forecast"},
+		}},
+		fetchPages: []web.Page{{URL: "https://meteoblue.example/forecast/brno-bystrc", Status: 200, Content: "Brno-Bystrc: 18C, partly cloudy"}},
+	}
+	m.toolRunner.Web = stub
+	m.toolRunner.WebMaxResults = 5
+	m.webOn = true
+
+	driveAgentCommands(t, m, m.dispatch("what's the detailed weather forecast for Brno-Bystrc right now?", nil))
+
+	wantSearch, wantFetch := (rounds+1)/2, rounds/2
+	if stub.searchCalls != wantSearch || stub.fetchCalls != wantFetch {
+		t.Errorf("searchCalls=%d fetchCalls=%d, want %d/%d (disabled — nothing should be blocked)", stub.searchCalls, stub.fetchCalls, wantSearch, wantFetch)
+	}
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty: no_progress is disabled", m.errText)
 	}
 }

@@ -119,6 +119,7 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
 | `verifier.max_tokens` | `1024` | Evaluator response cap; raise it if the verifier itself gets cut off mid-JSON on a slower/weaker model |
 | `verifier.timeout` | `120s` | Whole evaluator-request deadline |
+| `enforce_budgets_live` | `true` | Check `max_tool_calls`/`max_tokens` on every tool round using the run's true running totals, not only when a cycle completes. Set `false` to fall back to the cycle-boundary-only check if this causes an unexpected early stop — see [agent-loop.md](agent-loop.md#stop-conditions-and-budgets) |
 
 ### `tools`
 
@@ -150,6 +151,19 @@ command line would be classified, and `/tools list` / `/tools inspect
 | `protect_secret_files` | `true` | Reject writes into key-material directories (`.ssh`, `.gnupg`) |
 | `protect_shell_startup_files` | `true` | Reject writes to shell startup files (`.bashrc`, `.zshrc`, `.profile`, `config.fish`, …) |
 | `require_approval_for_secret_reads` | `true` | `read_file` of likely secret files (`.env`, `*.pem`, `*.key`, `id_rsa`, …) asks first |
+
+### `tools.no_progress`
+
+Blocks a batch of tool calls when every call in it only repeats a prior
+call with no new evidence (an unchanged result), in both ordinary
+tool-enabled chat and `/agent on`. Legitimate repetition — polling,
+pagination, retries — never trips it, since any change in the result resets
+the count. See [agent-loop.md](agent-loop.md#repeated-tool-calls-and-no-progress-detection):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch. Set `false` to revert to pre-v1 pass-through behavior if this produces a false positive in practice |
+| `threshold` | `3` | Consecutive no-new-evidence repeats of the same call allowed before the next one is blocked |
 
 ### `tools.web`
 

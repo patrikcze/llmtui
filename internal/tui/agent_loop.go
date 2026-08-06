@@ -569,6 +569,14 @@ func (m *Model) agentHardBudgetExceeded(incoming int) (exceeded bool, reason str
 	if !m.agentRunActive() {
 		return false, ""
 	}
+	if !m.cfg.Agent.EnforceBudgetsLive {
+		// Reverted to the pre-v1 behavior: only agent.Decide() at the
+		// cycle boundary enforces these budgets. See
+		// docs/architecture/v1-audit.md §4.2 for why that alone can
+		// under-enforce, and docs/architecture/v1-migration-plan.md for
+		// when disabling this is an appropriate rollback.
+		return false, ""
+	}
 	run := m.agentLoop.run
 	if m.agentLoop.liveToolCalls+incoming > run.Limits.MaxToolCalls {
 		return true, fmt.Sprintf("agent tool-call budget exhausted (maximum %d)", run.Limits.MaxToolCalls)

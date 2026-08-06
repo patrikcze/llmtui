@@ -183,6 +183,12 @@ type AgentConfig struct {
 	MaxMemoryKB         int                 `mapstructure:"max_memory_kb" yaml:"max_memory_kb"`
 	MaxRuns             int                 `mapstructure:"max_runs" yaml:"max_runs"`
 	Verifier            AgentVerifierConfig `mapstructure:"verifier" yaml:"verifier"`
+	// EnforceBudgetsLive checks max_tool_calls/max_tokens on every tool
+	// round using the run's true running totals, not only when a cycle
+	// completes (see docs/architecture/v1-audit.md §4.2). Defaults on; set
+	// false to fall back to the pre-v1 cycle-boundary-only check if this
+	// causes an unexpected early stop.
+	EnforceBudgetsLive bool `mapstructure:"enforce_budgets_live" yaml:"enforce_budgets_live"`
 }
 
 // AgentVerifierConfig bounds the independent evaluator request. Model is an
@@ -215,6 +221,25 @@ type ToolsConfig struct {
 	// Guardrails hardens the workspace tools (write blocks, command
 	// classification, secret-read approval). All protections default on.
 	Guardrails GuardrailsConfig `mapstructure:"guardrails" yaml:"guardrails"`
+	// NoProgress configures repeated-tool-call/no-progress detection (see
+	// docs/architecture/v1-agent-runtime.md §3). Applies to both ordinary
+	// tool-enabled chat and /agent on, since both share the same
+	// tool-execution kernel.
+	NoProgress NoProgressConfig `mapstructure:"no_progress" yaml:"no_progress"`
+}
+
+// NoProgressConfig toggles and tunes the progress ledger that blocks a
+// batch of tool calls when every call in it only repeats a prior call with
+// no new evidence (an unchanged result). Defaults on; set enabled: false
+// to revert to the pre-v1 pass-through behavior if it produces a false
+// positive in practice — legitimate repetition (polling, pagination,
+// retries) is designed to never trip it, but Threshold can also be raised
+// instead of disabling the protection outright.
+type NoProgressConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Threshold is how many consecutive no-new-evidence repeats of the
+	// same call are allowed before the next one is blocked.
+	Threshold int `mapstructure:"threshold" yaml:"threshold"`
 }
 
 // GuardrailsConfig toggles the workspace-tool protections. Every field
@@ -663,6 +688,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.model", "")
 	v.SetDefault("agent.verifier.max_tokens", 1024)
 	v.SetDefault("agent.verifier.timeout", "120s")
+	v.SetDefault("agent.enforce_budgets_live", true)
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -679,6 +705,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.guardrails.protect_secret_files", true)
 	v.SetDefault("tools.guardrails.protect_shell_startup_files", true)
 	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
+	v.SetDefault("tools.no_progress.enabled", true)
+	v.SetDefault("tools.no_progress.threshold", 3)
 
 	v.SetDefault("skills.enabled", true)
 	v.SetDefault("skills.expose_catalog_to_model", true)
@@ -825,6 +853,10 @@ agent:
   path: "~/.local/share/llmtui/agent-runs"
   max_memory_kb: 64
   max_runs: 32
+  # Checks max_tool_calls/max_tokens on every tool round, not only when a
+  # cycle completes. Set false to fall back to the cycle-boundary-only
+  # check if this causes an unexpected early stop.
+  enforce_budgets_live: true
   verifier:
     enabled: true
     model: "" # empty uses the active executor model in a fresh context
@@ -864,6 +896,14 @@ tools:
     protect_secret_files: true # reject writes into .ssh, .gnupg
     protect_shell_startup_files: true # reject writes to .bashrc, .zshrc, config.fish, …
     require_approval_for_secret_reads: true # read_file of .env, *.pem, id_rsa, … asks first
+  # Blocks a batch of tool calls when every call in it only repeats a
+  # prior call with no new evidence (an unchanged result) — applies to
+  # both ordinary tool chat and /agent on. Legitimate repetition (polling,
+  # pagination, retries) never trips it, since any change in the result
+  # resets the count. Set enabled: false to revert to pre-v1 behavior.
+  no_progress:
+    enabled: true
+    threshold: 3 # consecutive no-new-evidence repeats allowed before blocking
 
 # Skills: declarative task-instruction packages (SKILL.md files with YAML
 # front matter) discovered from <user-config>/llmtui/skills/<id>/ and

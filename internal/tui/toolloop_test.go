@@ -346,6 +346,39 @@ func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
 	}
 }
 
+// TestTruncatedNativeToolCallIsNotExecuted guards the fix for
+// docs/architecture/v1-agent-runtime.md §2: a tool call truncated by
+// max_tokens must never be executed, in ordinary tool chat just as much as
+// in /agent on. Before this fix, only /agent on recorded truncation as
+// evidence (and only for its own verifier, after the fact) — the ordinary
+// tool loop had no check at all and would have run the call.
+func TestTruncatedNativeToolCallIsNotExecuted(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.thinking = true
+
+	done := provider.ChatEvent{Type: provider.EventDone, Truncated: true, ToolCalls: []provider.ToolCall{
+		{ID: "call_1", Name: "write_file", Arguments: `{"path":"out.txt","content":"truncated conte`},
+	}}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+
+	if cmd != nil {
+		t.Fatal("a truncated tool call must not start execution")
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); err == nil {
+		t.Fatal("truncated write_file call must not have executed")
+	}
+	if m.errText == "" || !strings.Contains(m.errText, "cut off") {
+		t.Errorf("errText = %q, want an explanation that the call was cut off", m.errText)
+	}
+	if m.toolOK != 0 {
+		t.Errorf("toolOK = %d, want 0: nothing should have run", m.toolOK)
+	}
+}
+
 func TestEmptyCompletionBeforeToolExecutionRemainsClean(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true

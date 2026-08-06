@@ -133,6 +133,12 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if cfg.Agent.MaxElapsed != "30m" || !cfg.Agent.Persist || !cfg.Agent.Verifier.Enabled {
 		t.Fatalf("agent defaults = %+v", cfg.Agent)
 	}
+	if !cfg.Agent.EnforceBudgetsLive {
+		t.Fatal("agent.enforce_budgets_live must default on — see docs/architecture/v1-audit.md §4.2")
+	}
+	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
+		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
+	}
 }
 
 func TestFlagOverridesEnv(t *testing.T) {
