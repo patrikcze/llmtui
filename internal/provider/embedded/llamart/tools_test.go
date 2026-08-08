@@ -154,10 +154,21 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 		}
 	})
 	t.Run("invalid typed argument", func(t *testing.T) {
+		// An argument that fails schema type-checking must not abort the
+		// whole generation: the call is still returned, carrying the
+		// problem in ArgumentsError so it reaches the model as a normal
+		// tool error result and it can retry with a corrected argument.
 		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
 		router.Push(`<tool_call>{"name":"weather","arguments":{"days":"many"}}</tool_call>`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), "expected a JSON number") {
+		_, calls, err := router.Finish()
+		if err != nil {
 			t.Fatalf("Finish error = %v", err)
+		}
+		if len(calls) != 1 || calls[0].Name != "weather" || calls[0].Arguments != "" {
+			t.Fatalf("calls = %+v", calls)
+		}
+		if !strings.Contains(calls[0].ArgumentsError, "expected a JSON number") {
+			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
 }
@@ -182,12 +193,22 @@ func TestToolOutputRouterGemmaZeroArgumentCallsHonorSchema(t *testing.T) {
 	})
 
 	t.Run("required argument omitted", func(t *testing.T) {
+		// Same principle as the invalid-argument case: a missing required
+		// argument is a model mistake it can fix on retry, not a reason to
+		// abort the generation outright.
 		required := weatherToolSpec()
 		required.Parameters = []byte(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`)
 		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{required})
 		router.Push(`<|tool_call>call:weather{}<tool_call|>`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), `missing required argument "city"`) {
+		_, calls, err := router.Finish()
+		if err != nil {
 			t.Fatalf("Finish error = %v", err)
+		}
+		if len(calls) != 1 || calls[0].Name != "weather" {
+			t.Fatalf("calls = %+v", calls)
+		}
+		if !strings.Contains(calls[0].ArgumentsError, `missing required argument "city"`) {
+			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
 }

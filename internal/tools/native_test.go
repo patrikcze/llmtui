@@ -72,6 +72,16 @@ func TestCallsFromNative(t *testing.T) {
 			in:   provider.ToolCall{ID: "c5", Name: "delete_everything", Arguments: `{}`},
 			want: Call{ID: "c5", Tool: "delete_everything"},
 		},
+		{
+			// The embedded runtime flags a call this way when it can't type-check
+			// an argument against the tool's schema (e.g. a non-numeric
+			// max_results). It must produce a runnable Call carrying InputErr,
+			// not be dropped, so the mistake reaches the model as a normal tool
+			// error result instead of the whole turn failing.
+			name: "provider-flagged argument error produces InputErr",
+			in:   provider.ToolCall{ID: "c6", Name: ToolWebSearch, ArgumentsError: `argument "max_results" is invalid: expected a JSON number`},
+			want: Call{ID: "c6", Tool: ToolWebSearch, InputErr: `argument "max_results" is invalid: expected a JSON number`},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,6 +265,15 @@ func TestCallsFromNativeMCP(t *testing.T) {
 			name: "name without the mcp__ prefix is not treated as an MCP call",
 			in:   provider.ToolCall{ID: "c4", Name: "session_start", Arguments: `{}`},
 			want: Call{ID: "c4", Tool: "session_start"},
+		},
+		{
+			// ArgumentsError must win over MCP-name splitting: an MCP-shaped
+			// tool call the embedded runtime already flagged as invalid must
+			// carry InputErr, not fall through to a live MCP dispatch with
+			// arguments the runtime never validated.
+			name: "provider-flagged argument error wins over mcp routing",
+			in:   provider.ToolCall{ID: "c5", Name: "mcp__jiraWorklog__session_start", ArgumentsError: `argument "issue_key" is invalid: expected a JSON string`},
+			want: Call{ID: "c5", Tool: "mcp__jiraWorklog__session_start", InputErr: `argument "issue_key" is invalid: expected a JSON string`},
 		},
 	}
 	for _, tc := range tests {

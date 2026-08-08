@@ -321,15 +321,25 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		if missing, err := missingRequiredArgument(schema, call.Function.Arguments); err != nil {
 			return nil, fmt.Errorf("tool %q parameters are invalid: %w", name, err)
 		} else if missing != "" {
-			return nil, fmt.Errorf("tool %q call is missing required argument %q", name, missing)
+			result = append(result, provider.ToolCall{
+				Name:           name,
+				ArgumentsError: fmt.Sprintf("call is missing required argument %q", missing),
+			})
+			continue
 		}
 		arguments := make(map[string]any, len(call.Function.Arguments))
+		var argErr error
 		for key, raw := range call.Function.Arguments {
 			value, err := normalizeArgument(raw, propertySchema(schema, key))
 			if err != nil {
-				return nil, fmt.Errorf("tool %q argument %q is invalid: %w", name, key, err)
+				argErr = fmt.Errorf("argument %q is invalid: %w", key, err)
+				break
 			}
 			arguments[key] = value
+		}
+		if argErr != nil {
+			result = append(result, provider.ToolCall{Name: name, ArgumentsError: argErr.Error()})
+			continue
 		}
 		encoded, err := json.Marshal(arguments)
 		if err != nil {

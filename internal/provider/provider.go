@@ -73,6 +73,15 @@ type ToolCall struct {
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments,omitempty"`
+
+	// ArgumentsError, when non-empty, means the provider recognized the call
+	// but could not produce valid Arguments for it (e.g. a value that does
+	// not match the tool's declared JSON Schema type, or a missing required
+	// argument). The call is still surfaced rather than dropped or treated
+	// as a fatal generation error, so the mistake reaches the model as a
+	// normal tool error result and it gets a chance to retry with corrected
+	// arguments instead of the whole turn aborting.
+	ArgumentsError string `json:"-"`
 }
 
 // ToolSpec declares one callable function to the model. Parameters is a JSON

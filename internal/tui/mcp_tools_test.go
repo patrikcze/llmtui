@@ -300,6 +300,35 @@ func TestRunMixedToolBatchPreservesOrderAndRunsNativeToo(t *testing.T) {
 	}
 }
 
+// TestRunMixedToolBatchReportsInputErrInsteadOfDispatchingToMCP guards the
+// dispatch order in runPlannedToolBatch: a call carrying both MCPServer and
+// InputErr (set when the embedded runtime flags a tool argument as invalid
+// before it ever reaches an MCP server) must surface InputErr as the result
+// error, not silently call the MCP server with arguments the runtime never
+// validated.
+func TestRunMixedToolBatchReportsInputErrInsteadOfDispatchingToMCP(t *testing.T) {
+	called := false
+	reg := newConnectedMCPRegistry(t, "jiraWorklog", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
+		called = true
+		return mcp.Result{Content: "mcp-ok"}, nil
+	})
+	runner := tools.NewRunner(t.TempDir(), 64)
+	calls := []tools.Call{
+		{ID: "c1", Tool: "mcp__jiraWorklog__session_start", MCPServer: "jiraWorklog", MCPTool: "session_start", InputErr: `argument "issue_key" is invalid: expected a JSON string`},
+	}
+	cmd := runMixedToolBatch(context.Background(), runner, reg, calls)
+	msg, ok := cmd().(mcpToolResultsMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want mcpToolResultsMsg", cmd())
+	}
+	if called {
+		t.Fatal("MCP server was called despite InputErr being set")
+	}
+	if len(msg.results) != 1 || msg.results[0].Err == nil || !strings.Contains(msg.results[0].Err.Error(), "issue_key") {
+		t.Errorf("results = %+v", msg.results)
+	}
+}
+
 func TestRegisterMCPCapabilities(t *testing.T) {
 	reg := newConnectedMCPRegistry(t, "jiraWorklog", []mcp.Tool{
 		{Server: "jiraWorklog", Name: "session_start", Description: "start a session", Schema: json.RawMessage(`{"type":"object"}`)},

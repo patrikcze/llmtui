@@ -282,7 +282,12 @@ func runPlannedToolBatch(
 				continue
 			}
 			execute := func() tools.Result {
-				if c.MCPServer != "" {
+				// A call flagged with InputErr (e.g. the embedded runtime
+				// couldn't type-check an argument against the tool's
+				// schema) must report that error rather than reach the MCP
+				// server with bad arguments; ExecuteContext already turns
+				// InputErr into Result.Err before dispatching by tool name.
+				if c.MCPServer != "" && c.InputErr == "" {
 					return executeMCPCall(ctx, mcpReg, c, maxBytes)
 				}
 				return annotateUnknownTool(runner.ExecuteContext(ctx, c), mcpReg)

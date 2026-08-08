@@ -144,6 +144,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		if c.ID == "" {
 			c.ID = fmt.Sprintf("call_%d", i)
 		}
+		if tc.ArgumentsError != "" {
+			c.InputErr = tc.ArgumentsError
+			out = append(out, c)
+			continue
+		}
 		if server, tool, ok := SplitMCPToolName(tc.Name); ok {
 			c.MCPServer, c.MCPTool = server, tool
 			c.MCPArgs = tc.Arguments
