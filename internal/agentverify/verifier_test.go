@@ -70,6 +70,29 @@ func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
 	}
 }
 
+// TestVerifierPromptDoesNotModelPrematureFailureAsTheExample guards against a
+// regression to the schema-example wording that small/quantized models (used
+// as their own verifier when agent.verifier.model is unset) have been
+// observed to echo verbatim: a system prompt whose JSON template shows
+// retryable:false / confidence:0.0 as the example biases exactly the field
+// that turns "incomplete work" into a hard, unretryable run failure. The
+// prompt must instead show a safe-to-echo example and explain the field's
+// actual semantics.
+func TestVerifierPromptDoesNotModelPrematureFailureAsTheExample(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	input := Input{RunID: "r", Cycle: 1, Task: "task", Objective: "objective", Execution: agent.ExecutionResult{Summary: "done"}}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, input); err != nil {
+		t.Fatal(err)
+	}
+	system := client.requests[0].Messages[0].Content
+	if strings.Contains(system, `"retryable":false`) || strings.Contains(system, `"confidence":0.0`) {
+		t.Fatalf("system prompt still shows a false/0.0 example a small model could copy verbatim: %q", system)
+	}
+	if !strings.Contains(system, "own judgment") {
+		t.Fatalf("system prompt lost the guidance to judge retryable/confidence rather than copy the example: %q", system)
+	}
+}
+
 func TestMalformedControlOutput(t *testing.T) {
 	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`, validReply("passed") + validReply("failed")} {
 		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
