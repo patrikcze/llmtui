@@ -1439,9 +1439,24 @@ func (m *Model) retryLast() tea.Cmd {
 	}
 	m.toolDepth = 0                    // a retry is a fresh turn and gets a fresh tool budget
 	m.emptyContinuationRetried = false // a retry is a fresh turn and gets a fresh empty-completion retry
-	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+	m.errText = ""
 	m.notice = "retrying last message"
 	m.sentCount++
+	// Mirror send()'s agent-mode routing exactly: retrying while /agent on is
+	// active must go through the same run/cycle-stage machinery a fresh
+	// Enter keypress would, not the bare dispatch() used for ordinary chat.
+	// dispatch() never calls run.BeginCycle, so agentDirective() (which
+	// requires run.Stage == StageExecutor) would silently return "" — the
+	// model would then be genuinely correct in saying no bounded objective
+	// reached it, because retryLast() had skipped attaching one.
+	if m.agentOn {
+		if m.agentNeedsUserInput() {
+			return m.resumeVerifiedRunWithInput(m.lastUserMsg, m.lastImages)
+		}
+		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+		return m.startVerifiedRun(m.lastUserMsg, m.lastImages)
+	}
+	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
 	return m.dispatch(m.lastUserMsg, m.lastImages)
 }
 

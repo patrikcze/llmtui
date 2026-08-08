@@ -173,6 +173,52 @@ func TestVerifiedAgentVerificationCarriesAvailableToolNames(t *testing.T) {
 	}
 }
 
+// TestRetryAfterAgentRunGoesThroughAgentLoop guards a real bug: retryLast()
+// used to call the bare dispatch() path unconditionally, bypassing /agent
+// on's run/cycle-stage machinery entirely. A retry sent while agentOn was
+// still active never started a new verified run, so agentDirective() (which
+// requires an active run in StageExecutor) had nothing to attach — matching
+// the "that specific state and payload were not provided" confusion
+// observed live after a completed run was retried.
+func TestRetryAfterAgentRunGoesThroughAgentLoop(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Implemented the bounded change and observed success."},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+		// The retried run.
+		agentScriptStep{text: "Implemented the bounded change again and observed success."},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
+	if m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("first run = %+v", m.agentLoop.run)
+	}
+	firstRunID := m.agentLoop.run.ID
+	m.lastUserMsg = "make the bounded change"
+
+	cmd := m.retryLast()
+	if cmd == nil {
+		t.Fatal("retry should dispatch a request")
+	}
+	driveAgentCommands(t, m, cmd)
+
+	if m.agentLoop.run.ID == firstRunID {
+		t.Fatal("retry did not start a new verified run — it reused/ignored the ended run")
+	}
+	if m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("retried run = %+v", m.agentLoop.run)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want executor+verifier for each of two runs", len(prov.requests))
+	}
+	// The retried run's executor request must carry agentDirective's bounded
+	// objective text — proof it went through startVerifiedRun/BeginCycle
+	// rather than a bare dispatch that never attaches one.
+	executorReq := prov.requests[2]
+	if len(executorReq.Messages) == 0 || !strings.Contains(executorReq.Messages[0].Content, "Current bounded objective") {
+		t.Fatalf("retried executor request missing agent directive: %+v", executorReq.Messages)
+	}
+}
+
 func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
