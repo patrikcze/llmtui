@@ -356,7 +356,14 @@ func TestNativeToolCapabilityOverrideAndLearnedRejectionAreModelScoped(t *testin
 	}
 }
 
-func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
+// TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError guards two
+// things: a model that samples straight to EOS right after a tool result
+// (observed on a small local model deep into a long tool-heavy run) gets one
+// fresh attempt at the same round before the run is declared failed, and the
+// eventual failure message carries this round's completion-token count so a
+// "genuinely produced nothing" empty completion can be told apart from one
+// where real output existed but wasn't recognised as text or a tool call.
+func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true
 	m.toolDepth = 1
@@ -365,14 +372,31 @@ func TestEmptyCompletionAfterToolExecutionReportsError(t *testing.T) {
 	_, cmd := m.handleStreamEvent(streamEventMsg{
 		event: provider.ChatEvent{Type: provider.EventDone},
 		ok:    true,
+		gen:   m.streamGen,
 	})
-
-	if cmd != nil {
-		t.Fatal("empty completion must not start another command")
+	if cmd == nil {
+		t.Fatal("first empty completion must retry once, not fail immediately")
 	}
-	const want = "Model returned an empty completion after tool execution."
-	if m.errText != want {
-		t.Errorf("errText = %q, want %q", m.errText, want)
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty before the retry has even run", m.errText)
+	}
+	if !m.emptyContinuationRetried {
+		t.Error("emptyContinuationRetried must be set after spending the one retry")
+	}
+	if !m.thinking {
+		t.Fatal("continueChat's retry must leave a request in flight")
+	}
+
+	_, cmd = m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{CompletionTokens: 2}},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if cmd != nil {
+		t.Fatal("a second empty completion in a row must not retry again")
+	}
+	if !strings.Contains(m.errText, "twice in a row") || !strings.Contains(m.errText, "2 completion token") {
+		t.Errorf("errText = %q, want the retry outcome and completion-token count", m.errText)
 	}
 	if m.thinking {
 		t.Error("empty completion must finish the stream")

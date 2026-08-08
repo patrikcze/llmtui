@@ -18,7 +18,47 @@ import (
 var (
 	gemmaCallStart        = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
 	gemmaZeroArgumentCall = regexp.MustCompile(`call:([A-Za-z_][A-Za-z0-9_.-]*)\{\s*\}`)
+
+	// gemmaOrphanChannelTokenRE matches a Gemma 4 channel-boundary token
+	// (<|channel>NAME opening, or <channel|> closing) so it can be stripped
+	// from streamed text before the user ever sees it. yzma's own cleanup
+	// (message.StripMarkup) only removes a matched
+	// <|channel>thought...<channel|> pair used for internal reasoning; a
+	// channel opened under any other name (e.g. "final"), or a lone
+	// unpaired marker the model emits mid-answer (observed: the model
+	// repeating its whole answer with a bare <channel|> in between),
+	// survives untouched and would otherwise leak into the visible reply
+	// as literal control-token text. This is a defensive text-only strip:
+	// it removes the marker, never the content around it.
+	gemmaOrphanChannelTokenRE = regexp.MustCompile(`<\|channel>[A-Za-z0-9_]*|<channel\|>`)
 )
+
+// gemmaChannelTokenMarkers are the literal channel-boundary tokens passed to
+// retainedDelimiterSuffix so a partial occurrence at the tail of pending
+// streamed text is held back rather than split across two emitted chunks.
+var gemmaChannelTokenMarkers = []string{"<|channel>", "<channel|>"}
+
+// incompleteGemmaChannelTokenIndex returns the index of a complete
+// "<|channel>" opening token at the tail of value whose NAME suffix cannot
+// yet be resolved (more word characters may still follow), mirroring
+// incompleteGemmaCallIndex for "call:NAME{". Returns -1 when there is
+// nothing pending.
+func incompleteGemmaChannelTokenIndex(value string) int {
+	const open = "<|channel>"
+	index := strings.LastIndex(value, open)
+	if index < 0 {
+		return -1
+	}
+	tail := value[index+len(open):]
+	for _, char := range tail {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' {
+			continue
+		}
+		return -1 // a non-word character already terminated the name
+	}
+	return index
+}
 
 const gemmaToolFollowupInstruction = "After the tool returns, use its result to answer this request unless another tool call is necessary."
 
@@ -154,6 +194,17 @@ func (r *toolOutputRouter) Push(text string) []string {
 		if index := incompleteGemmaCallIndex(r.pending); index >= 0 && len(r.pending)-index > retained {
 			retained = len(r.pending) - index
 		}
+		// Hold back a channel-boundary token still being typed (a partial
+		// "<|channel>" / "<channel|>" literal, or a complete "<|channel>"
+		// whose NAME suffix might still grow) so it is never split across
+		// two emitted chunks — a split token can't be recognised as a
+		// complete token to strip once its pieces have already been sent.
+		if suffix := retainedDelimiterSuffix(r.pending, gemmaChannelTokenMarkers); suffix > retained {
+			retained = suffix
+		}
+		if index := incompleteGemmaChannelTokenIndex(r.pending); index >= 0 && len(r.pending)-index > retained {
+			retained = len(r.pending) - index
+		}
 	}
 	return r.emitPending(len(r.pending) - retained)
 }
@@ -179,6 +230,13 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 	}
 
 	cleaned := message.StripMarkup(raw)
+	if r.format == embedded.ToolFormatGemma {
+		// Keep this comparable to r.emitted, which emit() already strips of
+		// the same tokens as they stream — otherwise a stray channel token
+		// only present in cleaned (never live-streamed) would either break
+		// the prefix match in unstreamedText or leak into the tail.
+		cleaned = gemmaOrphanChannelTokenRE.ReplaceAllString(cleaned, "")
+	}
 	tail := unstreamedText(cleaned, r.emitted)
 	r.pending = ""
 	if tail == "" {
@@ -220,6 +278,9 @@ func (r *toolOutputRouter) emitPending(length int) []string {
 }
 
 func (r *toolOutputRouter) emit(text string) []string {
+	if r.format == embedded.ToolFormatGemma {
+		text = gemmaOrphanChannelTokenRE.ReplaceAllString(text, "")
+	}
 	if text == "" {
 		return nil
 	}

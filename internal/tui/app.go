@@ -163,18 +163,19 @@ type Model struct {
 	// nativeToolRejections is learned negative capability state keyed by
 	// provider+model. One incapable model must not disable native tools for a
 	// different model or provider for the rest of the session.
-	nativeToolRejections map[string]bool
-	toolsShowOutput      bool // show full tool output instead of one-line summaries
-	toolRunner           *tools.Runner
-	toolDepth            int          // auto follow-up rounds for the current user turn
-	pendingCalls         []tools.Call // parsed calls awaiting the user's approval
-	pendingToolPlan      *toolBatchPlan
-	pendingBudget        bool        // the pending prompt is "budget spent — continue?", not an approval
-	approvalIdx          int         // selected row in the approval menu (0 yes, 1 always, 2 no)
-	toolOK               int         // executed tool calls (exit summary)
-	toolErr              int         // failed or denied tool calls (exit summary)
-	webOn                bool        // web tools (web_search/web_fetch) enabled
-	webClient            *web.Client // shared web client; nil if the runner is unavailable
+	nativeToolRejections     map[string]bool
+	toolsShowOutput          bool // show full tool output instead of one-line summaries
+	toolRunner               *tools.Runner
+	toolDepth                int          // auto follow-up rounds for the current user turn
+	emptyContinuationRetried bool         // one retry already spent on this round's empty-completion-after-tools
+	pendingCalls             []tools.Call // parsed calls awaiting the user's approval
+	pendingToolPlan          *toolBatchPlan
+	pendingBudget            bool        // the pending prompt is "budget spent — continue?", not an approval
+	approvalIdx              int         // selected row in the approval menu (0 yes, 1 always, 2 no)
+	toolOK                   int         // executed tool calls (exit summary)
+	toolErr                  int         // failed or denied tool calls (exit summary)
+	webOn                    bool        // web tools (web_search/web_fetch) enabled
+	webClient                *web.Client // shared web client; nil if the runner is unavailable
 
 	// progress tracks tool-call fingerprints across the current run (both
 	// ordinary tool chat and /agent on share the same kernel — see
@@ -1015,7 +1016,8 @@ func (m *Model) send() tea.Cmd {
 	m.syncInputHeight()
 	m.relayout()
 	m.sentCount++
-	m.toolDepth = 0 // a fresh user turn gets a fresh tool budget
+	m.toolDepth = 0                    // a fresh user turn gets a fresh tool budget
+	m.emptyContinuationRetried = false // a fresh user turn gets a fresh empty-completion retry
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
 			// Resuming an in-progress run: it never replays incomplete work
@@ -1435,7 +1437,8 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.Messages = m.session.Messages[:n-1]
 		}
 	}
-	m.toolDepth = 0 // a retry is a fresh turn and gets a fresh tool budget
+	m.toolDepth = 0                    // a retry is a fresh turn and gets a fresh tool budget
+	m.emptyContinuationRetried = false // a retry is a fresh turn and gets a fresh empty-completion retry
 	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
 	m.notice = "retrying last message"
 	m.sentCount++
@@ -1832,12 +1835,31 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.recordAgentTruncation()
 		}
 		if emptyToolContinuation {
-			m.errText = "Model returned an empty completion after tool execution."
+			// A model can occasionally sample straight to EOS right after a
+			// tool result lands, especially deep into a long tool-heavy
+			// conversation on a small/quantized local model. That can be a
+			// one-off sampling event, so give it exactly one fresh attempt
+			// at the same round (same accumulated history, nothing resent)
+			// before treating it as a real failure.
+			if !m.emptyContinuationRetried {
+				m.emptyContinuationRetried = true
+				m.notice = "model returned an empty completion after tool execution — retrying once"
+				m.refreshViewport()
+				return m, m.continueChat()
+			}
+			completionTokens := -1
+			if msg.event.Usage != nil {
+				completionTokens = msg.event.Usage.CompletionTokens
+			}
+			m.errText = fmt.Sprintf(
+				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call).",
+				completionTokens)
 			m.failVerifiedRun(errors.New(m.errText))
 			m.endAgentRun()
 			m.refreshViewport()
 			return m, m.persistAgentRun()
 		}
+		m.emptyContinuationRetried = false
 		if truncatedToolCall {
 			m.errText = "Model's tool call was cut off by max_tokens before completing; it was not executed. Raise chat.max_tokens (and agent.verifier.max_tokens if applicable) or shorten the request."
 			m.failVerifiedRun(errors.New(m.errText))

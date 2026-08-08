@@ -226,6 +226,92 @@ func TestToolOutputRouterStripsSimulatedResults(t *testing.T) {
 	}
 }
 
+// TestToolOutputRouterStripsOrphanChannelTokens reproduces a leak observed
+// live on Gemma 4 E4B: after a long tool-heavy conversation, the model
+// repeated its entire final answer with a bare "<channel|>" token in
+// between the two copies, and that literal control token reached the user.
+// yzma's own StripMarkup only removes a matched
+// "<|channel>thought...<channel|>" pair (Gemma's reasoning-channel
+// convention); a channel opened under a different name, or — as here — an
+// unpaired closing marker with no opening tag in this round's text at all,
+// passes through untouched. The router must strip it defensively rather
+// than show raw model-internal tokens to the user.
+func TestToolOutputRouterStripsOrphanChannelTokens(t *testing.T) {
+	t.Run("bare closing token between two answer chunks, streamed live", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, nil)
+		var visible strings.Builder
+		raw := "first answer<channel|>second answer"
+		for i := range raw {
+			visible.WriteString(strings.Join(router.Push(raw[i:i+1]), ""))
+		}
+		tail, _, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		visible.WriteString(strings.Join(tail, ""))
+		got := visible.String()
+		if strings.Contains(got, "channel") {
+			t.Fatalf("channel token leaked into visible text: %q", got)
+		}
+		if got != "first answersecond answer" {
+			t.Fatalf("visible = %q, want the two chunks with the token removed", got)
+		}
+	})
+
+	t.Run("named opening and closing token, streamed live", func(t *testing.T) {
+		// The channel NAME ("final") is part of the token, not content: a
+		// real Gemma channel directive is "<|channel>NAME ...content...
+		// <channel|>", so the name is expected to be consumed along with
+		// the delimiters, leaving only the space and content that followed it.
+		router := newToolOutputRouter(embedded.ToolFormatGemma, nil)
+		raw := "<|channel>final answer text<channel|>"
+		got := strings.Join(router.Push(raw), "")
+		tail, _, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		got += strings.Join(tail, "")
+		if strings.Contains(got, "channel") {
+			t.Fatalf("channel token leaked into visible text: %q", got)
+		}
+		if strings.TrimSpace(got) != "answer text" {
+			t.Fatalf("visible = %q, want the marker and name stripped", got)
+		}
+	})
+
+	t.Run("token split across every possible chunk boundary", func(t *testing.T) {
+		raw := "before<|channel>name mid text<channel|>after"
+		for split := 0; split <= len(raw); split++ {
+			router := newToolOutputRouter(embedded.ToolFormatGemma, nil)
+			got := strings.Join(router.Push(raw[:split]), "") + strings.Join(router.Push(raw[split:]), "")
+			tail, _, err := router.Finish()
+			if err != nil {
+				t.Fatalf("split %d: Finish: %v", split, err)
+			}
+			got += strings.Join(tail, "")
+			if strings.Contains(got, "channel") {
+				t.Fatalf("split %d: channel token leaked into visible text: %q", split, got)
+			}
+			if got != "before mid textafter" {
+				t.Fatalf("split %d: visible = %q", split, got)
+			}
+		}
+	})
+
+	t.Run("non-Gemma formats are untouched", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatStandard, nil)
+		got := strings.Join(router.Push("literal <channel|> text"), "")
+		tail, _, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		got += strings.Join(tail, "")
+		if got != "literal <channel|> text" {
+			t.Fatalf("visible = %q, want the non-Gemma format left untouched", got)
+		}
+	})
+}
+
 func TestToolOutputRouterEveryMarkerSplitPoint(t *testing.T) {
 	for _, test := range []struct {
 		name   string
