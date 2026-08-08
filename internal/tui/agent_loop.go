@@ -306,6 +306,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	input := agentverify.Input{
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request}, Execution: execution,
+		Tools: activeToolNames(m.activeToolSpecs()),
 	}
 	if !m.cfg.Agent.Verifier.Enabled {
 		return func() tea.Msg {

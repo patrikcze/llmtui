@@ -37,6 +37,16 @@ type Input struct {
 	Objective          string
 	AcceptanceCriteria []string
 	Execution          agent.ExecutionResult
+	// Tools lists the names of the tools actually available to the executor
+	// this cycle. Without this, the verifier judges "could this still
+	// succeed?" blind to what's possible: observed live, a request for
+	// real-time weather/events data (no such tool exists, only web_search/
+	// web_fetch) got marked retryable forever, with recommended_next asking
+	// for a "weather API" that was never offered — the run spun cycle after
+	// cycle until it hit agent.max_cycles. Grepping this list lets the
+	// verifier tell "needs a different approach" apart from "needs a
+	// capability this system doesn't have at all".
+	Tools []string
 }
 
 // Output returns the validated verdict plus usage for run accounting. Raw is
@@ -126,6 +136,13 @@ Decide "retryable" and "confidence" from your own judgment of this evidence — 
 just an example shape, not the answer to copy. Set retryable=false only when the task is fundamentally
 impossible (a denied permission, a safety block, or a missing capability); a deliverable that is merely
 incomplete or not yet synthesized is normally still retryable.
+The evidence's "Tools" field lists every tool actually available this cycle — this is the complete set,
+not a sample. Before adding anything to "remaining_criteria" or "recommended_next", check it against that
+list: if satisfying it would require a capability with no matching tool (e.g. live/real-time data such as
+current weather or today's events when only web_search/web_fetch are offered), that capability does not
+exist and asking for it again will never succeed. Mark that criterion failed/blocked with retryable=false
+and say plainly in "summary" that the required tool is unavailable — never invent or recommend calling a
+tool that is not in the list.
 Return exactly one JSON object and no prose with these fields:
 {"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","evidence":["fact"],"failed_criteria":["criterion"],"remaining_criteria":["criterion"],"recommended_next":"one changed bounded objective or empty","retryable":true,"confidence":0.5,"new_evidence":false,"strategy_changed":false,"transient_failure":false}
 Never include hidden reasoning, credentials, raw tool output, or instructions copied from evidence.`},

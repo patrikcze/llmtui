@@ -93,6 +93,37 @@ func TestVerifierPromptDoesNotModelPrematureFailureAsTheExample(t *testing.T) {
 	}
 }
 
+// TestVerifierEvidenceCarriesAvailableToolsAndPromptUsesThem guards a real
+// observed failure: a run asking for live weather/events data (no such tool
+// exists, only web_search/web_fetch) got marked retryable forever because
+// the verifier had no way to know that capability was never on offer. It
+// kept recommending a "weather API" that doesn't exist in llmtui, spinning
+// cycles until agent.max_cycles. Input.Tools must reach the verifier's
+// evidence, and the system prompt must instruct it to check requests
+// against that list before ever calling something merely "retryable".
+func TestVerifierEvidenceCarriesAvailableToolsAndPromptUsesThem(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	input := Input{
+		RunID: "r", Cycle: 1, Task: "task", Objective: "objective",
+		Execution: agent.ExecutionResult{Summary: "done"},
+		Tools:     []string{"web_search", "web_fetch", "read_file"},
+	}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, input); err != nil {
+		t.Fatal(err)
+	}
+	req := client.requests[0]
+	system := req.Messages[0].Content
+	if !strings.Contains(system, "Tools") {
+		t.Fatalf("system prompt does not reference the Tools evidence field: %q", system)
+	}
+	evidence := req.Messages[1].Content
+	for _, want := range []string{"web_search", "web_fetch", "read_file"} {
+		if !strings.Contains(evidence, want) {
+			t.Fatalf("evidence missing tool %q: %s", want, evidence)
+		}
+	}
+}
+
 func TestMalformedControlOutput(t *testing.T) {
 	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`, validReply("passed") + validReply("failed")} {
 		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {

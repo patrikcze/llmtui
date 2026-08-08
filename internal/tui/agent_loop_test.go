@@ -139,6 +139,40 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentVerificationCarriesAvailableToolNames guards a real
+// observed failure: a run asking for capability llmtui doesn't have (a live
+// weather/events lookup, with only web_search/web_fetch available) got
+// marked retryable forever because the verifier had no way to know that
+// capability was never offered — it kept recommending a "weather API" that
+// doesn't exist, spinning cycles until agent.max_cycles. The verifier
+// request must carry the executor's actual tool names so it can tell
+// "try differently" apart from "this system cannot do that at all".
+func TestVerifiedAgentVerificationCarriesAvailableToolNames(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Implemented the bounded change and observed success."},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
+
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider requests = %d, want executor + verifier", len(prov.requests))
+	}
+	verifyReq := prov.requests[1]
+	if len(verifyReq.Messages) != 2 {
+		t.Fatalf("verifier request = %+v", verifyReq)
+	}
+	evidence := verifyReq.Messages[1].Content
+	for _, want := range []string{tools.ToolListDir, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand} {
+		if !strings.Contains(evidence, `"`+want+`"`) {
+			t.Errorf("verifier evidence missing tool name %q: %s", want, evidence)
+		}
+	}
+}
+
 func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},

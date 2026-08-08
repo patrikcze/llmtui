@@ -649,6 +649,20 @@ func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	return specs
 }
 
+// activeToolNames extracts just the names from a tool spec list, for callers
+// (the agent verifier) that need to know what's available without the full
+// JSON Schema parameter definitions.
+func activeToolNames(specs []provider.ToolSpec) []string {
+	if len(specs) == 0 {
+		return nil
+	}
+	names := make([]string, len(specs))
+	for i, spec := range specs {
+		names[i] = spec.Name
+	}
+	return names
+}
+
 // effectiveReasoning resolves the reasoning mode: session override first,
 // then config, normalizing anything unknown to "auto".
 func (m *Model) effectiveReasoning() string {
