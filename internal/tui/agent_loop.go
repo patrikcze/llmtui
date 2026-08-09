@@ -194,6 +194,16 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 	return tea.Batch(m.dispatch(input, images), m.persistAgentRun())
 }
 
+// agentContinueDirective is the synthetic "continue" turn the controller
+// sends the executor to drive it into its next bounded-objective cycle. It
+// is machinery, not something the user typed — refreshViewport renders it
+// as a controller status line instead of a "you" turn, so it can never be
+// mistaken for the user's own words (some models, e.g. Qwen 3.6, can loop
+// on this exact turn without ever completing a bounded objective; showing
+// it as "you: <text>" made that loop look like the user themself was stuck
+// repeating it).
+const agentContinueDirective = "Continue the active verified run. Execute only the controller's current bounded objective, then report observable results."
+
 func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	if !m.agentRunActive() {
 		return nil
@@ -210,7 +220,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	m.toolDepth = 0
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · executing", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
-	return m.dispatch("Continue the active verified run. Execute only the controller's current bounded objective, then report observable results.", nil)
+	return m.dispatch(agentContinueDirective, nil)
 }
 
 func (m *Model) resetAgentContext() {

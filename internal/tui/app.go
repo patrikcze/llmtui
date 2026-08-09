@@ -2175,6 +2175,18 @@ func (m *Model) refreshViewport() {
 	for i, msg := range m.session.Messages {
 		switch msg.Role {
 		case provider.RoleUser:
+			// The agent controller's own "continue" turn travels as a user
+			// message too (it must reach the model in the user slot), but it
+			// is machinery, not something the human typed — showing it under
+			// the "you" label would let a model that gets stuck repeating
+			// this exact turn look like the human was the one stuck, not the
+			// model. The actual message content sent to the model is
+			// unchanged; only its rendering here differs.
+			if msg.Content == agentContinueDirective {
+				b.WriteString(m.theme.SystemNote.Render("⚙ agent — continuing to the next bounded objective"))
+				b.WriteString("\n\n")
+				continue
+			}
 			// Tool results travel as user messages; style them as machinery,
 			// not as something the human typed. Compact by default — the
 			// model sees everything, the human sees one line per call
