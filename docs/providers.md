@@ -55,15 +55,15 @@ switch or exit. Its native runtime, platform matrix, and limitations are documen
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
 
-## Reasoning models (Qwen 3.5 / 3.6, DeepSeek-R1)
+## Reasoning models (Qwen 3.5 / 3.6 / 3.8, DeepSeek-R1)
 
 Server providers use structured chat APIs (`/v1/chat/completions`, Ollama
 `/api/chat`) and apply their own chat templates. The embedded provider
-applies the GGUF's template inside its llama.cpp runtime. If a Qwen 3.5/3.6
+applies the GGUF's template inside its llama.cpp runtime. If a Qwen 3.5/3.6/3.8
 model is slow or unstable (degenerate reasoning loops, stalled tool calls,
 KV-cache thrash making every turn slower), fix the template in the backend:
 
-The official Qwen 3.5/3.6 templates have known bugs; the community-fixed
+The official Qwen 3.5/3.6/3.8 templates have known bugs; the community-fixed
 drop-in replacement is
 [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates):
 

@@ -25,6 +25,14 @@ assistant message that requested it, the window widens backwards to include
 the request, keeping the tool-call/result pair intact (a lone `tool` message
 is protocol-invalid for OpenAI-compatible backends).
 
+Long native-tool turns also retain the latest real user message as their
+active-turn anchor. Completed older assistant/tool groups move into the
+session summary as complete units, while the newest complete tool group stays
+verbatim. If that irreducible continuation still cannot fit, llmtui replaces
+an oversized text-only user message with a bounded continuation anchor and
+preserves the original request in the summary; image turns fail explicitly
+instead of silently dropping their visual input.
+
 If the fixed system/user prompt plus tool schemas and response reserve cannot
 fit at all, llmtui stops before contacting the provider and explains which
 overhead must be reduced. `/context` and `/debug last` show the estimated
