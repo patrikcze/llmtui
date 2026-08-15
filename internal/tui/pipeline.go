@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"math/rand/v2"
@@ -180,6 +181,9 @@ type preparedRequest struct {
 	estimate   requestTokenEstimate
 }
 
+const compactedContinuationAnchor = "[Compacted continuation] Continue the original request " +
+	"using the session summary and tool results above."
+
 type compositionBase struct {
 	input      prompt.Input
 	ragResults []rag.Result
@@ -291,21 +295,99 @@ func estimatePrepared(out prompt.Output, specs []provider.ToolSpec, window, rese
 	return est
 }
 
-// dropOldestGroup removes the oldest request messages while preserving an
-// assistant tool-call message together with its immediately following tool
-// results. It prevents context fitting from producing a protocol-invalid
-// history that starts with role:"tool".
-func dropOldestGroup(messages []provider.Message) (dropped, recent []provider.Message) {
+// oldestGroupEnd returns the exclusive end of the first complete conversation
+// group. User turns include their following assistant/tool work up to the next
+// user; assistant tool calls include all immediately following tool results.
+func oldestGroupEnd(messages []provider.Message) int {
 	if len(messages) == 0 {
-		return nil, nil
+		return 0
 	}
 	end := 1
-	if len(messages[0].ToolCalls) > 0 {
+	if messages[0].Role == provider.RoleUser {
+		for end < len(messages) && messages[end].Role != provider.RoleUser {
+			end++
+		}
+		return end
+	}
+	if messages[0].Role == provider.RoleAssistant && len(messages[0].ToolCalls) > 0 {
 		for end < len(messages) && messages[end].Role == provider.RoleTool {
 			end++
 		}
 	}
-	return messages[:end], messages[end:]
+	return end
+}
+
+func latestUserMessageIndex(messages []provider.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == provider.RoleUser {
+			return i
+		}
+	}
+	return -1
+}
+
+// dropOldestGroup removes one complete group. During a native tool
+// continuation it keeps the active user at the front and refuses to discard
+// the newest assistant/tool group, so context fitting retains both the task
+// anchor and the freshest evidence.
+func dropOldestGroup(
+	messages []provider.Message,
+	preserveActiveTurn bool,
+) (dropped, recent []provider.Message, ok bool) {
+	if len(messages) == 0 {
+		return []provider.Message{}, []provider.Message{}, false
+	}
+	if !preserveActiveTurn {
+		end := oldestGroupEnd(messages)
+		return append([]provider.Message{}, messages[:end]...),
+			append([]provider.Message{}, messages[end:]...), true
+	}
+
+	start := 0
+	if latestUserMessageIndex(messages) == 0 {
+		start = 1
+	}
+	end := start + oldestGroupEnd(messages[start:])
+	if end <= start || end >= len(messages) {
+		return []provider.Message{}, append([]provider.Message{}, messages...), false
+	}
+
+	dropped = append([]provider.Message{}, messages[start:end]...)
+	recent = make([]provider.Message, 0, len(messages)-len(dropped))
+	recent = append(recent, messages[:start]...)
+	recent = append(recent, messages[end:]...)
+	return dropped, recent, true
+}
+
+func hasUserMessage(messages []provider.Message) bool {
+	return latestUserMessageIndex(messages) >= 0
+}
+
+func withCompactedContinuationAnchor(messages []provider.Message) []provider.Message {
+	if hasUserMessage(messages) {
+		return messages
+	}
+	anchored := make([]provider.Message, 0, len(messages)+1)
+	anchored = append(anchored, provider.Message{
+		Role:    provider.RoleUser,
+		Content: compactedContinuationAnchor,
+	})
+	anchored = append(anchored, messages...)
+	return anchored
+}
+
+func compactLatestUserMessage(messages []provider.Message) (provider.Message, []provider.Message, bool) {
+	index := latestUserMessageIndex(messages)
+	if index < 0 || messages[index].Content == compactedContinuationAnchor || len(messages[index].Images) > 0 {
+		return provider.Message{}, messages, false
+	}
+	original := messages[index]
+	compacted := append([]provider.Message{}, messages...)
+	compacted[index] = provider.Message{
+		Role:    provider.RoleUser,
+		Content: compactedContinuationAnchor,
+	}
+	return original, compacted, true
 }
 
 func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool) (preparedRequest, error) {
@@ -337,6 +419,10 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		keep = m.cfg.Context.KeepLastMessages
 	}
 	older, recent := contextmgr.Split(m.session.Messages, keep)
+	toolContinuation := omitRaw && len(recent) > 0 && recent[len(recent)-1].Role == provider.RoleTool
+	if toolContinuation {
+		recent = withCompactedContinuationAnchor(recent)
+	}
 	summary := m.summary
 	if decision.Compress && decision.Strategy == contextmgr.StrategySummarize && len(older) > 0 {
 		summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
@@ -346,8 +432,11 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 	est := estimatePrepared(out, specs, window, reserve, len(older), len(recent))
 	budget := window - reserve
 	for est.Total > budget && len(recent) > 0 && decision.Strategy != contextmgr.StrategyNone {
-		var dropped []provider.Message
-		dropped, recent = dropOldestGroup(recent)
+		dropped, next, ok := dropOldestGroup(recent, toolContinuation)
+		if !ok {
+			break
+		}
+		recent = next
 		older = append(older, dropped...)
 		if decision.Strategy == contextmgr.StrategySummarize {
 			summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
@@ -369,10 +458,44 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		out = composeFromBase(base, recent, summary)
 		est = estimatePrepared(out, specs, window, reserve, len(older), len(recent))
 	}
+
+	// If the irreducible active turn still does not fit, replace only its
+	// oversized text user message with a bounded anchor. The original request
+	// moves into the summary; image turns fail explicitly instead of silently
+	// dropping visual input.
+	if est.Total > budget && toolContinuation && decision.Strategy != contextmgr.StrategyNone {
+		original, compacted, ok := compactLatestUserMessage(recent)
+		if ok {
+			recent = compacted
+			older = append(older, original)
+			base.input.Include.SessionSummary = true
+			summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
+			out = composeFromBase(base, recent, summary)
+			est = estimatePrepared(out, specs, window, reserve, len(older), len(recent))
+			if est.Total > budget && summary != "" {
+				withoutSummary := composeFromBase(base, recent, "")
+				baseEstimate := estimatePrepared(withoutSummary, specs, window, reserve, len(older), len(recent))
+				maxSummary := budget - baseEstimate.Total - 8
+				if maxSummary > m.cfg.Context.SummaryMaxTokens {
+					maxSummary = m.cfg.Context.SummaryMaxTokens
+				}
+				summary = m.summarizeMessages(older, maxSummary)
+				out = composeFromBase(base, recent, summary)
+				est = estimatePrepared(out, specs, window, reserve, len(older), len(recent))
+			}
+		}
+	}
 	if est.Total > budget {
 		return preparedRequest{composed: out, decision: decision, summary: summary, tools: specs, ragResults: base.ragResults, estimate: est}, fmt.Errorf(
 			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
 			est.Total, budget)
+	}
+	if toolContinuation && !hasUserMessage(out.Messages) {
+		return preparedRequest{
+				composed: out, decision: decision, summary: summary, tools: specs,
+				ragResults: base.ragResults, estimate: est,
+			},
+			errors.New("tool continuation has no user anchor after context selection")
 	}
 	for _, section := range out.Sections {
 		if section.Title == "Session Summary" {

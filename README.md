@@ -394,7 +394,7 @@ provider/model resolution, and pings every configured backend.
   `thinking…` indicator while they work.
 - **Fonts/symbols look wrong** — llmtui works with any monospace font, but
   looks best with a Nerd Font such as JetBrains Mono Nerd Font or MesloLGS NF.
-- **Qwen 3.5/3.6 slow or looping?** The fix is usually the backend's chat
+- **Qwen 3.5/3.6/3.8 slow or looping?** The fix is usually the backend's chat
   template, not llmtui — see "Reasoning models" in `docs/providers.md`.
 
 ## Development

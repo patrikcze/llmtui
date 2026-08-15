@@ -4,7 +4,9 @@ package contextmgr
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -94,12 +96,13 @@ func countConversational(msgs []provider.Message) int {
 	return n
 }
 
-// Split divides conversational messages into (older, recent) keeping the
-// last keepLast messages intact. System messages are excluded entirely —
-// the prompt composer re-adds the system section itself. The window may be
-// widened past keepLast so it never severs a tool-call/result pair.
+// Split divides conversational messages into (older, recent), retaining the
+// latest user as the active-turn anchor plus the last keepLast messages.
+// System messages are excluded entirely — the prompt composer re-adds the
+// system section itself. The window may be widened past keepLast so it never
+// severs a tool-call/result pair.
 func Split(msgs []provider.Message, keepLast int) (older, recent []provider.Message) {
-	var conv []provider.Message
+	conv := make([]provider.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Role != provider.RoleSystem {
 			conv = append(conv, m)
@@ -109,7 +112,7 @@ func Split(msgs []provider.Message, keepLast int) (older, recent []provider.Mess
 		keepLast = 0
 	}
 	if len(conv) <= keepLast {
-		return nil, conv
+		return []provider.Message{}, slices.Clone(conv)
 	}
 	start := len(conv) - keepLast
 	// The kept window must never open on a tool result: a role:"tool" message
@@ -117,10 +120,41 @@ func Split(msgs []provider.Message, keepLast int) (older, recent []provider.Mess
 	// (OpenAI-compatible backends reject the request outright). Widen the
 	// window backwards until it starts at the assistant message that carries
 	// the calls, keeping call/result pairs intact.
-	for start > 0 && conv[start].Role == provider.RoleTool {
+	for start > 0 {
+		if start == len(conv) {
+			if conv[start-1].Role != provider.RoleTool {
+				break
+			}
+			start--
+			continue
+		}
+		if conv[start].Role != provider.RoleTool {
+			break
+		}
 		start--
 	}
-	return conv[:start], conv[start:]
+
+	latestUser := -1
+	for i := len(conv) - 1; i >= 0; i-- {
+		if conv[i].Role == provider.RoleUser {
+			latestUser = i
+			break
+		}
+	}
+	if latestUser < 0 || latestUser >= start {
+		return slices.Clone(conv[:start]), slices.Clone(conv[start:])
+	}
+
+	// The active user can sit far before the count window during a long tool
+	// run. Move that one message into recent while the completed tool groups
+	// between it and start become summarizable older context.
+	older = make([]provider.Message, 0, start-1)
+	older = append(older, conv[:latestUser]...)
+	older = append(older, conv[latestUser+1:start]...)
+	recent = make([]provider.Message, 0, len(conv)-start+1)
+	recent = append(recent, conv[latestUser])
+	recent = append(recent, conv[start:]...)
+	return older, recent
 }
 
 // SummaryInput feeds a Summarizer.
@@ -170,10 +204,20 @@ func (HeuristicSummarizer) Summarize(_ context.Context, in SummaryInput) (Summar
 // condenseMessage reduces one message to its lead sentence plus lines that
 // look technically important (errors, files, decisions, code).
 func condenseMessage(m provider.Message) []string {
-	prefix := "- " + string(m.Role) + ": "
+	out := make([]string, 0, len(m.ToolCalls)+1)
+	for _, call := range m.ToolCalls {
+		arguments := capLine(strings.TrimSpace(call.Arguments), 200)
+		out = append(out, fmt.Sprintf("- assistant tool call %s: %s", call.Name, arguments))
+	}
+
+	prefix := "- " + string(m.Role)
+	if m.Role == provider.RoleTool && m.ToolName != "" {
+		prefix += " " + m.ToolName
+	}
+	prefix += ": "
 	content := strings.TrimSpace(m.Content)
 	if content == "" {
-		return nil
+		return out
 	}
 
 	var picked []string
@@ -202,9 +246,9 @@ func condenseMessage(m provider.Message) []string {
 		}
 	}
 	if len(picked) == 0 {
-		return nil
+		return out
 	}
-	out := []string{prefix + picked[0]}
+	out = append(out, prefix+picked[0])
 	out = append(out, picked[1:]...)
 	return out
 }

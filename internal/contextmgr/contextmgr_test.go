@@ -2,6 +2,7 @@ package contextmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -143,20 +144,84 @@ func TestSplitNeverSeversToolCallResultPairs(t *testing.T) {
 	// protocol-invalid for OpenAI-compatible backends. The window must widen
 	// backwards to start at the assistant message carrying the calls.
 	older, recent := Split(conv, 3)
-	if len(recent) == 0 || recent[0].Role == provider.RoleTool {
-		t.Fatalf("recent starts with %v, must never start on a tool result", recent[0].Role)
+	if len(recent) < 2 || recent[1].Role == provider.RoleTool {
+		t.Fatalf("recent = %+v, must retain the user before a complete tool group", recent)
 	}
-	if recent[0].Role != provider.RoleAssistant || len(recent[0].ToolCalls) != 2 {
-		t.Fatalf("recent[0] = %+v, want the assistant message carrying the tool calls", recent[0])
+	if recent[0].Role != provider.RoleUser || recent[1].Role != provider.RoleAssistant || len(recent[1].ToolCalls) != 2 {
+		t.Fatalf("recent = %+v, want user anchor followed by the assistant tool calls", recent)
 	}
 	if len(older)+len(recent) != len(conv) {
 		t.Errorf("messages lost: %d + %d != %d", len(older), len(recent), len(conv))
 	}
 
-	// A boundary already on a non-tool message keeps exact keepLast counts.
+	// Even when the count boundary lands on a non-tool message, the latest
+	// user remains the anchor for the retained active turn.
 	older, recent = Split(conv, 1)
-	if len(recent) != 1 || len(older) != 6 {
-		t.Errorf("Split(conv, 1) = %d/%d, want 6/1", len(older), len(recent))
+	if len(recent) != 2 || len(older) != 5 {
+		t.Errorf("Split(conv, 1) = %d/%d, want 5/2", len(older), len(recent))
+	}
+	if recent[0].Role != provider.RoleUser || recent[0].Content != "u2" {
+		t.Errorf("recent[0] = %+v, want latest user anchor", recent[0])
+	}
+}
+
+func TestSplitPreservesLatestUserAcrossSevenToolRounds(t *testing.T) {
+	conv := []provider.Message{{Role: provider.RoleUser, Content: "run the benchmark"}}
+	for i := 1; i <= 7; i++ {
+		id := fmt.Sprintf("call_%d", i)
+		conv = append(conv,
+			provider.Message{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{{
+					ID: id, Name: "read_file", Arguments: `{"path":"input.txt"}`,
+				}},
+			},
+			provider.Message{Role: provider.RoleTool, ToolCallID: id, Content: fmt.Sprintf("result_%d", i)},
+		)
+	}
+
+	older, recent := Split(conv, 8)
+	if len(older) != 6 || len(recent) != 9 {
+		t.Fatalf("Split = %d older/%d recent, want 6/9", len(older), len(recent))
+	}
+	if recent[0].Role != provider.RoleUser || recent[0].Content != "run the benchmark" {
+		t.Fatalf("recent[0] = %+v, want original user anchor", recent[0])
+	}
+	if got := recent[len(recent)-1]; got.Role != provider.RoleTool || got.Content != "result_7" {
+		t.Fatalf("last recent message = %+v, want newest tool result", got)
+	}
+	for _, group := range [][]provider.Message{older, recent[1:]} {
+		for i := 0; i < len(group); i += 2 {
+			if i+1 >= len(group) || group[i].Role != provider.RoleAssistant || group[i+1].Role != provider.RoleTool {
+				t.Fatalf("tool group was severed: %+v", group)
+			}
+			if group[i].ToolCalls[0].ID != group[i+1].ToolCallID {
+				t.Fatalf("tool IDs differ: call=%q result=%q", group[i].ToolCalls[0].ID, group[i+1].ToolCallID)
+			}
+		}
+	}
+}
+
+func TestSplitWithZeroKeepStillRetainsNewestToolPair(t *testing.T) {
+	conv := []provider.Message{
+		{Role: provider.RoleUser, Content: "run the benchmark"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{{
+				ID: "call_1", Name: "read_file", Arguments: `{"path":"input.txt"}`,
+			}},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call_1", Content: "result"},
+	}
+
+	older, recent := Split(conv, 0)
+	if len(older) != 0 || len(recent) != 3 {
+		t.Fatalf("Split = %d older/%d recent, want 0/3", len(older), len(recent))
+	}
+	if recent[0].Role != provider.RoleUser ||
+		recent[1].Role != provider.RoleAssistant ||
+		recent[2].Role != provider.RoleTool {
+		t.Fatalf("recent = %+v, want user plus newest complete tool pair", recent)
 	}
 }
 
@@ -180,6 +245,36 @@ func TestHeuristicSummarizerKeepsTechnicalDetail(t *testing.T) {
 	}
 	if !strings.Contains(out.Summary, "user:") || !strings.Contains(out.Summary, "assistant:") {
 		t.Error("summary should attribute content to roles")
+	}
+}
+
+func TestHeuristicSummarizerKeepsStructuredToolGroups(t *testing.T) {
+	input := SummaryInput{
+		MaxTokens: 200,
+		Messages: []provider.Message{
+			{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{{
+					ID: "call_1", Name: "read_file", Arguments: `{"path":"benchmark_input.txt"}`,
+				}},
+			},
+			{
+				Role:       provider.RoleTool,
+				ToolCallID: "call_1",
+				ToolName:   "read_file",
+				Content:    "alpha=17\nbeta=25",
+			},
+		},
+	}
+
+	out, err := (HeuristicSummarizer{}).Summarize(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"read_file", "benchmark_input.txt", "alpha=17"} {
+		if !strings.Contains(out.Summary, want) {
+			t.Errorf("summary missing structured tool detail %q:\n%s", want, out.Summary)
+		}
 	}
 }
 

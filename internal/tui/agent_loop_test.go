@@ -173,6 +173,32 @@ func TestVerifiedAgentVerificationCarriesAvailableToolNames(t *testing.T) {
 	}
 }
 
+// TestAgentContinueDirectiveDoesNotRenderAsUserMessage guards a display-only
+// fix: some models (observed live on Qwen 3.6) can get stuck re-emitting
+// tool-call syntax without ever completing a bounded objective, so the
+// controller's canned "continue" turn ends up repeated verbatim many times.
+// Rendered under the "you" label, that looked exactly like the human was
+// stuck typing the same sentence over and over, which is misleading — the
+// human never wrote it. The directive must still reach the model completely
+// unchanged (it's what actually drives the next cycle); only its rendering
+// in the transcript changes.
+func TestAgentContinueDirectiveDoesNotRenderAsUserMessage(t *testing.T) {
+	m := newTestModel(t)
+	m.session.AddUser(agentContinueDirective)
+	m.refreshViewport()
+	view := m.viewport.View()
+	if strings.Contains(view, agentContinueDirective) {
+		t.Errorf("agent continue directive text leaked into the transcript: %s", view)
+	}
+	if !strings.Contains(view, "continuing to the next bounded objective") {
+		t.Errorf("agent continue directive missing a controller status line: %s", view)
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleUser || last.Content != agentContinueDirective {
+		t.Fatalf("message actually sent to the model must be unchanged: %+v", last)
+	}
+}
+
 // TestRetryAfterAgentRunGoesThroughAgentLoop guards a real bug: retryLast()
 // used to call the bare dispatch() path unconditionally, bypassing /agent
 // on's run/cycle-stage machinery entirely. A retry sent while agentOn was
