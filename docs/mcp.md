@@ -44,7 +44,8 @@ mcp:
       transport: stdio
       command: "/path/to/server"
       args: []
-      env: {} # values are redacted in /mcp inspect and never logged
+      env:
+        SERVICE_TOKEN: "env:SERVICE_TOKEN"
       approve: ask
       timeout: "30s"
 ```
@@ -57,8 +58,8 @@ the secret is not stored in llmtui's YAML:
 
 ```yaml
 env:
-  JIRA_PERSONAL_TOKEN: "env:JIRA_PERSONAL_TOKEN" # inherit this one variable
-  OTHER_TOKEN: "file:/Users/me/.config/llmtui/secrets/other-token"
+  SERVICE_TOKEN: "env:SERVICE_TOKEN" # inherit this one variable
+  OTHER_TOKEN: "file:/path/to/secret" # absolute path; value stays outside YAML
 ```
 
 `env:NAME` reads `NAME` from llmtui's launch environment at connect time;

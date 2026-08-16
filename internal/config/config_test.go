@@ -3,7 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -344,6 +347,44 @@ func TestWriteDefaultProducesLoadableConfig(t *testing.T) {
 	}
 	if _, ok := cfg.Providers["embedded"]; !ok {
 		t.Error("embedded provider should still be present (builtin), even though its YAML example is commented out")
+	}
+	if cfg.Chat.Reasoning != "auto" || !cfg.Chat.StripLeakedThinking {
+		t.Errorf("reasoning defaults = %q/strip=%v, want auto/true", cfg.Chat.Reasoning, cfg.Chat.StripLeakedThinking)
+	}
+	if cfg.Context.ReserveResponseTokens < cfg.Chat.MaxTokens {
+		t.Errorf("response reserve = %d, want at least max_tokens %d", cfg.Context.ReserveResponseTokens, cfg.Chat.MaxTokens)
+	}
+}
+
+func TestDefaultYAMLIsSecretFreeAndSafeByDefault(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(DefaultYAML), &cfg); err != nil {
+		t.Fatalf("parse DefaultYAML directly: %v", err)
+	}
+
+	for name, provider := range cfg.Providers {
+		if provider.APIKey != "" {
+			t.Errorf("provider %q embeds a non-empty API key", name)
+		}
+	}
+	if cfg.Tools.Enabled || cfg.Tools.Approve != "ask" || cfg.Tools.Web.Enabled {
+		t.Errorf("tools must start disabled with approval required: %+v", cfg.Tools)
+	}
+	if cfg.Agent.Enabled || cfg.MCP.Enabled || cfg.RAG.Enabled || cfg.RAG.Workspace.Enabled {
+		t.Errorf("external/agent features must be opt-in: agent=%v mcp=%v rag=%v workspace=%v",
+			cfg.Agent.Enabled, cfg.MCP.Enabled, cfg.RAG.Enabled, cfg.RAG.Workspace.Enabled)
+	}
+
+	for _, marker := range []string{
+		"/Users/",
+		"/home/",
+		"JIRA_PERSONAL_TOKEN",
+		"GITLAB_PERSONAL_TOKEN",
+		"BEGIN PRIVATE KEY",
+	} {
+		if strings.Contains(DefaultYAML, marker) {
+			t.Errorf("DefaultYAML contains machine-specific or secret marker %q", marker)
+		}
 	}
 }
 

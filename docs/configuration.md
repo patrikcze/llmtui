@@ -5,7 +5,11 @@
 - macOS/Linux: `~/.config/llmtui/config.yaml`
 - Windows: `%APPDATA%\llmtui\config.yaml`
 
-`llmtui config init` writes an annotated starter file, `config path` shows
+`llmtui config init` writes an annotated starter file with no embedded
+credentials or machine-specific paths. Optional execution and external-data
+features (tools, web, MCP, RAG, and agent mode) start disabled, and mutating
+tools default to `approve: ask`. The command refuses to overwrite an existing
+config and uses user-only permissions (`0600`) on Unix. `config path` shows
 where it lives, `config show` prints the effective merged config with secrets
 redacted. Inside the chat, `/config reload` re-reads the file and rebuilds the
 cache, memory store, profiles, and the active provider — CLI flag and env
@@ -38,9 +42,23 @@ Each entry has `type` (`ollama`, `openai_compatible`, `embedded`, `mock`),
 
 ```yaml
 providers:
+  lmstudio:
+    type: openai_compatible
+    base_url: http://localhost:1234/v1
+    api_key: "" # local LM Studio normally needs no key
+    default_model: local-model
+
   openai_compatible:
+    type: openai_compatible
+    base_url: http://localhost:8080/v1
     api_key_env: LLMTUI_API_KEY
+    api_key: ""
+    default_model: local-model
 ```
+
+`api_key_env` names an environment variable; it is not the credential itself.
+An unset variable falls back to `api_key`, which should remain empty for local
+servers that do not require authentication.
 
 Provider capability overrides are optional and tri-state. Omit a field to
 retain automatic/unknown behavior; set an explicit `true` or `false` when a
@@ -273,6 +291,26 @@ usual flags > env > file > defaults, so an env var overrides the file.
 `description`, `system_prompt`, `prompt_mode`, `temperature`. Custom
 `model_profiles` match by model-ID substring and are checked before the
 built-ins (`/profile list`).
+
+Keep profile matches lowercase and set `context_window` to the context size
+actually loaded by the server, not automatically to the model's advertised
+maximum. A generalized non-reasoning local-model profile looks like this:
+
+```yaml
+model_profiles:
+  local-gemma-12b:
+    match: ["vendor/gemma-12b", "gemma-12b"]
+    context_window: 65536
+    preferred_temperature: 0.2
+    supports_json_mode: true
+    prompt_style: direct
+    reasoning_hint: false
+```
+
+`reasoning_hint` only controls the helper text added to the prompt. It does
+not set `/think`. Keep `chat.reasoning: auto` to omit `enable_thinking` for
+non-reasoning models; use `/think on|off` only as a session override for a
+backend and model that support it.
 
 ### `ui` and `privacy`
 

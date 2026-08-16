@@ -156,18 +156,19 @@ providers:
   lmstudio:
     type: openai_compatible
     base_url: http://localhost:1234/v1
-    api_key: lm-studio
+    api_key: ""
     default_model: local-model
 
   unsloth:
     type: openai_compatible
     base_url: http://localhost:8000/v1
-    api_key: not-needed
+    api_key: ""
     default_model: local-model
 
   openai_compatible:
     type: openai_compatible
     base_url: http://localhost:8080/v1
+    api_key_env: LLMTUI_API_KEY
     api_key: ""
     default_model: local-model
 
@@ -457,4 +458,3 @@ At every phase, keep the app buildable and runnable.
 ## Important Constraint
 
 The goal is not to clone Claude Code. The goal is to build an original local LLM TUI with similar quality, elegance, smoothness, and terminal-native polish.
-

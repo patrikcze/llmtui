@@ -123,6 +123,25 @@ No `chat_template` override is needed for that Gemma 4 build; llmtui falls
 back to a full Jinja renderer when llama.cpp's restricted renderer does not
 support valid GGUF template constructs.
 
+For a model served by LM Studio or another OpenAI-compatible backend, use a
+model profile rather than copying machine-specific model paths. Match the
+context to the size loaded by the server. For a non-reasoning model, disable
+the prompt hint and leave the wire protocol on `chat.reasoning: auto`:
+
+```yaml
+chat:
+  reasoning: auto
+
+model_profiles:
+  local-gemma-12b:
+    match: ["vendor/gemma-12b", "gemma-12b"]
+    context_window: 65536
+    preferred_temperature: 0.2
+    supports_json_mode: true
+    prompt_style: direct
+    reasoning_hint: false
+```
+
 ## Runtime and sampling options
 
 | Key | Default | Meaning |
@@ -284,7 +303,7 @@ is loaded. Use `gpu_layers: 0` to diagnose GPU/backend problems. A larger
 `batch_size` can speed prompt processing but consumes more memory.
 
 If the TUI reports that request overhead is too large, the runtime context is
-not larger than the context manager's response reserve (2048 tokens by
+not larger than the context manager's response reserve (4096 tokens by
 default). Raise `context_size` or set a smaller
 `context.reserve_response_tokens` value appropriate for the model and desired
 answer length.

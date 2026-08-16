@@ -614,7 +614,6 @@ func builtinProviders() map[string]ProviderConfig {
 		"lmstudio": {
 			Type:         "openai_compatible",
 			BaseURL:      "http://localhost:1234/v1",
-			APIKey:       "lm-studio",
 			DefaultModel: "local-model",
 		},
 		"openai_compatible": {
@@ -682,7 +681,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("context.strategy", "auto")
 	v.SetDefault("context.max_context_tokens", 0)
-	v.SetDefault("context.reserve_response_tokens", 2048)
+	v.SetDefault("context.reserve_response_tokens", 4096)
 	v.SetDefault("context.summarize_after_messages", 12)
 	v.SetDefault("context.keep_last_messages", 8)
 	v.SetDefault("context.summary_max_tokens", 1200)
@@ -763,14 +762,17 @@ providers:
   lmstudio:
     type: openai_compatible
     base_url: http://localhost:1234/v1
-    api_key: lm-studio
+    # Local LM Studio normally needs no API key. If authentication is
+    # enabled, use api_key_env instead of storing the value in this file.
+    api_key: ""
     default_model: local-model
 
   openai_compatible:
     type: openai_compatible
     base_url: http://localhost:8080/v1
-    # Prefer api_key_env over writing secrets into this file:
-    # api_key_env: LLMTUI_API_KEY
+    # The environment variable is read at startup; its value is never
+    # written to this file or printed by config show.
+    api_key_env: LLMTUI_API_KEY
     api_key: ""
     default_model: local-model
     # Optional capability overrides. Omit a boolean to leave it unknown;
@@ -809,6 +811,10 @@ chat:
   top_p: 0.9
   max_tokens: 4096
   stream: true
+  # auto omits enable_thinking and lets each model/backend use its native
+  # behavior. Use /think on|off for a session-level override.
+  reasoning: auto
+  strip_leaked_thinking: true
   # Allow pasting images even when the model is not recognized as vision-capable:
   force_vision: false
   save_history: true
@@ -852,11 +858,12 @@ prompt:
   include_model_hints: true
   include_formatting_hints: true
 
-# Context-window management for small local models.
+# Context-window management for local models. Reserve at least max_tokens so
+# request preparation leaves enough room for the configured response ceiling.
 context:
   strategy: auto # none | truncate | summarize | auto
-  max_context_tokens: 0 # 0 = from model profile
-  reserve_response_tokens: 2048
+  max_context_tokens: 0 # 0 = from provider capability or model profile
+  reserve_response_tokens: 4096 # keep aligned with chat.max_tokens
   summarize_after_messages: 12
   keep_last_messages: 8
   summary_max_tokens: 1200
@@ -1007,9 +1014,10 @@ mcp:
   #     transport: stdio
   #     command: "/path/to/server"
   #     args: []
-  #     # Secret values can reference env:NAME or file:/path instead of being
+  #     # Secret values reference the process environment instead of being
   #     # stored here. Values are redacted in /mcp inspect and never logged.
-  #     env: {}
+  #     env:
+  #       SERVICE_TOKEN: "env:SERVICE_TOKEN"
   #     approve: ask
   #     timeout: "30s"
 
@@ -1040,18 +1048,19 @@ templates:
     prompt_mode: coding
     temperature: 0.3
 
-# Custom model profiles are matched before built-ins (/profile list). Add one
-# whenever a model's real context window differs from its family's built-in
-# guess (built-ins: coder/qwen 32768, gpt-oss 131072, llama/mistral/gemma
-# 8192, default 8192) — e.g. large-context MoE variants:
+# Custom model profiles are matched before built-ins (/profile list). Use
+# lowercase model-ID fragments and set context_window to the size actually
+# loaded by the server, which can be smaller than the model's advertised max.
+# reasoning_hint controls only the helper prompt; /think controls the wire
+# protocol and chat.reasoning: auto safely omits it for non-reasoning models.
 # model_profiles:
-#   qwen3-a3b:
-#     match: ["qwen3.6-35b-a3b"]
-#     context_window: 262144
-#     preferred_temperature: 0.6
+#   local-gemma-12b:
+#     match: ["vendor/gemma-12b", "gemma-12b"]
+#     context_window: 65536
+#     preferred_temperature: 0.2
 #     supports_json_mode: true
 #     prompt_style: direct
-#     reasoning_hint: true
+#     reasoning_hint: false # model has no dedicated reasoning mode
 model_profiles: {}
 `
 

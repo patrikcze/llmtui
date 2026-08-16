@@ -97,7 +97,10 @@ example, CPU/Metal choices, image limits, security notes, and troubleshooting.
 ```
 
 Config lives at `~/.config/llmtui/config.yaml` (macOS/Linux) or
-`%APPDATA%\llmtui\config.yaml` (Windows). Precedence, highest first:
+`%APPDATA%\llmtui\config.yaml` (Windows). The generated starter contains no
+credentials or machine-specific paths, leaves tools/web/MCP/RAG/agent mode
+disabled, uses `approve: ask`, and refuses to overwrite an existing file.
+Precedence, highest first:
 
 1. CLI flags (`--provider`, `--model`, `--base-url`, `--api-key`, …)
 2. Environment variables (`LLMTUI_PROVIDER`, `LLMTUI_MODEL`, `LLMTUI_BASE_URL`, `LLMTUI_API_KEY`, …)
@@ -108,8 +111,25 @@ Keep secrets out of YAML by referencing an environment variable:
 
 ```yaml
 providers:
+  lmstudio:
+    type: openai_compatible
+    base_url: http://localhost:1234/v1
+    api_key: "" # local LM Studio normally needs no key
+
   openai_compatible:
+    type: openai_compatible
+    base_url: http://localhost:8080/v1
     api_key_env: LLMTUI_API_KEY
+    api_key: ""
+
+chat:
+  stream: true
+  max_tokens: 4096
+  reasoning: auto # omit enable_thinking unless /think overrides it
+
+tools:
+  enabled: false
+  approve: ask
 ```
 
 The full reference for every section lives in
