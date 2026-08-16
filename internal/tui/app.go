@@ -2256,8 +2256,8 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	var b strings.Builder
-	appendReasoning := func(reasoning string, streaming bool) {
-		b.WriteString(m.renderReasoning(reasoning, streaming))
+	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
 		b.WriteString("\n\n")
 	}
 
@@ -2343,7 +2343,7 @@ func (m *Model) refreshViewport() {
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			if msg.Reasoning != "" {
-				appendReasoning(msg.Reasoning, false)
+				appendReasoning(msg.Reasoning, false, msg.ReasoningDuration)
 			}
 			content := msg.Content
 			if !m.toolsShowOutput {
@@ -2403,11 +2403,11 @@ func (m *Model) refreshViewport() {
 			b.WriteString("\n\n")
 		}
 		if m.reasoningBuf.Len() > 0 {
-			appendReasoning(m.reasoningBuf.String(), true)
+			appendReasoning(m.reasoningBuf.String(), true, m.reasoningDuration())
 		} else if m.reasoningLen > 0 {
 			// Reasoning model is still thinking; show progress so the wait
 			// is visible rather than a frozen screen.
-			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true)
+			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true, m.reasoningDuration())
 		}
 		if m.streamBuf.Len() > 0 {
 			b.WriteString(m.renderAnswer(terminaltext.Sanitize(m.streamBuf.String())))

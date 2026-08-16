@@ -265,7 +265,7 @@ git commit -m "feat(tui): track reasoning-phase duration for the thoughts header
 
 ---
 
-## Task 2: OpenCode-style `+`/`-` header with duration
+## Task 2: OpenCode-style `+`/`-` header with duration — done
 
 **Files:**
 - Modify: `internal/tui/transcript_styles.go` (`renderReasoning`, new `formatThoughtDuration`)

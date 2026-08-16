@@ -110,7 +110,7 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	m.refreshViewport()
 
 	view := m.viewport.View()
-	for _, want := range []string{"┃ How does this work?", "thought", "private scratch work", "It works carefully."} {
+	for _, want := range []string{"┃ How does this work?", "Thought", "private scratch work", "It works carefully."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("conversation view missing %q:\n%s", want, view)
 		}
@@ -137,8 +137,52 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	if strings.Contains(view, "private scratch work") {
 		t.Fatalf("hidden reasoning remained visible:\n%s", view)
 	}
-	if !strings.Contains(view, "thought · hidden · /thoughts show") {
+	if !strings.Contains(view, "+ Thought · /thoughts show") {
 		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
+	}
+}
+
+func TestReasoningHeaderShowsDurationWhenKnown(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 40)
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleAssistant, Content: "answer text",
+		Reasoning: "because X", ReasoningDuration: 4400 * time.Millisecond,
+	})
+
+	m.showReasoning = false
+	m.refreshViewport()
+	view := m.viewport.View()
+	if !strings.Contains(view, "+ Thought: 4.4s") {
+		t.Fatalf("collapsed header missing duration:\n%s", view)
+	}
+	if strings.Contains(view, "because X") {
+		t.Fatalf("collapsed view must not leak the reasoning body:\n%s", view)
+	}
+
+	m.showReasoning = true
+	m.refreshViewport()
+	view = m.viewport.View()
+	if !strings.Contains(view, "- Thought: 4.4s") {
+		t.Fatalf("expanded header missing duration:\n%s", view)
+	}
+	if !strings.Contains(view, "because X") {
+		t.Fatalf("expanded view missing reasoning body:\n%s", view)
+	}
+}
+
+func TestReasoningHeaderTicksWhileStreaming(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 40)
+	m.showReasoning = true
+	m.thinking = true
+	m.reasoningStart = time.Now().Add(-3 * time.Second)
+	m.reasoningBuf.WriteString("still working on it")
+	m.refreshViewport()
+
+	view := m.viewport.View()
+	if !strings.Contains(view, "- Thought: 3.") || !strings.Contains(view, "s…") {
+		t.Fatalf("streaming header missing live ticking duration with ellipsis:\n%s", view)
 	}
 }
 
