@@ -476,7 +476,7 @@ git commit -m "feat(tui): OpenCode-style +/- Thought header with duration"
 
 ---
 
-## Task 3: `/thinking` alias for `/thoughts`
+## Task 3: `/thinking` alias for `/thoughts` — done
 
 **Files:**
 - Modify: `internal/tui/commands.go:131`
