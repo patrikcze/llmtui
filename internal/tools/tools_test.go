@@ -353,6 +353,8 @@ func TestNeedsApproval(t *testing.T) {
 	}{
 		{Call{Tool: ToolListDir}, false},
 		{Call{Tool: ToolReadFile, Path: "a.txt"}, false},
+		{Call{Tool: ToolGlob, Body: "*.go"}, false},
+		{Call{Tool: ToolGrep, Body: "TODO"}, false},
 		{Call{Tool: ToolWriteFile, Path: "a.txt", Body: "x"}, true},
 		{Call{Tool: ToolRunCommand, Body: "ls -la"}, false},
 		{Call{Tool: ToolRunCommand, Body: "rm -rf ."}, true},

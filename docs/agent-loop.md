@@ -70,6 +70,15 @@ least one of these is true:
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
 
+The first cycle keeps prior human prompts and final answers, so follow-ups such
+as "write that to a file" keep their meaning. Completed tool-protocol messages,
+synthetic controller turns, and the old session summary remain visible in the
+transcript but are no longer resent as active work. Verifier-requested later
+cycles are context-isolated to messages from the current run; bounded cycle
+memory carries forward only the verified facts and next objective. This
+prevents a small local model from restarting an older task when a new run needs
+a retry; provider-side prompt caching does not change this selection.
+
 Tools use exactly the same native or fenced protocol as ordinary chat. Agent
 mode adds a total run-level tool-call limit above the existing per-turn
 `tools.max_iterations` limit, checked on every round — not only when a cycle

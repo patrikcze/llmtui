@@ -139,6 +139,77 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 	}
 }
 
+// A retry belongs to the current verified run, not to an older completed run
+// that happens to remain visible in the transcript. This guards the LM Studio
+// failure where a weather retry received an earlier benchmark's controller
+// turn and summary, then started executing the benchmark again.
+func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Weather answer without sufficient evidence."},
+		agentScriptStep{text: verifierJSON("failed", "weather evidence is missing", "use an alternative weather API", true, true)},
+		agentScriptStep{text: "Weather answer backed by the alternative API."},
+		agentScriptStep{text: verifierJSON("passed", "weather evidence verified", "", false, false)},
+	)
+	m.session.AddUser("OLD BENCHMARK INSTRUCTIONS")
+	m.session.AddUser(agentContinueDirective)
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleAssistant,
+		ToolCalls: []provider.ToolCall{{
+			ID: "old-call", Name: tools.ToolListDir, Arguments: `{}`,
+		}},
+	})
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleTool, ToolCallID: "old-call", ToolName: tools.ToolListDir,
+		Content: "old-benchmark-output",
+	})
+	m.session.AddAssistant("OLD BENCHMARK COMPLETE")
+	m.summary = "OLD BENCHMARK SUMMARY"
+
+	driveAgentCommands(t, m, m.startVerifiedRun("get current weather", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
+		t.Fatalf("run = %+v", m.agentLoop.run)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want executor/verifier twice", len(prov.requests))
+	}
+	first := prov.requests[0]
+	var firstContext strings.Builder
+	for _, message := range first.Messages {
+		firstContext.WriteString(message.Content)
+		firstContext.WriteByte('\n')
+	}
+	for _, stale := range []string{agentContinueDirective, "old-benchmark-output", "OLD BENCHMARK SUMMARY"} {
+		if strings.Contains(firstContext.String(), stale) {
+			t.Fatalf("new run leaked completed agent machinery %q:\n%s", stale, firstContext.String())
+		}
+	}
+	for _, conversational := range []string{"OLD BENCHMARK INSTRUCTIONS", "OLD BENCHMARK COMPLETE"} {
+		if !strings.Contains(firstContext.String(), conversational) {
+			t.Fatalf("new run lost conversational history %q:\n%s", conversational, firstContext.String())
+		}
+	}
+	retry := prov.requests[2]
+	var context strings.Builder
+	for _, message := range retry.Messages {
+		context.WriteString(message.Content)
+		context.WriteByte('\n')
+	}
+	got := context.String()
+	for _, stale := range []string{
+		"OLD BENCHMARK INSTRUCTIONS", "OLD BENCHMARK COMPLETE", "OLD BENCHMARK SUMMARY", "old-benchmark-output",
+	} {
+		if strings.Contains(got, stale) {
+			t.Fatalf("retry leaked prior-run context %q:\n%s", stale, got)
+		}
+	}
+	for _, current := range []string{"get current weather", "use an alternative weather API"} {
+		if !strings.Contains(got, current) {
+			t.Fatalf("retry lost current-run context %q:\n%s", current, got)
+		}
+	}
+}
+
 // TestVerifiedAgentVerificationCarriesAvailableToolNames guards a real
 // observed failure: a run asking for capability llmtui doesn't have (a live
 // weather/events lookup, with only web_search/web_fetch available) got

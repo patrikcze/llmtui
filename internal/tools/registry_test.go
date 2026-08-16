@@ -6,7 +6,7 @@ import (
 
 func TestDefaultRegistryContainsAllBuiltins(t *testing.T) {
 	reg := DefaultRegistry()
-	required := []string{ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch}
+	required := []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch}
 	for _, name := range required {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("missing capability %q", name)
@@ -64,7 +64,7 @@ func TestEnabledListFiltersOnSource(t *testing.T) {
 	for _, c := range caps {
 		found[c.Name] = true
 	}
-	for _, name := range []string{ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand} {
+	for _, name := range []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand} {
 		if !found[name] {
 			t.Errorf("builtin tool %q missing from EnabledList", name)
 		}
@@ -76,6 +76,8 @@ func TestBuiltinSafetyClasses(t *testing.T) {
 	cases := map[string]SafetyClass{
 		ToolListDir:    SafetyReadOnly,
 		ToolReadFile:   SafetyReadOnly,
+		ToolGlob:       SafetyReadOnly,
+		ToolGrep:       SafetyReadOnly,
 		ToolWriteFile:  SafetyWorkspaceWrite,
 		ToolRunCommand: SafetyCommand,
 		ToolWebSearch:  SafetyNetwork,

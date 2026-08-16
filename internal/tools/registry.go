@@ -90,6 +90,8 @@ func (r *Registry) EnabledList(sources map[string]bool) []CapabilityInfo {
 var safetyForBuiltin = map[string]SafetyClass{
 	ToolListDir:    SafetyReadOnly,
 	ToolReadFile:   SafetyReadOnly,
+	ToolGlob:       SafetyReadOnly,
+	ToolGrep:       SafetyReadOnly,
 	ToolWriteFile:  SafetyWorkspaceWrite,
 	ToolRunCommand: SafetyCommand,
 	// skill_load only changes prompt state inside the app: no file, command,
@@ -101,6 +103,8 @@ var safetyForBuiltin = map[string]SafetyClass{
 var approvalForTool = map[string]string{
 	ToolListDir:    "no",
 	ToolReadFile:   "ask for secret files",
+	ToolGlob:       "no",
+	ToolGrep:       "ask for an explicit secret file",
 	ToolWriteFile:  "ask",
 	ToolRunCommand: "ask unless read-only",
 	ToolWebSearch:  "no",

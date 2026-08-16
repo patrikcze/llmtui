@@ -37,6 +37,8 @@ const ResultsPrefix = "[tool results]"
 const (
 	ToolListDir    = "list_dir"
 	ToolReadFile   = "read_file"
+	ToolGlob       = "glob"
+	ToolGrep       = "grep"
 	ToolWriteFile  = "write_file"
 	ToolRunCommand = "run_command"
 	ToolWebSearch  = "web_search"
@@ -55,6 +57,8 @@ type Call struct {
 	Tool string
 	Path string
 	Body string
+	// Filter optionally narrows search tools (for example grep's file glob).
+	Filter string
 	// InputErr records malformed native JSON arguments. The call remains in
 	// the batch so the model receives a correlated tool error, but Execute
 	// must not run a zero-valued approximation of the requested operation.
@@ -264,6 +268,10 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.listDir(c.Path)
 	case ToolReadFile:
 		res.Output, res.Err = r.readFile(c.Path)
+	case ToolGlob:
+		res.Output, res.Err = r.globFiles(ctx, c.Path, c.Body)
+	case ToolGrep:
+		res.Output, res.Err = r.grepFiles(ctx, c.Path, c.Body, c.Filter)
 	case ToolWriteFile:
 		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
 	case ToolRunCommand:
@@ -275,8 +283,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolSkillLoad:
 		res.Output, res.Err = r.skillLoad(c)
 	default:
-		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s)",
-			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
+		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
 	}
 	return res
 }
@@ -520,7 +528,7 @@ func sanitizedEnv(environ []string) []string {
 // approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolWebSearch, ToolSkillLoad:
+	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWebSearch, ToolSkillLoad:
 		return false
 	case ToolRunCommand:
 		return ClassifyCommand(c.Body).Verdict != VerdictAuto
@@ -535,9 +543,9 @@ func NeedsApproval(c Call) bool {
 // id_rsa, …) asks first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolWebSearch, ToolSkillLoad:
+	case ToolListDir, ToolGlob, ToolWebSearch, ToolSkillLoad:
 		return false
-	case ToolReadFile:
+	case ToolReadFile, ToolGrep:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:
 		return r.Guardrails.ClassifyCommand(c.Body, r.root).Verdict != VerdictAuto
@@ -719,12 +727,23 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("web_search(%q)", strings.TrimSpace(c.Body))
 	case ToolWebFetch:
 		return "fetch " + c.Path
+	case ToolGlob:
+		return fmt.Sprintf("glob %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+	case ToolGrep:
+		return fmt.Sprintf("grep %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
 	default:
 		if c.Path == "" {
 			return c.Tool
 		}
 		return c.Tool + " " + c.Path
 	}
+}
+
+func orWorkspace(path string) string {
+	if path = strings.TrimSpace(path); path != "" {
+		return path
+	}
+	return "."
 }
 
 // Instructions is appended to the system prompt while tools are enabled;
@@ -740,6 +759,8 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
 - read_file <path> — return a file's contents
+- glob [path] — recursively find files; the glob pattern is the block's body
+- grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
 %s
@@ -756,6 +777,7 @@ grep -rn "TODO" scripts
 
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
+- glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".

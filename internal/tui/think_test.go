@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/patrikcze/llmtui/internal/provider"
 )
 
@@ -136,6 +138,30 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	}
 	if !strings.Contains(view, "thought · hidden · /thoughts show") {
 		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
+	}
+}
+
+func TestAnswerForegroundPreservesMarkdownRendering(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.UI.Markdown = true
+	// Changing width rebuilds the Glamour renderer after Markdown is enabled.
+	m.resize(100, 40)
+	m.session.AddAssistant("## Weather Summary\n\n| City | Forecast |\n| --- | --- |\n| **Brno** | Rain |\n\n```go\nfmt.Println(\"ok\")\n```")
+	m.refreshViewport()
+
+	view := ansi.Strip(m.viewport.View())
+	for _, want := range []string{"Weather Summary", "City", "Forecast", "Brno", "fmt.Println(\"ok\")"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("rendered Markdown is missing %q:\n%s", want, view)
+		}
+	}
+	for _, sourceMarker := range []string{"**Brno**", "```go"} {
+		if strings.Contains(view, sourceMarker) {
+			t.Fatalf("Markdown source marker %q was not rendered:\n%s", sourceMarker, view)
+		}
+	}
+	if !strings.Contains(view, "│") {
+		t.Fatalf("Markdown table was not laid out as a table:\n%s", view)
 	}
 }
 

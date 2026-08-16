@@ -1605,6 +1605,8 @@ func (m *Model) toolsOverlay() string {
 	b.WriteString(m.theme.UserLabel.Render("available tools") + "\n")
 	m.kv(&b, tools.ToolListDir, "list a directory in the workspace (auto)")
 	m.kv(&b, tools.ToolReadFile, "read a file's contents (auto)")
+	m.kv(&b, tools.ToolGlob, "find workspace files by glob pattern (auto)")
+	m.kv(&b, tools.ToolGrep, "search workspace contents with a regular expression (auto; secret files skipped)")
 	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
 	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
 	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")

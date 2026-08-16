@@ -12,8 +12,8 @@ import (
 
 func TestSpecsAreValidJSONSchemas(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 4 {
-		t.Fatalf("specs = %d, want 4", len(specs))
+	if len(specs) != 6 {
+		t.Fatalf("specs = %d, want 6", len(specs))
 	}
 	names := map[string]bool{}
 	for _, s := range specs {
@@ -29,7 +29,7 @@ func TestSpecsAreValidJSONSchemas(t *testing.T) {
 			t.Errorf("%s: missing description", s.Name)
 		}
 	}
-	for _, want := range []string{ToolListDir, ToolReadFile, ToolWriteFile, ToolRunCommand} {
+	for _, want := range []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand} {
 		if !names[want] {
 			t.Errorf("missing spec for %s", want)
 		}
@@ -56,6 +56,16 @@ func TestCallsFromNative(t *testing.T) {
 			name: "run_command",
 			in:   provider.ToolCall{ID: "c3", Name: ToolRunCommand, Arguments: `{"command":"ls"}`},
 			want: Call{ID: "c3", Tool: ToolRunCommand, Body: "ls"},
+		},
+		{
+			name: "glob",
+			in:   provider.ToolCall{ID: "c7", Name: ToolGlob, Arguments: `{"path":"internal","pattern":"**/*.go"}`},
+			want: Call{ID: "c7", Tool: ToolGlob, Path: "internal", Body: "**/*.go"},
+		},
+		{
+			name: "grep",
+			in:   provider.ToolCall{ID: "c8", Name: ToolGrep, Arguments: `{"path":"internal","pattern":"TODO|FIXME","glob":"*.go"}`},
+			want: Call{ID: "c8", Tool: ToolGrep, Path: "internal", Body: "TODO|FIXME", Filter: "*.go"},
 		},
 		{
 			name: "missing id is filled",

@@ -132,6 +132,10 @@ add` reminds you).
     files) require approval even though ordinary reads run unprompted.
     Each protection can be relaxed individually under
     `tools.guardrails.*` in config; all default on.
+  - **Typed search hygiene** — `glob` and `grep` execute inside llmtui rather
+    than through a shell, never traverse `.git`, skip symlinks, and cap their
+    results. Recursive `grep` skips likely secret files; explicitly targeting
+    one uses the same secret-read approval as `read_file`.
   - **Secret hygiene** — the environment passed to `run_command` is
     stripped of `LLMTUI_*` and anything matching key/token/secret/password
     patterns, so credentials cannot round-trip into model context via `env`.

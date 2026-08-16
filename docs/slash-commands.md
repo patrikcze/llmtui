@@ -87,7 +87,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | Command | Description |
 | --- | --- |
 | `/tools` · `/tools status` | Workspace tools overlay: state, approval mode, workspace root, limits |
-| `/tools on` / `/tools off` | Let the model list/read/write files and run commands under the launch directory |
+| `/tools on` / `/tools off` | Let the model list/read/search/write files and run commands under the launch directory |
 | `/tools ask` / `/tools auto` | Require approval and revoke temporary scoped grants (default), or explicitly run workspace tools unprompted in a fully trusted workspace |
 
 ## Skills

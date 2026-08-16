@@ -36,6 +36,31 @@ func Specs() []provider.ToolSpec {
 			}`),
 		},
 		{
+			Name:        ToolGlob,
+			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Paths are relative to the project root.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go or README*."},
+					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."}
+				},
+				"required": ["pattern"]
+			}`),
+		},
+		{
+			Name:        ToolGrep,
+			Description: "Recursively search project files with a Go regular expression and return path:line:content matches. Searches are read-only; recursive searches skip likely secret files.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"pattern": {"type": "string", "description": "Go regular expression to search for."},
+					"path": {"type": "string", "description": "Optional file or directory to search, relative to the project root."},
+					"glob": {"type": "string", "description": "Optional file-name glob filter, for example *.go or **/*.md."}
+				},
+				"required": ["pattern"]
+			}`),
+		},
+		{
 			Name:        ToolWriteFile,
 			Description: "Create or overwrite a file in the project workspace with the given content. Paths are relative to the project root. May require the user's approval.",
 			Parameters: json.RawMessage(`{
@@ -70,6 +95,8 @@ type nativeArgs struct {
 	URL        string `json:"url"`
 	MaxResults int    `json:"max_results"`
 	Skill      string `json:"skill"`
+	Pattern    string `json:"pattern"`
+	Glob       string `json:"glob"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -168,6 +195,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
+		case ToolGlob:
+			c.Body = args.Pattern
+		case ToolGrep:
+			c.Body = args.Pattern
+			c.Filter = strings.TrimSpace(args.Glob)
 		case ToolWriteFile:
 			c.Body = args.Content
 		case ToolRunCommand:
@@ -285,6 +317,7 @@ func NativeInstructions(root string, withWeb bool) string {
 	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using the provided tools.
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
+- glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))

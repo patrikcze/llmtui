@@ -153,6 +153,8 @@ func progressFingerprint(c tools.Call) string {
 		// Shell whitespace can be semantic inside quoted arguments. Only trim
 		// the block edges; do not collapse or case-fold the command itself.
 		resource = strings.TrimSpace(c.Body)
+	case tools.ToolGlob, tools.ToolGrep:
+		resource = strings.Join([]string{resource, strings.TrimSpace(c.Body), strings.TrimSpace(c.Filter)}, "\x1e")
 	case tools.ToolWriteFile:
 		resource += "\x1e" + digestText(c.Body)
 	case tools.ToolWebFetch:
