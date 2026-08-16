@@ -403,8 +403,23 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 		return
 	}
 	content := out.Choices[0].Message.Content
-	if content == "" && len(toolCalls) == 0 && out.Choices[0].Message.ReasoningContent != "" {
-		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)
+	reasoning := out.Choices[0].Message.ReasoningContent
+	if content == "" && len(toolCalls) == 0 && reasoning != "" {
+		// No visible answer and no tool call: the whole reply was spent
+		// thinking (typically max_tokens ran out mid-thought). Promote the
+		// reasoning to the visible answer instead of showing nothing.
+		content = reasoningFallback(reasoning)
+		reasoning = ""
+	}
+	if reasoning != "" {
+		// Any other shape — a final answer, a tool call, or both — keeps
+		// reasoning_content separate so it reaches the thoughts header
+		// instead of being silently dropped (previously it was only ever
+		// read inside the fallback above, so a normal think-then-answer or
+		// think-then-call-a-tool turn lost it entirely).
+		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: reasoning}) {
+			return
+		}
 	}
 	// A backend can fail to parse the model's tool-call attempt into
 	// structured tool_calls and instead leak the raw, still-tokenized
