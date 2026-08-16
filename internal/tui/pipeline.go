@@ -173,12 +173,15 @@ type requestTokenEstimate struct {
 // same value so context summarization, RAG, MCP connections, or skill state
 // cannot make the two disagree between separate composition passes.
 type preparedRequest struct {
-	composed   prompt.Output
-	decision   contextmgr.Decision
-	summary    string
-	tools      []provider.ToolSpec
-	ragResults []rag.Result
-	estimate   requestTokenEstimate
+	composed prompt.Output
+	decision contextmgr.Decision
+	summary  string
+	// agentScoped means summary was derived from only the active verified run.
+	// It must not overwrite the session-wide summary used by ordinary chat.
+	agentScoped bool
+	tools       []provider.ToolSpec
+	ragResults  []rag.Result
+	estimate    requestTokenEstimate
 }
 
 const compactedContinuationAnchor = "[Compacted continuation] Continue the original request " +
@@ -390,18 +393,62 @@ func compactLatestUserMessage(messages []provider.Message) (provider.Message, []
 	return original, compacted, true
 }
 
+// requestHistory returns the provider context for one request. A verified
+// run's first cycle keeps prior human prompts and final answers so requests
+// such as "write that to a file" still work, while completed tool protocol
+// messages and controller turns stay display-only. Once the verifier starts a
+// retry cycle, only messages produced by the current run are eligible.
+func (m *Model) requestHistory() (messages []provider.Message, summary string, agentScoped bool) {
+	messages = m.session.Messages
+	summary = m.summary
+	if !m.agentRunActive() {
+		return messages, summary, false
+	}
+	start := m.agentLoop.historyStart
+	if start < 0 || start > len(messages) {
+		start = 0
+	}
+	if m.agentLoop.run.Cycle <= 1 {
+		prior := projectCompletedAgentHistory(messages[:start])
+		current := append([]provider.Message(nil), messages[start:]...)
+		return append(prior, current...), "", true
+	}
+	return messages[start:], "", true
+}
+
+func projectCompletedAgentHistory(messages []provider.Message) []provider.Message {
+	projected := make([]provider.Message, 0, len(messages))
+	for _, message := range messages {
+		switch message.Role {
+		case provider.RoleTool:
+			continue
+		case provider.RoleUser:
+			if message.Content == agentContinueDirective || strings.HasPrefix(message.Content, tools.ResultsPrefix) {
+				continue
+			}
+		case provider.RoleAssistant:
+			if len(message.ToolCalls) > 0 || len(tools.Parse(message.Content)) > 0 {
+				continue
+			}
+		}
+		projected = append(projected, message)
+	}
+	return projected
+}
+
 func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool) (preparedRequest, error) {
 	base := m.compositionBase(raw, images, omitRaw)
 	specs := m.activeToolSpecs()
 	window, _ := m.contextWindow()
 	reserve := m.cfg.Context.ReserveResponseTokens
+	historyMessages, existingSummary, agentScoped := m.requestHistory()
 
 	// The no-history/no-summary composition is the irreducible request. Tool
 	// schemas are included because OpenAI-compatible servers count them in the
 	// prompt even though they are outside messages[].
 	probe := composeFromBase(base, nil, "")
 	fixed := estimatePrepared(probe, specs, window, reserve, 0, 0)
-	decision := contextmgr.Decide(m.session.Messages, contextmgr.Params{
+	decision := contextmgr.Decide(historyMessages, contextmgr.Params{
 		Strategy:               m.ctxStrategy,
 		ContextWindow:          window,
 		ReserveResponseTokens:  reserve,
@@ -409,21 +456,21 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		FixedTokens:            fixed.Total,
 	})
 	if fixed.Total+reserve > window {
-		return preparedRequest{composed: probe, decision: decision, tools: specs, ragResults: base.ragResults, estimate: fixed}, fmt.Errorf(
+		return preparedRequest{composed: probe, decision: decision, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, estimate: fixed}, fmt.Errorf(
 			"request overhead is too large for the %d-token context window: system/user prompt %d + tool schemas %d + response reserve %d; disable tools/skills/RAG, shorten the prompt, lower the reserve, or select a larger context window",
 			window, fixed.System+fixed.Messages, fixed.Tools, reserve)
 	}
 
-	keep := len(m.session.Messages)
+	keep := len(historyMessages)
 	if decision.Compress {
 		keep = m.cfg.Context.KeepLastMessages
 	}
-	older, recent := contextmgr.Split(m.session.Messages, keep)
+	older, recent := contextmgr.Split(historyMessages, keep)
 	toolContinuation := omitRaw && len(recent) > 0 && recent[len(recent)-1].Role == provider.RoleTool
 	if toolContinuation {
 		recent = withCompactedContinuationAnchor(recent)
 	}
-	summary := m.summary
+	summary := existingSummary
 	if decision.Compress && decision.Strategy == contextmgr.StrategySummarize && len(older) > 0 {
 		summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
 	}
@@ -486,13 +533,13 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		}
 	}
 	if est.Total > budget {
-		return preparedRequest{composed: out, decision: decision, summary: summary, tools: specs, ragResults: base.ragResults, estimate: est}, fmt.Errorf(
+		return preparedRequest{composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, estimate: est}, fmt.Errorf(
 			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
 			est.Total, budget)
 	}
 	if toolContinuation && !hasUserMessage(out.Messages) {
 		return preparedRequest{
-				composed: out, decision: decision, summary: summary, tools: specs,
+				composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs,
 				ragResults: base.ragResults, estimate: est,
 			},
 			errors.New("tool continuation has no user anchor after context selection")
@@ -504,17 +551,20 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		}
 	}
 	return preparedRequest{
-		composed:   out,
-		decision:   decision,
-		summary:    summary,
-		tools:      specs,
-		ragResults: base.ragResults,
-		estimate:   est,
+		composed:    out,
+		decision:    decision,
+		summary:     summary,
+		agentScoped: agentScoped,
+		tools:       specs,
+		ragResults:  base.ragResults,
+		estimate:    est,
 	}, nil
 }
 
 func (m *Model) commitPrepared(prepared preparedRequest) {
-	m.summary = prepared.summary
+	if !prepared.agentScoped {
+		m.summary = prepared.summary
+	}
 	m.ragLast = prepared.ragResults
 	m.ctxUsed = prepared.decision.Used
 	m.ctxWindow = prepared.estimate.Window

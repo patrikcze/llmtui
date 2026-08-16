@@ -291,9 +291,9 @@ tools:
   command_timeout: "30s"
 ```
 
-Four tools are available: `list_dir`, `read_file`, `write_file`, and
-`run_command` (one shell command in the workspace — `sh` on macOS/Linux,
-`cmd` on Windows, detected automatically). With `native: auto` (the default)
+Six tools are available: `list_dir`, `read_file`, `glob`, `grep`,
+`write_file`, and `run_command` (one shell command in the workspace — `sh` on
+macOS/Linux, `cmd` on Windows, detected automatically). With `native: auto` (the default)
 they are offered through **standard function calling**: the tool schemas ride
 in the request, the model answers with structured `tool_calls`, and results
 go back as `role:"tool"` messages — the protocol tool-capable models
@@ -319,7 +319,7 @@ what it already has — the turn never dead-ends in an error.
   line-numbered `+`/`-` diff against the previous content (green/red, with
   unchanged context elided). Long diffs are capped in compact mode; the
   diff is never sent to the model.
-- Reads, listings, and provably read-only commands (`ls`, `grep`, `cat`,
+- Reads, listings, typed `glob`/`grep` searches, and provably read-only commands (`ls`, `grep`, `cat`,
   `find`, `git status/log/diff`, … with no shell metacharacters) run
   automatically.
 - **Writes and every other command stop and ask first** with a

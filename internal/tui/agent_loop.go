@@ -21,8 +21,13 @@ import (
 const maxAgentDirectiveBytes = 12 * 1024
 
 type agentLoopState struct {
-	run          *agent.AgentRun
-	store        agent.Store
+	run   *agent.AgentRun
+	store agent.Store
+	// historyStart is the first session message owned by this run. The first
+	// cycle may use prior conversation for natural follow-up requests, but
+	// verifier-requested retry cycles are scoped from this index so completed
+	// runs and their synthetic controller turns cannot become active work.
+	historyStart int
 	ctx          context.Context
 	runCancel    context.CancelFunc
 	execution    agent.ExecutionResult
@@ -161,6 +166,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 		return nil
 	}
 	m.agentLoop.run = run
+	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.liveToolCalls = 0
@@ -726,6 +732,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.agentLoop.run = msg.run
+	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
 	m.agentOn = true
 	return m, tea.Batch(m.persistAgentRun(), m.startNextAgentCycle(next))
