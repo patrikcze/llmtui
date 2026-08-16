@@ -68,9 +68,10 @@ add` reminds you).
     workspace confinement, and approval gates below. A model emitting markup
     does not itself authorize execution. Unknown/malformed names or arguments
     are rejected before the TUI can run them.
-  - Reasoning output is routed separately and is not saved, cached, or sent
-    back to the model as answer history. `reasoning: on` requests thinking but
-    cannot force a model to produce it.
+  - Reasoning output is routed separately and may be expanded or collapsed in
+    the current UI with `/thoughts show|hide`. The UI-only text is not saved,
+    cached, or sent back to the model as answer history. `reasoning: on`
+    requests thinking but cannot force a model to produce it.
   - On macOS, the FFI dependency normally extracts its bundled libffi into the
     user's cache. Locked-down/read-only-cache environments can opt out and use
     a trusted system libffi as described in the troubleshooting guide.

@@ -121,7 +121,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 				return Output{Result: result, Usage: usage, Raw: raw.String()}, nil
 			case provider.EventError:
 				return Output{Raw: raw.String()}, classifyProviderError(callCtx, event.Err)
-			case provider.EventReasoning:
+			case provider.EventReasoning, provider.EventProgress:
 				// Reasoning is intentionally discarded and never enters run state.
 			}
 		}

@@ -703,6 +703,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
+	m.reasoningBuf.Reset()
+	m.filteredReasoningLen = 0
+	m.progressText = ""
 	m.resetThinkFilter()
 	m.streamStart = time.Now()
 	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
@@ -841,6 +844,9 @@ func (m *Model) continueChat() tea.Cmd {
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
+	m.reasoningBuf.Reset()
+	m.filteredReasoningLen = 0
+	m.progressText = ""
 	m.resetThinkFilter()
 	m.streamStart = time.Now()
 	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]

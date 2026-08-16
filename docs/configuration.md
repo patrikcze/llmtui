@@ -314,9 +314,12 @@ backend and model that support it.
 
 ### `ui` and `privacy`
 
-`ui.theme` (currently `claude_inspired`) and `ui.markdown` are honored
-today; the remaining `ui` keys (`use_nerd_font`, `animations`,
-`show_usage_chart`, `show_token_stats`, `compact_mode`) are reserved for
-future use. The `privacy` section is declarative — the behaviors it
-describes (local-first, key redaction) are hardcoded and not configurable
-off; see [security.md](security.md).
+`ui.theme` (currently `claude_inspired`), `ui.markdown`, and
+`ui.show_reasoning` are honored today. `show_reasoning` defaults to `true` and
+can be changed for the current session with `/thoughts show|hide`; it affects
+only presentation and does not enable or disable model reasoning. The
+remaining `ui` keys (`use_nerd_font`, `animations`, `show_usage_chart`,
+`show_token_stats`, `compact_mode`) are reserved for future use. The
+`privacy` section is declarative — the behaviors it describes (local-first,
+key redaction) are hardcoded and not configurable off; see
+[security.md](security.md).

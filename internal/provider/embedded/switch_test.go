@@ -87,7 +87,7 @@ func TestChatSwitchesToSiblingModel(t *testing.T) {
 	var sawSwitchNote, sawDelta, sawDone bool
 	for _, ev := range got {
 		switch ev.Type {
-		case provider.EventReasoning:
+		case provider.EventProgress:
 			if strings.Contains(ev.Delta, "switching model to second.gguf") {
 				sawSwitchNote = true
 			}
@@ -100,7 +100,7 @@ func TestChatSwitchesToSiblingModel(t *testing.T) {
 		}
 	}
 	if !sawSwitchNote {
-		t.Error("no 'switching model to …' reasoning event observed")
+		t.Error("no 'switching model to …' progress event observed")
 	}
 	if !sawDelta || !sawDone {
 		t.Errorf("deltas/done after switch: delta=%v done=%v, want both", sawDelta, sawDone)

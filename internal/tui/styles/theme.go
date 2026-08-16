@@ -16,6 +16,7 @@ type Theme struct {
 	Good      lipgloss.AdaptiveColor
 	Bad       lipgloss.AdaptiveColor
 	PanelEdge lipgloss.AdaptiveColor
+	UserEdge  lipgloss.AdaptiveColor
 
 	UserLabel      lipgloss.Style
 	AssistantLabel lipgloss.Style
@@ -28,6 +29,9 @@ type Theme struct {
 	BadgeWarn      lipgloss.Style
 	Panel          lipgloss.Style
 	InputPanel     lipgloss.Style
+	PromptRail     lipgloss.Style
+	ReasoningText  lipgloss.Style
+	AnswerText     lipgloss.Style
 	HelpFooter     lipgloss.Style
 	Spinner        lipgloss.Style
 	ErrorText      lipgloss.Style
@@ -46,6 +50,7 @@ func ClaudeInspired() Theme {
 		Good:      lipgloss.AdaptiveColor{Light: "#3D7A45", Dark: "#7CBF85"},
 		Bad:       lipgloss.AdaptiveColor{Light: "#B03A30", Dark: "#E07870"},
 		PanelEdge: lipgloss.AdaptiveColor{Light: "#D6D0C8", Dark: "#3F3B37"},
+		UserEdge:  lipgloss.AdaptiveColor{Light: "#2563B8", Dark: "#58A6FF"},
 	}
 
 	t.UserLabel = lipgloss.NewStyle().Bold(true).Foreground(t.Accent)
@@ -65,6 +70,13 @@ func ClaudeInspired() Theme {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Accent).
 		Padding(0, 1)
+	t.PromptRail = lipgloss.NewStyle().
+		Border(lipgloss.ThickBorder(), false, false, false, true).
+		BorderForeground(t.UserEdge).
+		Foreground(t.Text).
+		PaddingLeft(1)
+	t.ReasoningText = lipgloss.NewStyle().Foreground(t.Subtle)
+	t.AnswerText = lipgloss.NewStyle().Foreground(t.Text)
 	t.HelpFooter = lipgloss.NewStyle().Foreground(t.Faint)
 	t.Spinner = lipgloss.NewStyle().Foreground(t.Accent)
 	t.ErrorText = lipgloss.NewStyle().Foreground(t.Bad)

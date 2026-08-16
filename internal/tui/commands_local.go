@@ -212,6 +212,37 @@ func cmdThink(m *Model, args string) tea.Cmd {
 	}
 }
 
+// --- /thoughts ---------------------------------------------------------------
+
+func cmdThoughts(m *Model, args string) tea.Cmd {
+	mode := strings.TrimSpace(strings.ToLower(args))
+	switch mode {
+	case "", "status":
+		state := "hidden"
+		if m.showReasoning {
+			state = "shown"
+		}
+		m.notice = "captured reasoning is " + state + " — /think separately controls model reasoning"
+	case "show", "on":
+		m.showReasoning = true
+		m.reasoningDisplaySet = true
+		m.notice = "captured reasoning shown"
+		m.refreshViewport()
+	case "hide", "off":
+		m.showReasoning = false
+		m.reasoningDisplaySet = true
+		m.notice = "captured reasoning hidden"
+		m.refreshViewport()
+	case "toggle":
+		m.showReasoning = !m.showReasoning
+		m.reasoningDisplaySet = true
+		return cmdThoughts(m, "status")
+	default:
+		return m.fail("usage: /thoughts [show|hide|toggle|status]")
+	}
+	return nil
+}
+
 // --- /prompt -----------------------------------------------------------------
 
 func cmdPrompt(m *Model, args string) tea.Cmd {

@@ -32,6 +32,9 @@ func TestLeakedThinkBlockIsStrippedFromReplyAndHistory(t *testing.T) {
 	if m.reasoningLen == 0 {
 		t.Fatal("reasoning activity was not counted")
 	}
+	if last.Reasoning != "because reasons" {
+		t.Fatalf("captured reasoning = %q", last.Reasoning)
+	}
 }
 
 // Unclosed think block: the reply must be salvaged, not dropped.
@@ -44,6 +47,95 @@ func TestUnclosedThinkBlockIsSalvaged(t *testing.T) {
 	last := msgs[len(msgs)-1]
 	if !strings.Contains(last.Content, "ran out of tokens mid-thought") {
 		t.Fatalf("unclosed reasoning lost: %q", last.Content)
+	}
+	if last.Reasoning != "" {
+		t.Fatalf("salvaged reasoning duplicated into hidden UI field: %q", last.Reasoning)
+	}
+}
+
+func TestDedicatedReasoningEventIsCapturedSeparately(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type:  provider.EventReasoning,
+		Delta: "inspect inputs\x1b[2J",
+	}, ok: true, gen: m.streamGen})
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type:  provider.EventDelta,
+		Delta: "final answer",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Reasoning != "inspect inputs" {
+		t.Fatalf("reasoning = %q, want sanitized separate reasoning", last.Reasoning)
+	}
+	if last.Content != "final answer" {
+		t.Fatalf("answer = %q", last.Content)
+	}
+}
+
+func TestProviderProgressIsNotCapturedAsReasoning(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type:  provider.EventProgress,
+		Delta: "loading local model",
+	}, ok: true, gen: m.streamGen})
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type:  provider.EventDelta,
+		Delta: "ready",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Reasoning != "" {
+		t.Fatalf("provider progress captured as reasoning: %q", last.Reasoning)
+	}
+	if last.Content != "ready" {
+		t.Fatalf("answer = %q", last.Content)
+	}
+}
+
+func TestPromptRailAndReasoningVisibility(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 40)
+	m.session.AddUser("How does this work?")
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleAssistant, Content: "It works carefully.", Reasoning: "private scratch work",
+	})
+	m.refreshViewport()
+
+	view := m.viewport.View()
+	for _, want := range []string{"┃ How does this work?", "thought", "private scratch work", "It works carefully."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("conversation view missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"╭", "╰", "you", "assistant"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("conversation view contains removed card/role marker %q:\n%s", unwanted, view)
+		}
+	}
+	border, top, right, bottom, left := m.theme.PromptRail.GetBorder()
+	if border.Left != "┃" || top || right || bottom || !left {
+		t.Fatalf("prompt border = %+v sides=%v/%v/%v/%v, want heavy left rail only", border, top, right, bottom, left)
+	}
+	if m.theme.ReasoningText.GetForeground() != m.theme.Subtle {
+		t.Fatal("reasoning text should use the muted gray theme color")
+	}
+	if m.theme.AnswerText.GetForeground() != m.theme.Text {
+		t.Fatal("answer text should use the normal foreground color")
+	}
+
+	m.showReasoning = false
+	m.refreshViewport()
+	view = m.viewport.View()
+	if strings.Contains(view, "private scratch work") {
+		t.Fatalf("hidden reasoning remained visible:\n%s", view)
+	}
+	if !strings.Contains(view, "thought · hidden · /thoughts show") {
+		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
 	}
 }
 
