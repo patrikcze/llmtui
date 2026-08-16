@@ -135,9 +135,6 @@ func TestStaleResultsDoNotClearNewBatchActivity(t *testing.T) {
 
 func TestSettledGlyphsFromToolResults(t *testing.T) {
 	m := newTestModel(t)
-	// Conversation cards add a border around each event, so give the fixture
-	// enough rows to keep both settled calls visible at once.
-	m.resize(100, 40)
 	m.session.AddUser("do things")
 	m.session.Messages = append(m.session.Messages,
 		provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{

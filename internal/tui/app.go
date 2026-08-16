@@ -2183,18 +2183,14 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	var b strings.Builder
-	appendCard := func(style lipgloss.Style, label string, labelStyle lipgloss.Style, body string) {
-		b.WriteString(m.renderConversationCard(style, label, labelStyle, body))
-		b.WriteString("\n\n")
-	}
 	appendReasoning := func(reasoning string, streaming bool) {
-		b.WriteString(m.renderReasoningCard(reasoning, streaming))
+		b.WriteString(m.renderReasoning(reasoning, streaming))
 		b.WriteString("\n\n")
 	}
 
 	if m.demoMode {
-		appendCard(m.theme.SystemCard, "system", m.theme.SystemNote,
-			m.theme.SystemNote.Render("⚠ no backend reachable — running in offline demo mode (mock provider)"))
+		b.WriteString(m.theme.SystemNote.Render("⚠ no backend reachable — running in offline demo mode (mock provider)"))
+		b.WriteString("\n\n")
 	}
 
 	// Standing disclosure while agent mode is on: the user must always be
@@ -2204,13 +2200,15 @@ func (m *Model) refreshViewport() {
 		if m.toolsAutoApprove {
 			mode = "auto-approve"
 		}
-		appendCard(m.theme.SystemCard, "workspace", m.theme.SystemNote, m.theme.SystemNote.Render(fmt.Sprintf(
-			"⚒ tools on (%s) — the model can act on files and run commands only in\n%s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
+		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
+			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
+		b.WriteString("\n\n")
 	}
 
 	if m.ragOn && m.ragIndex != nil {
-		appendCard(m.theme.SystemCard, "context", m.theme.SystemNote, m.theme.SystemNote.Render(fmt.Sprintf(
-			"🔎 RAG on — keyword-matched snippets from %d indexed files inform prompts as\nlabeled reference context — /rag off to disable", len(m.ragIndex.Sources()))))
+		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
+			"🔎 RAG on — keyword-matched snippets from %d indexed files inform prompts as\n  labeled reference context — /rag off to disable", len(m.ragIndex.Sources()))))
+		b.WriteString("\n\n")
 	}
 
 	// Settled tool-call glyphs: map each call id to whether its result (a
@@ -2236,8 +2234,8 @@ func (m *Model) refreshViewport() {
 			// model. The actual message content sent to the model is
 			// unchanged; only its rendering here differs.
 			if msg.Content == agentContinueDirective {
-				appendCard(m.theme.SystemCard, "agent", m.theme.SystemNote,
-					m.theme.SystemNote.Render("⚙ continuing to the next bounded objective"))
+				b.WriteString(m.theme.SystemNote.Render("⚙ agent — continuing to the next bounded objective"))
+				b.WriteString("\n\n")
 				continue
 			}
 			// Tool results travel as user messages; style them as machinery,
@@ -2245,17 +2243,19 @@ func (m *Model) refreshViewport() {
 			// model sees everything, the human sees one line per call
 			// (/tools output shows the full text).
 			if strings.HasPrefix(msg.Content, tools.ResultsPrefix) {
-				var body strings.Builder
 				if m.toolsShowOutput {
-					body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
+					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
+					b.WriteString("\n")
+					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
+					b.WriteString("\n")
 				} else {
-					body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
+					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
+					b.WriteString("\n")
 				}
 				if msg.Display != "" {
-					body.WriteString("\n")
-					body.WriteString(m.renderToolDiff(msg.Display))
+					b.WriteString(m.renderToolDiff(msg.Display))
 				}
-				appendCard(m.theme.ToolCard, "tools", lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
+				b.WriteString("\n")
 				continue
 			}
 			var body strings.Builder
@@ -2266,33 +2266,27 @@ func (m *Model) refreshViewport() {
 				}
 				body.WriteString(m.theme.SystemNote.Render(fmt.Sprintf("⌗ [image %d] ", i+1)))
 			}
-			appendCard(m.theme.UserCard, "you", lipgloss.NewStyle().Bold(true).Foreground(m.theme.UserEdge), body.String())
+			b.WriteString(m.renderPrompt(body.String()))
+			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			if msg.Reasoning != "" {
 				appendReasoning(msg.Reasoning, false)
 			}
-			// A tool-only turn renders as bare action lines (Claude-Code
-			// style), without an "assistant" label or empty markdown body;
-			// its results attach directly underneath.
-			toolOnly := msg.Content == "" && len(msg.ToolCalls) > 0
-			if !toolOnly {
-				content := msg.Content
-				if !m.toolsShowOutput {
-					// Compact mode: fenced tool blocks (file bodies,
-					// scripts) render as one-line actions instead of full
-					// payloads.
-					content = tools.CollapseBlocks(content)
-				}
-				if content != "" {
-					appendCard(m.theme.AssistantCard, "assistant", m.theme.AssistantLabel, m.renderMarkdown(content))
-				}
+			content := msg.Content
+			if !m.toolsShowOutput {
+				// Compact mode: fenced tool blocks (file bodies, scripts)
+				// render as one-line actions instead of full payloads.
+				content = tools.CollapseBlocks(content)
+			}
+			if content != "" {
+				b.WriteString(m.renderAnswer(m.renderMarkdown(content)))
+				b.WriteString("\n\n")
 			}
 			// While an async batch runs, its parent message is the last one
 			// and its calls render as live animated lines below the viewport
 			// (renderActivity) — rendering them here too would duplicate them.
 			liveBatch := m.activity != nil && i == len(m.session.Messages)-1
 			if !liveBatch {
-				var body strings.Builder
 				for _, c := range tools.CallsFromNative(msg.ToolCalls) {
 					line, style := "⚒ "+c.Describe(), m.theme.SystemNote
 					if hasErr, ok := toolCallErr[c.ID]; ok {
@@ -2302,41 +2296,38 @@ func (m *Model) refreshViewport() {
 							line, style = "● "+c.Describe(), okGlyph
 						}
 					}
-					body.WriteString(style.Render(terminaltext.Sanitize(line)))
-					body.WriteString("\n")
+					b.WriteString(style.Render(terminaltext.Sanitize(line)))
+					b.WriteString("\n")
 				}
-				if body.Len() > 0 {
-					appendCard(m.theme.ToolCard, "tools", lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
-				}
+			}
+			if len(msg.ToolCalls) > 0 {
+				b.WriteString("\n")
 			}
 		case provider.RoleTool:
 			// Native tool results attach under their call, Claude-Code
 			// style. A write_file renders its diff; everything else is one
 			// summary line per call unless /tools output asked for more.
-			var body strings.Builder
 			switch {
 			case msg.Display != "":
-				body.WriteString(m.renderToolDiff(msg.Display))
+				b.WriteString(m.renderToolDiff(msg.Display))
 			case m.toolsShowOutput:
-				body.WriteString(m.theme.SystemNote.Render("⎿ " + terminaltext.Sanitize(msg.ToolName)))
-				body.WriteString("\n")
-				body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
+				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + terminaltext.Sanitize(msg.ToolName)))
+				b.WriteString("\n")
+				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
+				b.WriteString("\n")
 			default:
-				body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
-					"⎿ " + tools.SummarizeOutput(msg.Content))))
+				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
+					"  ⎿ " + tools.SummarizeOutput(msg.Content))))
+				b.WriteString("\n")
 			}
-			label := "tool"
-			if msg.ToolName != "" {
-				label += " · " + msg.ToolName
-			}
-			appendCard(m.theme.ToolCard, label, lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
+			b.WriteString("\n")
 		}
 	}
 
 	if m.thinking {
 		if m.progressText != "" {
-			appendCard(m.theme.SystemCard, "provider", m.theme.SystemNote,
-				m.theme.SystemNote.Render(m.progressText))
+			b.WriteString(m.theme.SystemNote.Render("provider · " + m.progressText))
+			b.WriteString("\n\n")
 		}
 		if m.reasoningBuf.Len() > 0 {
 			appendReasoning(m.reasoningBuf.String(), true)
@@ -2346,14 +2337,14 @@ func (m *Model) refreshViewport() {
 			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true)
 		}
 		if m.streamBuf.Len() > 0 {
-			appendCard(m.theme.AssistantCard, "assistant · streaming", m.theme.AssistantLabel,
-				terminaltext.Sanitize(m.streamBuf.String()))
+			b.WriteString(m.renderAnswer(terminaltext.Sanitize(m.streamBuf.String())))
+			b.WriteString("\n")
 		}
 	}
 
 	if m.errText != "" {
-		appendCard(m.theme.ErrorCard, "error", m.theme.ErrorText,
-			m.theme.ErrorText.Render(terminaltext.Sanitize("✗ "+m.errText)))
+		b.WriteString(m.theme.ErrorText.Render(terminaltext.Sanitize("✗ " + m.errText)))
+		b.WriteString("\n")
 	}
 
 	// Approval prompt: list exactly what the model wants to do before any

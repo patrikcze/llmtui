@@ -43,10 +43,10 @@ switch or exit. Its native runtime, platform matrix, and limitations are documen
 - **Reasoning models** (that "think" before answering) stream their thinking
   separately (OpenAI `reasoning_content`, Ollama `thinking`). llmtui treats
   that as activity: it resets the inactivity timer (so a long thinking phase
-  never times out) and shows it in a distinct thought card. Use `/thoughts
-  show|hide` to expand or collapse these cards without changing model
-  behavior. Thinking is not part of the answer and is not saved, cached, or
-  sent back as history.
+  never times out) and shows it as muted gray thought text. Use `/thoughts
+  show|hide` to expand or collapse it without changing model behavior.
+  Thinking is not part of the answer and is not saved, cached, or sent back
+  as history.
 - Transient failures (connection refused/reset, timeouts) retry up to
   `network.retry.max_attempts` with `network.retry.backoff` — HTTP errors
   (wrong model, bad request) and user cancellations are never retried.
@@ -79,7 +79,7 @@ What llmtui does client-side, for any reasoning model:
 
 - Strips a leaked leading `<think>…</think>` block out of the answer
   (`chat.strip_leaked_thinking`, default `true`), so broken-template
-  reasoning can be shown in a UI-only thought card but is never stored in
+  reasoning can be shown as UI-only thought text but is never stored in
   history, re-sent each turn, or cached.
 - `/thoughts show|hide` (or `ui.show_reasoning`) changes only whether captured
   thought text is visible. It does not request reasoning from the model.

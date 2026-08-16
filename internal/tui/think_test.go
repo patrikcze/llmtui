@@ -97,7 +97,7 @@ func TestProviderProgressIsNotCapturedAsReasoning(t *testing.T) {
 	}
 }
 
-func TestConversationCardsAndReasoningVisibility(t *testing.T) {
+func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	m := newTestModel(t)
 	m.resize(100, 40)
 	m.session.AddUser("How does this work?")
@@ -107,10 +107,25 @@ func TestConversationCardsAndReasoningVisibility(t *testing.T) {
 	m.refreshViewport()
 
 	view := m.viewport.View()
-	for _, want := range []string{"╭", "you", "thought", "assistant", "private scratch work", "It works carefully."} {
+	for _, want := range []string{"┃ How does this work?", "thought", "private scratch work", "It works carefully."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("conversation view missing %q:\n%s", want, view)
 		}
+	}
+	for _, unwanted := range []string{"╭", "╰", "you", "assistant"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("conversation view contains removed card/role marker %q:\n%s", unwanted, view)
+		}
+	}
+	border, top, right, bottom, left := m.theme.PromptRail.GetBorder()
+	if border.Left != "┃" || top || right || bottom || !left {
+		t.Fatalf("prompt border = %+v sides=%v/%v/%v/%v, want heavy left rail only", border, top, right, bottom, left)
+	}
+	if m.theme.ReasoningText.GetForeground() != m.theme.Subtle {
+		t.Fatal("reasoning text should use the muted gray theme color")
+	}
+	if m.theme.AnswerText.GetForeground() != m.theme.Text {
+		t.Fatal("answer text should use the normal foreground color")
 	}
 
 	m.showReasoning = false
@@ -119,8 +134,8 @@ func TestConversationCardsAndReasoningVisibility(t *testing.T) {
 	if strings.Contains(view, "private scratch work") {
 		t.Fatalf("hidden reasoning remained visible:\n%s", view)
 	}
-	if !strings.Contains(view, "reasoning hidden") || !strings.Contains(view, "/thoughts show") {
-		t.Fatalf("hidden reasoning card lacks recovery hint:\n%s", view)
+	if !strings.Contains(view, "thought · hidden · /thoughts show") {
+		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
 	}
 }
 
