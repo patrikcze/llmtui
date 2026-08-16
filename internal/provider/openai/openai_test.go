@@ -411,6 +411,100 @@ func captureChatBody(t *testing.T, req provider.ChatRequest) string {
 	return body
 }
 
+// TestChatNonStreamingFlagsLeakedHarmonyToolCall guards against LM Studio's
+// Harmony parser failing to convert a gpt-oss tool-call attempt into
+// structured tool_calls and instead leaking the raw, still-tokenized
+// attempt into content (observed verbatim from LM Studio serving
+// openai/gpt-oss-20b). That text must not be surfaced as a normal answer.
+func TestChatNonStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
+	const leaked = `to=functions.read_file?<|constrain|>json<|message|>{"path":"llmtui-agent","content?"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var sawDelta bool
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			sawDelta = true
+		}
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	if sawDelta {
+		t.Error("leaked tool-call text must never be emitted as a delta")
+	}
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a leaked Harmony tool-call attempt")
+	}
+	if len(done.ToolCalls) != 0 {
+		t.Errorf("ToolCalls = %+v, want none: nothing was actually parsed", done.ToolCalls)
+	}
+}
+
+func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "a normal, complete reply"}}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	text, _, err := collect(t, events)
+	if err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if text != "a normal, complete reply" {
+		t.Errorf("text = %q, want the ordinary reply preserved", text)
+	}
+	done := collectDoneEvent(t, events)
+	if done.MalformedToolCall {
+		t.Error("MalformedToolCall = true, want false for an ordinary reply")
+	}
+}
+
+// TestChatStreamingFlagsLeakedHarmonyToolCall guards the streaming path's
+// equivalent detection. Unlike the non-streaming path it cannot suppress the
+// already-streamed deltas (the leak is only recognizable once the full text
+// has arrived), but it must still flag EventDone so the caller can drop the
+// turn from conversation history instead of keeping it as a real answer.
+func TestChatStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"to=functions.read_file?\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"<|constrain|>json<|message|>{\\\"path\\\":\\\"x\\\"}\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a leaked Harmony tool-call attempt")
+	}
+}
+
 func TestChatSendsEnableThinkingWhenReasoningSet(t *testing.T) {
 	for _, tc := range []struct {
 		reasoning string

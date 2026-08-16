@@ -754,6 +754,8 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
 	m.reasoningBuf.Reset()
+	m.reasoningStart = time.Time{}
+	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	m.resetThinkFilter()
@@ -895,6 +897,8 @@ func (m *Model) continueChat() tea.Cmd {
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
 	m.reasoningBuf.Reset()
+	m.reasoningStart = time.Time{}
+	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	m.resetThinkFilter()

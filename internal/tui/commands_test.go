@@ -36,6 +36,17 @@ func TestCommandAliases(t *testing.T) {
 	}
 }
 
+func TestThinkingIsAnAliasForThoughts(t *testing.T) {
+	m := newTestModel(t)
+	m.showReasoning = false
+
+	runCommand(m, "/thinking show")
+
+	if !m.showReasoning {
+		t.Fatal("/thinking show should resolve via alias to /thoughts show")
+	}
+}
+
 func TestHelpGroupsByCategory(t *testing.T) {
 	m := newTestModel(t)
 	help := m.helpOverlay("")

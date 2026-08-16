@@ -112,6 +112,8 @@ type Model struct {
 	thinking             bool
 	streamBuf            strings.Builder
 	reasoningBuf         strings.Builder
+	reasoningStart       time.Time // zero until the first reasoning byte of the current turn
+	reasoningEnd         time.Time // zero until the first visible-answer byte after reasoning
 	stream               <-chan provider.ChatEvent
 	streamStart          time.Time
 	lastTPS              float64
@@ -173,6 +175,7 @@ type Model struct {
 	toolRunner               *tools.Runner
 	toolDepth                int          // auto follow-up rounds for the current user turn
 	emptyContinuationRetried bool         // one retry already spent on this round's empty-completion-after-tools
+	malformedToolCallRetried bool         // one retry already spent on this round's leaked/unparsed tool-call attempt
 	pendingCalls             []tools.Call // parsed calls awaiting the user's approval
 	pendingToolPlan          *toolBatchPlan
 	pendingBudget            bool        // the pending prompt is "budget spent — continue?", not an approval
@@ -1032,6 +1035,7 @@ func (m *Model) send() tea.Cmd {
 	m.sentCount++
 	m.toolDepth = 0                    // a fresh user turn gets a fresh tool budget
 	m.emptyContinuationRetried = false // a fresh user turn gets a fresh empty-completion retry
+	m.malformedToolCallRetried = false // a fresh user turn gets a fresh malformed-tool-call retry
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
 			// Resuming an in-progress run: it never replays incomplete work
@@ -1453,6 +1457,7 @@ func (m *Model) retryLast() tea.Cmd {
 	}
 	m.toolDepth = 0                    // a retry is a fresh turn and gets a fresh tool budget
 	m.emptyContinuationRetried = false // a retry is a fresh turn and gets a fresh empty-completion retry
+	m.malformedToolCallRetried = false // a retry is a fresh turn and gets a fresh malformed-tool-call retry
 	m.errText = ""
 	m.notice = "retrying last message"
 	m.sentCount++
@@ -1836,6 +1841,9 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// live indicator so a long thinking phase never looks frozen or times
 		// out.
 		reasoning := terminaltext.Sanitize(msg.event.Delta)
+		if m.reasoningStart.IsZero() {
+			m.reasoningStart = time.Now()
+		}
 		m.reasoningLen += len(reasoning)
 		m.reasoningBuf.WriteString(reasoning)
 		if m.idleWatchdog != nil {
@@ -1848,6 +1856,9 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if m.thinkFilter != nil {
 			answer, reasoning := m.thinkFilter.Feed(delta)
 			if reasoning != "" {
+				if m.reasoningStart.IsZero() {
+					m.reasoningStart = time.Now()
+				}
 				m.reasoningLen += len(reasoning)
 				m.filteredReasoningLen += len(reasoning)
 				m.reasoningBuf.WriteString(reasoning)
@@ -1855,6 +1866,9 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			delta = answer
 		}
 		if delta != "" {
+			if !m.reasoningStart.IsZero() && m.reasoningEnd.IsZero() {
+				m.reasoningEnd = time.Now()
+			}
 			m.streamBuf.WriteString(delta)
 		}
 		// A token arrived: the stream is healthy, so push the idle deadline out.
@@ -1864,7 +1878,20 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
-		emptyToolContinuation := m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
+		// A backend can fail to parse the model's tool-call attempt into
+		// structured ToolCalls and instead leak the raw, still-tokenized
+		// attempt into content (see openai.looksLikeUnparsedToolCall). That
+		// text is not a real answer and must never enter conversation
+		// history: kept there it re-confuses the model on every later turn,
+		// which is worse than the one-off glitch that produced it. Checked
+		// (and streamBuf cleared) before emptyToolContinuation because a
+		// non-streaming leak looks identical to an empty completion once
+		// content is suppressed at the source.
+		malformedToolCall := msg.event.MalformedToolCall && len(msg.event.ToolCalls) == 0
+		if malformedToolCall {
+			m.streamBuf.Reset()
+		}
+		emptyToolContinuation := !malformedToolCall && m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
 		// A tool call truncated by max_tokens must never be executed: the
 		// backend's own grammar usually can't emit a structured ToolCalls
 		// entry from incomplete JSON, so this mainly guards a backend that
@@ -1884,6 +1911,27 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if msg.event.Truncated {
 			m.recordAgentTruncation()
 		}
+		if malformedToolCall {
+			// This is usually a one-off backend parsing hiccup (observed:
+			// LM Studio's Harmony parser losing track partway through a
+			// gpt-oss tool call deep in a long conversation), so give it
+			// exactly one fresh attempt at the same round — same
+			// accumulated history, nothing resent — before treating it as a
+			// real failure, mirroring the empty-completion retry below.
+			if !m.malformedToolCallRetried {
+				m.malformedToolCallRetried = true
+				m.notice = "model's tool call could not be parsed by the backend — retrying once"
+				m.refreshViewport()
+				return m, m.continueChat()
+			}
+			m.errText = "Model's tool call could not be parsed by the backend, twice in a row (retry did not help). " +
+				"This is typically the backend (e.g. LM Studio) failing to convert the model's tool-call attempt into a structured call — check for a backend/runtime update for this model, or try again."
+			m.failVerifiedRun(errors.New(m.errText))
+			m.endAgentRun()
+			m.refreshViewport()
+			return m, m.persistAgentRun()
+		}
+		m.malformedToolCallRetried = false
 		if emptyToolContinuation {
 			// A model can occasionally sample straight to EOS right after a
 			// tool result lands, especially deep into a long tool-heavy
@@ -1972,15 +2020,18 @@ func (m *Model) streamFailed(err error) {
 	// Preserve partial streamed output instead of discarding it.
 	if partial := m.streamBuf.String(); partial != "" {
 		m.session.AddMessage(provider.Message{
-			Role:      provider.RoleAssistant,
-			Content:   partial,
-			Reasoning: m.reasoningBuf.String(),
+			Role:              provider.RoleAssistant,
+			Content:           partial,
+			Reasoning:         m.reasoningBuf.String(),
+			ReasoningDuration: m.reasoningDuration(),
 		})
 		m.replyCount++
 		m.streamBuf.Reset()
 		m.errText += " (partial reply kept)"
 	}
 	m.reasoningBuf.Reset()
+	m.reasoningStart = time.Time{}
+	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	if m.cancelStream != nil {
@@ -2020,13 +2071,34 @@ func (m *Model) drainStream() {
 // deliberate, complete answer.
 const truncatedResponseNotice = "\n\n_(response was cut off by max_tokens — raise max_tokens or ask again; the answer above may be incomplete or broken)_"
 
+// reasoningDuration reports how long the current turn's reasoning phase has
+// taken. It returns 0 if no reasoning was captured this turn. While
+// reasoning is still in progress (reasoningEnd not yet set) it measures up
+// to now, so a live re-render ticks the number up instead of freezing it.
+func (m *Model) reasoningDuration() time.Duration {
+	if m.reasoningStart.IsZero() {
+		return 0
+	}
+	end := m.reasoningEnd
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if end.Before(m.reasoningStart) {
+		return 0
+	}
+	return end.Sub(m.reasoningStart)
+}
+
 func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	m.thinking = false
 	m.flushThinkFilter()
 	reply := m.streamBuf.String()
 	m.streamBuf.Reset()
 	reasoning := m.reasoningBuf.String()
+	reasoningDuration := m.reasoningDuration()
 	m.reasoningBuf.Reset()
+	m.reasoningStart = time.Time{}
+	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	toolCalls := m.streamToolCalls
@@ -2042,10 +2114,11 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	}
 	if reply != "" || len(toolCalls) > 0 {
 		m.session.AddMessage(provider.Message{
-			Role:      provider.RoleAssistant,
-			Content:   reply,
-			ToolCalls: toolCalls,
-			Reasoning: reasoning,
+			Role:              provider.RoleAssistant,
+			Content:           reply,
+			ToolCalls:         toolCalls,
+			Reasoning:         reasoning,
+			ReasoningDuration: reasoningDuration,
 		})
 		m.replyCount++
 	}
@@ -2183,8 +2256,8 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	var b strings.Builder
-	appendReasoning := func(reasoning string, streaming bool) {
-		b.WriteString(m.renderReasoning(reasoning, streaming))
+	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
 		b.WriteString("\n\n")
 	}
 
@@ -2270,7 +2343,7 @@ func (m *Model) refreshViewport() {
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			if msg.Reasoning != "" {
-				appendReasoning(msg.Reasoning, false)
+				appendReasoning(msg.Reasoning, false, msg.ReasoningDuration)
 			}
 			content := msg.Content
 			if !m.toolsShowOutput {
@@ -2330,11 +2403,11 @@ func (m *Model) refreshViewport() {
 			b.WriteString("\n\n")
 		}
 		if m.reasoningBuf.Len() > 0 {
-			appendReasoning(m.reasoningBuf.String(), true)
+			appendReasoning(m.reasoningBuf.String(), true, m.reasoningDuration())
 		} else if m.reasoningLen > 0 {
 			// Reasoning model is still thinking; show progress so the wait
 			// is visible rather than a frozen screen.
-			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true)
+			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true, m.reasoningDuration())
 		}
 		if m.streamBuf.Len() > 0 {
 			b.WriteString(m.renderAnswer(terminaltext.Sanitize(m.streamBuf.String())))

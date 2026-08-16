@@ -164,3 +164,45 @@ func TestChatNonStreamingToolCalls(t *testing.T) {
 		t.Errorf("calls = %+v", calls)
 	}
 }
+
+// TestChatNonStreamingPreservesReasoningAlongsideToolCalls guards a real
+// regression: a reasoning-capable model (e.g. gemma-4-e4b via LM Studio)
+// deciding to call a tool still emits reasoning_content explaining why. The
+// non-streaming path only ever read reasoning_content as a content
+// fallback when there were NO tool calls, so on every ordinary
+// think-then-call-a-tool turn the reasoning was silently dropped — never
+// reaching the transcript, history, or the thoughts header.
+func TestChatNonStreamingPreservesReasoningAlongsideToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"","reasoning_content":"I should list the directory first.","tool_calls":[
+			{"id":"call_3","type":"function","function":{"name":"list_dir","arguments":"{}"}}
+		]},"finish_reason":"tool_calls"}]}`)
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL+"/v1", "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "list the files"}}})
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	var reasoning string
+	var done provider.ChatEvent
+	for ev := range events {
+		switch ev.Type {
+		case provider.EventReasoning:
+			reasoning += ev.Delta
+		case provider.EventDone:
+			done = ev
+		case provider.EventError:
+			t.Fatalf("stream error: %v", ev.Err)
+		}
+	}
+	if reasoning != "I should list the directory first." {
+		t.Errorf("reasoning = %q, want the model's reasoning_content preserved even though tool_calls were present", reasoning)
+	}
+	if len(done.ToolCalls) != 1 || done.ToolCalls[0].ID != "call_3" || done.ToolCalls[0].Name != "list_dir" {
+		t.Errorf("ToolCalls = %+v, want the list_dir call untouched", done.ToolCalls)
+	}
+}

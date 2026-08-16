@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -109,7 +110,7 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	m.refreshViewport()
 
 	view := m.viewport.View()
-	for _, want := range []string{"┃ How does this work?", "thought", "private scratch work", "It works carefully."} {
+	for _, want := range []string{"┃ How does this work?", "Thought", "private scratch work", "It works carefully."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("conversation view missing %q:\n%s", want, view)
 		}
@@ -136,8 +137,52 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	if strings.Contains(view, "private scratch work") {
 		t.Fatalf("hidden reasoning remained visible:\n%s", view)
 	}
-	if !strings.Contains(view, "thought · hidden · /thoughts show") {
+	if !strings.Contains(view, "+ Thought · /thoughts show") {
 		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
+	}
+}
+
+func TestReasoningHeaderShowsDurationWhenKnown(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 40)
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleAssistant, Content: "answer text",
+		Reasoning: "because X", ReasoningDuration: 4400 * time.Millisecond,
+	})
+
+	m.showReasoning = false
+	m.refreshViewport()
+	view := m.viewport.View()
+	if !strings.Contains(view, "+ Thought: 4.4s") {
+		t.Fatalf("collapsed header missing duration:\n%s", view)
+	}
+	if strings.Contains(view, "because X") {
+		t.Fatalf("collapsed view must not leak the reasoning body:\n%s", view)
+	}
+
+	m.showReasoning = true
+	m.refreshViewport()
+	view = m.viewport.View()
+	if !strings.Contains(view, "- Thought: 4.4s") {
+		t.Fatalf("expanded header missing duration:\n%s", view)
+	}
+	if !strings.Contains(view, "because X") {
+		t.Fatalf("expanded view missing reasoning body:\n%s", view)
+	}
+}
+
+func TestReasoningHeaderTicksWhileStreaming(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(100, 40)
+	m.showReasoning = true
+	m.thinking = true
+	m.reasoningStart = time.Now().Add(-3 * time.Second)
+	m.reasoningBuf.WriteString("still working on it")
+	m.refreshViewport()
+
+	view := m.viewport.View()
+	if !strings.Contains(view, "- Thought: 3.") || !strings.Contains(view, "s…") {
+		t.Fatalf("streaming header missing live ticking duration with ellipsis:\n%s", view)
 	}
 }
 
@@ -208,5 +253,60 @@ func TestBuildRequestCarriesReasoning(t *testing.T) {
 	m.reasoningMode = "auto"
 	if req := m.buildRequest(nil); req.Reasoning != "" {
 		t.Fatalf("auto must map to empty, got %q", req.Reasoning)
+	}
+}
+
+func TestReasoningDurationCapturedOnFinish(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventReasoning, Delta: "thinking...",
+	}, ok: true, gen: m.streamGen})
+	time.Sleep(5 * time.Millisecond)
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "final answer",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration < 5*time.Millisecond {
+		t.Fatalf("ReasoningDuration = %v, want >= 5ms", last.ReasoningDuration)
+	}
+}
+
+func TestReasoningDurationResetsBetweenTurns(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventReasoning, Delta: "first turn thinking",
+	}, ok: true, gen: m.streamGen})
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "first answer",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "second answer, no reasoning this time",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration != 0 {
+		t.Fatalf("ReasoningDuration = %v, want 0 (this turn had no reasoning, and finishStream must reset the prior turn's window)", last.ReasoningDuration)
+	}
+}
+
+func TestReasoningDurationCapturedViaThinkFilter(t *testing.T) {
+	m := newTestModel(t)
+	m.resetThinkFilter()
+	feedDelta(t, m, "<think>because")
+	time.Sleep(5 * time.Millisecond)
+	feedDelta(t, m, " reasons</think>42")
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration < 5*time.Millisecond {
+		t.Fatalf("ReasoningDuration = %v, want >= 5ms (leaked <think> block path)", last.ReasoningDuration)
 	}
 }
