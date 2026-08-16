@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -208,5 +209,60 @@ func TestBuildRequestCarriesReasoning(t *testing.T) {
 	m.reasoningMode = "auto"
 	if req := m.buildRequest(nil); req.Reasoning != "" {
 		t.Fatalf("auto must map to empty, got %q", req.Reasoning)
+	}
+}
+
+func TestReasoningDurationCapturedOnFinish(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventReasoning, Delta: "thinking...",
+	}, ok: true, gen: m.streamGen})
+	time.Sleep(5 * time.Millisecond)
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "final answer",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration < 5*time.Millisecond {
+		t.Fatalf("ReasoningDuration = %v, want >= 5ms", last.ReasoningDuration)
+	}
+}
+
+func TestReasoningDurationResetsBetweenTurns(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventReasoning, Delta: "first turn thinking",
+	}, ok: true, gen: m.streamGen})
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "first answer",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
+		Type: provider.EventDelta, Delta: "second answer, no reasoning this time",
+	}, ok: true, gen: m.streamGen})
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration != 0 {
+		t.Fatalf("ReasoningDuration = %v, want 0 (this turn had no reasoning, and finishStream must reset the prior turn's window)", last.ReasoningDuration)
+	}
+}
+
+func TestReasoningDurationCapturedViaThinkFilter(t *testing.T) {
+	m := newTestModel(t)
+	m.resetThinkFilter()
+	feedDelta(t, m, "<think>because")
+	time.Sleep(5 * time.Millisecond)
+	feedDelta(t, m, " reasons</think>42")
+	m.finishStream(&provider.Usage{}, false)
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.ReasoningDuration < 5*time.Millisecond {
+		t.Fatalf("ReasoningDuration = %v, want >= 5ms (leaked <think> block path)", last.ReasoningDuration)
 	}
 }

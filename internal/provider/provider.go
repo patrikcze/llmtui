@@ -119,6 +119,11 @@ type Message struct {
 	// in the current process, but is never serialized, cached, persisted, or
 	// sent back to a backend as conversation history.
 	Reasoning string `json:"-" yaml:"-"`
+	// ReasoningDuration is UI-only timing for the captured Reasoning text —
+	// wall-clock time from the first reasoning byte to the first visible
+	// answer byte. Same rule as Reasoning: never serialized, cached,
+	// persisted, or sent back to a backend.
+	ReasoningDuration time.Duration `json:"-" yaml:"-"`
 }
 
 // ModelInfo describes a model available on a provider.

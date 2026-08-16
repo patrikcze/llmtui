@@ -20,7 +20,7 @@
 
 ---
 
-## Task 1: Track reasoning-phase duration
+## Task 1: Track reasoning-phase duration — done
 
 **Files:**
 - Modify: `internal/provider/provider.go:103-122` (`Message` struct)
