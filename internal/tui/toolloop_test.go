@@ -412,6 +412,92 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 // in /agent on. Before this fix, only /agent on recorded truncation as
 // evidence (and only for its own verifier, after the fact) — the ordinary
 // tool loop had no check at all and would have run the call.
+// TestMalformedToolCallRetriesOnceThenReportsError guards against a backend
+// (observed: LM Studio's Harmony parser for openai/gpt-oss-20b) failing to
+// convert the model's tool-call attempt into structured ToolCalls and
+// leaking the raw, still-tokenized attempt into content instead. That text
+// is not a real answer: it gets one retry at the same round — same
+// accumulated history, nothing resent — before the run is reported failed,
+// and it must never land in conversation history (it would only confuse the
+// model further on every later turn).
+func TestMalformedToolCallRetriesOnceThenReportsError(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	messagesBefore := len(m.session.Messages)
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone, MalformedToolCall: true},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if cmd == nil {
+		t.Fatal("first malformed tool call must retry once, not fail immediately")
+	}
+	if m.errText != "" {
+		t.Errorf("errText = %q, want empty before the retry has even run", m.errText)
+	}
+	if !m.malformedToolCallRetried {
+		t.Error("malformedToolCallRetried must be set after spending the one retry")
+	}
+	if !m.thinking {
+		t.Fatal("continueChat's retry must leave a request in flight")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("messages = %d, want %d (leaked content must never enter history)", len(m.session.Messages), messagesBefore)
+	}
+
+	_, cmd = m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone, MalformedToolCall: true},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if cmd != nil {
+		t.Fatal("a second malformed tool call in a row must not retry again")
+	}
+	if !strings.Contains(m.errText, "twice in a row") {
+		t.Errorf("errText = %q, want the retry outcome explained", m.errText)
+	}
+	if m.thinking {
+		t.Error("malformed tool call failure must finish the stream")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("messages = %d, want %d (no garbled assistant message)", len(m.session.Messages), messagesBefore)
+	}
+}
+
+// TestMalformedToolCallDropsLeakedDeltaFromHistory guards the streaming
+// path: unlike the non-streaming path, leaked/garbled text arrives as
+// ordinary EventDelta chunks before the backend's parser failure is
+// recognizable, so it lands in streamBuf. The MalformedToolCall flag on
+// EventDone must still cause it to be dropped rather than stored as the
+// model's answer.
+func TestMalformedToolCallDropsLeakedDeltaFromHistory(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	messagesBefore := len(m.session.Messages)
+
+	m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDelta, Delta: `to=functions.read_file<|constrain|>json<|message|>{"path":"x"}`},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if m.streamBuf.Len() == 0 {
+		t.Fatal("test setup: delta should have landed in streamBuf")
+	}
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone, MalformedToolCall: true},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if cmd == nil {
+		t.Fatal("first malformed tool call must retry once")
+	}
+	if len(m.session.Messages) != messagesBefore {
+		t.Errorf("messages = %d, want %d (leaked delta must not enter history)", len(m.session.Messages), messagesBefore)
+	}
+}
+
 func TestTruncatedNativeToolCallIsNotExecuted(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()

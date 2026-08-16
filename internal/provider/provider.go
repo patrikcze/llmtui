@@ -198,6 +198,13 @@ type ChatEvent struct {
 	// or malformed (e.g. a dropped, half-emitted tool call) and must not be
 	// treated as a normal completed answer.
 	Truncated bool
+	// MalformedToolCall is set on EventDone when ToolCalls is empty but the
+	// text content looks like a tool call the backend's own parser failed to
+	// convert into structured ToolCalls (observed: LM Studio's Harmony parser
+	// leaking raw "to=functions.NAME<|message|>{...}" syntax into content for
+	// openai/gpt-oss models). Such content is not a real answer and must not
+	// be treated, shown, or stored as one.
+	MalformedToolCall bool
 }
 
 // Provider is implemented by every LLM backend.

@@ -406,8 +406,16 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	if content == "" && len(toolCalls) == 0 && out.Choices[0].Message.ReasoningContent != "" {
 		content = reasoningFallback(out.Choices[0].Message.ReasoningContent)
 	}
-	if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
-		return
+	// A backend can fail to parse the model's tool-call attempt into
+	// structured tool_calls and instead leak the raw, still-tokenized
+	// attempt into content (see looksLikeUnparsedToolCall). That text is not
+	// a real answer, so it must never reach the transcript or conversation
+	// history: suppress the delta entirely and let the caller retry.
+	malformed := len(toolCalls) == 0 && looksLikeUnparsedToolCall(content)
+	if !malformed {
+		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
+			return
+		}
 	}
 	usage := out.Usage.toUsage()
 	if usage == nil {
@@ -415,7 +423,32 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	}
 	finishReason := out.Choices[0].FinishReason
 	truncated := finishReason != nil && *finishReason == "length"
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated})
+	provider.Emit(ctx, events, provider.ChatEvent{
+		Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls,
+		Truncated: truncated, MalformedToolCall: malformed,
+	})
+}
+
+// unparsedToolCallMarkers are Harmony response-format control tokens (used by
+// openai/gpt-oss models). They must never appear in a normal answer, so their
+// presence alongside a "to=functions." recipient prefix means the backend's
+// own tool-call parser failed to convert the model's attempt into structured
+// tool_calls and fell back to leaking the raw, partially-tokenized text into
+// content instead — e.g.
+// `to=functions.read_file<|constrain|>json<|message|>{"path":"..."}`.
+// Observed with LM Studio serving openai/gpt-oss-20b.
+var unparsedToolCallMarkers = []string{"<|channel|>", "<|constrain|>", "<|message|>", "<|call|>"}
+
+func looksLikeUnparsedToolCall(content string) bool {
+	if !strings.Contains(content, "to=functions.") {
+		return false
+	}
+	for _, marker := range unparsedToolCallMarkers {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {

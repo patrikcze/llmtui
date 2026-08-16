@@ -173,6 +173,7 @@ type Model struct {
 	toolRunner               *tools.Runner
 	toolDepth                int          // auto follow-up rounds for the current user turn
 	emptyContinuationRetried bool         // one retry already spent on this round's empty-completion-after-tools
+	malformedToolCallRetried bool         // one retry already spent on this round's leaked/unparsed tool-call attempt
 	pendingCalls             []tools.Call // parsed calls awaiting the user's approval
 	pendingToolPlan          *toolBatchPlan
 	pendingBudget            bool        // the pending prompt is "budget spent — continue?", not an approval
@@ -1032,6 +1033,7 @@ func (m *Model) send() tea.Cmd {
 	m.sentCount++
 	m.toolDepth = 0                    // a fresh user turn gets a fresh tool budget
 	m.emptyContinuationRetried = false // a fresh user turn gets a fresh empty-completion retry
+	m.malformedToolCallRetried = false // a fresh user turn gets a fresh malformed-tool-call retry
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
 			// Resuming an in-progress run: it never replays incomplete work
@@ -1453,6 +1455,7 @@ func (m *Model) retryLast() tea.Cmd {
 	}
 	m.toolDepth = 0                    // a retry is a fresh turn and gets a fresh tool budget
 	m.emptyContinuationRetried = false // a retry is a fresh turn and gets a fresh empty-completion retry
+	m.malformedToolCallRetried = false // a retry is a fresh turn and gets a fresh malformed-tool-call retry
 	m.errText = ""
 	m.notice = "retrying last message"
 	m.sentCount++
@@ -1864,7 +1867,20 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
-		emptyToolContinuation := m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
+		// A backend can fail to parse the model's tool-call attempt into
+		// structured ToolCalls and instead leak the raw, still-tokenized
+		// attempt into content (see openai.looksLikeUnparsedToolCall). That
+		// text is not a real answer and must never enter conversation
+		// history: kept there it re-confuses the model on every later turn,
+		// which is worse than the one-off glitch that produced it. Checked
+		// (and streamBuf cleared) before emptyToolContinuation because a
+		// non-streaming leak looks identical to an empty completion once
+		// content is suppressed at the source.
+		malformedToolCall := msg.event.MalformedToolCall && len(msg.event.ToolCalls) == 0
+		if malformedToolCall {
+			m.streamBuf.Reset()
+		}
+		emptyToolContinuation := !malformedToolCall && m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
 		// A tool call truncated by max_tokens must never be executed: the
 		// backend's own grammar usually can't emit a structured ToolCalls
 		// entry from incomplete JSON, so this mainly guards a backend that
@@ -1884,6 +1900,27 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if msg.event.Truncated {
 			m.recordAgentTruncation()
 		}
+		if malformedToolCall {
+			// This is usually a one-off backend parsing hiccup (observed:
+			// LM Studio's Harmony parser losing track partway through a
+			// gpt-oss tool call deep in a long conversation), so give it
+			// exactly one fresh attempt at the same round — same
+			// accumulated history, nothing resent — before treating it as a
+			// real failure, mirroring the empty-completion retry below.
+			if !m.malformedToolCallRetried {
+				m.malformedToolCallRetried = true
+				m.notice = "model's tool call could not be parsed by the backend — retrying once"
+				m.refreshViewport()
+				return m, m.continueChat()
+			}
+			m.errText = "Model's tool call could not be parsed by the backend, twice in a row (retry did not help). " +
+				"This is typically the backend (e.g. LM Studio) failing to convert the model's tool-call attempt into a structured call — check for a backend/runtime update for this model, or try again."
+			m.failVerifiedRun(errors.New(m.errText))
+			m.endAgentRun()
+			m.refreshViewport()
+			return m, m.persistAgentRun()
+		}
+		m.malformedToolCallRetried = false
 		if emptyToolContinuation {
 			// A model can occasionally sample straight to EOS right after a
 			// tool result lands, especially deep into a long tool-heavy

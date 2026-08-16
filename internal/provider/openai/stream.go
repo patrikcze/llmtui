@@ -195,5 +195,14 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if usage == nil {
 		usage = estimateUsage(req, completion.String())
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls, Truncated: finishLen})
+	// The garbled text (if any) was already streamed as EventDelta chunks by
+	// the time a full leaked tool-call attempt can be recognized, so this
+	// can't suppress it from the live transcript the way the non-streaming
+	// path does — it only flags EventDone so the caller drops it from
+	// conversation history instead of treating it as a real answer.
+	malformed := len(calls) == 0 && looksLikeUnparsedToolCall(completion.String())
+	provider.Emit(ctx, events, provider.ChatEvent{
+		Type: provider.EventDone, Usage: usage, ToolCalls: calls,
+		Truncated: finishLen, MalformedToolCall: malformed,
+	})
 }
