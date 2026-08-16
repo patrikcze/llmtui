@@ -16,6 +16,9 @@ type Theme struct {
 	Good      lipgloss.AdaptiveColor
 	Bad       lipgloss.AdaptiveColor
 	PanelEdge lipgloss.AdaptiveColor
+	UserEdge  lipgloss.AdaptiveColor
+	Thought   lipgloss.AdaptiveColor
+	Tool      lipgloss.AdaptiveColor
 
 	UserLabel      lipgloss.Style
 	AssistantLabel lipgloss.Style
@@ -28,6 +31,12 @@ type Theme struct {
 	BadgeWarn      lipgloss.Style
 	Panel          lipgloss.Style
 	InputPanel     lipgloss.Style
+	UserCard       lipgloss.Style
+	AssistantCard  lipgloss.Style
+	ReasoningCard  lipgloss.Style
+	ToolCard       lipgloss.Style
+	SystemCard     lipgloss.Style
+	ErrorCard      lipgloss.Style
 	HelpFooter     lipgloss.Style
 	Spinner        lipgloss.Style
 	ErrorText      lipgloss.Style
@@ -46,6 +55,9 @@ func ClaudeInspired() Theme {
 		Good:      lipgloss.AdaptiveColor{Light: "#3D7A45", Dark: "#7CBF85"},
 		Bad:       lipgloss.AdaptiveColor{Light: "#B03A30", Dark: "#E07870"},
 		PanelEdge: lipgloss.AdaptiveColor{Light: "#D6D0C8", Dark: "#3F3B37"},
+		UserEdge:  lipgloss.AdaptiveColor{Light: "#2563B8", Dark: "#58A6FF"},
+		Thought:   lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"},
+		Tool:      lipgloss.AdaptiveColor{Light: "#6F42C1", Dark: "#A98BFA"},
 	}
 
 	t.UserLabel = lipgloss.NewStyle().Bold(true).Foreground(t.Accent)
@@ -65,6 +77,25 @@ func ClaudeInspired() Theme {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Accent).
 		Padding(0, 1)
+	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	t.UserCard = card.Copy().
+		BorderForeground(t.UserEdge).
+		Background(lipgloss.AdaptiveColor{Light: "#EFF6FF", Dark: "#111A24"})
+	t.AssistantCard = card.Copy().
+		BorderForeground(t.Good).
+		Background(lipgloss.AdaptiveColor{Light: "#F1F7F2", Dark: "#121B15"})
+	t.ReasoningCard = card.Copy().
+		BorderForeground(t.Thought).
+		Background(lipgloss.AdaptiveColor{Light: "#FFF8E7", Dark: "#211B10"})
+	t.ToolCard = card.Copy().
+		BorderForeground(t.Tool).
+		Background(lipgloss.AdaptiveColor{Light: "#F6F3FF", Dark: "#181523"})
+	t.SystemCard = card.Copy().
+		BorderForeground(t.PanelEdge).
+		Background(lipgloss.AdaptiveColor{Light: "#F7F5F2", Dark: "#181614"})
+	t.ErrorCard = card.Copy().
+		BorderForeground(t.Bad).
+		Background(lipgloss.AdaptiveColor{Light: "#FFF1F0", Dark: "#251313"})
 	t.HelpFooter = lipgloss.NewStyle().Foreground(t.Faint)
 	t.Spinner = lipgloss.NewStyle().Foreground(t.Accent)
 	t.ErrorText = lipgloss.NewStyle().Foreground(t.Bad)

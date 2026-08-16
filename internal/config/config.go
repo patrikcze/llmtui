@@ -133,6 +133,7 @@ type UIConfig struct {
 	Animations     bool   `mapstructure:"animations" yaml:"animations"`
 	ShowUsageChart bool   `mapstructure:"show_usage_chart" yaml:"show_usage_chart"`
 	ShowTokenStats bool   `mapstructure:"show_token_stats" yaml:"show_token_stats"`
+	ShowReasoning  bool   `mapstructure:"show_reasoning" yaml:"show_reasoning"`
 	Markdown       bool   `mapstructure:"markdown" yaml:"markdown"`
 	CompactMode    bool   `mapstructure:"compact_mode" yaml:"compact_mode"`
 }
@@ -654,6 +655,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ui.animations", true)
 	v.SetDefault("ui.show_usage_chart", true)
 	v.SetDefault("ui.show_token_stats", true)
+	v.SetDefault("ui.show_reasoning", true)
 	v.SetDefault("ui.markdown", true)
 	v.SetDefault("ui.compact_mode", false)
 
@@ -826,6 +828,9 @@ ui:
   animations: true
   show_usage_chart: true
   show_token_stats: true
+  # Display reasoning emitted by capable models. /thoughts hide changes only
+  # this presentation setting; /think controls what the backend is asked for.
+  show_reasoning: true
   markdown: true
   compact_mode: false
 

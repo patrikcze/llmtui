@@ -105,32 +105,37 @@ type Model struct {
 	input    textarea.Model
 	spinner  spinner.Model
 
-	width, height int
-	ready         bool
-	connected     bool
-	demoMode      bool
-	thinking      bool
-	streamBuf     strings.Builder
-	stream        <-chan provider.ChatEvent
-	streamStart   time.Time
-	lastTPS       float64
-	errText       string
-	cancelStream  context.CancelFunc
-	streamCtx     context.Context
-	idleWatchdog  *time.Timer
-	idleTimeout   time.Duration
-	reasoningLen  int // chars of "thinking" streamed before the visible answer
-	thinkFilter   *provider.ThinkFilter
-	attachments   []provider.Image
-	frame         int
-	renderWidth   int
-	mouseEnabled  bool
-	notice        string
-	overlayOpen   bool
-	pickerKind    pickerKind
-	pickerItems   []string
-	pickerIdx     int
-	pickerModels  []provider.ModelInfo
+	width, height        int
+	ready                bool
+	connected            bool
+	demoMode             bool
+	thinking             bool
+	streamBuf            strings.Builder
+	reasoningBuf         strings.Builder
+	stream               <-chan provider.ChatEvent
+	streamStart          time.Time
+	lastTPS              float64
+	errText              string
+	cancelStream         context.CancelFunc
+	streamCtx            context.Context
+	idleWatchdog         *time.Timer
+	idleTimeout          time.Duration
+	reasoningLen         int // chars of "thinking" streamed before the visible answer
+	filteredReasoningLen int
+	progressText         string
+	thinkFilter          *provider.ThinkFilter
+	showReasoning        bool
+	reasoningDisplaySet  bool
+	attachments          []provider.Image
+	frame                int
+	renderWidth          int
+	mouseEnabled         bool
+	notice               string
+	overlayOpen          bool
+	pickerKind           pickerKind
+	pickerItems          []string
+	pickerIdx            int
+	pickerModels         []provider.ModelInfo
 	// visionByID caches backend-reported vision capability (model ID ->
 	// supports images) from the last successful ListModels call, so the
 	// paste-image gate can use real data instead of the SupportsVision
@@ -300,12 +305,13 @@ func New(opts Options) *Model {
 		inputLines:   1,
 		startedAt:    time.Now(),
 
-		memEnabled:  cfg.Memory.Enabled,
-		profileMode: profileMode,
-		ctxStrategy: ctxStrategy,
-		cfgPath:     opts.ConfigPath,
-		toolsOn:     cfg.Tools.Enabled,
-		agentOn:     cfg.Agent.Enabled,
+		memEnabled:    cfg.Memory.Enabled,
+		profileMode:   profileMode,
+		ctxStrategy:   ctxStrategy,
+		cfgPath:       opts.ConfigPath,
+		toolsOn:       cfg.Tools.Enabled,
+		agentOn:       cfg.Agent.Enabled,
+		showReasoning: cfg.UI.ShowReasoning,
 
 		toolsAutoApprove:     cfg.Tools.Approve == "auto",
 		nativeToolRejections: make(map[string]bool),
@@ -354,6 +360,9 @@ func (m *Model) adoptSession(name string, s history.Session) {
 // runtime (/profile, /context strategy, /memory on|off) are left alone.
 func (m *Model) rebuildFromConfig() {
 	cfg := m.cfg
+	if !m.reasoningDisplaySet {
+		m.showReasoning = cfg.UI.ShowReasoning
+	}
 
 	m.historyDir = ""
 	if cfg.Chat.SaveHistory && cfg.Chat.HistoryDir != "" {
@@ -1774,6 +1783,16 @@ func (m *Model) flushThinkFilter() {
 		m.streamBuf.WriteString(answer)
 	}
 	if m.streamBuf.Len() == 0 && unclosed != "" {
+		// Feed already copied the emitted portion of this unclosed block into
+		// reasoningBuf. Since the recovery below promotes the whole block to
+		// the visible answer, remove that portion to avoid showing it twice.
+		captured := m.reasoningBuf.String()
+		keep := len(captured) - m.filteredReasoningLen
+		if keep < 0 {
+			keep = 0
+		}
+		m.reasoningBuf.Reset()
+		m.reasoningBuf.WriteString(captured[:keep])
 		m.streamBuf.WriteString("_(the model spent its reply inside an unclosed <think> block — showing it as-is)_\n\n")
 		m.streamBuf.WriteString(unclosed)
 	}
@@ -1804,12 +1823,21 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.event.Type {
+	case provider.EventProgress:
+		m.progressText = terminaltext.Sanitize(msg.event.Delta)
+		if m.idleWatchdog != nil {
+			m.idleWatchdog.Reset(m.idleTimeout)
+		}
+		m.refreshViewport()
+		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventReasoning:
 		// The model is thinking (reasoning_content). It produces no visible
 		// answer yet, but it is active — reset the idle deadline and show a
 		// live indicator so a long thinking phase never looks frozen or times
 		// out.
-		m.reasoningLen += len(msg.event.Delta)
+		reasoning := terminaltext.Sanitize(msg.event.Delta)
+		m.reasoningLen += len(reasoning)
+		m.reasoningBuf.WriteString(reasoning)
 		if m.idleWatchdog != nil {
 			m.idleWatchdog.Reset(m.idleTimeout)
 		}
@@ -1821,6 +1849,8 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			answer, reasoning := m.thinkFilter.Feed(delta)
 			if reasoning != "" {
 				m.reasoningLen += len(reasoning)
+				m.filteredReasoningLen += len(reasoning)
+				m.reasoningBuf.WriteString(reasoning)
 			}
 			delta = answer
 		}
@@ -1941,11 +1971,18 @@ func (m *Model) streamFailed(err error) {
 	m.errText = err.Error()
 	// Preserve partial streamed output instead of discarding it.
 	if partial := m.streamBuf.String(); partial != "" {
-		m.session.AddAssistant(partial)
+		m.session.AddMessage(provider.Message{
+			Role:      provider.RoleAssistant,
+			Content:   partial,
+			Reasoning: m.reasoningBuf.String(),
+		})
 		m.replyCount++
 		m.streamBuf.Reset()
 		m.errText += " (partial reply kept)"
 	}
+	m.reasoningBuf.Reset()
+	m.filteredReasoningLen = 0
+	m.progressText = ""
 	if m.cancelStream != nil {
 		m.cancelStream()
 		m.cancelStream = nil
@@ -1988,6 +2025,10 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	m.flushThinkFilter()
 	reply := m.streamBuf.String()
 	m.streamBuf.Reset()
+	reasoning := m.reasoningBuf.String()
+	m.reasoningBuf.Reset()
+	m.filteredReasoningLen = 0
+	m.progressText = ""
 	toolCalls := m.streamToolCalls
 	m.streamToolCalls = nil
 	if m.cancelStream != nil {
@@ -2004,6 +2045,7 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 			Role:      provider.RoleAssistant,
 			Content:   reply,
 			ToolCalls: toolCalls,
+			Reasoning: reasoning,
 		})
 		m.replyCount++
 	}
@@ -2141,10 +2183,18 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	var b strings.Builder
+	appendCard := func(style lipgloss.Style, label string, labelStyle lipgloss.Style, body string) {
+		b.WriteString(m.renderConversationCard(style, label, labelStyle, body))
+		b.WriteString("\n\n")
+	}
+	appendReasoning := func(reasoning string, streaming bool) {
+		b.WriteString(m.renderReasoningCard(reasoning, streaming))
+		b.WriteString("\n\n")
+	}
 
 	if m.demoMode {
-		b.WriteString(m.theme.SystemNote.Render("⚠ no backend reachable — running in offline demo mode (mock provider)"))
-		b.WriteString("\n\n")
+		appendCard(m.theme.SystemCard, "system", m.theme.SystemNote,
+			m.theme.SystemNote.Render("⚠ no backend reachable — running in offline demo mode (mock provider)"))
 	}
 
 	// Standing disclosure while agent mode is on: the user must always be
@@ -2154,15 +2204,13 @@ func (m *Model) refreshViewport() {
 		if m.toolsAutoApprove {
 			mode = "auto-approve"
 		}
-		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
-			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
-		b.WriteString("\n\n")
+		appendCard(m.theme.SystemCard, "workspace", m.theme.SystemNote, m.theme.SystemNote.Render(fmt.Sprintf(
+			"⚒ tools on (%s) — the model can act on files and run commands only in\n%s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
 	}
 
 	if m.ragOn && m.ragIndex != nil {
-		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
-			"🔎 RAG on — keyword-matched snippets from %d indexed files inform prompts as\n  labeled reference context — /rag off to disable", len(m.ragIndex.Sources()))))
-		b.WriteString("\n\n")
+		appendCard(m.theme.SystemCard, "context", m.theme.SystemNote, m.theme.SystemNote.Render(fmt.Sprintf(
+			"🔎 RAG on — keyword-matched snippets from %d indexed files inform prompts as\nlabeled reference context — /rag off to disable", len(m.ragIndex.Sources()))))
 	}
 
 	// Settled tool-call glyphs: map each call id to whether its result (a
@@ -2188,8 +2236,8 @@ func (m *Model) refreshViewport() {
 			// model. The actual message content sent to the model is
 			// unchanged; only its rendering here differs.
 			if msg.Content == agentContinueDirective {
-				b.WriteString(m.theme.SystemNote.Render("⚙ agent — continuing to the next bounded objective"))
-				b.WriteString("\n\n")
+				appendCard(m.theme.SystemCard, "agent", m.theme.SystemNote,
+					m.theme.SystemNote.Render("⚙ continuing to the next bounded objective"))
 				continue
 			}
 			// Tool results travel as user messages; style them as machinery,
@@ -2197,39 +2245,37 @@ func (m *Model) refreshViewport() {
 			// model sees everything, the human sees one line per call
 			// (/tools output shows the full text).
 			if strings.HasPrefix(msg.Content, tools.ResultsPrefix) {
+				var body strings.Builder
 				if m.toolsShowOutput {
-					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
-					b.WriteString("\n")
-					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
-					b.WriteString("\n")
+					body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
 				} else {
-					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
-					b.WriteString("\n")
+					body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
 				}
 				if msg.Display != "" {
-					b.WriteString(m.renderToolDiff(msg.Display))
+					body.WriteString("\n")
+					body.WriteString(m.renderToolDiff(msg.Display))
 				}
-				b.WriteString("\n")
+				appendCard(m.theme.ToolCard, "tools", lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
 				continue
 			}
-			b.WriteString(m.theme.UserLabel.Render("you"))
-			b.WriteString("\n")
-			b.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(terminaltext.Sanitize(msg.Content)))
+			var body strings.Builder
+			body.WriteString(lipgloss.NewStyle().Foreground(m.theme.Text).Render(terminaltext.Sanitize(msg.Content)))
 			for i := range msg.Images {
 				if i == 0 && msg.Content != "" {
-					b.WriteString(" ")
+					body.WriteString(" ")
 				}
-				b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf("⌗ [image %d] ", i+1)))
+				body.WriteString(m.theme.SystemNote.Render(fmt.Sprintf("⌗ [image %d] ", i+1)))
 			}
-			b.WriteString("\n\n")
+			appendCard(m.theme.UserCard, "you", lipgloss.NewStyle().Bold(true).Foreground(m.theme.UserEdge), body.String())
 		case provider.RoleAssistant:
+			if msg.Reasoning != "" {
+				appendReasoning(msg.Reasoning, false)
+			}
 			// A tool-only turn renders as bare action lines (Claude-Code
 			// style), without an "assistant" label or empty markdown body;
 			// its results attach directly underneath.
 			toolOnly := msg.Content == "" && len(msg.ToolCalls) > 0
 			if !toolOnly {
-				b.WriteString(m.theme.AssistantLabel.Render("assistant"))
-				b.WriteString("\n")
 				content := msg.Content
 				if !m.toolsShowOutput {
 					// Compact mode: fenced tool blocks (file bodies,
@@ -2237,13 +2283,16 @@ func (m *Model) refreshViewport() {
 					// payloads.
 					content = tools.CollapseBlocks(content)
 				}
-				b.WriteString(m.renderMarkdown(content))
+				if content != "" {
+					appendCard(m.theme.AssistantCard, "assistant", m.theme.AssistantLabel, m.renderMarkdown(content))
+				}
 			}
 			// While an async batch runs, its parent message is the last one
 			// and its calls render as live animated lines below the viewport
 			// (renderActivity) — rendering them here too would duplicate them.
 			liveBatch := m.activity != nil && i == len(m.session.Messages)-1
 			if !liveBatch {
+				var body strings.Builder
 				for _, c := range tools.CallsFromNative(msg.ToolCalls) {
 					line, style := "⚒ "+c.Describe(), m.theme.SystemNote
 					if hasErr, ok := toolCallErr[c.ID]; ok {
@@ -2253,53 +2302,58 @@ func (m *Model) refreshViewport() {
 							line, style = "● "+c.Describe(), okGlyph
 						}
 					}
-					b.WriteString(style.Render(terminaltext.Sanitize(line)))
-					b.WriteString("\n")
+					body.WriteString(style.Render(terminaltext.Sanitize(line)))
+					body.WriteString("\n")
 				}
-			}
-			if len(msg.ToolCalls) == 0 {
-				b.WriteString("\n")
+				if body.Len() > 0 {
+					appendCard(m.theme.ToolCard, "tools", lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
+				}
 			}
 		case provider.RoleTool:
 			// Native tool results attach under their call, Claude-Code
 			// style. A write_file renders its diff; everything else is one
 			// summary line per call unless /tools output asked for more.
+			var body strings.Builder
 			switch {
 			case msg.Display != "":
-				b.WriteString(m.renderToolDiff(msg.Display))
+				body.WriteString(m.renderToolDiff(msg.Display))
 			case m.toolsShowOutput:
-				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + terminaltext.Sanitize(msg.ToolName)))
-				b.WriteString("\n")
-				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
-				b.WriteString("\n")
+				body.WriteString(m.theme.SystemNote.Render("⎿ " + terminaltext.Sanitize(msg.ToolName)))
+				body.WriteString("\n")
+				body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
 			default:
-				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
-					"  ⎿ " + tools.SummarizeOutput(msg.Content))))
-				b.WriteString("\n")
+				body.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
+					"⎿ " + tools.SummarizeOutput(msg.Content))))
 			}
-			b.WriteString("\n")
+			label := "tool"
+			if msg.ToolName != "" {
+				label += " · " + msg.ToolName
+			}
+			appendCard(m.theme.ToolCard, label, lipgloss.NewStyle().Bold(true).Foreground(m.theme.Tool), body.String())
 		}
 	}
 
 	if m.thinking {
-		b.WriteString(m.theme.AssistantLabel.Render("assistant"))
-		b.WriteString("\n")
-		switch {
-		case m.streamBuf.Len() > 0:
-			b.WriteString(terminaltext.Sanitize(m.streamBuf.String()))
-			b.WriteString("\n")
-		case m.reasoningLen > 0:
+		if m.progressText != "" {
+			appendCard(m.theme.SystemCard, "provider", m.theme.SystemNote,
+				m.theme.SystemNote.Render(m.progressText))
+		}
+		if m.reasoningBuf.Len() > 0 {
+			appendReasoning(m.reasoningBuf.String(), true)
+		} else if m.reasoningLen > 0 {
 			// Reasoning model is still thinking; show progress so the wait
 			// is visible rather than a frozen screen.
-			b.WriteString(m.theme.SystemNote.Render(
-				fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4))))
-			b.WriteString("\n")
+			appendReasoning(fmt.Sprintf("thinking… (%s of reasoning so far)", components.FormatTokens(m.reasoningLen/4)), true)
+		}
+		if m.streamBuf.Len() > 0 {
+			appendCard(m.theme.AssistantCard, "assistant · streaming", m.theme.AssistantLabel,
+				terminaltext.Sanitize(m.streamBuf.String()))
 		}
 	}
 
 	if m.errText != "" {
-		b.WriteString(m.theme.ErrorText.Render(terminaltext.Sanitize("✗ " + m.errText)))
-		b.WriteString("\n")
+		appendCard(m.theme.ErrorCard, "error", m.theme.ErrorText,
+			m.theme.ErrorText.Render(terminaltext.Sanitize("✗ "+m.errText)))
 	}
 
 	// Approval prompt: list exactly what the model wants to do before any

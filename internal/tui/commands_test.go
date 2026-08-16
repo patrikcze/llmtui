@@ -436,3 +436,26 @@ func TestThinkCommand(t *testing.T) {
 		t.Fatal("invalid mode must set an error")
 	}
 }
+
+func TestThoughtsCommandDoesNotChangeReasoningMode(t *testing.T) {
+	m := newTestModel(t)
+	m.reasoningMode = "on"
+
+	runCommand(m, "/thoughts hide")
+	if m.showReasoning {
+		t.Fatal("/thoughts hide should hide captured reasoning")
+	}
+	if m.reasoningMode != "on" {
+		t.Fatalf("display command changed reasoning mode to %q", m.reasoningMode)
+	}
+
+	runCommand(m, "/thoughts toggle")
+	if !m.showReasoning {
+		t.Fatal("/thoughts toggle should show captured reasoning")
+	}
+
+	runCommand(m, "/thoughts banana")
+	if !strings.Contains(m.errText, "usage: /thoughts") {
+		t.Fatalf("invalid mode error = %q", m.errText)
+	}
+}

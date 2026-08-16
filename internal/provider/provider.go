@@ -114,6 +114,11 @@ type Message struct {
 	// Display is a UI-only annotation (e.g. the rendered diff of a
 	// write_file result). It is never serialized or sent to a backend.
 	Display string `json:"-" yaml:"-"`
+	// Reasoning is UI-only thinking text captured from a provider's dedicated
+	// reasoning channel or a leaked leading <think> block. It may be rendered
+	// in the current process, but is never serialized, cached, persisted, or
+	// sent back to a backend as conversation history.
+	Reasoning string `json:"-" yaml:"-"`
 }
 
 // ModelInfo describes a model available on a provider.
@@ -172,6 +177,10 @@ const (
 	// part of the visible answer: consumers should treat it as activity
 	// (resetting inactivity timers) and may show it as a thinking indicator.
 	EventReasoning
+	// EventProgress carries provider/runtime lifecycle status such as an
+	// embedded model load or switch. It resets inactivity timers like
+	// reasoning, but must not be presented or retained as model thought text.
+	EventProgress
 )
 
 // ChatEvent is one item on the streaming channel returned by Chat.

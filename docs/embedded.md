@@ -207,7 +207,8 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
   sets false. A model may still choose to answer directly when thinking is on.
   When the model emits supported thought delimiters, llmtui routes the content
   to the reasoning stream and keeps it out of the visible answer, history,
-  subsequent prompts, and response cache.
+  subsequent prompts, and response cache. `/thoughts show|hide` expands or
+  collapses that UI-only reasoning without changing the template setting.
 
 ## Lifecycle and behavior
 

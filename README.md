@@ -7,7 +7,12 @@ LM Studio, vLLM, llama.cpp, Unsloth, or any OpenAI-compatible server.
 ╭──────────────────────────────────────────────────────────────╮
 │  you                                                         │
 │  Explain goroutines in one paragraph.                        │
-│                                                              │
+╰──────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────╮
+│  thought                                                     │
+│  Compare scheduling, stacks, and communication…              │
+╰──────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────╮
 │  assistant                                                   │
 │  Goroutines are lightweight threads managed by the Go        │
 │  runtime…                                                    │
@@ -24,6 +29,13 @@ enter send · ctrl+l clear · ctrl+c quit
 
 Local-first: no telemetry, no external calls unless you configure them,
 API keys never logged — see [docs/security.md](docs/security.md).
+
+Conversation events render as adaptive rounded cards: prompts, answers,
+reasoning, tool activity, system notices, and errors each have a distinct
+color. `/thoughts show|hide` controls only whether captured reasoning is
+expanded; `/think on|off|auto` separately controls what the model backend is
+asked to produce. Reasoning is kept in memory for the current UI and is never
+saved in history, cached, or sent back as answer context.
 
 llmtui can also run a local GGUF directly in-process through llama.cpp—no
 separate model server required. See [Embedded GGUF inference](docs/embedded.md).
@@ -128,6 +140,9 @@ chat:
   stream: true
   max_tokens: 4096
   reasoning: auto # omit enable_thinking unless /think overrides it
+
+ui:
+  show_reasoning: true # /thoughts hide changes this for the current session
 
 tools:
   enabled: false

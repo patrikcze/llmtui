@@ -3,6 +3,7 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Messages: []provider.Message{
 			{Role: provider.RoleSystem, Content: "be helpful"},
 			{Role: provider.RoleUser, Content: "hi"},
-			{Role: provider.RoleAssistant, Content: "hello!"},
+			{Role: provider.RoleAssistant, Content: "hello!", Reasoning: "ephemeral thought"},
 		},
 		Prompt:    10,
 		Reply:     20,
@@ -42,6 +43,16 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Messages[2].Content != "hello!" {
 		t.Errorf("message content lost: %+v", got.Messages[2])
+	}
+	if got.Messages[2].Reasoning != "" {
+		t.Errorf("UI-only reasoning was persisted: %+v", got.Messages[2])
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved session: %v", err)
+	}
+	if strings.Contains(string(raw), "ephemeral thought") || strings.Contains(string(raw), "reasoning") {
+		t.Fatalf("saved session leaked reasoning: %s", raw)
 	}
 }
 

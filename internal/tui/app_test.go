@@ -22,7 +22,7 @@ func newTestModel(t *testing.T) *Model {
 			SystemPrompt: "You are a helpful local assistant.", StripLeakedThinking: true,
 			HistoryDir: filepath.Join(t.TempDir(), "history"),
 		},
-		UI: config.UIConfig{Markdown: false},
+		UI: config.UIConfig{Markdown: false, ShowReasoning: true},
 		Memory: config.MemoryConfig{
 			Path:        filepath.Join(t.TempDir(), "memory.yaml"),
 			MaxSnippets: 10,

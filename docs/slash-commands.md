@@ -48,6 +48,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/profile auto` | Restore automatic profile matching for the active model |
 | `/profile set <name>` / `/profile inspect` | Pin a named profile / inspect the active profile |
 | `/think [on\|off\|auto\|status]` | Reasoning models: request, suppress, or default the thinking phase |
+| `/thoughts [show\|hide\|toggle\|status]` | Show or hide captured reasoning without changing model behavior |
 
 ## Prompt
 | Command | Description |

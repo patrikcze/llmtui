@@ -320,11 +320,11 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 
 	if !loaded {
 		base := filepath.Base(opts.ModelPath)
-		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: fmt.Sprintf("loading model %s …", base)}) {
+		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: fmt.Sprintf("loading model %s …", base)}) {
 			return
 		}
 		meta, err := rt.Load(genCtx, opts, func(msg string) {
-			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: msg})
+			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: msg})
 		})
 		if err != nil {
 			emitError(genCtx, events, fmt.Errorf("embedded provider %q: failed to load model %q: %w", p.name, opts.ModelPath, err))
@@ -345,7 +345,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
 		Progress: func(message string) {
-			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: message})
+			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: message})
 		},
 	}
 	if len(req.Tools) > 0 {
@@ -424,7 +424,7 @@ func (p *Provider) switchModelIfRequested(genCtx context.Context, requested stri
 		return fmt.Errorf("embedded provider %q cannot switch to model %q: not a .gguf model file on disk (currently loaded: %s)", p.name, requested, current)
 	}
 
-	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: fmt.Sprintf("switching model to %s …", filepath.Base(requested))})
+	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: fmt.Sprintf("switching model to %s …", filepath.Base(requested))})
 
 	var oldRt Runtime
 	p.mu.Lock()
@@ -442,7 +442,7 @@ func (p *Provider) switchModelIfRequested(genCtx context.Context, requested stri
 		if err := oldRt.Close(); err != nil {
 			// The old engine is gone either way; a close error must not
 			// block the switch. Surface it as activity, not failure.
-			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: fmt.Sprintf("note: closing previous model reported: %v", err)})
+			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: fmt.Sprintf("note: closing previous model reported: %v", err)})
 		}
 		p.mu.Lock()
 		p.rt = p.newRuntime()

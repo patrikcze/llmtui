@@ -88,9 +88,7 @@ func TestChatMapsReasoningDeltasAndPropagatesMode(t *testing.T) {
 		case provider.EventDelta:
 			answer.WriteString(event.Delta)
 		case provider.EventReasoning:
-			if event.Delta != "loading model model.gguf …" && event.Delta != "loading model …" {
-				reasoning.WriteString(event.Delta)
-			}
+			reasoning.WriteString(event.Delta)
 		}
 	}
 	if answer.String() != "public" || reasoning.String() != "private" {

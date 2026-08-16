@@ -183,7 +183,7 @@ Engine state machine (mutex-guarded): `unloaded → loading → ready → closed
   demo-mode fallback (`internal/tui/app.go`) makes anything slower unsafe.
 - First `Chat` triggers the load inside the producer goroutine (never on
   the TUI event loop): `llama.Load` → `Init` → `ModelLoadFromFile` →
-  `InitFromModel`. Load progress is surfaced as `EventReasoning` activity
+  `InitFromModel`. Load progress is surfaced as `EventProgress` activity
   ("loading model …"), which the TUI already treats as watchdog-resetting
   progress, so a slow load cannot trip the inactivity timeout.
 - Subsequent `Chat` calls reuse the loaded model/context (per Definition of

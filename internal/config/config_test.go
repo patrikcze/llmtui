@@ -37,6 +37,9 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 	if !cfg.Chat.Stream {
 		t.Error("Stream should default to true")
 	}
+	if !cfg.UI.ShowReasoning {
+		t.Error("reasoning display should default to visible")
+	}
 	if _, ok := cfg.Providers["ollama"]; !ok {
 		t.Error("built-in ollama provider missing")
 	}
@@ -350,6 +353,9 @@ func TestWriteDefaultProducesLoadableConfig(t *testing.T) {
 	}
 	if cfg.Chat.Reasoning != "auto" || !cfg.Chat.StripLeakedThinking {
 		t.Errorf("reasoning defaults = %q/strip=%v, want auto/true", cfg.Chat.Reasoning, cfg.Chat.StripLeakedThinking)
+	}
+	if !cfg.UI.ShowReasoning {
+		t.Error("generated config should show captured reasoning by default")
 	}
 	if cfg.Context.ReserveResponseTokens < cfg.Chat.MaxTokens {
 		t.Errorf("response reserve = %d, want at least max_tokens %d", cfg.Context.ReserveResponseTokens, cfg.Chat.MaxTokens)
