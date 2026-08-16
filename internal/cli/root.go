@@ -12,25 +12,38 @@ import (
 
 // Root bundles state shared by all commands.
 type Root struct {
-	cfgFile string
-	viper   *viper.Viper
-	cfg     *config.Config
+	cfgFile    string
+	viper      *viper.Viper
+	cfg        *config.Config
+	launchChat launchChatFunc
 }
+
+type launchChatFunc func(r *Root, resumeName string, continueLatest bool) error
 
 // NewRootCmd builds the llmtui command tree.
 func NewRootCmd(version, commit, date string) *cobra.Command {
-	r := &Root{}
+	return newRootCmd(version, commit, date, runChat)
+}
+
+func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.Command {
+	r := &Root{launchChat: launchChat}
+	rootChatFlags := chatFlags{}
 
 	cmd := &cobra.Command{
 		Use:           "llmtui",
 		Short:         "A premium terminal UI for chatting with local LLMs",
-		Long:          "llmtui is a fast, keyboard-first terminal UI for chatting with local\nand OpenAI-compatible LLM backends such as Ollama, LM Studio, vLLM and llama.cpp.",
+		Long:          "llmtui is a fast, keyboard-first terminal UI for chatting with local\nand OpenAI-compatible LLM backends such as Ollama, LM Studio, vLLM and llama.cpp.\n\nRunning llmtui without a subcommand starts an interactive chat session.",
+		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return r.load(cmd)
 		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return r.launchChat(r, rootChatFlags.resumeName, rootChatFlags.continueLatest)
+		},
 	}
+	addChatFlags(cmd, &rootChatFlags)
 
 	pf := cmd.PersistentFlags()
 	pf.StringVar(&r.cfgFile, "config", "", "path to config file")

@@ -967,6 +967,11 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		selection := m.pickerItems[m.pickerIdx]
 		kind := m.pickerKind
 		m.closeOverlay()
+		if kind == pickerProfile {
+			m.profileMode = selection
+			m.notice = "profile pinned to " + selection
+			return m, nil
+		}
 		if m.busy() {
 			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"
 			m.refreshViewport()

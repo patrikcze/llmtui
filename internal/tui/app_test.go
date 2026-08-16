@@ -405,6 +405,37 @@ func TestProvidersPickerNavigatesAndSelects(t *testing.T) {
 	}
 }
 
+func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "qwen3:8b"
+	m.profileMode = "auto"
+
+	runCommand(m, "/profile list")
+	if m.pickerKind != pickerProfile || !m.overlayOpen {
+		t.Fatal("/profile list should open the profile picker")
+	}
+	if selected := m.pickerItems[m.pickerIdx]; selected != "qwen" {
+		t.Fatalf("initial profile selection = %q, want auto-matched qwen", selected)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	want := m.pickerItems[m.pickerIdx]
+	if want == "qwen" || !strings.Contains(m.viewport.View(), "▸ "+want) {
+		t.Fatalf("down did not move profile selection to %q:\n%s", want, m.viewport.View())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.profileMode != want {
+		t.Errorf("profileMode = %q, want pinned profile %q", m.profileMode, want)
+	}
+	if m.overlayOpen || m.pickerKind != pickerNone {
+		t.Error("selecting a profile should close and clear the picker")
+	}
+	if !strings.Contains(m.notice, "profile pinned to "+want) {
+		t.Errorf("notice = %q, want profile confirmation", m.notice)
+	}
+}
+
 func TestPickerEscapeCancelsSelection(t *testing.T) {
 	m := newTestModel(t)
 	m.openModelsPicker([]provider.ModelInfo{{ID: "demo-model"}, {ID: "other"}})

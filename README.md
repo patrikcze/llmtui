@@ -45,12 +45,14 @@ go build -o llmtui ./cmd/llmtui
 
 ## Quick start
 
-If no backend is running, `llmtui chat` automatically falls back to a built-in
+If no backend is running, `llmtui` automatically falls back to a built-in
 **offline demo provider**, so you can try the UI immediately:
 
 ```bash
-./llmtui chat
+./llmtui
 ```
+
+Bare `llmtui` starts the chat; `llmtui chat` remains available as the explicit form.
 
 ### With Ollama
 
@@ -139,6 +141,7 @@ The full reference for every section lives in
 
 | Command | Description |
 | --- | --- |
+| `llmtui` | Start an interactive full-screen chat |
 | `llmtui chat` | Interactive full-screen chat (`--resume <name>` / `--continue` to resume a saved session) |
 | `llmtui models` | List models on the active provider |
 | `llmtui providers` | List configured providers and their status |
@@ -197,6 +200,7 @@ navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
 | `/agent [on\|off\|status\|cancel\|resume]` | Opt-in bounded multi-cycle execution with fresh verification |
 | `/models` | List models on the current provider |
 | `/model <id>` | Switch to a different model |
+| `/profile list` | Choose and pin a model profile with `↑`/`↓` and `Enter` |
 | `/providers` | List configured providers |
 | `/provider <name>` | Switch provider (adopts its default model) |
 | `/stats` | Session + all-time token usage, durations, and tok/s |
@@ -378,6 +382,8 @@ Set `chat.save_history: false` to disable both.
 ### Resuming a session
 
 ```bash
+./llmtui --resume session-20260702-163005        # bare command also supports resume
+./llmtui --continue                              # resume the most recently saved session
 ./llmtui chat --resume session-20260702-163005   # resume that exact saved session
 ./llmtui chat --continue                          # resume the most recently saved session
 ./llmtui chat -c                                  # short form of --continue

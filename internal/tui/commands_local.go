@@ -119,7 +119,7 @@ func cmdProfile(m *Model, args string) tea.Cmd {
 	case "", "inspect":
 		m.openOverlay(m.profileOverlay())
 	case "list":
-		m.openOverlay(m.profileListOverlay())
+		m.openProfilesPicker()
 	case "auto":
 		m.profileMode = "auto"
 		prof, _ := m.activeProfile()
@@ -166,11 +166,10 @@ func (m *Model) profileOverlay() string {
 func (m *Model) profileListOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("model profiles") + "\n\n")
-	active, _ := m.activeProfile()
-	for _, p := range m.profiles {
+	for i, p := range m.profiles {
 		marker := "  "
 		name := m.theme.StatusValue.Render(fmt.Sprintf("%-10s", p.Name))
-		if p.Name == active.Name {
+		if m.pickerKind == pickerProfile && i == m.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			name = m.theme.BadgeOK.Render(fmt.Sprintf("%-10s", p.Name))
 		}
@@ -178,8 +177,9 @@ func (m *Model) profileListOverlay() string {
 			m.theme.StatusBar.Render(fmt.Sprintf("ctx %s · temp %.2f · %s · matches: %s",
 				components.FormatTokens(p.ContextWindow), p.PreferredTemperature, p.PromptStyle, strings.Join(p.Match, ", "))))
 	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("custom profiles come from model_profiles in the config"))
-	return m.overlayFooter(&b)
+	b.WriteString("\n" + m.theme.SystemNote.Render("custom profiles come from model_profiles in the config") + "\n")
+	b.WriteString(m.theme.SystemNote.Render("↑/↓ select · enter pin · esc cancel · /profile auto restores matching"))
+	return b.String()
 }
 
 func modelprofileByName(m *Model, name string) (any, bool) {

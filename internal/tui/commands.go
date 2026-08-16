@@ -72,6 +72,7 @@ const (
 	pickerNone pickerKind = iota
 	pickerModel
 	pickerProvider
+	pickerProfile
 	pickerSkill
 )
 
@@ -357,6 +358,23 @@ func (m *Model) openProvidersPicker() {
 	m.renderPicker()
 }
 
+func (m *Model) openProfilesPicker() {
+	m.pickerKind = pickerProfile
+	m.pickerItems = make([]string, 0, len(m.profiles))
+	for _, profile := range m.profiles {
+		m.pickerItems = append(m.pickerItems, profile.Name)
+	}
+
+	selected := m.profileMode
+	if selected == "" || selected == "auto" {
+		active, _ := m.activeProfile()
+		selected = active.Name
+	}
+	m.pickerIdx = selectedIndex(m.pickerItems, selected)
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
 func selectedIndex(items []string, selected string) int {
 	for i, item := range items {
 		if item == selected {
@@ -373,6 +391,8 @@ func (m *Model) renderPicker() {
 		content = m.modelsOverlay(m.pickerModels)
 	case pickerProvider:
 		content = m.providersOverlay()
+	case pickerProfile:
+		content = m.profileListOverlay()
 	case pickerSkill:
 		content = m.skillsPickerOverlay()
 	}

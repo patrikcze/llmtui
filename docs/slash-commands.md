@@ -44,7 +44,9 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | --- | --- |
 | `/models` | Choose a model with `↑`/`↓` and `Enter` |
 | `/model <id>` | Switch model |
-| `/profile [list\|auto\|set <name>\|inspect]` | Model profiles |
+| `/profile list` | Choose and pin a model profile with `↑`/`↓` and `Enter` |
+| `/profile auto` | Restore automatic profile matching for the active model |
+| `/profile set <name>` / `/profile inspect` | Pin a named profile / inspect the active profile |
 | `/think [on\|off\|auto\|status]` | Reasoning models: request, suppress, or default the thinking phase |
 
 ## Prompt
