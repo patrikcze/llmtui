@@ -124,6 +124,85 @@ func TestVerifierEvidenceCarriesAvailableToolsAndPromptUsesThem(t *testing.T) {
 	}
 }
 
+func TestParseCriteriaProposalsAndUpdates(t *testing.T) {
+	raw := `{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,
+"proposed_criteria":["current time determined","forecast covers six hours"],
+"criteria":[{"id":"c1","status":"satisfied","note":"time from tool output"},{"id":"c2","status":"failed"}]}`
+	result, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ProposedCriteria) != 2 || len(result.CriteriaUpdates) != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.CriteriaUpdates[0].Status != agent.CriterionSatisfied || result.CriteriaUpdates[1].Status != agent.CriterionFailed {
+		t.Fatalf("criteria updates = %+v", result.CriteriaUpdates)
+	}
+}
+
+func TestParseRejectsInvalidCriterionUpdates(t *testing.T) {
+	for _, raw := range []string{
+		`{"verdict":"passed","summary":"ok","confidence":0.5,"criteria":[{"id":"c1","status":"probably"}]}`,
+		`{"verdict":"passed","summary":"ok","confidence":0.5,"criteria":[{"id":"","status":"satisfied"}]}`,
+	} {
+		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
+			t.Errorf("Parse(%q) error = %v, want malformed control", raw, err)
+		}
+	}
+}
+
+// The verifier must receive the cumulative bounded run state — pinned
+// criteria with statuses, the evidence ledger, prior-cycle summaries — not
+// only the current cycle, and the system prompt must explain those fields.
+func TestVerifierEvidenceCarriesCumulativeRunState(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	input := Input{
+		RunID: "r", Cycle: 3, Task: "task", Objective: "objective",
+		Criteria: []agent.Criterion{
+			{ID: "c1", Text: "gather data", Status: agent.CriterionSatisfied},
+			{ID: "c2", Text: "produce report", Status: agent.CriterionPending},
+		},
+		Evidence: []agent.EvidenceItem{
+			{Cycle: 1, Kind: agent.EvidenceTest, Source: "go test ./...", Success: true},
+		},
+		PriorCycles: []agent.MemoryEntry{
+			{Cycle: 1, Objective: "first objective", Verdict: agent.VerificationPassed},
+		},
+		Execution: agent.ExecutionResult{Summary: "done"},
+	}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, input); err != nil {
+		t.Fatal(err)
+	}
+	req := client.requests[0]
+	evidence := req.Messages[1].Content
+	for _, want := range []string{"gather data", "produce report", "go test ./...", "first objective", "c1", "c2"} {
+		if !strings.Contains(evidence, want) {
+			t.Fatalf("evidence missing cumulative state %q: %s", want, evidence)
+		}
+	}
+	system := req.Messages[0].Content
+	for _, want := range []string{"Criteria", "proposed_criteria", "PriorCycles"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt does not explain %q: %s", want, system)
+		}
+	}
+}
+
+// A deterministic failure must also void the semantic verdict's criterion
+// status updates: a cycle whose mechanical outcome is failure cannot newly
+// satisfy anything.
+func TestDeterministicOverrideDropsCriteriaUpdates(t *testing.T) {
+	result := agent.VerificationResult{
+		Verdict: agent.VerificationPassed, Summary: "claims done",
+		CriteriaUpdates: []agent.CriterionUpdate{{ID: "c1", Status: agent.CriterionSatisfied}},
+	}
+	execution := agent.ExecutionResult{TestsRun: []agent.TestResult{{Name: "go test", Passed: false}}}
+	clamped := ApplyDeterministicEvidence(result, execution)
+	if clamped.Verdict != agent.VerificationFailed || len(clamped.CriteriaUpdates) != 0 {
+		t.Fatalf("clamped = %+v, want failed verdict with no criterion updates", clamped)
+	}
+}
+
 func TestMalformedControlOutput(t *testing.T) {
 	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`, validReply("passed") + validReply("failed")} {
 		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {

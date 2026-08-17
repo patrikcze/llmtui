@@ -93,6 +93,7 @@ func (r *AgentRun) CompleteExecution(result ExecutionResult, now time.Time) erro
 	boundExecution(&result)
 	cycle.Execution = &result
 	r.ToolCalls += len(result.ToolCalls)
+	r.AppendEvidence(CollectEvidence(cycle.Number, result))
 	r.Stage = StageVerifier
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "execution_completed", result.Summary)
@@ -110,7 +111,23 @@ func (r *AgentRun) CompleteVerification(result VerificationResult, now time.Time
 		return fmt.Errorf("%w: unknown verdict %q", ErrMalformedControl, result.Verdict)
 	}
 	boundVerification(&result)
+	// New evidence is a mechanical fact, not a verifier claim: a semantic
+	// verdict may not assert progress the executor's observable record does
+	// not contain. (It may still under-claim; that direction is harmless.)
+	if cycle.Execution != nil {
+		result.NewEvidence = result.NewEvidence && cycle.Execution.NewEvidence
+	}
+	// Criteria are controller state: proposals pin exactly once, updates
+	// apply only to pinned IDs, and both happen before the failure
+	// fingerprint so repeated-failure detection sees the updated set.
+	r.PinCriteria(result.ProposedCriteria)
+	r.ApplyCriteriaUpdates(result.CriteriaUpdates, cycle.Number)
 	cycle.Verification = &result
+	r.AppendEvidence([]EvidenceItem{{
+		Cycle: cycle.Number, Kind: EvidenceSemantic, Source: "verifier",
+		Summary: string(result.Verdict) + ": " + result.Summary,
+		Success: result.Verdict == VerificationPassed,
+	}})
 	r.updateFailureCount(result)
 	r.Stage = StageMemoryWrite
 	r.UpdatedAt = now.UTC()
@@ -270,7 +287,7 @@ func (r *AgentRun) updateFailureCount(v VerificationResult) {
 		r.RepeatedFailures = 0
 		return
 	}
-	key := failureKey(v)
+	key := r.failureKey(v)
 	if key == r.FailureKey {
 		r.RepeatedFailures++
 	} else {
@@ -279,7 +296,14 @@ func (r *AgentRun) updateFailureCount(v VerificationResult) {
 	}
 }
 
-func failureKey(v VerificationResult) string {
+// failureKey fingerprints a non-passed cycle for repeated-failure detection.
+// With pinned criteria it keys on the verdict plus the unresolved criterion
+// IDs — immune to phrasing drift in verifier prose. Without criteria it
+// falls back to the historical text-based key.
+func (r *AgentRun) failureKey(v VerificationResult) string {
+	if r.HasCriteria() {
+		return string(v.Verdict) + "\x00" + r.unresolvedCriteriaKey()
+	}
 	return strings.Join([]string{
 		string(v.Verdict),
 		strings.ToLower(strings.TrimSpace(v.Summary)),
@@ -323,6 +347,14 @@ func boundVerification(r *VerificationResult) {
 	r.FailedCriteria = boundedStrings(r.FailedCriteria, 64, 512)
 	r.RemainingCriteria = boundedStrings(r.RemainingCriteria, 64, 512)
 	r.RecommendedNext = truncate(r.RecommendedNext, 2048)
+	r.ProposedCriteria = boundedStrings(r.ProposedCriteria, MaxCriteria, 256)
+	if len(r.CriteriaUpdates) > MaxCriteria {
+		r.CriteriaUpdates = r.CriteriaUpdates[:MaxCriteria]
+	}
+	for i := range r.CriteriaUpdates {
+		r.CriteriaUpdates[i].ID = truncate(strings.TrimSpace(r.CriteriaUpdates[i].ID), 32)
+		r.CriteriaUpdates[i].Note = truncate(r.CriteriaUpdates[i].Note, 256)
+	}
 	if r.Confidence < 0 {
 		r.Confidence = 0
 	}

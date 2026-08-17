@@ -208,10 +208,47 @@ type AgentConfig struct {
 // AgentVerifierConfig bounds the independent evaluator request. Model is an
 // optional model ID on the active provider; empty reuses the executor model.
 type AgentVerifierConfig struct {
-	Enabled   bool   `mapstructure:"enabled" yaml:"enabled"`
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Mode selects the verification policy: "off" (trust the executor, no
+	// evaluation at all), "deterministic" (mechanical evidence only, no
+	// evaluator request), "adaptive" (deterministic evidence first, semantic
+	// evaluation only when it cannot decide — the default), or "always"
+	// (a semantic evaluation after every cycle, the pre-adaptive behavior).
+	// Empty derives the mode from the legacy Enabled flag: true → adaptive,
+	// false → deterministic.
+	Mode      string `mapstructure:"mode" yaml:"mode,omitempty"`
 	Model     string `mapstructure:"model" yaml:"model,omitempty"`
 	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"`
 	Timeout   string `mapstructure:"timeout" yaml:"timeout"`
+}
+
+// Verification policy modes; see AgentVerifierConfig.Mode.
+const (
+	VerifierModeOff           = "off"
+	VerifierModeDeterministic = "deterministic"
+	VerifierModeAdaptive      = "adaptive"
+	VerifierModeAlways        = "always"
+)
+
+// ResolvedMode returns the effective verification policy. An explicit valid
+// Mode wins; otherwise the legacy Enabled flag derives it (true → adaptive,
+// false → deterministic). Unknown values fall back to the derived default so
+// a typo degrades to the documented default instead of disabling checks.
+func (c AgentVerifierConfig) ResolvedMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case VerifierModeOff:
+		return VerifierModeOff
+	case VerifierModeDeterministic:
+		return VerifierModeDeterministic
+	case VerifierModeAdaptive:
+		return VerifierModeAdaptive
+	case VerifierModeAlways:
+		return VerifierModeAlways
+	}
+	if !c.Enabled {
+		return VerifierModeDeterministic
+	}
+	return VerifierModeAdaptive
 }
 
 // ToolsConfig configures workspace tools for the chat (the model can list,
@@ -709,6 +746,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.max_memory_kb", 64)
 	v.SetDefault("agent.max_runs", 32)
 	v.SetDefault("agent.verifier.enabled", true)
+	v.SetDefault("agent.verifier.mode", "")
 	v.SetDefault("agent.verifier.model", "")
 	v.SetDefault("agent.verifier.max_tokens", 1024)
 	v.SetDefault("agent.verifier.timeout", "120s")

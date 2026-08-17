@@ -49,10 +49,22 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 
 	switch verify.Verdict {
 	case VerificationPassed:
+		// With pinned criteria the controller's own unresolved set is
+		// authoritative — the verifier's freeform remaining_criteria list
+		// cannot end or extend the run on its own.
+		if run.HasCriteria() {
+			unresolved := run.UnresolvedCriteria()
+			if len(unresolved) == 0 {
+				return StopResult{Decision: DecisionDone, Reason: "all pinned acceptance criteria satisfied"}
+			}
+			return continueResult(run, verify, DecisionContinue,
+				"Address the next unresolved acceptance criterion: "+unresolved[0].Text)
+		}
 		if len(verify.RemainingCriteria) == 0 {
 			return StopResult{Decision: DecisionDone, Reason: "observable acceptance criteria passed"}
 		}
-		return continueResult(run, verify, DecisionContinue)
+		return continueResult(run, verify, DecisionContinue,
+			"Address the next remaining acceptance criterion: "+verify.RemainingCriteria[0])
 	case VerificationBlocked:
 		if verify.Retryable {
 			return retryResult(run, verify)
@@ -83,13 +95,13 @@ func retryResult(run *AgentRun, verify *VerificationResult) StopResult {
 	return StopResult{Decision: DecisionRetry, Reason: nonempty(verify.Summary, "verification requested a bounded retry"), NextObjective: next}
 }
 
-func continueResult(run *AgentRun, verify *VerificationResult, decision Decision) StopResult {
+func continueResult(run *AgentRun, verify *VerificationResult, decision Decision, fallbackNext string) StopResult {
 	if run.Cycle >= run.Limits.MaxCycles {
 		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum %d cycles reached", run.Limits.MaxCycles)}
 	}
 	next := strings.TrimSpace(verify.RecommendedNext)
 	if next == "" {
-		next = "Address the next remaining acceptance criterion: " + verify.RemainingCriteria[0]
+		next = fallbackNext
 	}
 	if strings.EqualFold(next, strings.TrimSpace(run.Objective)) && !verify.NewEvidence && !verify.StrategyChanged {
 		return StopResult{Decision: DecisionFailed, Reason: "continuation rejected because the next objective did not change"}

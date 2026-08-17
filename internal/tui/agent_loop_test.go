@@ -77,6 +77,9 @@ func configureAgentTestModel(t *testing.T, steps ...agentScriptStep) (*Model, *s
 	m.model = "test-model"
 	m.agentOn = true
 	m.cfg.Agent.Verifier.Enabled = true
+	// These tests exercise the semantic-verify flow explicitly, so pin the
+	// legacy always-verify policy; adaptive-mode behavior has its own tests.
+	m.cfg.Agent.Verifier.Mode = "always"
 	m.cfg.Agent.Verifier.Timeout = "1s"
 	m.cfg.Agent.Verifier.MaxTokens = 256
 	m.cfg.Agent.Persist = false
@@ -688,6 +691,123 @@ func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
 	}
 	if m.thinking || m.agentLoop.run.Status != agent.DecisionCancelled {
 		t.Fatalf("thinking=%v status=%q", m.thinking, m.agentLoop.run.Status)
+	}
+}
+
+// Adaptive mode: a mechanically complete tool cycle needs no semantic
+// verification — the run finishes on deterministic evidence alone, with no
+// verifier request at all. This is the "simple lookup" UX objective.
+func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifier(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
+		agentScriptStep{text: "Listed the workspace and completed the objective."},
+	)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("inspect the workspace", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 1 {
+		t.Fatalf("run = %+v", m.agentLoop.run)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider requests = %d, want executor + tool continuation only (no verifier)", len(prov.requests))
+	}
+	verification := m.agentLoop.run.LatestCycle().Verification
+	if verification == nil || verification.Verdict != agent.VerificationPassed {
+		t.Fatalf("verification = %+v", verification)
+	}
+}
+
+// Adaptive mode: a conclusive deterministic failure (truncated executor
+// reply) skips the semantic verifier entirely instead of paying for a
+// verdict that would be discarded by the deterministic override.
+func TestAdaptiveDeterministicFailureSkipsSemanticVerifier(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "partial write attempt", truncated: true},
+		agentScriptStep{text: "completed the write this time"},
+		agentScriptStep{text: verifierJSON("passed", "complete", "", false, false)},
+	)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	driveAgentCommands(t, m, m.startVerifiedRun("write the file", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
+		t.Fatalf("run = %+v, want a deterministic retry then semantic completion", m.agentLoop.run)
+	}
+	first := m.agentLoop.run.Cycles[0]
+	if first.Verification == nil || first.Verification.Verdict != agent.VerificationFailed || !first.Verification.Retryable {
+		t.Fatalf("first cycle verification = %+v", first.Verification)
+	}
+	// Cycle 1: executor only (deterministic failure, no verifier).
+	// Cycle 2: executor + semantic verifier for the prose-only answer.
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want 3 (no verifier call for the truncated cycle)", len(prov.requests))
+	}
+}
+
+// Adaptive mode: a prose-only answer has no mechanical evidence, so the
+// semantic verifier is still consulted — and its proposed criteria are
+// pinned on the run and persist across cycles with stable IDs.
+func TestAdaptiveProseAnswerVerifiedAndCriteriaPersistAcrossCycles(t *testing.T) {
+	proposeAndFail := `{"verdict":"failed","summary":"report criterion unresolved","retryable":true,` +
+		`"recommended_next":"produce the report","strategy_changed":true,"confidence":0.8,` +
+		`"proposed_criteria":["gather data","produce report"],` +
+		`"criteria":[{"id":"c1","status":"satisfied","note":"data gathered"}]}`
+	satisfyRest := `{"verdict":"passed","summary":"report produced","retryable":false,"confidence":0.9,` +
+		`"criteria":[{"id":"c2","status":"satisfied"}]}`
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Gathered the data and reported findings."},
+		agentScriptStep{text: proposeAndFail},
+		agentScriptStep{text: "Produced the report."},
+		agentScriptStep{text: satisfyRest},
+	)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	driveAgentCommands(t, m, m.startVerifiedRun("gather data and produce a report", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone || run.Cycle != 2 {
+		t.Fatalf("run = %+v", run)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want executor+verifier per cycle for prose-only answers", len(prov.requests))
+	}
+	if len(run.Criteria) != 2 || run.Criteria[0].ID != "c1" || run.Criteria[1].ID != "c2" {
+		t.Fatalf("criteria = %+v, want the pinned set stable across cycles", run.Criteria)
+	}
+	for _, criterion := range run.Criteria {
+		if criterion.Status != agent.CriterionSatisfied {
+			t.Fatalf("criterion %s = %q, want satisfied at completion", criterion.ID, criterion.Status)
+		}
+	}
+	// The second verification request must carry the pinned criteria and the
+	// cumulative ledger, proving the verifier sees cross-cycle state.
+	secondVerify := prov.requests[3].Messages[1].Content
+	for _, want := range []string{"gather data", "produce report", `"EstablishCriteria":false`} {
+		if !strings.Contains(secondVerify, want) {
+			t.Fatalf("second verification evidence missing %q: %s", want, secondVerify)
+		}
+	}
+}
+
+// Mode "off" trusts the executor: no verifier request, and the run reports
+// done with an explicitly unverified summary.
+func TestVerifierModeOffSkipsAllVerification(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Answered directly."},
+	)
+	m.cfg.Agent.Verifier.Mode = "off"
+	driveAgentCommands(t, m, m.startVerifiedRun("answer the question", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("run = %+v", m.agentLoop.run)
+	}
+	if len(prov.requests) != 1 {
+		t.Fatalf("provider requests = %d, want executor only", len(prov.requests))
+	}
+	verification := m.agentLoop.run.Cycles[0].Verification
+	if verification == nil || !strings.Contains(verification.Summary, "not verified") {
+		t.Fatalf("verification = %+v, want an explicitly unverified summary", verification)
 	}
 }
 

@@ -154,7 +154,8 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `path` | `~/.local/share/llmtui/agent-runs` | Private versioned run-record directory |
 | `max_memory_kb` | `64` | Maximum serialized bytes per run |
 | `max_runs` | `32` | Number of newest records retained |
-| `verifier.enabled` | `true` | Run a fresh tool-free evaluator request; false uses deterministic checks only |
+| `verifier.enabled` | `true` | Legacy toggle; when `verifier.mode` is empty, `true` derives `adaptive` and `false` derives `deterministic` |
+| `verifier.mode` | empty | Verification policy: `off`, `deterministic`, `adaptive` (deterministic evidence first, semantic evaluation only when it cannot decide), or `always` (semantic evaluation every cycle) |
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
 | `verifier.max_tokens` | `1024` | Evaluator response cap; raise it if the verifier itself gets cut off mid-JSON on a slower/weaker model |
 | `verifier.timeout` | `120s` | Whole evaluator-request deadline |
