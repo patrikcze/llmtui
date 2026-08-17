@@ -133,6 +133,12 @@ type VerificationResult struct {
 	NewEvidence       bool                `json:"new_evidence,omitempty"`
 	StrategyChanged   bool                `json:"strategy_changed,omitempty"`
 	TransientFailure  bool                `json:"transient_failure,omitempty"`
+	// ProposedCriteria decomposes the task into stable acceptance criteria.
+	// Only the first semantic verification may propose them; PinCriteria
+	// ignores proposals once a set is pinned.
+	ProposedCriteria []string `json:"proposed_criteria,omitempty"`
+	// CriteriaUpdates are per-ID status changes for the pinned criteria.
+	CriteriaUpdates []CriterionUpdate `json:"criteria,omitempty"`
 }
 
 // MemoryEntry is concise cycle-to-cycle state. It deliberately excludes raw
@@ -182,6 +188,11 @@ type AgentRun struct {
 	Cycles           []Cycle       `json:"cycles,omitempty"`
 	Memory           []MemoryEntry `json:"memory,omitempty"`
 	Events           []Event       `json:"events,omitempty"`
+	// Criteria are the stable acceptance criteria pinned once near run start;
+	// Evidence is the bounded cumulative structured ledger. Both are additive
+	// to schema v1: older records load with empty slices.
+	Criteria []Criterion    `json:"criteria,omitempty"`
+	Evidence []EvidenceItem `json:"evidence,omitempty"`
 }
 
 // StopResult is the explicit stop-check output.

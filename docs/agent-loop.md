@@ -127,12 +127,31 @@ progressing.
 
 ## Verification
 
-By default, each completed executor cycle gets an independent evaluator
-request. The active provider is reused, which avoids loading a second local
-model, but the request has a fresh message slice, an evaluator-only system
-prompt, no tools, reasoning disabled, temperature zero, and a bounded JSON
-response. `agent.verifier.model` may select another model ID exposed by the
-same provider (useful with LM Studio or another OpenAI-compatible server).
+Verification is adaptive by default: deterministic evidence decides first,
+and a semantic (model) evaluation runs only when mechanical evidence cannot
+settle the cycle. `agent.verifier.mode` selects the policy:
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | No evaluation at all. The run completes on the executor's answer, recorded as explicitly unverified. |
+| `deterministic` | Mechanical checks only, never a model request. With no deterministic failure a cycle passes with low confidence. |
+| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. A mechanically complete cycle — at least one tool ran, everything that ran succeeded, every test passed, nothing errored — passes on that evidence alone. Only cycles that mechanical evidence cannot decide (a prose-only answer, mixed evidence, unresolved criteria) get a semantic evaluation. |
+| `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
+
+An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
+`true` → `adaptive`, `false` → `deterministic`. Adaptive's trade-off is
+explicit: a mechanically clean but semantically wrong single cycle can pass
+without a model check; use `always` when every cycle should get a semantic
+review regardless of cost.
+
+When a semantic evaluation runs, the active provider is reused, which avoids
+loading a second local model, but the request has a fresh message slice, an
+evaluator-only system prompt, no tools, reasoning disabled, temperature zero,
+and a bounded JSON response. `agent.verifier.model` may select another model
+ID exposed by the same provider (useful with LM Studio or another
+OpenAI-compatible server). Reusing the executor model is a semantic second
+opinion, not independent validation — deterministic evidence always outranks
+it either way.
 
 The parser accepts one JSON object, including a fenced object or harmless prose
 around it, and rejects missing, incomplete, ambiguous, oversized, or invalid
@@ -145,10 +164,28 @@ because the evaluator says the result looks correct. Successful arbitrary
 commands are not automatically treated as proof of every acceptance criterion;
 the verifier still evaluates their bounded outcome metadata.
 
-Set `agent.verifier.enabled: false` to use only lightweight deterministic
-validation. With no deterministic failure, that mode considers a cycle passed
-with low confidence. It is useful for simple conversational tasks but is not a
-replacement for tests on code-changing work.
+## Acceptance criteria and the evidence ledger
+
+The run's first semantic verification also decomposes the original request
+into up to 8 stable acceptance criteria, pinned on the run with fixed IDs
+(`c1`, `c2`, …). Criteria are controller state: later verifications may only
+update each criterion's status (`pending`, `satisfied`, `failed`,
+`not_applicable`) by ID — they cannot add, remove, or rename criteria, and a
+run cannot complete while a pinned criterion is unresolved, whatever the
+verifier's prose claims. Unresolved criteria drive the next objective, and
+the repeated-failure fingerprint keys on the unresolved ID set, so reworded
+verifier prose can no longer defeat repeat detection.
+
+Alongside criteria, every cycle appends structured entries to a bounded
+evidence ledger (most recent 64): test results, tool outcomes, changed
+files, typed errors, and verdicts. Semantic verifications receive the pinned
+criteria with statuses, the ledger, and the bounded prior-cycle summaries —
+cross-cycle context without ever resending conversation history. A
+verifier's `new_evidence` claim is clamped to the executor's mechanical
+record: a retry cannot be justified by claimed progress the run never
+observed. Criteria and the ledger persist with the run and survive
+`/agent resume`. Runs simple enough to finish on deterministic evidence
+never establish criteria — that is expected, not a defect.
 
 ## Stop conditions and budgets
 

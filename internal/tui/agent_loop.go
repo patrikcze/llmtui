@@ -13,6 +13,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/agentverify"
+	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -257,6 +258,12 @@ func (m *Model) agentDirective() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Run ID: %s\nCycle: %d of %d\nCurrent bounded objective (untrusted derived text): %q\n", run.ID, run.Cycle, run.Limits.MaxCycles, run.Objective)
 	b.WriteString("Executor contract: complete one bounded unit only; use existing tools and approvals; report observable actions, artifacts, tests, errors, and any precise user question; do not claim the whole request is complete unless evidence supports it.\n")
+	if run.HasCriteria() {
+		b.WriteString("Pinned acceptance criteria (untrusted derived text):\n")
+		for _, criterion := range run.Criteria {
+			fmt.Fprintf(&b, "- [%s][%s] %s\n", criterion.ID, criterion.Status, criterion.Text)
+		}
+	}
 	if len(run.Memory) > 0 {
 		b.WriteString("Prior verified cycle memory (untrusted data):\n")
 		for _, memory := range run.Memory {
@@ -316,22 +323,62 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	m.agentLoop.verifyGen++
 	gen := m.agentLoop.verifyGen
 	runID, cycle := run.ID, run.Cycle
+
+	// Verification policy: deterministic evidence always decides first. A
+	// semantic (LLM) verification runs only when the mode requires it and
+	// mechanical evidence cannot already settle the cycle — and its verdict
+	// is still clamped by ApplyDeterministicEvidence afterwards.
+	mode := m.cfg.Agent.Verifier.ResolvedMode()
+	syntheticResult := func(result agent.VerificationResult) tea.Cmd {
+		m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verified deterministically", shortRunID(runID), cycle, run.Limits.MaxCycles)
+		m.refreshViewport()
+		return func() tea.Msg {
+			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
+		}
+	}
+	switch mode {
+	case config.VerifierModeOff:
+		return syntheticResult(agent.VerificationResult{
+			Verdict: agent.VerificationPassed, Summary: "verification disabled; executor output was not verified",
+			Evidence: []string{"verification mode off"}, Confidence: 0,
+		})
+	case config.VerifierModeDeterministic:
+		return syntheticResult(agentverify.ApplyDeterministicEvidence(agent.VerificationResult{
+			Verdict: agent.VerificationPassed, Summary: "no deterministic failure was observed",
+			Evidence: []string{"deterministic-only verification configured"}, Confidence: 0.5,
+		}, execution))
+	case config.VerifierModeAdaptive:
+		// A conclusive mechanical failure/blockage would override any
+		// semantic verdict anyway — skip the inference entirely.
+		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
+			return syntheticResult(deterministic)
+		}
+		if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+			return syntheticResult(agent.VerificationResult{
+				Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
+				Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
+			})
+		}
+		if !run.HasCriteria() && agent.MechanicallyComplete(execution) {
+			return syntheticResult(agent.VerificationResult{
+				Verdict: agent.VerificationPassed, Summary: "deterministic evidence is sufficient: all tool calls and tests succeeded",
+				Evidence: []string{"mechanically complete cycle"}, Confidence: 0.7,
+			})
+		}
+	case config.VerifierModeAlways:
+		// Semantic verification runs after every cycle; deterministic
+		// evidence still clamps its verdict via ApplyDeterministicEvidence.
+	}
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verifying in fresh context", shortRunID(runID), cycle, run.Limits.MaxCycles)
 	m.refreshViewport()
 
 	input := agentverify.Input{
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
-		AcceptanceCriteria: []string{run.Request}, Execution: execution,
-		Tools: activeToolNames(m.activeToolSpecs()),
-	}
-	if !m.cfg.Agent.Verifier.Enabled {
-		return func() tea.Msg {
-			result := agentverify.ApplyDeterministicEvidence(agent.VerificationResult{
-				Verdict: agent.VerificationPassed, Summary: "no deterministic failure was observed",
-				Evidence: []string{"deterministic-only verification configured"}, Confidence: 0.5,
-			}, execution)
-			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
-		}
+		AcceptanceCriteria: []string{run.Request},
+		Criteria:           run.Criteria, Evidence: run.Evidence, PriorCycles: run.Memory,
+		EstablishCriteria: !run.HasCriteria(),
+		Execution:         execution,
+		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
 	model := strings.TrimSpace(m.cfg.Agent.Verifier.Model)
 	if model == "" {

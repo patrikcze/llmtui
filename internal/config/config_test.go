@@ -180,6 +180,31 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
 		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
 	}
+	if cfg.Agent.Verifier.Mode != "" || cfg.Agent.Verifier.ResolvedMode() != VerifierModeAdaptive {
+		t.Fatalf("verifier mode default = %q resolved %q, want empty resolving to adaptive", cfg.Agent.Verifier.Mode, cfg.Agent.Verifier.ResolvedMode())
+	}
+}
+
+func TestVerifierModeResolution(t *testing.T) {
+	cases := []struct {
+		name    string
+		verNoun AgentVerifierConfig
+		want    string
+	}{
+		{"explicit off", AgentVerifierConfig{Enabled: true, Mode: "off"}, VerifierModeOff},
+		{"explicit always wins over enabled=false", AgentVerifierConfig{Enabled: false, Mode: "always"}, VerifierModeAlways},
+		{"explicit deterministic", AgentVerifierConfig{Enabled: true, Mode: "Deterministic"}, VerifierModeDeterministic},
+		{"legacy enabled derives adaptive", AgentVerifierConfig{Enabled: true}, VerifierModeAdaptive},
+		{"legacy disabled derives deterministic", AgentVerifierConfig{Enabled: false}, VerifierModeDeterministic},
+		{"typo falls back to derived default", AgentVerifierConfig{Enabled: true, Mode: "adaptve"}, VerifierModeAdaptive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.verNoun.ResolvedMode(); got != tc.want {
+				t.Fatalf("ResolvedMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestFlagOverridesEnv(t *testing.T) {
