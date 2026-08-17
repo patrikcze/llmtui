@@ -259,6 +259,26 @@ over stdio only on an explicit `/mcp connect`. Documented in
 | `servers.<name>.approve` | `ask` | `ask` or `auto` for the server's tool calls |
 | `servers.<name>.timeout` | `30s` | Per-call timeout |
 
+### `tool_registry`
+
+Optional read-only HTTP discovery for agent hosts and other clients that need
+the exact native tool schemas llmtui will attach to its next provider request.
+It is disabled by default and exposes only `GET /api/v1/tools`; it cannot call
+tools or bypass approvals. See [tool-registry.md](tool-registry.md).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Start the registry with the chat TUI |
+| `listen` | `127.0.0.1:7834` | TCP listen address; unauthenticated listeners must be loopback |
+| `token_env` | empty | Environment variable containing a bearer token; required for non-loopback listeners |
+| `shutdown_timeout` | `5s` | Grace period for in-flight registry requests when the TUI exits |
+
+The snapshot changes with session state. `/tools off`, `/web off`, loss of
+native-tool support, and MCP disconnect/disable remove affected schemas. After
+`/mcp connect <server>` completes its MCP `tools/list`, those prefixed
+`mcp__<server>__<tool>` schemas appear in both the registry response and every
+subsequent native LLM request.
+
 ### `cache`, `memory`, `prompt`, `context`, `network`
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),

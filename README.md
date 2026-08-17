@@ -39,6 +39,11 @@ fresh-context verification, concise recoverable run memory, and deterministic
 stop checks. It is disabled by default and never enables tools or bypasses
 approvals. See [Bounded verified agent loop](docs/agent-loop.md).
 
+An optional read-only [HTTP tool registry](docs/tool-registry.md) lets local
+or remote agent hosts discover a read-only mirror of the exact native tool
+schemas llmtui sends directly with each model request, including tools learned
+from connected MCP servers. Model providers do not need to query the endpoint.
+
 ## Install
 
 Requires Go 1.26+.

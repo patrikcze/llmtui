@@ -105,6 +105,32 @@ prompt protocol instead of executing unrecognized output.
 
 ## Weak or inconsistent tool-calling
 
+### Verify native tools in LM Studio
+
+With `/tools on`, llmtui includes the current native definitions in every
+OpenAI-compatible chat request. Enable LM Studio debug logging, send a message,
+and inspect the corresponding `POST /v1/chat/completions` body. A `tools` array
+containing entries such as `list_dir`, `read_file`, and `run_command` proves
+that LM Studio received their names, descriptions, and JSON Schemas.
+
+Receipt and invocation are different checks. This response means the model
+received the tools but chose to answer without using one:
+
+```text
+Model generated tool calls: []
+```
+
+A native invocation is confirmed by a response with `finish_reason` set to
+`tool_calls` and a structured call such as `list_dir`. The following llmtui
+request should contain an assistant `tool_calls` entry and a matching
+`role: "tool"` result with the same `tool_call_id`. Together, those records
+prove provider receipt, model selection, llmtui execution, and result delivery.
+
+The optional [HTTP tool registry](tool-registry.md) does not change this flow.
+LM Studio does not normally query that endpoint; llmtui sends the synchronized
+snapshot directly in each provider request. Use the registry's MCP before/after
+procedure to verify that the set changes dynamically.
+
 Some local models — observed with a Qwen 3.6 MoE build served by LM Studio —
 intermittently emit tool calls the *backend's own* grammar fails to close:
 malformed JSON escaping, or a hybrid pseudo-XML form

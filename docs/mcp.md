@@ -117,6 +117,12 @@ tools. Request composition snapshots that exact array once; the provider
 request, cache fingerprint, context estimate, and `/debug last` tool hash all
 refer to that same snapshot.
 
+When the optional [HTTP tool registry](tool-registry.md) is enabled, its next
+snapshot reads this same active array. A successful `/mcp connect` therefore
+adds the server's `tools/list` results to both the registry endpoint and the
+next LLM request. Disconnecting or disabling the server removes them from
+both. Configured but unconnected servers never advertise tools.
+
 A timeout means *llmtui* gave up waiting — it does not mean the server
 rolled anything back. A slow `session_start` may still have created a
 session on the server's side even though the timeout fired locally; check
