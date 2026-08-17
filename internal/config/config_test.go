@@ -180,6 +180,17 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
 		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
 	}
+}
+
+func TestAgentVerifierModeDefaultsToEmptyAndResolvesAdaptive(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Agent.Verifier.Mode != "" || cfg.Agent.Verifier.ResolvedMode() != VerifierModeAdaptive {
 		t.Fatalf("verifier mode default = %q resolved %q, want empty resolving to adaptive", cfg.Agent.Verifier.Mode, cfg.Agent.Verifier.ResolvedMode())
 	}
