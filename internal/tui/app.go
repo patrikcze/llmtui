@@ -1920,6 +1920,11 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
 		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
 		m.streamToolCalls = msg.event.ToolCalls
+		// Captured before finishStream resets reasoningBuf: an empty-completion
+		// round never reaches session.AddMessage (reply == "" and no tool
+		// calls), so its reasoning text would otherwise vanish with nothing to
+		// diagnose why the round produced no usable output.
+		roundReasoningChars := m.reasoningBuf.Len()
 		m.finishStream(msg.event.Usage, msg.event.Truncated)
 		if msg.event.Truncated {
 			m.recordAgentTruncation()
@@ -1963,8 +1968,8 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 				completionTokens = msg.event.Usage.CompletionTokens
 			}
 			m.errText = fmt.Sprintf(
-				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call).",
-				completionTokens)
+				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t).",
+				completionTokens, roundReasoningChars, msg.event.Truncated)
 			m.failVerifiedRun(errors.New(m.errText))
 			m.endAgentRun()
 			m.refreshViewport()

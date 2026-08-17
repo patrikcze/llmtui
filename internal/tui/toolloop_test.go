@@ -387,6 +387,15 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 		t.Fatal("continueChat's retry must leave a request in flight")
 	}
 
+	// A round that burned its whole budget on hidden reasoning and never
+	// reached a visible answer or a tool call looks identical to a
+	// genuinely-empty round from streamBuf/ToolCalls alone; the reasoning
+	// char count in the failure message is what tells them apart.
+	_, _ = m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventReasoning, Delta: "thinking about the missing file"},
+		ok:    true,
+		gen:   m.streamGen,
+	})
 	_, cmd = m.handleStreamEvent(streamEventMsg{
 		event: provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{CompletionTokens: 2}},
 		ok:    true,
@@ -397,6 +406,12 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 	}
 	if !strings.Contains(m.errText, "twice in a row") || !strings.Contains(m.errText, "2 completion token") {
 		t.Errorf("errText = %q, want the retry outcome and completion-token count", m.errText)
+	}
+	if !strings.Contains(m.errText, "31 reasoning char") {
+		t.Errorf("errText = %q, want this round's reasoning char count so a hidden-reasoning-only round is diagnosable from a genuinely empty one", m.errText)
+	}
+	if !strings.Contains(m.errText, "finish reason reported truncated=false") {
+		t.Errorf("errText = %q, want the finish-reason truncation flag", m.errText)
 	}
 	if m.thinking {
 		t.Error("empty completion must finish the stream")
