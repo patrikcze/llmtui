@@ -14,14 +14,20 @@ func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool)
 			return deterministicVerdict(VerificationFailed, "deterministic test failure: "+test.Name, true, false), true
 		}
 	}
-	for _, tool := range execution.ToolCalls {
-		if tool.Succeeded {
-			continue
+	// Only the cycle's most recent tool call decides whether it ended in
+	// blockage. A tool call failing and being recovered from later in the
+	// same cycle — try a path, get "not found", read the corrected path — is
+	// a normal, expected agentic sequence, not a stall; only a failure
+	// nothing ran after means the cycle actually stopped there. Permission
+	// denial is still checked below regardless of position because it
+	// aborts the executor rather than being something later calls run past.
+	if n := len(execution.ToolCalls); n > 0 {
+		if last := execution.ToolCalls[n-1]; !last.Succeeded {
+			if last.ErrorKind == ErrorPermissionDenied {
+				return deterministicVerdict(VerificationBlocked, "tool permission was denied", false, false), true
+			}
+			return deterministicVerdict(VerificationFailed, "deterministic tool failure: "+last.Name, true, false), true
 		}
-		if tool.ErrorKind == ErrorPermissionDenied {
-			return deterministicVerdict(VerificationBlocked, "tool permission was denied", false, false), true
-		}
-		return deterministicVerdict(VerificationFailed, "deterministic tool failure: "+tool.Name, true, false), true
 	}
 	for _, runErr := range execution.Errors {
 		switch runErr.Kind {
@@ -38,8 +44,14 @@ func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool)
 			// dropped tool call reduced to plain text. Never trust any read
 			// of a possibly-incomplete answer as success.
 			return deterministicVerdict(VerificationFailed, "deterministic execution error: response truncated by max_tokens", true, true), true
-		case ErrorToolValidation, ErrorToolExecution, ErrorProvider, ErrorInvariant:
+		case ErrorProvider, ErrorInvariant:
 			return deterministicVerdict(VerificationFailed, "deterministic execution error: "+string(runErr.Kind), true, false), true
+		case ErrorToolValidation, ErrorToolExecution:
+			// Always recorded 1:1 with a ToolCallRecord (see
+			// recordAgentToolResultsCount), so the trailing-call check above
+			// already covers these — checking again here would judge the
+			// same recovered-or-not failure twice and undo that recovery
+			// exemption for the exact case it exists to handle.
 		}
 	}
 	return VerificationResult{}, false
