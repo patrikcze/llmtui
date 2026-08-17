@@ -176,6 +176,13 @@ add` reminds you).
     still cannot mutate anything without you seeing it.
   - **No API keys involved** — search uses DuckDuckGo's public HTML
     endpoint; nothing identifies you beyond the request itself.
+- The optional HTTP tool registry ([tool-registry.md](tool-registry.md)) is
+  disabled by default and read-only. Without bearer authentication it refuses
+  non-loopback listeners. Remote binds require `tool_registry.token_env`, and
+  the token value is read from the process environment rather than YAML. The
+  response contains active tool metadata only: no provider credentials, MCP
+  commands or environments, workspace paths, prompts, tool arguments, or
+  results. There is no CORS opt-in and no HTTP tool-execution endpoint.
 - Local RAG (`/rag`) is off by default; indexing and retrieval stay local (see
   [rag.md](rag.md)):
   - **Local indexing and retrieval** — keyword scoring (BM25-lite), index

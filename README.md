@@ -39,6 +39,10 @@ fresh-context verification, concise recoverable run memory, and deterministic
 stop checks. It is disabled by default and never enables tools or bypasses
 approvals. See [Bounded verified agent loop](docs/agent-loop.md).
 
+An optional read-only [HTTP tool registry](docs/tool-registry.md) lets local
+or remote agent hosts discover the exact native tool schemas currently offered
+to the model, including tools learned from connected MCP servers.
+
 ## Install
 
 Requires Go 1.26+.
