@@ -10,6 +10,19 @@ replace the standard OpenAI-compatible `tools` request field. An LLM cannot
 autonomously query an HTTP URL unless its host gives it network/tool access;
 normally the host queries this endpoint and provisions the returned schemas.
 
+There are two separate but synchronized flows:
+
+1. llmtui assembles the active native tool definitions and sends them directly
+  to LM Studio, Ollama, or another provider with each inference request. For
+  OpenAI-compatible providers, they are the request's standard `tools` array.
+2. The HTTP endpoint exposes that same active snapshot for external agent
+  hosts, gateways, and diagnostics clients.
+
+LM Studio does not query this endpoint as part of normal llmtui operation. Its
+request log should instead show the definitions in `POST /v1/chat/completions`.
+The endpoint is a discovery mirror, not a replacement provider protocol or a
+second tool-execution path.
+
 ## Configuration
 
 ```yaml
@@ -104,6 +117,33 @@ Consequently, a connected MCP tool is either present in both the HTTP snapshot
 and subsequent native LLM requests, or absent from both. The provider request
 remains authoritative for a particular inference because it snapshots its tool
 array when that request is composed.
+
+### Verify MCP synchronization
+
+Capture the registry's current names while the TUI is running:
+
+```bash
+curl -s http://127.0.0.1:7834/api/v1/tools |
+  jq -r '.tools[].name'
+```
+
+Then connect a configured server with `/mcp connect <server>` and repeat the
+request. Its successfully discovered tools should appear as
+`mcp__<server>__<tool>`. Send another chat message and inspect the provider's
+next request: the same names should be present in its `tools` array.
+
+Run `/mcp disconnect <server>` or `/mcp disable <server>`, then repeat both
+checks. Those MCP names should be absent from the endpoint and the next
+provider request. This before/after test proves that MCP `tools/list`, HTTP
+discovery, and per-request model provisioning share the current tool set.
+
+### Native fallback
+
+This endpoint exposes structured native tool schemas only. If a provider/model
+rejects native function calling and llmtui switches that pair to the fenced
+text protocol, the endpoint returns an empty `tools` array even though llmtui
+can continue offering its supported fenced tools through prompt instructions.
+That state does not mean the registry server failed.
 
 ## Versioning
 
