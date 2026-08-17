@@ -444,26 +444,18 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	})
 }
 
-// unparsedToolCallMarkers are Harmony response-format control tokens (used by
-// openai/gpt-oss models). They must never appear in a normal answer, so their
-// presence alongside a "to=functions." recipient prefix means the backend's
-// own tool-call parser failed to convert the model's attempt into structured
-// tool_calls and fell back to leaking the raw, partially-tokenized text into
-// content instead — e.g.
-// `to=functions.read_file<|constrain|>json<|message|>{"path":"..."}`.
-// Observed with LM Studio serving openai/gpt-oss-20b.
-var unparsedToolCallMarkers = []string{"<|channel|>", "<|constrain|>", "<|message|>", "<|call|>"}
-
+// looksLikeUnparsedToolCall reports whether content is a failed tool-call
+// attempt rather than a real answer. The "to=functions." recipient prefix is
+// itself the reliable signal — it is Harmony's function-call addressing
+// syntax and never appears in ordinary prose — so its presence alone is
+// enough to flag the turn, whether or not any Harmony control token survived
+// alongside it. The same backend has been observed leaking both the fully
+// tokenized form above and a degraded, token-stripped form with no control
+// tokens at all (e.g. `to=functions.grep...commentary?`, seen verbatim from
+// LM Studio serving openai/gpt-oss-20b); requiring a control token missed
+// the latter and let the garbled text stand in as a real, verified answer.
 func looksLikeUnparsedToolCall(content string) bool {
-	if !strings.Contains(content, "to=functions.") {
-		return false
-	}
-	for _, marker := range unparsedToolCallMarkers {
-		if strings.Contains(content, marker) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(content, "to=functions.")
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {

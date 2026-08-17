@@ -454,6 +454,49 @@ func TestChatNonStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
 	}
 }
 
+// TestChatNonStreamingFlagsLeakedToolCallWithoutHarmonyTokens guards a
+// degraded leak shape observed verbatim from LM Studio serving
+// openai/gpt-oss-20b: the backend's Harmony parser can strip every control
+// token and still fail to produce structured tool_calls, leaving only the
+// "to=functions." recipient prefix and garbled remnants (e.g.
+// "to=functions.grep...commentary?"). Requiring a control token alongside
+// the prefix missed this shape entirely, letting the leaked text stand in as
+// a real, verified answer and short-circuit the agent loop's verifier.
+func TestChatNonStreamingFlagsLeakedToolCallWithoutHarmonyTokens(t *testing.T) {
+	const leaked = "to=functions.grep...commentary?"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var sawDelta bool
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			sawDelta = true
+		}
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	if sawDelta {
+		t.Error("leaked tool-call text must never be emitted as a delta")
+	}
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a token-stripped leaked tool-call attempt")
+	}
+}
+
 func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
