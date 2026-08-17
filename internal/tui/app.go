@@ -34,6 +34,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/skill"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
+	"github.com/patrikcze/llmtui/internal/toolapi"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
@@ -579,6 +580,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case toolRegistrySnapshotMsg:
+		select {
+		case msg.reply <- m.toolRegistryCatalog():
+		case <-msg.ctx.Done():
+		}
+		return m, nil
+
+	case toolRegistryServerErrMsg:
+		m.errText = "tool registry: " + msg.err.Error()
+		m.refreshViewport()
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -2671,6 +2684,33 @@ func Run(opts Options) error {
 	defer fmt.Print(disableModifyOtherKeys)
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	var registryServer *toolapi.Server
+	if opts.Config.ToolRegistry.Enabled {
+		var err error
+		registryServer, err = toolapi.Start(toolapi.Options{
+			Listen:   opts.Config.ToolRegistry.Listen,
+			TokenEnv: opts.Config.ToolRegistry.TokenEnv,
+			Source:   toolRegistrySource(p),
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			timeout, err := time.ParseDuration(opts.Config.ToolRegistry.ShutdownTimeout)
+			if err != nil || timeout <= 0 {
+				timeout = 5 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			_ = registryServer.Shutdown(ctx)
+		}()
+		go func() {
+			if err, ok := <-registryServer.Errors(); ok {
+				p.Send(toolRegistryServerErrMsg{err: err})
+			}
+		}()
+	}
 
 	// Route terminal/process-manager shutdown through the same graceful path
 	// as Ctrl+C. A second signal or a wedged shutdown escalates after a grace.

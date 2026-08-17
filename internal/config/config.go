@@ -418,6 +418,14 @@ type ModelProfileConfig struct {
 	ReasoningHint        bool     `mapstructure:"reasoning_hint" yaml:"reasoning_hint"`
 }
 
+// ToolRegistryConfig controls the optional read-only HTTP tool discovery API.
+type ToolRegistryConfig struct {
+	Enabled         bool   `mapstructure:"enabled" yaml:"enabled"`
+	Listen          string `mapstructure:"listen" yaml:"listen"`
+	TokenEnv        string `mapstructure:"token_env" yaml:"token_env"`
+	ShutdownTimeout string `mapstructure:"shutdown_timeout" yaml:"shutdown_timeout"`
+}
+
 // Config is the fully merged configuration plus runtime overrides.
 type Config struct {
 	DefaultProvider string                        `mapstructure:"default_provider" yaml:"default_provider"`
@@ -436,6 +444,7 @@ type Config struct {
 	Plugins         PluginsConfig                 `mapstructure:"plugins" yaml:"plugins"`
 	RAG             RAGConfig                     `mapstructure:"rag" yaml:"rag"`
 	MCP             MCPConfig                     `mapstructure:"mcp" yaml:"mcp"`
+	ToolRegistry    ToolRegistryConfig            `mapstructure:"tool_registry" yaml:"tool_registry"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
 	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
 	ModelProfiles   map[string]ModelProfileConfig `mapstructure:"model_profiles" yaml:"model_profiles,omitempty"`
@@ -561,6 +570,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
+		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
 			return nil, fmt.Errorf("bind env %s: %w", key, err)
@@ -741,6 +751,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.retrieval.strategy", "keyword")
 
 	v.SetDefault("mcp.enabled", false)
+
+	v.SetDefault("tool_registry.enabled", false)
+	v.SetDefault("tool_registry.listen", "127.0.0.1:7834")
+	v.SetDefault("tool_registry.token_env", "")
+	v.SetDefault("tool_registry.shutdown_timeout", "5s")
 
 	v.SetDefault("network.timeout", "120s")
 	v.SetDefault("network.connect_timeout", "10s")
@@ -1025,6 +1040,15 @@ mcp:
   #       SERVICE_TOKEN: "env:SERVICE_TOKEN"
   #     approve: ask
   #     timeout: "30s"
+
+# Optional read-only HTTP discovery for the exact native tool schemas offered
+# to the active model. The endpoint is GET /api/v1/tools. It never executes a
+# tool. Loopback needs no token; any non-loopback listener requires token_env.
+tool_registry:
+  enabled: false
+  listen: "127.0.0.1:7834"
+  token_env: "" # env variable name, e.g. LLMTUI_REGISTRY_TOKEN
+  shutdown_timeout: "5s"
 
 network:
   # Inactivity timeout: how long to wait for the *next* streamed token
