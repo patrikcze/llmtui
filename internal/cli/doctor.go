@@ -64,12 +64,18 @@ func newDoctorCmd(r *Root) *cobra.Command {
 						warn(fmt.Sprintf("%s runtime pin: %v", name, pinErr))
 					} else if resolveErr != nil {
 						warn(fmt.Sprintf("%s runtime: %v", name, resolveErr))
+					} else if resolution.Verified {
+						// Only managed tiers (3/4) reach here with Verified set:
+						// resolveManaged already confirmed every required file is
+						// present and hashes match the embedded pin.
+						ok(fmt.Sprintf("%s runtime %s: %s, verified (%s)", name, pin.LlamaTag, resolution.TierName, resolution.Dir))
 					} else {
-						verification := "unverified override"
-						if resolution.Verified {
-							verification = "verified"
-						}
-						ok(fmt.Sprintf("%s runtime %s: %s, %s (%s)", name, pin.LlamaTag, resolution.TierName, verification, resolution.Dir))
+						// Explicit overrides (tiers 1-2) and the legacy directory
+						// (tier 5) are accepted without file-presence verification,
+						// so report them as a warning rather than a checkmark —
+						// the HealthCheck line below is authoritative on whether the
+						// library files actually load.
+						warn(fmt.Sprintf("%s runtime %s: %s, unverified override (%s)", name, pin.LlamaTag, resolution.TierName, resolution.Dir))
 					}
 				}
 				prov, err := app.BuildProvider(name, pc, r.cfg.Network)

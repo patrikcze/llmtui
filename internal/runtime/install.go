@@ -102,6 +102,12 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 		}, nil
 	}
 	if _, statErr := os.Lstat(dest); statErr == nil {
+		if existing, mErr := ReadManifest(dest); mErr == nil && manifestBackend(existing) != backend {
+			return nil, fmt.Errorf(
+				"runtime destination %q already holds a %q-backend installation; run `llmtui runtime uninstall` first, or pass --dest to install the %q backend to a different location",
+				dest, manifestBackend(existing), backend,
+			)
+		}
 		return nil, fmt.Errorf("runtime destination %q already exists but is not a valid %s installation; move or remove it explicitly", dest, pin.LlamaTag)
 	} else if !os.IsNotExist(statErr) {
 		return nil, fmt.Errorf("inspect runtime destination %q: %w", dest, statErr)
@@ -193,11 +199,9 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 		return nil, fmt.Errorf("verify staged runtime: %s", verificationSummary(verification))
 	}
 
-	// Fsync directory for durability
-	if err := syncDirectory(extractDir); err != nil {
-		// Non-fatal, log and continue
-		_ = err
-	}
+	// Fsync directory for durability; failure is non-fatal and intentionally
+	// ignored — the subsequent atomic rename is still correct without it.
+	_ = syncDirectory(extractDir)
 
 	if err := os.Rename(extractDir, dest); err != nil {
 		if isValidInstallation(dest, pin.LlamaTag, platformPin, pc) {
@@ -349,13 +353,7 @@ func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) 
 	defer gzr.Close()
 
 	tr := tar.NewReader(gzr)
-
-	// Build allowlist of expected basenames
-	allowlist := make(map[string]bool, len(platformPin.Files))
-	for filename := range platformPin.Files {
-		allowlist[filename] = true
-	}
-
+	allowlist := archiveAllowlist(platformPin)
 	extracted := make(map[string]bool)
 
 	for {
@@ -369,50 +367,17 @@ func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) 
 		if err := validateArchivePath(header.Name); err != nil {
 			return err
 		}
-
-		// Get basename
 		basename := path.Base(strings.ReplaceAll(header.Name, "\\", "/"))
-
-		// Skip if not in allowlist
 		if !allowlist[basename] {
 			continue
 		}
-
-		// Only extract regular files
-		if header.Typeflag != tar.TypeReg {
-			return fmt.Errorf("allowlisted archive entry %q is not a regular file", header.Name)
-		}
-
-		// Extract to basename in extractDir
-		destPath := filepath.Join(extractDir, basename)
-
-		// Prevent duplicate extraction
-		if extracted[basename] {
-			return fmt.Errorf("duplicate file in archive: %s", basename)
-		}
-
-		outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-		if err != nil {
-			return fmt.Errorf("create file %s: %w", basename, err)
-		}
-
-		if _, err := io.Copy(outFile, tr); err != nil {
-			outFile.Close()
-			return fmt.Errorf("extract file %s: %w", basename, err)
-		}
-		outFile.Close()
-
-		extracted[basename] = true
-	}
-
-	// Verify all expected files were extracted
-	for filename := range allowlist {
-		if !extracted[filename] {
-			return fmt.Errorf("expected file not found in archive: %s", filename)
+		open := func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }
+		if err := extractArchiveEntry(extractDir, header.Name, basename, header.Typeflag == tar.TypeReg, open, extracted); err != nil {
+			return err
 		}
 	}
 
-	return nil
+	return verifyAllExtracted(allowlist, extracted)
 }
 
 // extractZipSafe extracts a zip archive safely.
@@ -423,68 +388,77 @@ func extractZipSafe(archivePath, extractDir string, platformPin *PlatformPin) er
 	}
 	defer r.Close()
 
-	// Build allowlist of expected basenames
+	allowlist := archiveAllowlist(platformPin)
+	extracted := make(map[string]bool)
+
+	for _, entry := range r.File {
+		if err := validateArchivePath(entry.Name); err != nil {
+			return err
+		}
+		basename := path.Base(strings.ReplaceAll(entry.Name, "\\", "/"))
+		if !allowlist[basename] {
+			continue
+		}
+		isRegular := entry.Mode()&os.ModeType == 0 && entry.Mode().IsRegular()
+		if err := extractArchiveEntry(extractDir, entry.Name, basename, isRegular, entry.Open, extracted); err != nil {
+			return err
+		}
+	}
+
+	return verifyAllExtracted(allowlist, extracted)
+}
+
+// archiveAllowlist returns the set of basenames extraction is permitted to
+// write, derived from the platform pin's expected file list.
+func archiveAllowlist(platformPin *PlatformPin) map[string]bool {
 	allowlist := make(map[string]bool, len(platformPin.Files))
 	for filename := range platformPin.Files {
 		allowlist[filename] = true
 	}
+	return allowlist
+}
 
-	extracted := make(map[string]bool)
-
-	for _, f := range r.File {
-		if err := validateArchivePath(f.Name); err != nil {
-			return err
-		}
-		// Get basename
-		basename := path.Base(strings.ReplaceAll(f.Name, "\\", "/"))
-
-		// Skip if not in allowlist
-		if !allowlist[basename] {
-			continue
-		}
-
-		// Only extract regular files
-		if f.Mode()&os.ModeType != 0 || !f.Mode().IsRegular() {
-			return fmt.Errorf("allowlisted archive entry %q is not a regular file", f.Name)
-		}
-
-		// Extract to basename in extractDir
-		destPath := filepath.Join(extractDir, basename)
-
-		// Prevent duplicate extraction
-		if extracted[basename] {
-			return fmt.Errorf("duplicate file in archive: %s", basename)
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return fmt.Errorf("open file in archive %s: %w", basename, err)
-		}
-
-		outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-		if err != nil {
-			rc.Close()
-			return fmt.Errorf("create file %s: %w", basename, err)
-		}
-
-		if _, err := io.Copy(outFile, rc); err != nil {
-			outFile.Close()
-			rc.Close()
-			return fmt.Errorf("extract file %s: %w", basename, err)
-		}
-		outFile.Close()
-		rc.Close()
-
-		extracted[basename] = true
+// extractArchiveEntry writes one already-allowlisted archive entry (basename)
+// to extractDir, shared by both the tar.gz and zip extraction paths so a
+// safety fix (duplicate rejection, non-regular-file rejection) applies to
+// both formats identically. name is the raw archive-internal path, used only
+// for error messages.
+func extractArchiveEntry(extractDir, name, basename string, isRegular bool, open func() (io.ReadCloser, error), extracted map[string]bool) error {
+	if !isRegular {
+		return fmt.Errorf("allowlisted archive entry %q is not a regular file", name)
+	}
+	if extracted[basename] {
+		return fmt.Errorf("duplicate file in archive: %s", basename)
 	}
 
-	// Verify all expected files were extracted
+	rc, err := open()
+	if err != nil {
+		return fmt.Errorf("open file in archive %s: %w", basename, err)
+	}
+	defer rc.Close()
+
+	outFile, err := os.OpenFile(filepath.Join(extractDir, basename), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("create file %s: %w", basename, err)
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, rc); err != nil {
+		return fmt.Errorf("extract file %s: %w", basename, err)
+	}
+
+	extracted[basename] = true
+	return nil
+}
+
+// verifyAllExtracted confirms every allowlisted file was actually present in
+// the archive.
+func verifyAllExtracted(allowlist, extracted map[string]bool) error {
 	for filename := range allowlist {
 		if !extracted[filename] {
 			return fmt.Errorf("expected file not found in archive: %s", filename)
 		}
 	}
-
 	return nil
 }
 

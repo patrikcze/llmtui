@@ -80,7 +80,7 @@ func Resolve(cfg ResolveConfig) (*Resolution, error) {
 		if filesErr != nil {
 			return nil, filesErr
 		}
-		resolution, reason := resolveLegacy(legacyDir, cfg.Pin.LlamaTag, managedFiles)
+		resolution, reason := resolveLegacy(legacyDir, cfg.Pin.LlamaTag, managedFiles, cfg.Platform)
 		attempts = append(attempts, fmt.Sprintf("legacy runtime %s: %s", legacyDir, reason))
 		if resolution != nil {
 			resolution.Attempts = append([]string(nil), attempts...)
@@ -95,7 +95,7 @@ func Resolve(cfg ResolveConfig) (*Resolution, error) {
 }
 
 func trustedResolution(path string, tier int, name, expectedVersion string) *Resolution {
-	dir := filepath.Clean(expandHome(path))
+	dir := filepath.Clean(ExpandHome(path))
 	resolution := &Resolution{Dir: dir, Tier: tier, TierName: name}
 	if found, err := ReadVersion(dir); err == nil && !versionMatches(found, expectedVersion) {
 		resolution.Warnings = append(resolution.Warnings, fmt.Sprintf("runtime %s differs from tested %s", found, expectedVersion))
@@ -147,15 +147,29 @@ func resolveManaged(dir string, tier int, name, version string, platformPin *Pla
 	return &Resolution{Dir: resolved, Tier: tier, TierName: name, Verified: true}, "verified"
 }
 
-func resolveLegacy(dir, version string, files map[string]string) (*Resolution, string) {
-	foundVersion, err := ReadVersion(dir)
+func resolveLegacy(dir, version string, files map[string]string, platform *PlatformConfig) (*Resolution, string) {
+	// Tier 5 reads from the same class of user-owned directory as the
+	// managed tiers (3/4) and must be held to the same symlink/ownership
+	// standard: a matching LLAMA_VERSION stamp alone is not a trust boundary.
+	resolved, err := platform.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err.Error()
+	}
+	secure, err := platform.IsSecureOwnership(resolved)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if !secure {
+		return nil, "directory is not owner-controlled"
+	}
+	foundVersion, err := ReadVersion(resolved)
 	if err != nil {
 		return nil, err.Error()
 	}
 	if !versionMatches(foundVersion, version) {
 		return nil, fmt.Sprintf("version %q does not match %q", foundVersion, version)
 	}
-	verification, err := VerifyBaseline(dir, files, version, false)
+	verification, err := VerifyBaseline(resolved, files, version, false)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -163,7 +177,7 @@ func resolveLegacy(dir, version string, files map[string]string) (*Resolution, s
 		return nil, verificationSummary(verification)
 	}
 	return &Resolution{
-		Dir:      dir,
+		Dir:      resolved,
 		Tier:     5,
 		TierName: "legacy runtime",
 		Warnings: []string{"legacy runtime is unverified; run `llmtui runtime install` to migrate"},
@@ -198,7 +212,9 @@ func verificationSummary(result *VerificationResult) string {
 	return strings.Join(parts, "; ")
 }
 
-func expandHome(path string) string {
+// ExpandHome expands a leading "~" to the user's home directory. It is a
+// no-op (including on lookup failure) for any other path shape.
+func ExpandHome(path string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, strings.TrimPrefix(path, "~"))

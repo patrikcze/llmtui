@@ -17,6 +17,16 @@ import (
 
 func TestRuntime_Probe(t *testing.T) {
 	t.Setenv("YZMA_LIB", "")
+	// Isolate every resolver tier that reads ambient machine state (bundled
+	// exe-relative dir, managed user dir, legacy ~/.local/share directory) so
+	// this test is hermetic on a developer machine that has a real runtime
+	// installed. Without this, tier 5 (legacy) can pick up a real prior
+	// `scripts/fetch-llama-runtime.sh`/`llmtui runtime install` result and
+	// this test's very first assertion (total-resolution-failure) fails.
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(emptyHome, "xdg-data"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(emptyHome, "local-appdata"))
 	runtime := New()
 
 	if err := runtime.Probe(embedded.Options{}); err == nil || !strings.Contains(err.Error(), "llmtui runtime install") {
@@ -24,8 +34,8 @@ func TestRuntime_Probe(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := runtime.Probe(embedded.Options{LibraryPath: dir}); err == nil || !strings.Contains(err.Error(), "fetch-llama-runtime.sh") {
-		t.Fatalf("Probe() error = %v, want fetch-script guidance", err)
+	if err := runtime.Probe(embedded.Options{LibraryPath: dir}); err == nil || !strings.Contains(err.Error(), "llmtui runtime install") {
+		t.Fatalf("Probe() error = %v, want runtime-install guidance", err)
 	}
 
 	library := loader.GetLibraryFilename(dir, "llama")

@@ -113,6 +113,21 @@ func (pc *PlatformConfig) LegacyRuntimeDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "llmtui", "llama.cpp"), nil
 }
 
+// primaryLibraryName returns the platform-specific primary llama.cpp library
+// filename used as the quick-verification anchor (see VerifyQuickForPlatform).
+func primaryLibraryName(goos string) string {
+	switch goos {
+	case "darwin":
+		return "libllama.dylib"
+	case "linux":
+		return "libllama.so"
+	case "windows":
+		return "llama.dll"
+	default:
+		return "libllama.so.0" // fallback
+	}
+}
+
 // IsSecureOwnership checks Unix file permissions to ensure the file/directory
 // is not group- or world-writable. On Windows, this always returns true.
 // This is required for managed tiers 3-4.

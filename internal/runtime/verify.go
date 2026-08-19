@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 )
 
 // VerificationResult records the outcome of verifying a runtime directory.
@@ -51,7 +52,15 @@ func VerifyBaseline(dir string, expectedFiles map[string]string, expectedVersion
 		}
 	}
 
-	// Check that all expected files exist and are regular files
+	checkFilesExist(result, dir, expectedFiles)
+	return result, nil
+}
+
+// checkFilesExist stats each expected file and records any that are missing
+// or not a regular file, mutating result in place. Shared by VerifyBaseline
+// and VerifyFull so the two verification levels agree on what "missing"
+// means.
+func checkFilesExist(result *VerificationResult, dir string, expectedFiles map[string]string) {
 	for filename := range expectedFiles {
 		path := filepath.Join(dir, filename)
 		info, err := os.Stat(path)
@@ -65,8 +74,6 @@ func VerifyBaseline(dir string, expectedFiles map[string]string, expectedVersion
 			result.MissingFiles = append(result.MissingFiles, filename)
 		}
 	}
-
-	return result, nil
 }
 
 // VerifyFull performs complete SHA256 verification of all files in dir
@@ -76,27 +83,16 @@ func VerifyBaseline(dir string, expectedFiles map[string]string, expectedVersion
 // expectedFiles is a map of filename → expected SHA256.
 func VerifyFull(dir string, expectedFiles map[string]string) (*VerificationResult, error) {
 	result := &VerificationResult{Valid: true}
+	checkFilesExist(result, dir, expectedFiles)
 
 	for filename, expectedHash := range expectedFiles {
-		path := filepath.Join(dir, filename)
-		info, err := os.Stat(path)
-		if err != nil {
-			result.Valid = false
-			result.MissingFiles = append(result.MissingFiles, filename)
+		if slices.Contains(result.MissingFiles, filename) {
 			continue
 		}
-		if !info.Mode().IsRegular() {
-			result.Valid = false
-			result.MissingFiles = append(result.MissingFiles, filename)
-			continue
-		}
-
-		// Compute SHA256
-		actualHash, err := computeFileSHA256(path)
+		actualHash, err := computeFileSHA256(filepath.Join(dir, filename))
 		if err != nil {
-			return nil, fmt.Errorf("hash %s: %w", path, err)
+			return nil, fmt.Errorf("hash %s: %w", filepath.Join(dir, filename), err)
 		}
-
 		if actualHash != expectedHash {
 			result.Valid = false
 			result.BadHashes = append(result.BadHashes, fmt.Sprintf("%s (expected %s, got %s)", filename, expectedHash, actualHash))
@@ -163,17 +159,4 @@ func computeFileSHA256(path string) (string, error) {
 // getPrimaryLibraryName returns the platform-specific primary llama library name.
 func getPrimaryLibraryName() string {
 	return primaryLibraryName(goruntime.GOOS)
-}
-
-func primaryLibraryName(goos string) string {
-	switch goos {
-	case "darwin":
-		return "libllama.dylib"
-	case "linux":
-		return "libllama.so"
-	case "windows":
-		return "llama.dll"
-	default:
-		return "libllama.so.0" // fallback
-	}
 }

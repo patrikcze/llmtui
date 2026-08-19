@@ -85,53 +85,62 @@ func New() *Runtime {
 
 // Probe performs stat-only library validation. It never loads native code.
 func (r *Runtime) Probe(opts embedded.Options) error {
+	_, err := r.probeDir(opts)
+	return err
+}
+
+// probeDir resolves the library directory and performs the same stat-only
+// validation as Probe, returning the resolved directory. Load calls this
+// instead of Probe so the (potentially expensive, for managed tiers)
+// directory resolution and verification happens exactly once per call.
+func (r *Runtime) probeDir(opts embedded.Options) (string, error) {
 	dir, err := resolveLibraryDir(opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	filename := loader.GetLibraryFilename(dir, "llama")
 	info, err := os.Stat(filename)
 	if err != nil {
-		return fmt.Errorf(
-			"llama.cpp library not found at %q: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md",
+		return "", fmt.Errorf(
+			"llama.cpp library not found at %q: %w; run `llmtui runtime install` or see docs/embedded.md",
 			filename,
 			err,
 		)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("llama.cpp library path %q is a directory; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", filename)
+		return "", fmt.Errorf("llama.cpp library path %q is a directory; run `llmtui runtime install` or see docs/embedded.md", filename)
 	}
 	if err := validateRequiredLibraries(dir); err != nil {
-		return fmt.Errorf("incomplete llama.cpp runtime: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", err)
+		return "", fmt.Errorf("incomplete llama.cpp runtime: %w; run `llmtui runtime install` or see docs/embedded.md", err)
 	}
 	if opts.ModelPath != "" {
 		modelInfo, err := os.Stat(opts.ModelPath)
 		if err != nil {
-			return fmt.Errorf("GGUF model not found at %q: %w", opts.ModelPath, err)
+			return "", fmt.Errorf("GGUF model not found at %q: %w", opts.ModelPath, err)
 		}
 		if modelInfo.IsDir() {
-			return fmt.Errorf("GGUF model path %q is a directory", opts.ModelPath)
+			return "", fmt.Errorf("GGUF model path %q is a directory", opts.ModelPath)
 		}
 	}
 	if opts.MMProjPath != "" {
 		projector, err := os.Stat(opts.MMProjPath)
 		if err != nil {
-			return fmt.Errorf("vision projector not found at %q: %w", opts.MMProjPath, err)
+			return "", fmt.Errorf("vision projector not found at %q: %w", opts.MMProjPath, err)
 		}
 		if projector.IsDir() {
-			return fmt.Errorf("vision projector path %q is a directory; a matching mmproj GGUF file is required", opts.MMProjPath)
+			return "", fmt.Errorf("vision projector path %q is a directory; a matching mmproj GGUF file is required", opts.MMProjPath)
 		}
 		mtmdLibrary := loader.GetLibraryFilename(dir, "mtmd")
 		mtmdInfo, err := os.Stat(mtmdLibrary)
 		if err != nil {
-			return fmt.Errorf("mtmd vision library not found at %q: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", mtmdLibrary, err)
+			return "", fmt.Errorf("mtmd vision library not found at %q: %w; run `llmtui runtime install` or see docs/embedded.md", mtmdLibrary, err)
 		}
 		if mtmdInfo.IsDir() {
-			return fmt.Errorf("mtmd vision library path %q is a directory", mtmdLibrary)
+			return "", fmt.Errorf("mtmd vision library path %q is a directory", mtmdLibrary)
 		}
 	}
-	return nil
+	return dir, nil
 }
 
 // Load initializes the process-global backend, then loads this runtime's model
@@ -160,16 +169,12 @@ func (r *Runtime) Load(
 	if err := ctx.Err(); err != nil {
 		return meta, err
 	}
-	if err := r.Probe(opts); err != nil {
+	dir, err := r.probeDir(opts)
+	if err != nil {
 		return meta, err
 	}
 	if err := ffi.EnsureAvailable(); err != nil {
 		return meta, fmt.Errorf("embedded inference requires libffi: %w; install the libffi8 package on Linux (other providers remain available)", err)
-	}
-
-	dir, err := resolveLibraryDir(opts)
-	if err != nil {
-		return meta, err
 	}
 	nativeLogReset()
 	if err := initBackend(dir); err != nil {
@@ -651,7 +656,7 @@ func (state *backendState) initLlama(dir string, load func(string) error, initia
 	return nil
 }
 
-func initMTMDBackend(dir string) error {
+func initMTMDBackend(dir string) (err error) {
 	globalBackend.mu.Lock()
 	defer globalBackend.mu.Unlock()
 
@@ -661,6 +666,18 @@ func initMTMDBackend(dir string) error {
 	if globalBackend.mtmdInitialized {
 		return nil
 	}
+	// Defensive: initBackend already registers dir for Windows DLL search
+	// (mtmd is always loaded from the same dir in the current call order),
+	// but this keeps initMTMDBackend correct on its own if that ordering
+	// ever changes.
+	if err := runtime.PrepareLibraryDir(dir); err != nil {
+		return fmt.Errorf("prepare native runtime directory: %w", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("native mtmd initialization panic: %v", recovered)
+		}
+	}()
 	if err := mtmd.Load(dir); err != nil {
 		return err
 	}

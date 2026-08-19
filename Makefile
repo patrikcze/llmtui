@@ -22,8 +22,12 @@ ARCHIVE_BASE  := $(BINARY)-$(VERSION)-$(TARGET_GOOS)-$(TARGET_GOARCH)
 ARCHIVE_EXT   := $(if $(filter windows,$(TARGET_GOOS)),zip,tar.gz)
 ARCHIVE_OUT   := $(DIST)/$(ARCHIVE_BASE).$(ARCHIVE_EXT)
 ARCHIVE_STAGE := $(DIST)/$(ARCHIVE_BASE)
-YZMA_DIR      := $(shell go list -m -f '{{.Dir}}' github.com/hybridgroup/yzma)
-PUREGO_DIR    := $(shell go list -m -f '{{.Dir}}' github.com/ebitengine/purego)
+# Recursively expanded (=, not :=): `go list -m` must run after dist-platform
+# has forced module extraction, not at Makefile parse time. On a cold module
+# cache, evaluating this at parse time (:= ) silently yields an empty string
+# and corrupts the LICENSE install paths below.
+YZMA_DIR       = $(shell go list -m -f '{{.Dir}}' github.com/hybridgroup/yzma)
+PUREGO_DIR     = $(shell go list -m -f '{{.Dir}}' github.com/ebitengine/purego)
 
 .DEFAULT_GOAL := help
 
@@ -122,6 +126,10 @@ dist-archive: dist-platform
 		echo "7z is required to build the Windows release archive" >&2; \
 		exit 1; \
 	fi
+	@if [ -z "$(YZMA_DIR)" ] || [ -z "$(PUREGO_DIR)" ]; then \
+		echo "error: could not resolve yzma/purego module directories via 'go list -m'; run 'go mod download' first" >&2; \
+		exit 1; \
+	fi
 	@rm -rf $(ARCHIVE_STAGE) $(ARCHIVE_OUT)
 	@mkdir -p $(ARCHIVE_STAGE)/lib/llmtui $(ARCHIVE_STAGE)/licenses
 	@$(INSTALL_CMD) -m 0755 $(TARGET_OUT) $(ARCHIVE_STAGE)/$(BINARY)$(TARGET_EXT)
@@ -137,6 +145,7 @@ dist-archive: dist-platform
 		tar -C $(DIST) -czf $(ARCHIVE_OUT) $(ARCHIVE_BASE); \
 	fi
 	@rm -rf $(ARCHIVE_STAGE)
+	@rm -f $(TARGET_OUT)
 	@echo "  packaged $(ARCHIVE_OUT)"
 
 ## dist-checksums: write checksums for existing dist artifacts
