@@ -126,6 +126,19 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// NativeDiagnostics reports backend registrations for the active loaded
+// runtime without triggering a model or native-library load.
+func (p *Provider) NativeDiagnostics() NativeDiagnostics {
+	p.mu.Lock()
+	rt := p.rt
+	p.mu.Unlock()
+	reporter, ok := rt.(nativeDiagnosticsReporter)
+	if !ok {
+		return NativeDiagnostics{}
+	}
+	return reporter.NativeDiagnostics()
+}
+
 // ListModels returns the active model plus sibling *.gguf files found in
 // the same directory, sorted and deduplicated. A missing or unreadable
 // directory is not an error: it just yields the active entry alone.

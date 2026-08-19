@@ -47,8 +47,18 @@ add` reminds you).
 - Embedded GGUF inference ([embedded.md](embedded.md)) stays in-process and
   makes no network requests, but it expands the native-code trust boundary:
   - llama.cpp dynamic libraries execute with llmtui's full user permissions.
-    Use the checksum-pinned fetch script or libraries you built from a trusted
-    source; never point `library_path` at an untrusted directory.
+    Self-contained archives and `llmtui runtime install` use one embedded pin:
+    exact asset URL/size/SHA-256, version stamp, regular-file allowlist, trusted
+    aliases, and per-file hashes. Downloads occur only inside the explicit
+    install command and are verified before extraction. Managed directories
+    must be owner-controlled and not group/world writable; invalid managed
+    tiers are skipped with their reason. Never point the trusted
+    `library_path`/`YZMA_LIB` overrides at an untrusted directory.
+  - Installation stages under the destination parent, fully verifies the
+    result, and publishes it with an atomic rename. An unknown or invalid
+    existing destination is never deleted automatically. Uninstall removes
+    only the embedded pin's filenames and refuses a forged or mismatched
+    manifest.
   - GGUF parsing happens in native llama.cpp code. Treat model files as
     untrusted inputs, prefer reputable sources, and keep the pinned runtime
     current. Go can recover ordinary binding panics but not native faults such
@@ -75,6 +85,11 @@ add` reminds you).
   - On macOS, the FFI dependency normally extracts its bundled libffi into the
     user's cache. Locked-down/read-only-cache environments can opt out and use
     a trusted system libffi as described in the troubleshooting guide.
+  - Linux uses a lazily initialized system `libffi.so.8`. Its absence returns
+    an embedded-provider error only; process startup and Ollama, LM Studio, and
+    OpenAI-compatible providers remain functional. Windows registers the
+    verified absolute runtime directory with `AddDllDirectory` without
+    modifying `PATH` or global default DLL search policy.
 - Session names from `/history load` are validated against path traversal —
   they cannot escape the history directory.
 - Provider responses, streaming tool-call arguments, and MCP JSON-RPC frames

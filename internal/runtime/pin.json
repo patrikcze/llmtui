@@ -1,0 +1,210 @@
+{
+  "yzma_version": "v1.19.0",
+  "llama_tag": "b10066",
+  "llama_commit": "86a9c79f866799eb0e7e89c03578ccfbcc5d808e",
+  "compatible_range": {
+    "min": "b9979",
+    "max": "b10103"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "archive": "llama-b10066-bin-macos-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-macos-arm64.tar.gz",
+      "sha256": "52db287b6f39dfab93cc0dd1953c13d2108ca12c2817431c79a169ed3da57597",
+      "size": 10598666,
+      "files": {
+        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "libllama.0.0.10066.dylib": "7ca28116c5198ffbd106397f8673d2b01bf32d526333b25fb67b15078721109b",
+        "libggml.0.17.0.dylib": "85acdf1924c48cfc25d74ac5fe7d40040ef31bddda82d0dd70adc55d325b914b",
+        "libggml-base.0.17.0.dylib": "958b70473a593f2d013c0f1375f5ad1e9da599e18847aa8ac321c32d181c7c27",
+        "libggml-cpu.0.17.0.dylib": "86cec8a069cb50cf3a355ea9cd403cb57009c5326e7699544b5c41c2da524d1f",
+        "libggml-blas.0.17.0.dylib": "c12c6eb9c317a91b4018235f2e86be7e00ef85ddd164e90f325c8c66444b89ee",
+        "libggml-metal.0.17.0.dylib": "0c9d964643e418f027e4d4f4554d06f225f8d1ffd23765f86cd1a72edb789384",
+        "libggml-rpc.0.17.0.dylib": "6bca38b002d59704c4a67ed8793e358498b12d409546f6938eced73cecb26815",
+        "libmtmd.0.0.10066.dylib": "600e271308ae69548c974b2efe8e72cde3b7eec156eba26a9a48fd810c3be4bc"
+      },
+      "aliases": {
+        "libllama.dylib": "libllama.0.0.10066.dylib",
+        "libllama.0.dylib": "libllama.0.0.10066.dylib",
+        "libggml.dylib": "libggml.0.17.0.dylib",
+        "libggml.0.dylib": "libggml.0.17.0.dylib",
+        "libggml-base.dylib": "libggml-base.0.17.0.dylib",
+        "libggml-base.0.dylib": "libggml-base.0.17.0.dylib",
+        "libggml-cpu.dylib": "libggml-cpu.0.17.0.dylib",
+        "libggml-cpu.0.dylib": "libggml-cpu.0.17.0.dylib",
+        "libggml-blas.dylib": "libggml-blas.0.17.0.dylib",
+        "libggml-blas.0.dylib": "libggml-blas.0.17.0.dylib",
+        "libggml-metal.dylib": "libggml-metal.0.17.0.dylib",
+        "libggml-metal.0.dylib": "libggml-metal.0.17.0.dylib",
+        "libggml-rpc.dylib": "libggml-rpc.0.17.0.dylib",
+        "libggml-rpc.0.dylib": "libggml-rpc.0.17.0.dylib",
+        "libmtmd.dylib": "libmtmd.0.0.10066.dylib",
+        "libmtmd.0.dylib": "libmtmd.0.0.10066.dylib"
+      }
+    },
+    "darwin-amd64": {
+      "archive": "llama-b10066-bin-macos-x64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-macos-x64.tar.gz",
+      "sha256": "2cd0c72e8ecc42bcb7190eaacaaf60d32037d6ee8bfb63ebcab820c5f4dec73d",
+      "size": 10874185,
+      "files": {
+        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "libllama.0.0.10066.dylib": "9bee9b53550f65ebb0e2cd8d1f14af2d2b4410db7fe07a2d76f7d96f9535c678",
+        "libggml.0.17.0.dylib": "835afa31dce784f2f5576784ce620c6a2446f52aa93f7fda8d248fe8b49b91ab",
+        "libggml-base.0.17.0.dylib": "68cb8f68c84c2a3cb8529de0cc79b00443c6d4fb54d57f71bde46ef25c7def44",
+        "libggml-cpu.0.17.0.dylib": "e6681c1b626edf783b5d251d3045a7323f066b88bba57e0b3256b102a52bad30",
+        "libggml-blas.0.17.0.dylib": "b2dcd20c7b5d481ec3607b2fd4b3e93330ce2dbff331fc1037ddb06753c2c0b3",
+        "libggml-rpc.0.17.0.dylib": "820d994a3eee7c244b9802c139f6c8fd3dc7a6c1461d90afb047c7dcb4c3056d",
+        "libmtmd.0.0.10066.dylib": "81e007080d26c07518c226e0490036a66f55c55afdb1e760a83859ac03d6ed54"
+      },
+      "aliases": {
+        "libllama.dylib": "libllama.0.0.10066.dylib",
+        "libllama.0.dylib": "libllama.0.0.10066.dylib",
+        "libggml.dylib": "libggml.0.17.0.dylib",
+        "libggml.0.dylib": "libggml.0.17.0.dylib",
+        "libggml-base.dylib": "libggml-base.0.17.0.dylib",
+        "libggml-base.0.dylib": "libggml-base.0.17.0.dylib",
+        "libggml-cpu.dylib": "libggml-cpu.0.17.0.dylib",
+        "libggml-cpu.0.dylib": "libggml-cpu.0.17.0.dylib",
+        "libggml-blas.dylib": "libggml-blas.0.17.0.dylib",
+        "libggml-blas.0.dylib": "libggml-blas.0.17.0.dylib",
+        "libggml-rpc.dylib": "libggml-rpc.0.17.0.dylib",
+        "libggml-rpc.0.dylib": "libggml-rpc.0.17.0.dylib",
+        "libmtmd.dylib": "libmtmd.0.0.10066.dylib",
+        "libmtmd.0.dylib": "libmtmd.0.0.10066.dylib"
+      }
+    },
+    "linux-arm64": {
+      "archive": "llama-b10066-bin-ubuntu-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-ubuntu-arm64.tar.gz",
+      "sha256": "bb049c4cd03ebcd4fb3c86a8e48152abc717a9a9dfe7d9da35f814d136075b0b",
+      "size": 12974198,
+      "files": {
+        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "libllama.so.0.0.10066": "8042e9cf0a18f49a69e6f8cd0a827de76ade3fe27bc746b6f6ba9e7855800938",
+        "libggml.so.0.17.0": "ca4ba3566a9b858dbd6fa60f195a4e0d332d0703d47ebb6b6384ae8e315be45c",
+        "libggml-base.so.0.17.0": "5881d9dc026f08a3f5450dd9777b3aaf03a9b744baa821957177aeba93ccf75e",
+        "libggml-cpu-armv8.0_1.so": "812338e462bae2f2f3912949dde5f01c7cf9fe64edc2e6d808ab0f00d8ae31cd",
+        "libggml-cpu-armv8.2_1.so": "143f935bfcea653e60037364cd4995702e902cb961dfd29fd188e0ab1814d90f",
+        "libggml-cpu-armv8.2_2.so": "463a6afdd389c7041a6aa790e22eb47d9b6d65f72a6f308cd75e70c722f0b461",
+        "libggml-cpu-armv8.2_3.so": "a9c0b37e3df3d4e777852aa1982f1fee1882c5c2ba4bf2e150102bf922159201",
+        "libggml-cpu-armv8.6_1.so": "68affebff3d044573e2324f4e85a7066795ed54726fd4702c2d7b955963efbca",
+        "libggml-cpu-armv8.6_2.so": "3ff2da9ddcd36aa3305f3a657e2cd0bc74b3b5b3dae3141ee403dcca3b47478e",
+        "libggml-cpu-armv9.2_1.so": "332b15c398f5cdb45cf91f8072365184d97591157ab60f3eb4b98f350b9a601a",
+        "libggml-cpu-armv9.2_2.so": "17276f180fab6ef69c3c5e9af5aa74027a1fb0d0779ab5ab56c81663f19d1910",
+        "libggml-rpc.so": "b9362aee855eb96ec87060d155b23d66103ae020a39062bd76db1315386147db",
+        "libmtmd.so.0.0.10066": "084ebaf9829dbcf51cb72ff7cc41156e95157eb63b97aceaa5a9277f9994f260"
+      },
+      "aliases": {
+        "libllama.so": "libllama.so.0.0.10066",
+        "libllama.so.0": "libllama.so.0.0.10066",
+        "libggml.so": "libggml.so.0.17.0",
+        "libggml.so.0": "libggml.so.0.17.0",
+        "libggml-base.so": "libggml-base.so.0.17.0",
+        "libggml-base.so.0": "libggml-base.so.0.17.0",
+        "libmtmd.so": "libmtmd.so.0.0.10066",
+        "libmtmd.so.0": "libmtmd.so.0.0.10066"
+      },
+      "packs": {
+        "vulkan": {
+          "archive": "llama-b10066-bin-ubuntu-vulkan-arm64.tar.gz",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-ubuntu-vulkan-arm64.tar.gz",
+          "sha256": "ea0845873ea9487e0e26233051bb583072d823af88f7f821e0676ffd01d069fe",
+          "size": 26119630,
+          "files": {
+            "libggml-vulkan.so": "391077503d3b1069b9768f23a7b07861eae3ec19a15605bbeb7e7c17d046cbe9"
+          }
+        }
+      }
+    },
+    "linux-amd64": {
+      "archive": "llama-b10066-bin-ubuntu-x64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-ubuntu-x64.tar.gz",
+      "sha256": "8387ddb55db54ea0b12e38182b73284df6b0d1b847f3d53e6111c2102c5da331",
+      "size": 16066486,
+      "files": {
+        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "libllama.so.0.0.10066": "45c889381fcadbc4f0cc5924479acd8a5cdabbf31da5c95aa9f54d5a6c6cb444",
+        "libggml.so.0.17.0": "ffd6a736ad58e2d9407ed427252520ffbd4bca8dd5de467ecb2bd446a7a3d75b",
+        "libggml-base.so.0.17.0": "e8a599c585eee04e62aacf3d611837370e19a3fbd93f4d67cabc0c8cdca93e09",
+        "libggml-cpu-alderlake.so": "c454ea03cb519b3d5d796354563d4eb3f66240ec4fb73e421de663fe807be985",
+        "libggml-cpu-cannonlake.so": "70087f6a7b9d757039469f07b405c7c4d2252c517ada4b91fbeb043c9b869ceb",
+        "libggml-cpu-cascadelake.so": "48c8d5486e5ba2afb1e3ed5cb7d1c59946d584d3a137fbf8369d57617a81db73",
+        "libggml-cpu-cooperlake.so": "2dbb35ffb05abecd4e7a03e23b4131c78fc0809005d507188042b40471d375a2",
+        "libggml-cpu-haswell.so": "5170b9a121bc6d982fc90e7177c516a241d10158d98fcb4fc016bf2141662710",
+        "libggml-cpu-icelake.so": "e9d469f6dc15b2cfe2baa1a61ee5283c17ec7368bcb1e63e5bfbbfef6a9bd1a9",
+        "libggml-cpu-ivybridge.so": "52e7d70e111a4188da991d32a2a18eeac9592a5a9f94de7604e53fb3bd0bdfb1",
+        "libggml-cpu-piledriver.so": "14e5a8e8b737cef47734842d375f5372ea8c9e2205f3915b0609aa6832807e9c",
+        "libggml-cpu-sandybridge.so": "53d1ae1f6e986774f630b841058babe052b215b6792509ba34084d64312efee8",
+        "libggml-cpu-sapphirerapids.so": "40ccb9a9b27de2188524310967a74884ae7d28a51089ad4ca9b6e28eb0f02a42",
+        "libggml-cpu-skylakex.so": "e92b180237907b2fa22f3089fac53fbec2cad95393c0c3ce139fe8e02b7ea6aa",
+        "libggml-cpu-sse42.so": "631e645c829dae9f72eb8ac9b8e49fb600d6da77acdeef0101d2169d04742914",
+        "libggml-cpu-x64.so": "05bd795702f9c2a89744a46fc82453594b8aa4eedd416da92e71641554d2bae2",
+        "libggml-cpu-zen4.so": "d9d38ae85a94d3c7309d237f4439b3bc56e9144390efb27dd26589952febc818",
+        "libggml-rpc.so": "52b35b36f8b10052faf1598afb1b5926f5cc0f8bcf5312bd8a5ec90dc1bbc20d",
+        "libmtmd.so.0.0.10066": "c282644acec4aaf7e75676878d5d6cbd69c742230461dbf270a004e6f934f4f7"
+      },
+      "aliases": {
+        "libllama.so": "libllama.so.0.0.10066",
+        "libllama.so.0": "libllama.so.0.0.10066",
+        "libggml.so": "libggml.so.0.17.0",
+        "libggml.so.0": "libggml.so.0.17.0",
+        "libggml-base.so": "libggml-base.so.0.17.0",
+        "libggml-base.so.0": "libggml-base.so.0.17.0",
+        "libmtmd.so": "libmtmd.so.0.0.10066",
+        "libmtmd.so.0": "libmtmd.so.0.0.10066"
+      },
+      "packs": {
+        "vulkan": {
+          "archive": "llama-b10066-bin-ubuntu-vulkan-x64.tar.gz",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-ubuntu-vulkan-x64.tar.gz",
+          "sha256": "37831256be31aacf8ffe5bfc0a88040ef6f0224c220777b28fd77d4198a0b902",
+          "size": 32029550,
+          "files": {
+            "libggml-vulkan.so": "fcf410823860069d71f8b1a501f76814169e38a74c2ce2c4c58652bf672e1375"
+          }
+        }
+      }
+    },
+    "windows-amd64": {
+      "archive": "llama-b10066-bin-win-cpu-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-win-cpu-x64.zip",
+      "sha256": "c4edaaf7f06652e57dd5cf302e719bbc761117e823b6bb3fa34b89945fb32b5f",
+      "size": 18007237,
+      "files": {
+        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "llama.dll": "ae5d9b7c3ff235fd6638d8c626a3c7036aa1372b57dd47e986750f24a06cbdeb",
+        "ggml.dll": "9758fefe9544744d2bf12fb4e71a76dcc4e50215ef4f9d5b15a352e1747cc051",
+        "ggml-base.dll": "26c0194a270563d0d79954ba33acf376a85896a3ddfc4d44f612db499b15e7ac",
+        "ggml-cpu-alderlake.dll": "f6f798d8033c712d19c8f6d43d7acff003a1b4e3cd805e3faf70ee883f38c6c7",
+        "ggml-cpu-cannonlake.dll": "9b9280acf7784d4697ea2e69f0069ba2e28283f5844918eae0ef632210264fbe",
+        "ggml-cpu-cascadelake.dll": "868b4185ec74fcaac269363e79c00ac71c07c7b4f74c6a4c597d66af5051c26d",
+        "ggml-cpu-cooperlake.dll": "774f216fa9a99a787f8d0d95ef19dff07442d127247f836bc6c40586515a2942",
+        "ggml-cpu-haswell.dll": "62dacbbb03f04dfb3a41d38e470a2edf070745046ac689cf0aba336bc2790ecb",
+        "ggml-cpu-icelake.dll": "56e715074c7dbd317a76fd06e84460480f595ac9d037040181ca0f34d16ca24a",
+        "ggml-cpu-ivybridge.dll": "1cb6d596baf04e551919df5b4d8dc530479f86848e13187110c5a8f857e2e099",
+        "ggml-cpu-piledriver.dll": "23fa6f60de6cf85f71cca763469b5181c582b8579ace662edd4be8705658e4c7",
+        "ggml-cpu-sandybridge.dll": "95fc11f5e987d0a105c73fc74e70c7918f67333d4251a6abc03771477abddf92",
+        "ggml-cpu-sapphirerapids.dll": "6d221f9f79f9e19e89cf031be8d787bafe594e2f43b46d6b072450a890fc743f",
+        "ggml-cpu-skylakex.dll": "d6d7da72307567aa21c6cc857c4e44a3b1e98aa2e02aaaf9514984c29899365c",
+        "ggml-cpu-sse42.dll": "7dff5d97900d04882e7682e8c540f214695fb2cca2454bfbe287949524792590",
+        "ggml-cpu-x64.dll": "2caf1ff861c65ef83e1b8fbd027494942219f9c4d3abad30124c407b27cd3b44",
+        "ggml-cpu-zen4.dll": "fb80ed66140629dfbb6084a95c795c22f3d05e1fc0a95dc767c24ff7707fb0e5",
+        "ggml-rpc.dll": "f727f224a0d9594e5cdcd337fd4147bc75cc18f54a8600cfe8a3942926269d57",
+        "mtmd.dll": "3db61b16d778c81a8c86b109eebf728b02580b5c1d332203e42390ae897a95f3",
+        "libomp140.x86_64.dll": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+      },
+      "packs": {
+        "vulkan": {
+          "archive": "llama-b10066-bin-win-vulkan-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10066/llama-b10066-bin-win-vulkan-x64.zip",
+          "sha256": "57cb5dd3143b2814b8d1d14587867628bfb126536abfa7085ca9560c4919d998",
+          "size": 33271537,
+          "files": {
+            "ggml-vulkan.dll": "dd0965ca474f8d44905cfef368be2c231833c6b6c4436c38ed32a1dd61a629d5"
+          }
+        }
+      }
+    }
+  }
+}

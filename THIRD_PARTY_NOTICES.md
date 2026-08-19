@@ -25,11 +25,11 @@ Full text: <https://github.com/ardanlabs/jinja/blob/main/LICENSE>
 
 ## llama.cpp / ggml (github.com/ggml-org/llama.cpp)
 
-The native inference runtime. llmtui does not vendor or compile llama.cpp;
-users obtain its libraries separately (see `scripts/fetch-llama-runtime.sh`
-and `docs/embedded.md`). This notice is included because llmtui is designed
-to load and is distributed alongside instructions for obtaining these
-libraries.
+The native inference runtime. Self-contained llmtui release archives
+redistribute a checksum-pinned, trimmed copy of the official llama.cpp binary
+release for that platform under `lib/llmtui/runtime/`. The upstream `LICENSE`
+file is included verbatim in every runtime directory. Bare-binary users may
+obtain the same verified files with `llmtui runtime install`.
 
 MIT License. Copyright (c) 2023-2026 The ggml authors.
 
@@ -42,7 +42,11 @@ Foreign-function-interface layers used by yzma.
 purego: Apache License 2.0. Copyright the Ebitengine authors.
 ffi: MIT License. Copyright (c) 2024 JupiterRider.
 
-The ffi module embeds libffi binaries on macOS and Windows.
+llmtui carries the ffi v0.6.0 source under `third_party/ffi` with one local
+behavioral change: libffi symbol initialization is lazy and reports an error
+at embedded-provider use instead of panicking during process startup. The
+upstream copyright and MIT license files are retained unmodified in that
+directory. The ffi module embeds libffi binaries on macOS and Windows.
 libffi: MIT/Expat License. Copyright (c) 1996-2025 Anthony Green,
 Red Hat, Inc. and others.
 
@@ -50,3 +54,16 @@ Full texts:
 <https://github.com/ebitengine/purego/blob/main/LICENSE>
 <https://github.com/jupiterrider/ffi/blob/main/LICENSE>
 <https://github.com/jupiterrider/ffi/blob/main/assets/libffi/LICENSE>
+
+## LLVM OpenMP runtime (Windows runtime archive only)
+
+The official llama.cpp Windows CPU archive includes
+`libomp140.x86_64.dll`, the LLVM/Intel OpenMP runtime required by its CPU
+backend. llmtui preserves that upstream binary byte-for-byte and records its
+SHA-256 in `internal/runtime/pin.json`.
+
+License: Apache License 2.0 with LLVM exceptions, including the legacy Intel
+OpenMP notices reproduced by the canonical license file.
+
+Full text:
+<https://github.com/llvm/llvm-project/blob/main/openmp/LICENSE.TXT>

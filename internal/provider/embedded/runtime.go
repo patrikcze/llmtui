@@ -2,15 +2,9 @@ package embedded
 
 import (
 	"context"
-	"errors"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 )
-
-// ErrRuntimeUnavailable is returned by a Runtime whose native backend is not
-// wired into the current build (see unavailable.go). Provider callers wrap
-// it with actionable, provider-name-specific context.
-var ErrRuntimeUnavailable = errors.New("embedded inference runtime is not available")
 
 // ModelMeta describes a loaded model.
 type ModelMeta struct {
@@ -60,6 +54,17 @@ type GenResult struct {
 	PromptTokens     int
 	CompletionTokens int
 	ToolCalls        []provider.ToolCall
+}
+
+// NativeDiagnostics describes the native backends visible to a loaded runtime.
+type NativeDiagnostics struct {
+	Loaded        bool
+	Registrations uint64
+	Devices       uint64
+}
+
+type nativeDiagnosticsReporter interface {
+	NativeDiagnostics() NativeDiagnostics
 }
 
 // Runtime is one loaded native inference engine. It is the seam between the

@@ -2,6 +2,9 @@ module github.com/patrikcze/llmtui
 
 go 1.26.6
 
+// Keep libffi lazy so non-embedded providers can start on Linux without libffi.so.8.
+replace github.com/jupiterrider/ffi => ./third_party/ffi
+
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/ardanlabs/jinja v1.1.0
@@ -13,6 +16,7 @@ require (
 	github.com/ebitengine/purego v0.10.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/hybridgroup/yzma v1.19.0
+	github.com/jupiterrider/ffi v0.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	golang.org/x/net v0.56.0
@@ -43,7 +47,6 @@ require (
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jupiterrider/ffi v0.6.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

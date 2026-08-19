@@ -81,15 +81,25 @@ Start LM Studio's local server (default `http://localhost:1234/v1`), then:
 ./llmtui chat --provider lmstudio --model <loaded-model-id>
 ```
 
-### With an embedded GGUF (Apple Silicon)
+### With an embedded GGUF
 
 ```bash
-scripts/fetch-llama-runtime.sh
-export YZMA_LIB="$HOME/.local/share/llmtui/llama.cpp"
+./llmtui runtime install
 ./llmtui chat --provider embedded --model "$HOME/models/model.gguf"
 ```
 
-The runtime is checksum-pinned and inference stays inside the llmtui process.
+Official release archives already include the pinned runtime, so the install
+command is needed only for bare binaries and source builds. It is the only
+runtime command that uses the network: it downloads the exact platform asset,
+verifies its size and SHA-256 before extraction, trims it to the trusted file
+set, and installs it atomically. `llmtui runtime list|verify|uninstall` inspect
+or remove that managed installation. Linux amd64/arm64 and Windows amd64 can
+install the pinned Vulkan variant with `llmtui runtime install --backend
+vulkan`.
+
+Inference stays inside the llmtui process. Linux requires the system
+`libffi.so.8` (`libffi8` package); if it is absent, embedded inference reports
+an error while Ollama, LM Studio, and OpenAI-compatible providers keep working.
 Add a matching `mmproj_path` to the embedded provider to enable PNG/JPEG
 vision; recognized embedded models also use native structured tools and
 `/think on|off|auto`. See [docs/embedded.md](docs/embedded.md) for a Gemma 4

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hybridgroup/yzma/pkg/llama"
@@ -18,8 +19,8 @@ func TestRuntime_Probe(t *testing.T) {
 	t.Setenv("YZMA_LIB", "")
 	runtime := New()
 
-	if err := runtime.Probe(embedded.Options{}); err == nil || !strings.Contains(err.Error(), "library path is unset") {
-		t.Fatalf("Probe() error = %v, want unset-path guidance", err)
+	if err := runtime.Probe(embedded.Options{}); err == nil || !strings.Contains(err.Error(), "llmtui runtime install") {
+		t.Fatalf("Probe() error = %v, want runtime-install guidance", err)
 	}
 
 	dir := t.TempDir()
@@ -30,6 +31,15 @@ func TestRuntime_Probe(t *testing.T) {
 	library := loader.GetLibraryFilename(dir, "llama")
 	if err := os.WriteFile(library, []byte("test fixture"), 0o600); err != nil {
 		t.Fatalf("write fake library: %v", err)
+	}
+	if err := runtime.Probe(embedded.Options{LibraryPath: dir}); err == nil || !strings.Contains(err.Error(), "incomplete llama.cpp runtime") {
+		t.Fatalf("Probe() missing backend error = %v", err)
+	}
+	for _, pattern := range requiredLibraryPatterns() {
+		name := strings.ReplaceAll(pattern, "*", "")
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test fixture"), 0o600); err != nil {
+			t.Fatalf("write fake required library %q: %v", name, err)
+		}
 	}
 	if err := runtime.Probe(embedded.Options{LibraryPath: dir}); err != nil {
 		t.Fatalf("Probe() = %v, want stat-only success", err)
@@ -87,6 +97,56 @@ func TestResolveLibraryDir(t *testing.T) {
 				t.Errorf("resolveLibraryDir() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBackendInitRetriesAfterLoadFailure(t *testing.T) {
+	var state backendState
+	loadCalls := 0
+	load := func(string) error {
+		loadCalls++
+		if loadCalls == 1 {
+			return os.ErrNotExist
+		}
+		return nil
+	}
+	initializeCalls := 0
+
+	if err := state.initLlama("bad", load, func() { initializeCalls++ }); err == nil {
+		t.Fatal("first initLlama() error = nil, want load failure")
+	}
+	if state.dir != "" || state.llamaInitialized {
+		t.Fatalf("failed initialization poisoned state: dir=%q initialized=%v", state.dir, state.llamaInitialized)
+	}
+	if err := state.initLlama("good", load, func() { initializeCalls++ }); err != nil {
+		t.Fatalf("retry initLlama() error = %v", err)
+	}
+	if state.dir != "good" || !state.llamaInitialized {
+		t.Fatalf("successful retry state: dir=%q initialized=%v", state.dir, state.llamaInitialized)
+	}
+	if loadCalls != 2 || initializeCalls != 1 {
+		t.Fatalf("load calls = %d, initialize calls = %d; want 2, 1", loadCalls, initializeCalls)
+	}
+}
+
+func TestAbortCallbackIsProcessGlobal(t *testing.T) {
+	first := processAbortCallback()
+	for range 100 {
+		if got := processAbortCallback(); got != first {
+			t.Fatalf("processAbortCallback() = %d, want stable %d", got, first)
+		}
+	}
+}
+
+func TestAbortSignalRegistration(t *testing.T) {
+	var signal atomic.Bool
+	id := registerAbortSignal(&signal)
+	if _, ok := abortCallbacks.registered.Load(id); !ok {
+		t.Fatal("registered abort signal is missing")
+	}
+	unregisterAbortSignal(id)
+	if _, ok := abortCallbacks.registered.Load(id); ok {
+		t.Fatal("unregistered abort signal remains reachable")
 	}
 }
 

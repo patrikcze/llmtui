@@ -2,6 +2,55 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-08-19 addendum: verified runtime distribution
+
+Status: **Accepted and implemented**. This addendum supersedes the original
+native build strategy, supported-platform, resource-lifecycle, packaging,
+security-download, known-limitation, and upstream-pinning text where they
+conflict.
+
+llmtui still uses yzma v1.19.0, in-process dynamic loading, no application
+`import "C"`, and no sidecar. llama.cpp b10066 and commit
+`86a9c79f866799eb0e7e89c03578ccfbcc5d808e` are now defined once in
+`internal/runtime/pin.json` together with the yzma compatibility range,
+official platform asset URLs/sizes/SHA-256 values, regular payload hashes, and
+trusted aliases. Self-contained release archives ship the trimmed runtime at
+`lib/llmtui/runtime`; no GGUF model is bundled.
+
+Runtime precedence is explicit `library_path`, `YZMA_LIB`, executable-relative
+bundle, managed user-data `runtime/<tag>`, then a matching stamped legacy
+directory. The first two remain trusted advanced overrides. Bundled/managed
+tiers require an owner-controlled directory, matching stamp and embedded file
+set, and primary-library hash; `runtime verify` hashes every file. Resolution
+performs no network access and no writes.
+
+`llmtui runtime install|list|verify|uninstall` is the management surface.
+Install is the only network path: it downloads an exact pinned URL, enforces
+exact size and SHA-256 before archive parsing, extracts only regular allowlisted
+payloads, recreates aliases from the embedded pin, fully verifies staging, and
+publishes by atomic rename. Unknown existing destinations are never deleted.
+Uninstall trusts the embedded pin rather than arbitrary manifest filenames.
+
+The actual provider state machine is `unloaded -> ready -> closed`; model
+loading is serialized inside the first chat but is not a distinct externally
+observable state. Provider/model switch and app quit free projector, context,
+and model; there is no `/runtime unload` command. The process-global native
+backends remain initialized until exit.
+
+One process-lifetime abort callback uses opaque numeric runtime IDs and a Go
+registry, avoiding permanent purego callback allocation on model switches.
+Failed llama library loads do not pin the attempted directory and can retry.
+Windows registers the absolute verified runtime directory with
+`AddDllDirectory`. Linux libffi initialization is lazy: missing
+`libffi.so.8` fails only embedded inference with an actionable error, never
+process startup or unrelated providers. Linux release notes and setup docs
+retain `libffi8` as a system prerequisite.
+
+CI builds and extracts every platform archive and requires doctor to report a
+verified bundled tier. CPU native inference runs on macOS arm64 and Linux
+amd64 against an immutable, size/SHA-256-pinned SmolLM2 GGUF fixture. macOS
+continues to use `CGO_ENABLED=1`; Linux and Windows remain `CGO_ENABLED=0`.
+
 ## 2026-07-18 addendum: multimodal, tools, and reasoning
 
 Status: **Accepted for the next increment**. This addendum supersedes only the

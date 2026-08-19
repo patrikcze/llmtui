@@ -48,6 +48,8 @@ jobs:
   release-build:
     name: Release build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ${{ matrix.runner }}
+    env:
+      LLMTUI_RUNTIME_CACHE: ${{ github.workspace }}/.runtime-cache
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +83,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Cache pinned llama.cpp runtime
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLMTUI_RUNTIME_CACHE }}
+          key: llama-runtime-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('internal/runtime/pin.json') }}
+
       - name: Test Windows process containment
         if: matrix.goos == 'windows'
         shell: bash
@@ -88,10 +96,107 @@ jobs:
 
       # macOS uses the real cgo runtime because Metal creates native threads;
       # Linux and Windows keep the portable no-cgo release configuration.
-      - name: Build release platform
+      - name: Build self-contained release archive
         shell: bash
         run: >-
-          make dist-platform VERSION=ci-smoke
+          make dist-archive VERSION=ci-smoke
           TARGET_GOOS=${{ matrix.goos }}
           TARGET_GOARCH=${{ matrix.goarch }}
           CGO_ENABLED=${{ matrix.cgo }}
+
+      - name: Verify bundled runtime resolution
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/llmtui-archive-smoke"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          if [ "${{ matrix.goos }}" = windows ]; then
+            7z x "dist/llmtui-ci-smoke-${{ matrix.goos }}-${{ matrix.goarch }}.zip" -o"$stage" -y >/dev/null
+            binary="$stage/llmtui-ci-smoke-${{ matrix.goos }}-${{ matrix.goarch }}/llmtui.exe"
+          else
+            tar -xzf "dist/llmtui-ci-smoke-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" -C "$stage"
+            binary="$stage/llmtui-ci-smoke-${{ matrix.goos }}-${{ matrix.goarch }}/llmtui"
+          fi
+          config="$stage/embedded-smoke.yaml"
+          printf '%s\n' \
+            'default_provider: embedded' \
+            'default_model: /missing/ci-smoke.gguf' \
+            'providers:' \
+            '  embedded:' \
+            '    type: embedded' \
+            '    model_path: /missing/ci-smoke.gguf' > "$config"
+          "$binary" --config "$config" doctor | tee "$stage/doctor.txt"
+          grep 'runtime b10066: bundled runtime, verified' "$stage/doctor.txt"
+
+  native-integration:
+    name: Native inference (${{ matrix.goos }}/${{ matrix.goarch }}, CPU)
+    runs-on: ${{ matrix.runner }}
+    env:
+      LLMTUI_RUNTIME_CACHE: ${{ github.workspace }}/.runtime-cache
+      LLMTUI_MODEL_CACHE: ${{ github.workspace }}/.model-cache
+      LLMTUI_TEST_MODEL_REVISION: 09816acd5d99df7be770d85ea30822623dab342c
+      LLMTUI_TEST_MODEL_FILE: SmolLM2-135M-Instruct-Q2_K.gguf
+      LLMTUI_TEST_MODEL_SIZE: "88202080"
+      LLMTUI_TEST_MODEL_SHA256: 741ad12b64088fedc17c33aacb22e48be1972ef36a39f03666dd68bd15614fb9
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+            cgo: "1"
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Cache pinned llama.cpp runtime
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLMTUI_RUNTIME_CACHE }}
+          key: llama-runtime-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('internal/runtime/pin.json') }}
+
+      - name: Cache pinned native test model
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLMTUI_MODEL_CACHE }}
+          key: native-model-${{ env.LLMTUI_TEST_MODEL_SHA256 }}
+
+      - name: Install pinned runtime
+        shell: bash
+        run: go run ./cmd/llmtui runtime install --dest "$RUNNER_TEMP/llmtui-runtime"
+
+      - name: Fetch and verify native test model
+        shell: bash
+        run: |
+          mkdir -p "$LLMTUI_MODEL_CACHE"
+          model="$LLMTUI_MODEL_CACHE/$LLMTUI_TEST_MODEL_FILE"
+          if [ ! -f "$model" ] || [ "$(wc -c < "$model" | tr -d ' ')" != "$LLMTUI_TEST_MODEL_SIZE" ] || [ "$(shasum -a 256 "$model" | awk '{print $1}')" != "$LLMTUI_TEST_MODEL_SHA256" ]; then
+            rm -f "$model"
+            curl --proto '=https' -fL --retry 3 \
+              -o "$model" \
+              "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/$LLMTUI_TEST_MODEL_REVISION/$LLMTUI_TEST_MODEL_FILE"
+          fi
+          test "$(wc -c < "$model" | tr -d ' ')" = "$LLMTUI_TEST_MODEL_SIZE"
+          echo "$LLMTUI_TEST_MODEL_SHA256  $model" | shasum -a 256 -c -
+
+      - name: Run native integration tests
+        shell: bash
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+          YZMA_LIB: ${{ runner.temp }}/llmtui-runtime
+          LLMTUI_TEST_GGUF: ${{ env.LLMTUI_MODEL_CACHE }}/${{ env.LLMTUI_TEST_MODEL_FILE }}
+          LLMTUI_TEST_CPU: "1"
+        run: >-
+          go test ./internal/provider/embedded/llamart
+          -run '^(TestRuntimeIntegration|TestLoadInvalidModelQuotesNativeLog)$'
+          -count=1 -v

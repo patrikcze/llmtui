@@ -18,6 +18,12 @@ TARGET_GOARCH ?= $(shell go env GOARCH)
 CGO_ENABLED   ?= $(if $(filter darwin,$(TARGET_GOOS)),1,0)
 TARGET_EXT    := $(if $(filter windows,$(TARGET_GOOS)),.exe,)
 TARGET_OUT    := $(DIST)/$(BINARY)_$(VERSION)_$(TARGET_GOOS)_$(TARGET_GOARCH)$(TARGET_EXT)
+ARCHIVE_BASE  := $(BINARY)-$(VERSION)-$(TARGET_GOOS)-$(TARGET_GOARCH)
+ARCHIVE_EXT   := $(if $(filter windows,$(TARGET_GOOS)),zip,tar.gz)
+ARCHIVE_OUT   := $(DIST)/$(ARCHIVE_BASE).$(ARCHIVE_EXT)
+ARCHIVE_STAGE := $(DIST)/$(ARCHIVE_BASE)
+YZMA_DIR      := $(shell go list -m -f '{{.Dir}}' github.com/hybridgroup/yzma)
+PUREGO_DIR    := $(shell go list -m -f '{{.Dir}}' github.com/ebitengine/purego)
 
 .DEFAULT_GOAL := help
 
@@ -94,7 +100,7 @@ tidy:
 .PHONY: dist
 dist:
 	@rm -rf $(DIST)
-	@$(MAKE) --no-print-directory dist-platform
+	@$(MAKE) --no-print-directory dist-archive
 	@$(MAKE) --no-print-directory dist-checksums
 
 ## dist-platform: build one release binary for TARGET_GOOS/TARGET_GOARCH
@@ -105,11 +111,39 @@ dist-platform:
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) \
 		go build -trimpath -ldflags '$(LDFLAGS)' -o $(TARGET_OUT) $(MAIN)
 
+## dist-archive: build a self-contained binary + verified runtime archive
+.PHONY: dist-archive
+dist-archive: dist-platform
+	@if [ "$(shell go env GOOS)-$(shell go env GOARCH)" != "$(TARGET_GOOS)-$(TARGET_GOARCH)" ]; then \
+		echo "runtime staging must run on native $(TARGET_GOOS)/$(TARGET_GOARCH) to install and verify that platform's llama.cpp binaries" >&2; \
+		exit 1; \
+	fi
+	@if [ "$(TARGET_GOOS)" = "windows" ] && ! command -v 7z >/dev/null 2>&1; then \
+		echo "7z is required to build the Windows release archive" >&2; \
+		exit 1; \
+	fi
+	@rm -rf $(ARCHIVE_STAGE) $(ARCHIVE_OUT)
+	@mkdir -p $(ARCHIVE_STAGE)/lib/llmtui $(ARCHIVE_STAGE)/licenses
+	@$(INSTALL) -m 0755 $(TARGET_OUT) $(ARCHIVE_STAGE)/$(BINARY)$(TARGET_EXT)
+	@$(INSTALL) -m 0644 LICENSE $(ARCHIVE_STAGE)/LICENSE
+	@$(INSTALL) -m 0644 THIRD_PARTY_NOTICES.md $(ARCHIVE_STAGE)/THIRD_PARTY_NOTICES.md
+	@$(INSTALL) -m 0644 $(YZMA_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/yzma-APACHE-2.0.txt
+	@$(INSTALL) -m 0644 $(PUREGO_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/purego-APACHE-2.0.txt
+	@$(INSTALL) -m 0644 third_party/ffi/LICENSE $(ARCHIVE_STAGE)/licenses/ffi-MIT.txt
+	@go run $(MAIN) runtime install --dest $(ARCHIVE_STAGE)/lib/llmtui/runtime
+	@if [ "$(TARGET_GOOS)" = "windows" ]; then \
+		cd $(DIST) && 7z a -tzip $(notdir $(ARCHIVE_OUT)) $(ARCHIVE_BASE) >/dev/null; \
+	else \
+		tar -C $(DIST) -czf $(ARCHIVE_OUT) $(ARCHIVE_BASE); \
+	fi
+	@rm -rf $(ARCHIVE_STAGE)
+	@echo "  packaged $(ARCHIVE_OUT)"
+
 ## dist-checksums: write checksums for existing dist artifacts
 .PHONY: dist-checksums
 dist-checksums:
 	@rm -f $(DIST)/checksums.txt
-	@cd $(DIST) && shasum -a 256 * > checksums.txt
+	@cd $(DIST) && find . -maxdepth 1 -type f ! -name checksums.txt -print | LC_ALL=C sort | xargs shasum -a 256 > checksums.txt
 	@echo "release artifacts in $(DIST)/"
 
 ## clean: remove build artifacts, coverage and dist output

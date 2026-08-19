@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/patrikcze/llmtui/internal/app"
+	runtimemgr "github.com/patrikcze/llmtui/internal/runtime"
 )
 
 func newDoctorCmd(r *Root) *cobra.Command {
@@ -52,6 +53,25 @@ func newDoctorCmd(r *Root) *cobra.Command {
 			anyOnline := false
 			for _, name := range names {
 				pc := r.cfg.Providers[name]
+				if pc.Type == "embedded" {
+					pin, pinErr := runtimemgr.LoadPin()
+					resolution, resolveErr := runtimemgr.Resolve(runtimemgr.ResolveConfig{
+						ExplicitPath: pc.LibraryPath,
+						YzmaLib:      os.Getenv("YZMA_LIB"),
+						Pin:          pin,
+					})
+					if pinErr != nil {
+						warn(fmt.Sprintf("%s runtime pin: %v", name, pinErr))
+					} else if resolveErr != nil {
+						warn(fmt.Sprintf("%s runtime: %v", name, resolveErr))
+					} else {
+						verification := "unverified override"
+						if resolution.Verified {
+							verification = "verified"
+						}
+						ok(fmt.Sprintf("%s runtime %s: %s, %s (%s)", name, pin.LlamaTag, resolution.TierName, verification, resolution.Dir))
+					}
+				}
 				prov, err := app.BuildProvider(name, pc, r.cfg.Network)
 				if err != nil {
 					warn(fmt.Sprintf("%s: %v", name, err))
