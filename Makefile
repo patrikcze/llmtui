@@ -6,7 +6,7 @@ MAIN    := ./cmd/llmtui
 DIST    := dist
 PREFIX  ?= $(HOME)/.local
 BINDIR  ?= $(PREFIX)/bin
-INSTALL ?= install
+INSTALL_CMD ?= install
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -47,8 +47,8 @@ run: build
 ## install: build and install into BINDIR
 .PHONY: install
 install: build
-	$(INSTALL) -d $(DESTDIR)$(BINDIR)
-	$(INSTALL) -m 0755 $(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
+	$(INSTALL_CMD) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL_CMD) -m 0755 $(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
 	@echo "installed $(BINARY) to $(DESTDIR)$(BINDIR)"
 
 ## fmt: format all Go sources
@@ -124,12 +124,12 @@ dist-archive: dist-platform
 	fi
 	@rm -rf $(ARCHIVE_STAGE) $(ARCHIVE_OUT)
 	@mkdir -p $(ARCHIVE_STAGE)/lib/llmtui $(ARCHIVE_STAGE)/licenses
-	@$(INSTALL) -m 0755 $(TARGET_OUT) $(ARCHIVE_STAGE)/$(BINARY)$(TARGET_EXT)
-	@$(INSTALL) -m 0644 LICENSE $(ARCHIVE_STAGE)/LICENSE
-	@$(INSTALL) -m 0644 THIRD_PARTY_NOTICES.md $(ARCHIVE_STAGE)/THIRD_PARTY_NOTICES.md
-	@$(INSTALL) -m 0644 $(YZMA_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/yzma-APACHE-2.0.txt
-	@$(INSTALL) -m 0644 $(PUREGO_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/purego-APACHE-2.0.txt
-	@$(INSTALL) -m 0644 third_party/ffi/LICENSE $(ARCHIVE_STAGE)/licenses/ffi-MIT.txt
+	@$(INSTALL_CMD) -m 0755 $(TARGET_OUT) $(ARCHIVE_STAGE)/$(BINARY)$(TARGET_EXT)
+	@$(INSTALL_CMD) -m 0644 LICENSE $(ARCHIVE_STAGE)/LICENSE
+	@$(INSTALL_CMD) -m 0644 THIRD_PARTY_NOTICES.md $(ARCHIVE_STAGE)/THIRD_PARTY_NOTICES.md
+	@$(INSTALL_CMD) -m 0644 $(YZMA_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/yzma-APACHE-2.0.txt
+	@$(INSTALL_CMD) -m 0644 $(PUREGO_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/purego-APACHE-2.0.txt
+	@$(INSTALL_CMD) -m 0644 third_party/ffi/LICENSE $(ARCHIVE_STAGE)/licenses/ffi-MIT.txt
 	@go run $(MAIN) runtime install --dest $(ARCHIVE_STAGE)/lib/llmtui/runtime
 	@if [ "$(TARGET_GOOS)" = "windows" ]; then \
 		cd $(DIST) && 7z a -tzip $(notdir $(ARCHIVE_OUT)) $(ARCHIVE_BASE) >/dev/null; \
