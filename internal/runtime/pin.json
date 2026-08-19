@@ -172,7 +172,6 @@
       "sha256": "c4edaaf7f06652e57dd5cf302e719bbc761117e823b6bb3fa34b89945fb32b5f",
       "size": 18007237,
       "files": {
-        "LICENSE": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
         "llama.dll": "ae5d9b7c3ff235fd6638d8c626a3c7036aa1372b57dd47e986750f24a06cbdeb",
         "ggml.dll": "9758fefe9544744d2bf12fb4e71a76dcc4e50215ef4f9d5b15a352e1747cc051",
         "ggml-base.dll": "26c0194a270563d0d79954ba33acf376a85896a3ddfc4d44f612db499b15e7ac",

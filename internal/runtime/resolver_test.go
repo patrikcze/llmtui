@@ -85,7 +85,11 @@ func TestResolveLegacyUsesVersionStamp(t *testing.T) {
 	root := t.TempDir()
 	pin := testPin()
 	dir := filepath.Join(root, ".local", "share", "llmtui", "llama.cpp")
-	writeFiles(t, dir, pin.Platforms["linux-amd64"].Files)
+	managedFiles, err := pin.Platforms["linux-amd64"].ManagedFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFiles(t, dir, managedFiles)
 	if err := WriteVersion(dir, pin.LlamaTag); err != nil {
 		t.Fatal(err)
 	}
@@ -127,20 +131,31 @@ func testPlatform(t *testing.T) *PlatformConfig {
 
 func writeManaged(t *testing.T, dir string, pin *Pin) {
 	t.Helper()
-	files := pin.Platforms["linux-amd64"].Files
+	files, err := pin.Platforms["linux-amd64"].ManagedFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeFiles(t, dir, files)
 	if err := WriteManifest(dir, &Manifest{LlamaVersion: pin.LlamaTag, Files: files}); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// writeFiles writes fixture files matching the hashes ManagedFiles()
+// expects. Every fake test fixture file hashes to sha256("runtime") except
+// "LICENSE", which ManagedFiles() always guarantees via the real embedded
+// fallback text (see PlatformPin.ManagedFiles), so it needs real content.
 func writeFiles(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for name := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("runtime"), 0o644); err != nil {
+		content := []byte("runtime")
+		if name == "LICENSE" {
+			content = embeddedLlamaCppLicense
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

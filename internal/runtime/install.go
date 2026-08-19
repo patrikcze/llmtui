@@ -173,6 +173,14 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 		return nil, fmt.Errorf("verify extracted files: %w", err)
 	}
 
+	// Some official platform archives (the Windows CPU/Vulkan zips, as of
+	// b10066) don't include a LICENSE file at all, unlike the macOS/Linux
+	// tar.gz archives. Guarantee one is always present in the managed
+	// directory using llmtui's own verified copy of the same upstream text.
+	if err := ensureLicensePresent(extractDir); err != nil {
+		return nil, fmt.Errorf("write fallback license: %w", err)
+	}
+
 	// Create aliases (symlinks on Unix, copies on Windows)
 	if err := createAliases(extractDir, platformPin.Aliases, pc.GOOS); err != nil {
 		return nil, fmt.Errorf("create aliases: %w", err)
@@ -486,6 +494,20 @@ func verifyExtractedFiles(extractDir string, platformPin *PlatformPin) error {
 		}
 	}
 	return nil
+}
+
+// ensureLicensePresent writes llmtui's embedded copy of llama.cpp's LICENSE
+// into extractDir if the extracted archive didn't already provide one. It
+// never overwrites a LICENSE that came from the archive itself (that copy
+// was already SHA256-verified against the pin in verifyExtractedFiles).
+func ensureLicensePresent(extractDir string) error {
+	path := filepath.Join(extractDir, "LICENSE")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	return os.WriteFile(path, embeddedLlamaCppLicense, 0644)
 }
 
 // createAliases creates trusted symlinks (Unix) or copies (Windows) for aliases.

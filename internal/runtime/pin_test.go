@@ -60,9 +60,12 @@ func TestLoadPin(t *testing.T) {
 			continue
 		}
 
-		// Verify LICENSE exists in files
-		if _, ok := pp.Files["LICENSE"]; !ok {
-			t.Errorf("Platform %q: LICENSE not in Files", platform)
+		// Every platform's fully-resolved managed file set guarantees a
+		// LICENSE entry, even for archives (Windows CPU/Vulkan, as of
+		// b10066) that don't include one themselves — see
+		// PlatformPin.ManagedFiles and Install's ensureLicensePresent.
+		if _, ok := managedFiles["LICENSE"]; !ok {
+			t.Errorf("Platform %q: LICENSE not in ManagedFiles()", platform)
 		}
 
 		// Verify platform-specific primary library

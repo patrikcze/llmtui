@@ -9,14 +9,41 @@
 package runtime
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	goruntime "runtime"
+	"sync"
 )
 
 //go:embed pin.json
 var embeddedPinJSON []byte
+
+// embeddedLlamaCppLicense is llama.cpp's own MIT LICENSE text at the pinned
+// tag, byte-identical to the LICENSE file bundled in the macOS/Linux release
+// archives (verified: sha256 94f29bbe...d010d, matching every platform entry
+// in pin.json). The official Windows CPU/Vulkan zip does not include a
+// LICENSE file at all — Install falls back to writing this verified copy for
+// any platform whose archive doesn't provide one, so every managed runtime
+// directory ends up with the upstream license regardless of how a given
+// platform's release happens to be packaged upstream.
+//
+//go:embed llama-cpp-LICENSE.txt
+var embeddedLlamaCppLicense []byte
+
+var fallbackLicenseHash = sync.OnceValue(func() string {
+	sum := sha256.Sum256(embeddedLlamaCppLicense)
+	return hex.EncodeToString(sum[:])
+})
+
+// fallbackLicenseSHA256 returns the SHA256 of llmtui's embedded llama.cpp
+// LICENSE fallback, computed once from the actual embedded bytes so it can
+// never drift from embeddedLlamaCppLicense's real content.
+func fallbackLicenseSHA256() string {
+	return fallbackLicenseHash()
+}
 
 // Pin describes the canonical llama.cpp runtime pin: yzma version, llama.cpp
 // tag/commit, compatible range, and per-platform archive URLs, SHA256 hashes,
@@ -84,8 +111,16 @@ func (p PlatformPin) ForBackend(backend string) (*PlatformPin, error) {
 }
 
 // ManagedFiles returns hashes for both archive payloads and trusted aliases.
+// Every managed directory is guaranteed a "LICENSE" entry: platforms whose
+// archive includes one (verified via that entry's own hash in Files) keep
+// it; platforms whose official archive doesn't (the Windows CPU/Vulkan zips,
+// as of b10066) get llmtui's embedded, byte-identical fallback copy of the
+// same upstream text (see Install's ensureLicensePresent). Encoding the
+// guarantee here — rather than only inside Install — is what keeps
+// install-time manifest writing and resolve-time pin comparison in
+// agreement regardless of which path supplied the file.
 func (p PlatformPin) ManagedFiles() (map[string]string, error) {
-	files := make(map[string]string, len(p.Files)+len(p.Aliases))
+	files := make(map[string]string, len(p.Files)+len(p.Aliases)+1)
 	for name, hash := range p.Files {
 		files[name] = hash
 	}
@@ -95,6 +130,9 @@ func (p PlatformPin) ManagedFiles() (map[string]string, error) {
 			return nil, fmt.Errorf("runtime alias %q references unknown target %q", name, target)
 		}
 		files[name] = hash
+	}
+	if _, ok := files["LICENSE"]; !ok {
+		files["LICENSE"] = fallbackLicenseSHA256()
 	}
 	return files, nil
 }
