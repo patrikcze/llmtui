@@ -213,6 +213,68 @@ func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
 	}
 }
 
+// A completed cycle's own raw tool-call/tool-result exchange must not be
+// resent verbatim once a later cycle's executor request is built — the
+// executor already has that cycle's outcome via the bounded run.Memory
+// recap in its system prompt (agentDirective). Resending it anyway only
+// grows context every cycle without adding information, which is exactly
+// what large web_fetch/read_file/run_command outputs from an earlier cycle
+// would otherwise keep doing across every subsequent cycle of a multi-cycle
+// run. The CURRENT cycle's own tool call/result must still be sent in full.
+func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/cycle-one-marker.txt", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
+		agentScriptStep{text: "Listed the workspace but evidence was inconclusive."},
+		agentScriptStep{text: verifierJSON("failed", "not enough evidence yet", "try a different approach", true, true)},
+		agentScriptStep{text: "Completed using a different approach."},
+		agentScriptStep{text: verifierJSON("passed", "objective satisfied", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(dir, 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("inspect the workspace", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
+		t.Fatalf("run = %+v", m.agentLoop.run)
+	}
+	// Cycle 1: tool call + tool continuation + verifier = 3 requests.
+	// Cycle 2: executor + verifier = 2 requests.
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want 5", len(prov.requests))
+	}
+	cycle2Request := prov.requests[3]
+	var hasToolMessage, hasToolCallMessage bool
+	var got strings.Builder
+	for _, message := range cycle2Request.Messages {
+		got.WriteString(message.Content)
+		got.WriteByte('\n')
+		if message.Role == provider.RoleTool {
+			hasToolMessage = true
+		}
+		if len(message.ToolCalls) > 0 {
+			hasToolCallMessage = true
+		}
+	}
+	if hasToolMessage || hasToolCallMessage {
+		t.Fatalf("cycle 2 request still carries cycle 1's raw tool exchange: %+v", cycle2Request.Messages)
+	}
+	if strings.Contains(got.String(), "cycle-one-marker.txt") {
+		t.Fatalf("cycle 2 request leaked cycle 1's raw tool result content:\n%s", got.String())
+	}
+	// agentContinueDirective is expected here: it's cycle 2's OWN triggering
+	// message (startNextAgentCycle dispatches it to begin cycle 2), not
+	// leftover from cycle 1 — cycle 1 was triggered by the real user request.
+	for _, current := range []string{"inspect the workspace", "try a different approach", agentContinueDirective} {
+		if !strings.Contains(got.String(), current) {
+			t.Fatalf("cycle 2 request lost current-run context %q:\n%s", current, got.String())
+		}
+	}
+}
+
 // TestVerifiedAgentVerificationCarriesAvailableToolNames guards a real
 // observed failure: a run asking for capability llmtui doesn't have (a live
 // weather/events lookup, with only web_search/web_fetch available) got

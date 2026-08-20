@@ -413,7 +413,33 @@ func (m *Model) requestHistory() (messages []provider.Message, summary string, a
 		current := append([]provider.Message(nil), messages[start:]...)
 		return append(prior, current...), "", true
 	}
-	return messages[start:], "", true
+	return projectPriorCyclesInRun(messages, start, m.agentLoop.cycleBoundaries), "", true
+}
+
+// projectPriorCyclesInRun returns a multi-cycle run's messages from runStart
+// onward with every COMPLETED cycle's raw tool-call/tool-result exchange
+// projected away via projectCompletedAgentHistory — the executor already has
+// each completed cycle's outcome from the bounded run.Memory recap in its
+// system prompt (agentDirective), so resending that cycle's full tool
+// traffic verbatim on every later cycle only grows context without adding
+// information the executor doesn't already have. Only the current,
+// in-progress cycle (the final segment, bounded by cycleBoundaries) is kept
+// verbatim, since the executor still needs full fidelity on what it just did
+// this cycle. If cycleBoundaries is empty (e.g. a run resumed from persisted
+// storage into a fresh in-memory loop state, which never recorded them),
+// this degrades to returning the full range unprojected — the same
+// behavior as before this projection existed.
+func projectPriorCyclesInRun(messages []provider.Message, runStart int, cycleBoundaries []int) []provider.Message {
+	result := make([]provider.Message, 0, len(messages)-runStart)
+	segmentStart := runStart
+	for _, boundary := range cycleBoundaries {
+		if boundary <= segmentStart || boundary > len(messages) {
+			continue
+		}
+		result = append(result, projectCompletedAgentHistory(messages[segmentStart:boundary])...)
+		segmentStart = boundary
+	}
+	return append(result, messages[segmentStart:]...)
 }
 
 func projectCompletedAgentHistory(messages []provider.Message) []provider.Message {

@@ -29,13 +29,22 @@ type agentLoopState struct {
 	// verifier-requested retry cycles are scoped from this index so completed
 	// runs and their synthetic controller turns cannot become active work.
 	historyStart int
-	ctx          context.Context
-	runCancel    context.CancelFunc
-	execution    agent.ExecutionResult
-	verifying    bool
-	verifyCancel context.CancelFunc
-	verifyGen    int
-	persistErr   error
+	// cycleBoundaries[i] is the session-message index at which cycle i+2
+	// began (cycle 1 always starts at historyStart, so it needs no entry).
+	// requestHistory uses these to identify which messages belong to a
+	// completed cycle versus the in-progress one, so it can project away a
+	// completed cycle's raw tool-call/tool-result exchange (the executor
+	// already has that cycle's outcome via the bounded run.Memory recap in
+	// its system prompt) while leaving the current cycle's messages, and
+	// the current run's tool state, untouched.
+	cycleBoundaries []int
+	ctx             context.Context
+	runCancel       context.CancelFunc
+	execution       agent.ExecutionResult
+	verifying       bool
+	verifyCancel    context.CancelFunc
+	verifyGen       int
+	persistErr      error
 	// liveToolCalls is the run's true cumulative tool-call count, updated as
 	// each round completes. Unlike execution.ToolCalls (reset every cycle by
 	// startNextAgentCycle), this never resets for the life of the run, so
@@ -168,6 +177,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	}
 	m.agentLoop.run = run
 	m.agentLoop.historyStart = len(m.session.Messages)
+	m.agentLoop.cycleBoundaries = nil
 	m.resetAgentContext()
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.liveToolCalls = 0
@@ -188,12 +198,14 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 		m.refreshViewport()
 		return nil
 	}
+	boundary := len(m.session.Messages)
 	if err := run.BeginCycle(objective, append(m.agentContextSources(), "new_user_input"), time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		m.errText = "resume agent run: " + err.Error()
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
+	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.toolDepth = 0
 	m.bypassCache = true
@@ -216,6 +228,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 		return nil
 	}
 	run := m.agentLoop.run
+	boundary := len(m.session.Messages)
 	if err := run.BeginCycle(objective, m.agentContextSources(), time.Now()); err != nil {
 		_ = run.Terminate(agent.DecisionFailed, err.Error(), time.Now())
 		m.errText = "agent: " + err.Error()
@@ -223,6 +236,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
+	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.toolDepth = 0
 	m.bypassCache = true
