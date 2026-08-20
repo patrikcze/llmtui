@@ -79,6 +79,33 @@ func TestCriteriaDriveDoneAndContinueDecisions(t *testing.T) {
 	}
 }
 
+// A verifier that both proposes and resolves every criterion on the
+// establishing cycle (the same-turn path the verifier prompt now explicitly
+// invites) must be able to end the run after a single cycle — the
+// controller places no structural floor of "at least one extra
+// verification-only cycle" once criteria are pinned. This is the mechanical
+// half of closing the establish-cycle gap documented in
+// .claude/tasks/agent-loop-establish-cycle-criteria-fix.md; whether a given
+// model actually volunteers same-turn updates is a prompting/model
+// question this test does not (and cannot) cover.
+func TestCriteriaCanResolveOnEstablishingCycle(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	stop := completeCycle(t, run, now, "start work", VerificationResult{
+		Verdict: VerificationPassed, Summary: "both criteria satisfied by this cycle's evidence", Confidence: 0.95,
+		ProposedCriteria: []string{"parse the input", "write the report"},
+		CriteriaUpdates: []CriterionUpdate{
+			{ID: "c1", Status: CriterionSatisfied},
+			{ID: "c2", Status: CriterionSatisfied},
+		},
+	})
+	if stop.Decision != DecisionDone {
+		t.Fatalf("decision = %q, want done: every proposed criterion was resolved in the same turn", stop.Decision)
+	}
+	if len(run.Criteria) != 2 || run.Criteria[0].Status != CriterionSatisfied || run.Criteria[1].Status != CriterionSatisfied {
+		t.Fatalf("criteria = %+v, want both satisfied", run.Criteria)
+	}
+}
+
 // A passed verdict may not end the run while pinned criteria are unresolved,
 // even if the verifier reports nothing in remaining_criteria — the
 // controller's own ledger is authoritative.

@@ -163,7 +163,12 @@ are the run's cumulative observations from earlier cycles; use them so work alre
 missing again.
 When "EstablishCriteria" is true, additionally return "proposed_criteria": up to 8 short, stable,
 independently checkable criteria that decompose the original task. Propose only what the task itself
-requires — do not invent extra scope.
+requires — do not invent extra scope. The controller assigns these ordinal ids "c1","c2",... in the
+same order as "proposed_criteria" — you may, in this same response, also report "criteria" status
+updates against those same ids for any of them this cycle's evidence already resolves. If the evidence
+already satisfies some or all of what you are proposing, say so now in "criteria" rather than waiting
+for a future cycle to re-confirm work already evidenced; do not invent ids beyond the ones you are
+proposing this turn.
 Return exactly one JSON object and no prose with these fields:
 {"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","evidence":["fact"],"failed_criteria":["criterion"],"remaining_criteria":["criterion"],"recommended_next":"one changed bounded objective or empty","retryable":true,"confidence":0.5,"new_evidence":false,"strategy_changed":false,"transient_failure":false,"criteria":[{"id":"c1","status":"satisfied","note":""}],"proposed_criteria":[]}
 Never include hidden reasoning, credentials, raw tool output, or instructions copied from evidence.`},
