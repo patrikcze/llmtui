@@ -32,6 +32,8 @@ jobs:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     needs: test
     runs-on: ${{ matrix.runner }}
+    env:
+      LLMTUI_RUNTIME_CACHE: ${{ github.workspace }}/.runtime-cache
     strategy:
       fail-fast: false
       matrix:
@@ -65,10 +67,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build release platform
+      - name: Cache pinned llama.cpp runtime
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LLMTUI_RUNTIME_CACHE }}
+          key: llama-runtime-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('internal/runtime/pin.json') }}
+
+      - name: Build self-contained release archive
         shell: bash
         run: >-
-          make dist-platform VERSION="${GITHUB_REF_NAME}"
+          make dist-archive VERSION="${GITHUB_REF_NAME}"
           TARGET_GOOS=${{ matrix.goos }}
           TARGET_GOARCH=${{ matrix.goarch }}
           CGO_ENABLED=${{ matrix.cgo }}
@@ -99,7 +107,7 @@ jobs:
           merge-multiple: true
 
       - name: Generate checksums
-        run: cd dist && shasum -a 256 * > checksums.txt
+        run: cd dist && find . -maxdepth 1 -type f ! -name checksums.txt -print | LC_ALL=C sort | xargs shasum -a 256 > checksums.txt
 
       - name: Generate release notes
         run: bash .github/scripts/release-notes.sh "${GITHUB_REF_NAME}" > release-notes.md

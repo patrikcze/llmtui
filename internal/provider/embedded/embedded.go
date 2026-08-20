@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/runtime"
 )
 
 // state is the Provider's lifecycle stage.
@@ -90,12 +91,7 @@ func (p *Provider) activeOptions() Options {
 // any resolution failure the path is returned unchanged (the subsequent
 // stat produces the actionable error).
 func expandHome(path string) string {
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(path, "~"))
-		}
-	}
-	return path
+	return runtime.ExpandHome(path)
 }
 
 // Name returns the configured provider name.
@@ -124,6 +120,19 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("embedded provider %q: runtime unavailable: %w", p.name, err)
 	}
 	return nil
+}
+
+// NativeDiagnostics reports backend registrations for the active loaded
+// runtime without triggering a model or native-library load.
+func (p *Provider) NativeDiagnostics() NativeDiagnostics {
+	p.mu.Lock()
+	rt := p.rt
+	p.mu.Unlock()
+	reporter, ok := rt.(nativeDiagnosticsReporter)
+	if !ok {
+		return NativeDiagnostics{}
+	}
+	return reporter.NativeDiagnostics()
 }
 
 // ListModels returns the active model plus sibling *.gguf files found in

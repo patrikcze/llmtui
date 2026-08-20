@@ -94,7 +94,7 @@ Embedded-only provider keys:
 | --- | --- | --- |
 | `model_path` | empty | Local GGUF model file |
 | `mmproj_path` | empty | Optional matching multimodal-projector GGUF; enables vision and fixes this provider to the configured pair |
-| `library_path` | `YZMA_LIB` | Directory containing llama.cpp shared libraries |
+| `library_path` | automatic | Advanced override for a trusted llama.cpp library directory; otherwise resolution checks `YZMA_LIB`, the release archive, the managed runtime, then a matching stamped legacy directory |
 | `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context |
 | `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only |
 | `threads` | `0` | Automatic CPU thread selection |
@@ -104,8 +104,8 @@ Embedded-only provider keys:
 | `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | `auto`, `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
-| `sampling.top_k` | `40` | Top-k sampler (`0` disables) |
-| `sampling.min_p` | `0.05` | Min-p sampler (`0` disables) |
+| `sampling.top_k` | `40` | Top-k sampler; `0` currently means unset and restores the default |
+| `sampling.min_p` | `0.05` | Min-p sampler; `0` currently means unset and restores the default |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Repetition-history length |
 | `sampling.seed` | `0` | Random; nonzero is deterministic |

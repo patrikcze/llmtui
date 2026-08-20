@@ -5,46 +5,77 @@ llama.cpp. It needs no Ollama, LM Studio, HTTP server, or API key. It is
 opt-in: existing providers and the default `llmtui chat` flow are unchanged.
 
 The implementation uses `hybridgroup/yzma` with purego and libffi. Native
-llama.cpp libraries remain a separate runtime dependency and are never
-downloaded automatically. Published macOS binaries enable Go's cgo runtime so
-Metal can safely use native threads; they still load llama.cpp dynamically and
-do not require users to compile llmtui or link a model runtime.
+llama.cpp libraries are included in self-contained release archives and remain
+dynamically loaded. Bare binaries and source builds can install the same pinned
+runtime with an explicit command; startup and inference never download it.
+Published macOS binaries enable Go's cgo runtime so Metal can safely use native
+threads without adding application `import "C"` code.
 
 ## Platform status
 
 | Platform | Status | Acceleration |
 | --- | --- | --- |
-| macOS arm64 (Apple Silicon) | Tested and supported | Metal or CPU |
-| Linux amd64/arm64 | Compiles; source-built runtime required; not yet acceptance-tested by this project | CUDA, Vulkan, or CPU as built |
-| Windows amd64 | Compiles; source-built runtime required; not yet acceptance-tested by this project | CUDA, Vulkan, or CPU as built |
-| macOS amd64 | Not supported for embedded inference | Use a server provider instead |
+| macOS arm64 (Apple Silicon) | Native CI and packaged runtime | Metal or CPU |
+| macOS amd64 | Packaged runtime | CPU |
+| Linux amd64 | Native CPU CI and packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
+| Linux arm64 | Packaged runtime | CPU; custom Vulkan runtime via `library_path` |
+| Windows amd64 | Packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
 
 The normal Ollama and OpenAI-compatible providers remain portable regardless
 of embedded-runtime support on the host.
 
 ## Install the native runtime
 
-On Apple Silicon, fetch the exact llama.cpp release tested with this llmtui
-version:
+If you downloaded a self-contained release archive, no runtime setup is
+required. Keep the `llmtui` binary and its adjacent `lib/llmtui/runtime`
+directory together.
+
+For a bare binary or source build, run:
 
 ```bash
-scripts/fetch-llama-runtime.sh
+llmtui runtime install
 ```
 
-The script downloads the official `b10066` macOS arm64 archive, verifies its
-pinned SHA-256 checksum, and installs its llama, ggml, and mtmd dynamic
-libraries under
-`~/.local/share/llmtui/llama.cpp`. It does not download a model.
+This explicit command downloads the official `b10066` asset for the current
+platform, verifies its exact byte size and pinned SHA-256 before parsing it,
+extracts only the embedded allowlist, recreates trusted library aliases, fully
+verifies the result, and atomically installs it under the platform user-data
+directory as `llmtui/runtime/b10066`. It never downloads a model.
 
-To choose another destination:
+Management commands:
 
 ```bash
-scripts/fetch-llama-runtime.sh /path/to/llama.cpp-libs
+llmtui runtime list
+llmtui runtime verify
+llmtui runtime uninstall
 ```
 
-On other supported architectures, build the matching llama.cpp revision as
-shared libraries and point llmtui at the directory containing `libllama`,
-`libmtmd`, and `libggml*`:
+`--dest` on `runtime install` is an advanced override used by release staging.
+The deprecated `scripts/fetch-llama-runtime.sh` wrapper delegates to this
+command.
+
+Resolution precedence is:
+
+1. `providers.<name>.library_path` (trusted advanced override)
+2. `YZMA_LIB` (trusted advanced override)
+3. release-archive runtime beside the executable (manifest verified)
+4. managed user runtime for the pinned tag (manifest verified)
+5. matching stamped legacy `~/.local/share/llmtui/llama.cpp` directory
+
+Managed directories must be owner-controlled and not group/world writable.
+Their version, file set, and primary library hash must match the manifest
+embedded in llmtui. `llmtui runtime verify` hashes every managed file.
+
+Linux amd64/arm64 and Windows amd64 can install the official pinned Vulkan
+variant explicitly:
+
+```bash
+llmtui runtime install --backend vulkan
+```
+
+The host Vulkan loader and GPU driver still come from the operating system or
+GPU vendor. To use another accelerator build, compile the compatible llama.cpp
+revision as shared libraries and select it with `library_path` or `YZMA_LIB`:
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git
@@ -54,9 +85,17 @@ cmake -B build -DBUILD_SHARED_LIBS=ON
 cmake --build build --config Release -j
 ```
 
-Backend flags such as CUDA or Vulkan are llama.cpp build choices. Keep yzma,
-the llama.cpp revision, and llmtui's pin aligned; an ABI-incompatible library
-normally fails during symbol resolution and must not be used.
+CUDA pack installation is not available: upstream publishes no Linux CUDA
+artifact, and the Windows CUDA runtime is hundreds of megabytes with separate
+redistribution requirements. `runtime install --backend cuda` fails explicitly
+rather than downloading an unpinned or incomplete asset. Keep yzma, the
+llama.cpp revision, and llmtui's pin aligned.
+
+Linux additionally needs `libffi.so.8` from the distribution's `libffi8`
+package. The dependency is initialized lazily: when it is missing, only the
+embedded provider fails, and remote/local-server providers remain usable.
+The packaged Windows CPU runtime includes its required
+`libomp140.x86_64.dll`; keep it in the runtime directory with the other DLLs.
 
 ## Configure and run
 
@@ -69,7 +108,8 @@ providers:
     model_path: "~/models/model.gguf"
     # Optional: enables vision. This projector must match model_path exactly.
     # mmproj_path: "~/models/mmproj-model.gguf"
-    library_path: "~/.local/share/llmtui/llama.cpp"
+    # Optional advanced override. Omit for bundled/managed runtime discovery.
+    # library_path: "/path/to/trusted/llama.cpp-libs"
     context_size: 8192
     gpu_layers: -1
     threads: 0
@@ -148,7 +188,7 @@ model_profiles:
 | --- | --- | --- |
 | `model_path` | empty | Local GGUF file; required unless `--model`/`LLMTUI_MODEL` supplies it |
 | `mmproj_path` | empty | Optional compatible multimodal projector GGUF; enables authoritative vision support and fixes the provider to this model/projector pair |
-| `library_path` | `YZMA_LIB` | Directory containing the llama.cpp shared libraries |
+| `library_path` | automatic | Advanced trusted override; otherwise use the resolution tiers above |
 | `context_size` | `0` | Bounded model default: `min(n_ctx_train, 8192)`; a positive value is capped at the trained context |
 | `gpu_layers` | `-1` | `-1` offloads all possible layers, `0` is CPU-only, positive values set an exact layer count |
 | `threads` | `0` | llama.cpp automatic CPU thread selection |
@@ -158,8 +198,8 @@ model_profiles:
 | `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | Flash-attention mode: `auto` (llama.cpp decides per model/backend), `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
-| `sampling.top_k` | `40` | Top-k sampling; `0` disables it |
-| `sampling.min_p` | `0.05` | Min-p sampling; `0` disables it |
+| `sampling.top_k` | `40` | Top-k sampling; `0` currently means unset and restores the default |
+| `sampling.min_p` | `0.05` | Min-p sampling; `0` currently means unset and restores the default |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Token history used by the repetition penalty |
 | `sampling.seed` | `0` | `0` selects a random seed; another value is deterministic |

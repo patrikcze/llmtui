@@ -16,12 +16,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ebitengine/purego"
 	"github.com/hybridgroup/yzma/pkg/llama"
 	"github.com/hybridgroup/yzma/pkg/loader"
 	"github.com/hybridgroup/yzma/pkg/mtmd"
+	"github.com/jupiterrider/ffi"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
+	"github.com/patrikcze/llmtui/internal/runtime"
 )
 
 const (
@@ -31,13 +34,20 @@ const (
 	tokenPieceBufSize  = 256
 )
 
-var globalBackend struct {
-	mu        sync.Mutex
-	dir       string
-	llamaOnce sync.Once
-	llamaErr  error
-	mtmdOnce  sync.Once
-	mtmdErr   error
+type backendState struct {
+	mu               sync.Mutex
+	dir              string
+	llamaInitialized bool
+	mtmdInitialized  bool
+}
+
+var globalBackend backendState
+
+var abortCallbacks struct {
+	once       sync.Once
+	callback   uintptr
+	nextID     atomic.Uintptr
+	registered sync.Map
 }
 
 // Runtime owns one llama.cpp model and context. Calls are serialized by the
@@ -64,7 +74,8 @@ type Runtime struct {
 	// purego callback slots live for the process lifetime. Install one callback
 	// per context and update this flag per request instead of allocating a new
 	// callback for every generation.
-	abort atomic.Bool
+	abort   atomic.Bool
+	abortID uintptr
 }
 
 // New returns an unloaded llama.cpp runtime.
@@ -74,50 +85,62 @@ func New() *Runtime {
 
 // Probe performs stat-only library validation. It never loads native code.
 func (r *Runtime) Probe(opts embedded.Options) error {
+	_, err := r.probeDir(opts)
+	return err
+}
+
+// probeDir resolves the library directory and performs the same stat-only
+// validation as Probe, returning the resolved directory. Load calls this
+// instead of Probe so the (potentially expensive, for managed tiers)
+// directory resolution and verification happens exactly once per call.
+func (r *Runtime) probeDir(opts embedded.Options) (string, error) {
 	dir, err := resolveLibraryDir(opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	filename := loader.GetLibraryFilename(dir, "llama")
 	info, err := os.Stat(filename)
 	if err != nil {
-		return fmt.Errorf(
-			"llama.cpp library not found at %q: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md",
+		return "", fmt.Errorf(
+			"llama.cpp library not found at %q: %w; run `llmtui runtime install` or see docs/embedded.md",
 			filename,
 			err,
 		)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("llama.cpp library path %q is a directory; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", filename)
+		return "", fmt.Errorf("llama.cpp library path %q is a directory; run `llmtui runtime install` or see docs/embedded.md", filename)
+	}
+	if err := validateRequiredLibraries(dir); err != nil {
+		return "", fmt.Errorf("incomplete llama.cpp runtime: %w; run `llmtui runtime install` or see docs/embedded.md", err)
 	}
 	if opts.ModelPath != "" {
 		modelInfo, err := os.Stat(opts.ModelPath)
 		if err != nil {
-			return fmt.Errorf("GGUF model not found at %q: %w", opts.ModelPath, err)
+			return "", fmt.Errorf("GGUF model not found at %q: %w", opts.ModelPath, err)
 		}
 		if modelInfo.IsDir() {
-			return fmt.Errorf("GGUF model path %q is a directory", opts.ModelPath)
+			return "", fmt.Errorf("GGUF model path %q is a directory", opts.ModelPath)
 		}
 	}
 	if opts.MMProjPath != "" {
 		projector, err := os.Stat(opts.MMProjPath)
 		if err != nil {
-			return fmt.Errorf("vision projector not found at %q: %w", opts.MMProjPath, err)
+			return "", fmt.Errorf("vision projector not found at %q: %w", opts.MMProjPath, err)
 		}
 		if projector.IsDir() {
-			return fmt.Errorf("vision projector path %q is a directory; a matching mmproj GGUF file is required", opts.MMProjPath)
+			return "", fmt.Errorf("vision projector path %q is a directory; a matching mmproj GGUF file is required", opts.MMProjPath)
 		}
 		mtmdLibrary := loader.GetLibraryFilename(dir, "mtmd")
 		mtmdInfo, err := os.Stat(mtmdLibrary)
 		if err != nil {
-			return fmt.Errorf("mtmd vision library not found at %q: %w; run scripts/fetch-llama-runtime.sh or see docs/embedded.md", mtmdLibrary, err)
+			return "", fmt.Errorf("mtmd vision library not found at %q: %w; run `llmtui runtime install` or see docs/embedded.md", mtmdLibrary, err)
 		}
 		if mtmdInfo.IsDir() {
-			return fmt.Errorf("mtmd vision library path %q is a directory", mtmdLibrary)
+			return "", fmt.Errorf("mtmd vision library path %q is a directory", mtmdLibrary)
 		}
 	}
-	return nil
+	return dir, nil
 }
 
 // Load initializes the process-global backend, then loads this runtime's model
@@ -146,13 +169,12 @@ func (r *Runtime) Load(
 	if err := ctx.Err(); err != nil {
 		return meta, err
 	}
-	if err := r.Probe(opts); err != nil {
-		return meta, err
-	}
-
-	dir, err := resolveLibraryDir(opts)
+	dir, err := r.probeDir(opts)
 	if err != nil {
 		return meta, err
+	}
+	if err := ffi.EnsureAvailable(); err != nil {
+		return meta, fmt.Errorf("embedded inference requires libffi: %w; install the libffi8 package on Linux (other providers remain available)", err)
 	}
 	nativeLogReset()
 	if err := initBackend(dir); err != nil {
@@ -198,6 +220,8 @@ func (r *Runtime) Load(
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("free model after load failure: %w", freeErr))
 			}
 		}
+		unregisterAbortSignal(r.abortID)
+		r.abortID = 0
 		err = errors.Join(err, errors.Join(cleanupErrors...))
 	}()
 	if err := ctx.Err(); err != nil {
@@ -219,6 +243,9 @@ func (r *Runtime) Load(
 	if err != nil {
 		return meta, err
 	}
+	r.abortID = registerAbortSignal(&r.abort)
+	contextParams.AbortCallback = processAbortCallback()
+	contextParams.AbortCallbackData = r.abortID
 
 	emitProgress(progress, fmt.Sprintf("initializing %d-token context …", nCtx))
 	lctx, err := llama.InitFromModel(model, contextParams)
@@ -278,7 +305,6 @@ func (r *Runtime) Load(
 		HasTemplate:  template != "",
 	}
 
-	llama.SetAbortCallback(lctx, func() bool { return r.abort.Load() })
 	opts.Sampling.Stop = slices.Clone(opts.Sampling.Stop)
 	r.model = model
 	r.vocab = vocab
@@ -511,6 +537,8 @@ func (r *Runtime) Close() (err error) {
 	defer recoverError("close llama.cpp runtime", &err)
 
 	r.abort.Store(true)
+	unregisterAbortSignal(r.abortID)
+	r.abortID = 0
 	lctx := r.lctx
 	model := r.model
 	mctx := r.mctx
@@ -544,65 +572,146 @@ func (r *Runtime) Close() (err error) {
 	return errors.Join(errs...)
 }
 
+// NativeDiagnostics reports llama.cpp backend registrations and devices after
+// the runtime has loaded. It never initializes native code.
+func (r *Runtime) NativeDiagnostics() embedded.NativeDiagnostics {
+	if r.lctx == 0 {
+		return embedded.NativeDiagnostics{}
+	}
+	return embedded.NativeDiagnostics{
+		Loaded:        true,
+		Registrations: llama.GGMLBackendRegCount(),
+		Devices:       llama.GGMLBackendDeviceCount(),
+	}
+}
+
 func resolveLibraryDir(opts embedded.Options) (string, error) {
-	dir := opts.LibraryPath
-	if dir == "" {
-		dir = os.Getenv("YZMA_LIB")
+	// Use the new runtime resolution system which supports 5 tiers:
+	// 1. Explicit config path (library_path) - trusted
+	// 2. YZMA_LIB environment variable - trusted
+	// 3. Executable-relative paths - managed
+	// 4. User data runtime/<tag> - managed
+	// 5. Legacy ~/.local/share/llmtui/llama.cpp - managed with warning
+	//
+	// Tiers 1-2 are trusted: full baseline presence probe but stamp mismatch
+	// only produces a warning. Tiers 3-4 require matching LLAMA_VERSION,
+	// manifest, and secure ownership.
+
+	cfg := runtime.ResolveConfig{
+		ExplicitPath: opts.LibraryPath,
+		YzmaLib:      os.Getenv("YZMA_LIB"),
+		Platform:     nil, // use defaults
+		Pin:          nil, // use embedded pin
 	}
-	if dir == "" {
-		return "", errors.New("llama.cpp library path is unset; set providers.<name>.library_path or YZMA_LIB, run scripts/fetch-llama-runtime.sh, or see docs/embedded.md")
+
+	res, err := runtime.Resolve(cfg)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Clean(dir), nil
+
+	// Log warnings if any (version mismatches, legacy directory, etc.)
+	for _, warning := range res.Warnings {
+		// TODO: Once we have structured logging, log these warnings properly
+		// For now they're just noted in the resolution result
+		_ = warning
+	}
+
+	return res.Dir, nil
 }
 
 func initBackend(dir string) error {
-	globalBackend.mu.Lock()
-	defer globalBackend.mu.Unlock()
-
-	if globalBackend.dir != "" && globalBackend.dir != dir {
-		return fmt.Errorf("llama.cpp is already initialized from %q and cannot be reloaded from %q in the same process", globalBackend.dir, dir)
+	if err := runtime.PrepareLibraryDir(dir); err != nil {
+		return fmt.Errorf("prepare native runtime directory: %w", err)
 	}
-	globalBackend.dir = dir
-	globalBackend.llamaOnce.Do(func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				globalBackend.llamaErr = fmt.Errorf("native llama initialization panic: %v", recovered)
-			}
-		}()
-		if err := llama.Load(dir); err != nil {
-			globalBackend.llamaErr = err
-			return
-		}
+	return globalBackend.initLlama(dir, llama.Load, func() {
 		// Capture native logs into a bounded in-memory ring instead of
 		// silencing them: nothing reaches stderr (which would corrupt the
 		// TUI), and load/allocation failures can quote the decisive lines.
 		llama.LogSet(nativeLogCallback())
 		llama.Init()
 	})
-	return globalBackend.llamaErr
 }
 
-func initMTMDBackend(dir string) error {
+func (state *backendState) initLlama(dir string, load func(string) error, initialize func()) (err error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.llamaInitialized {
+		if state.dir != dir {
+			return fmt.Errorf("llama.cpp is already initialized from %q and cannot be reloaded from %q in the same process; restart llmtui to change runtime directories", state.dir, dir)
+		}
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("native llama initialization panic: %v", recovered)
+		}
+	}()
+	if err := load(dir); err != nil {
+		return err
+	}
+	initialize()
+	state.dir = dir
+	state.llamaInitialized = true
+	return nil
+}
+
+func initMTMDBackend(dir string) (err error) {
 	globalBackend.mu.Lock()
 	defer globalBackend.mu.Unlock()
 
 	if globalBackend.dir != "" && globalBackend.dir != dir {
 		return fmt.Errorf("native libraries are already initialized from %q and cannot load mtmd from %q in the same process", globalBackend.dir, dir)
 	}
-	globalBackend.dir = dir
-	globalBackend.mtmdOnce.Do(func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				globalBackend.mtmdErr = fmt.Errorf("native mtmd initialization panic: %v", recovered)
-			}
-		}()
-		if err := mtmd.Load(dir); err != nil {
-			globalBackend.mtmdErr = err
-			return
+	if globalBackend.mtmdInitialized {
+		return nil
+	}
+	// Defensive: initBackend already registers dir for Windows DLL search
+	// (mtmd is always loaded from the same dir in the current call order),
+	// but this keeps initMTMDBackend correct on its own if that ordering
+	// ever changes.
+	if err := runtime.PrepareLibraryDir(dir); err != nil {
+		return fmt.Errorf("prepare native runtime directory: %w", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("native mtmd initialization panic: %v", recovered)
 		}
-		mtmd.LogSet(nativeLogCallback())
+	}()
+	if err := mtmd.Load(dir); err != nil {
+		return err
+	}
+	mtmd.LogSet(nativeLogCallback())
+	globalBackend.dir = dir
+	globalBackend.mtmdInitialized = true
+	return nil
+}
+
+func processAbortCallback() uintptr {
+	abortCallbacks.once.Do(func() {
+		// llama_abort_callback receives its opaque user-data pointer and
+		// returns a C bool. The numeric ID avoids storing Go pointers in C.
+		abortCallbacks.callback = purego.NewCallback(func(id uintptr) uintptr {
+			signal, ok := abortCallbacks.registered.Load(id)
+			if ok && signal.(*atomic.Bool).Load() {
+				return 1
+			}
+			return 0
+		})
 	})
-	return globalBackend.mtmdErr
+	return abortCallbacks.callback
+}
+
+func registerAbortSignal(signal *atomic.Bool) uintptr {
+	id := abortCallbacks.nextID.Add(1)
+	abortCallbacks.registered.Store(id, signal)
+	return id
+}
+
+func unregisterAbortSignal(id uintptr) {
+	if id != 0 {
+		abortCallbacks.registered.Delete(id)
+	}
 }
 
 func gpuLayerCount(configured int) (int32, error) {

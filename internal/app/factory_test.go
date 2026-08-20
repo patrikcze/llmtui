@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jupiterrider/ffi"
 
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -13,6 +16,25 @@ import (
 )
 
 func intPtr(v int) *int { return &v }
+
+func TestAppStartupDefersMissingLibffi(t *testing.T) {
+	if os.Getenv("LLMTUI_TEST_MISSING_LIBFFI") == "1" {
+		if err := ffi.EnsureAvailable(); err == nil {
+			t.Fatal("EnsureAvailable() error = nil for missing configured libffi")
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAppStartupDefersMissingLibffi$")
+	cmd.Env = append(os.Environ(),
+		"LLMTUI_TEST_MISSING_LIBFFI=1",
+		"FFI_NO_EMBED=1",
+		"FFI_LIBRARY_PATH="+filepath.Join(t.TempDir(), "missing-libffi"),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("app package startup loaded libffi eagerly: %v\n%s", err, output)
+	}
+}
 
 func TestBuildProviderEmbeddedConstructs(t *testing.T) {
 	pc := config.ProviderConfig{Type: "embedded", ModelPath: "/models/model.gguf"}

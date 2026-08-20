@@ -22,6 +22,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/embedded"
 	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -664,6 +665,16 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 	add("reasoning events", caps.ReasoningEvents.String())
 	add("structured output", caps.StructuredOutput.String())
 	add("context window", fmt.Sprintf("%d from %s", window, windowSource))
+	if diagnostics, ok := prov.(interface {
+		NativeDiagnostics() embedded.NativeDiagnostics
+	}); ok {
+		native := diagnostics.NativeDiagnostics()
+		if native.Loaded {
+			add("native backends", fmt.Sprintf("%d registered, %d devices", native.Registrations, native.Devices))
+		} else {
+			add("native backends", "runtime not loaded")
+		}
+	}
 	add("timeout", cfg.Network.Timeout+" (connect "+cfg.Network.ConnectTimeout+")")
 	retry := "off"
 	if cfg.Network.Retry.Enabled {

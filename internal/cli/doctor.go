@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/patrikcze/llmtui/internal/app"
+	runtimemgr "github.com/patrikcze/llmtui/internal/runtime"
 )
 
 func newDoctorCmd(r *Root) *cobra.Command {
@@ -52,6 +53,31 @@ func newDoctorCmd(r *Root) *cobra.Command {
 			anyOnline := false
 			for _, name := range names {
 				pc := r.cfg.Providers[name]
+				if pc.Type == "embedded" {
+					pin, pinErr := runtimemgr.LoadPin()
+					resolution, resolveErr := runtimemgr.Resolve(runtimemgr.ResolveConfig{
+						ExplicitPath: pc.LibraryPath,
+						YzmaLib:      os.Getenv("YZMA_LIB"),
+						Pin:          pin,
+					})
+					if pinErr != nil {
+						warn(fmt.Sprintf("%s runtime pin: %v", name, pinErr))
+					} else if resolveErr != nil {
+						warn(fmt.Sprintf("%s runtime: %v", name, resolveErr))
+					} else if resolution.Verified {
+						// Only managed tiers (3/4) reach here with Verified set:
+						// resolveManaged already confirmed every required file is
+						// present and hashes match the embedded pin.
+						ok(fmt.Sprintf("%s runtime %s: %s, verified (%s)", name, pin.LlamaTag, resolution.TierName, resolution.Dir))
+					} else {
+						// Explicit overrides (tiers 1-2) and the legacy directory
+						// (tier 5) are accepted without file-presence verification,
+						// so report them as a warning rather than a checkmark —
+						// the HealthCheck line below is authoritative on whether the
+						// library files actually load.
+						warn(fmt.Sprintf("%s runtime %s: %s, unverified override (%s)", name, pin.LlamaTag, resolution.TierName, resolution.Dir))
+					}
+				}
 				prov, err := app.BuildProvider(name, pc, r.cfg.Network)
 				if err != nil {
 					warn(fmt.Sprintf("%s: %v", name, err))
