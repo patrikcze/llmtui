@@ -419,8 +419,10 @@ func TestVerifiedAgentVerifierParseFailureRepeatedStops(t *testing.T) {
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{text: "Attempt one."},
 		agentScriptStep{text: "not a json object at all"},
+		agentScriptStep{text: "still not a json object"},
 		agentScriptStep{text: "Attempt two."},
 		agentScriptStep{text: "not a json object at all"},
+		agentScriptStep{text: "still not a json object"},
 	)
 	m.cfg.Agent.MaxRepeatedFailures = 2
 	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
@@ -441,6 +443,25 @@ func TestVerifiedAgentVerifierParseFailureRepeatedStops(t *testing.T) {
 	}
 	if n := strings.Count(second.RecommendedNext, "Retry the bounded objective"); n != 1 {
 		t.Fatalf("recommended_next nested the retry prefix %d times: %q", n, second.RecommendedNext)
+	}
+}
+
+func TestVerifiedAgentRepairsVerifierFormatWithoutRepeatingExecutor(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Completed the requested work."},
+		agentScriptStep{text: `{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.9,"proposed_criteria":[{"criterion":"complete the work"}]}`},
+		agentScriptStep{text: `{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.9,"proposed_criteria":["complete the work"],"criteria":[{"id":"c1","status":"satisfied"}]}`},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("complete the work", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || len(m.agentLoop.run.Cycles) != 1 {
+		t.Fatalf("run = %+v, want one completed cycle", m.agentLoop.run)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("requests = %d, want executor plus initial and repaired verifier requests", len(prov.requests))
+	}
+	if !strings.Contains(prov.requests[2].Messages[0].Content, "FORMAT REPAIR") {
+		t.Fatalf("third request is not the verifier format repair: %+v", prov.requests[2])
 	}
 }
 

@@ -16,6 +16,7 @@ type recordingClient struct {
 	mu       sync.Mutex
 	requests []provider.ChatRequest
 	reply    string
+	replies  []string
 	err      error
 	block    bool
 }
@@ -23,6 +24,11 @@ type recordingClient struct {
 func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
+	reply := c.reply
+	if len(c.replies) > 0 {
+		reply = c.replies[0]
+		c.replies = c.replies[1:]
+	}
 	c.mu.Unlock()
 	if c.err != nil {
 		return nil, c.err
@@ -35,7 +41,7 @@ func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<
 			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 			return
 		}
-		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: c.reply}
+		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: reply}
 		events <- provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{TotalTokens: 10}}
 	}()
 	return events, nil
@@ -90,6 +96,31 @@ func TestVerifierPromptDoesNotModelPrematureFailureAsTheExample(t *testing.T) {
 	}
 	if !strings.Contains(system, "own judgment") {
 		t.Fatalf("system prompt lost the guidance to judge retryable/confidence rather than copy the example: %q", system)
+	}
+}
+
+func TestVerifierRepairsMalformedCriteriaShapeWithoutExecutorCycle(t *testing.T) {
+	client := &recordingClient{replies: []string{
+		`{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.8,"proposed_criteria":[{"criterion":"write report"}]}`,
+		`{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.8,"proposed_criteria":["write report"]}`,
+	}}
+	out, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, Input{
+		Task: "write a report", EstablishCriteria: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want one initial verifier request and one verifier-only repair", len(client.requests))
+	}
+	if !strings.Contains(client.requests[1].Messages[0].Content, "FORMAT REPAIR") {
+		t.Fatalf("repair request lacks corrective schema guidance: %q", client.requests[1].Messages[0].Content)
+	}
+	if len(out.Result.ProposedCriteria) != 1 || out.Result.ProposedCriteria[0] != "write report" {
+		t.Fatalf("result = %+v", out.Result)
+	}
+	if out.Usage == nil || out.Usage.TotalTokens != 20 {
+		t.Fatalf("usage = %+v, want both verifier attempts accounted", out.Usage)
 	}
 }
 
@@ -212,6 +243,18 @@ func TestMalformedControlOutput(t *testing.T) {
 	result, err := Parse("```json\n" + validReply("passed") + "\n```")
 	if err != nil || result.Verdict != agent.VerificationPassed {
 		t.Fatalf("fenced parse = %+v, %v", result, err)
+	}
+}
+
+func TestParseRejectsMalformedProposedCriteriaShapes(t *testing.T) {
+	for _, raw := range []string{
+		`{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,"proposed_criteria":"write report"}`,
+		`{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,"proposed_criteria":{"criterion":"write report"}}`,
+		`{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,"proposed_criteria":[{"criterion":"write report"}]}`,
+	} {
+		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
+			t.Errorf("Parse(%q) error = %v, want malformed control", raw, err)
+		}
 	}
 }
 
