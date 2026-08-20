@@ -71,6 +71,36 @@ func TestToolOutputRouterSupportedFormats(t *testing.T) {
 	}
 }
 
+func TestToolOutputRouterGemmaAlternateDelimitersDoNotLeak(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name:       "web_search",
+		Parameters: []byte(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	var visible strings.Builder
+	for _, piece := range []string{`<|tool`, `call|call:web_`, `search{query:<|"|>current stable Go programming language `, `version release date<|"|>}<|toolcall|>`} {
+		visible.WriteString(strings.Join(router.Push(piece), ""))
+	}
+	tail, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	visible.WriteString(strings.Join(tail, ""))
+	if visible.String() != "" {
+		t.Fatalf("tool markup leaked as visible text: %q", visible.String())
+	}
+	if len(calls) != 1 || calls[0].Name != "web_search" {
+		t.Fatalf("calls = %+v", calls)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(calls[0].Arguments), &arguments); err != nil {
+		t.Fatalf("arguments are not JSON: %v", err)
+	}
+	if arguments["query"] != "current stable Go programming language version release date" {
+		t.Fatalf("arguments = %+v", arguments)
+	}
+}
+
 func TestToolOutputRouterPreservesTypedNestedArguments(t *testing.T) {
 	raw := `<tool_call>{"name":"weather","arguments":{"city":"Žluťoučký kůň","days":3,"metric":true,"filters":{"rain":{"max":2.5}},"tags":["city",4]}}</tool_call>`
 	router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})

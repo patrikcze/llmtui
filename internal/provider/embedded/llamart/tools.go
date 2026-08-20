@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	gemmaCallStart        = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
-	gemmaZeroArgumentCall = regexp.MustCompile(`call:([A-Za-z_][A-Za-z0-9_.-]*)\{\s*\}`)
+	gemmaCallStart                = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
+	gemmaZeroArgumentCall         = regexp.MustCompile(`call:([A-Za-z_][A-Za-z0-9_.-]*)\{\s*\}`)
+	gemmaAlternateToolcallTokenRE = regexp.MustCompile(`<\|toolcall\|>?`)
 
 	// gemmaOrphanChannelTokenRE matches a Gemma 4 channel-boundary token
 	// (<|channel>NAME opening, or <channel|> closing) so it can be stripped
@@ -236,6 +237,7 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		// only present in cleaned (never live-streamed) would either break
 		// the prefix match in unstreamedText or leak into the tail.
 		cleaned = gemmaOrphanChannelTokenRE.ReplaceAllString(cleaned, "")
+		cleaned = gemmaAlternateToolcallTokenRE.ReplaceAllString(cleaned, "")
 	}
 	tail := unstreamedText(cleaned, r.emitted)
 	r.pending = ""
@@ -280,6 +282,7 @@ func (r *toolOutputRouter) emitPending(length int) []string {
 func (r *toolOutputRouter) emit(text string) []string {
 	if r.format == embedded.ToolFormatGemma {
 		text = gemmaOrphanChannelTokenRE.ReplaceAllString(text, "")
+		text = gemmaAlternateToolcallTokenRE.ReplaceAllString(text, "")
 	}
 	if text == "" {
 		return nil
@@ -295,7 +298,7 @@ func toolStartMarkers(format embedded.ToolFormat) []string {
 	case embedded.ToolFormatMistral:
 		return []string{"[TOOL_CALLS]"}
 	case embedded.ToolFormatGemma:
-		return []string{"<|toolcall>", "<toolcall>", "<|tool_call>", "<tool_call>", `{"name"`}
+		return []string{"<|toolcall>", "<|toolcall|", "<toolcall>", "<|tool_call>", "<tool_call>", `{"name"`}
 	case embedded.ToolFormatGPT:
 		return []string{"<|message|>"}
 	case embedded.ToolFormatGLM:
