@@ -694,13 +694,26 @@ func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
 	}
 }
 
-// Adaptive mode: a mechanically complete tool cycle needs no semantic
-// verification — the run finishes on deterministic evidence alone, with no
-// verifier request at all. This is the "simple lookup" UX objective.
-func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifier(t *testing.T) {
+// Adaptive mode, first cycle: even when execution is mechanically complete
+// (a tool call ran and succeeded), the run's FIRST cycle must still call the
+// semantic verifier. "Every tool I called happened to succeed" is not the
+// same claim as "I did everything the request asked for" — skipping
+// semantic verification on cycle 1 is exactly how a multi-part request can
+// reach "done" having silently dropped a requirement the executor never
+// attempted (see .claude/tasks/agent-loop-establish-cycle-criteria-fix.md
+// for the observed real-world case: a file-write step that never ran still
+// exited via this shortcut with full confidence). The verifier's own
+// same-turn establish-and-resolve path (see the "resolve criteria on the
+// establishing cycle" fix) is what keeps this a one-cycle UX for a genuinely
+// simple objective, not a shortcut around ever checking it.
+func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *testing.T) {
+	verifierPass := `{"verdict":"passed","summary":"workspace inspected as requested","retryable":false,"confidence":0.9,` +
+		`"proposed_criteria":["list the workspace contents"],` +
+		`"criteria":[{"id":"c1","status":"satisfied","note":"listed"}]}`
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
 		agentScriptStep{text: "Listed the workspace and completed the objective."},
+		agentScriptStep{text: verifierPass},
 	)
 	m.cfg.Agent.Verifier.Mode = "adaptive"
 	m.toolsOn = true
@@ -711,12 +724,54 @@ func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifier(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 1 {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 2 {
-		t.Fatalf("provider requests = %d, want executor + tool continuation only (no verifier)", len(prov.requests))
+	// Tool call + tool continuation + semantic verifier: the first-cycle
+	// guard must force the verifier request even though execution alone
+	// was already mechanically complete.
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want executor+continuation+verifier on cycle 1", len(prov.requests))
 	}
 	verification := m.agentLoop.run.LatestCycle().Verification
 	if verification == nil || verification.Verdict != agent.VerificationPassed {
 		t.Fatalf("verification = %+v", verification)
+	}
+	if len(m.agentLoop.run.Criteria) != 1 || m.agentLoop.run.Criteria[0].Status != agent.CriterionSatisfied {
+		t.Fatalf("criteria = %+v, want the establishing cycle's same-turn resolution to pin and satisfy c1", m.agentLoop.run.Criteria)
+	}
+}
+
+// Adaptive mode: once a run's first cycle has genuinely had its chance at
+// semantic verification — even if that cycle took the deterministic-failure
+// shortcut, which never calls the verifier at all — a later mechanically
+// complete cycle may still skip semantic verification. The first-cycle
+// guard above protects only cycle 1 itself, not every cycle a run happens
+// to establish zero criteria in.
+func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifierAfterFirstCycle(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "partial write attempt", truncated: true},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
+		agentScriptStep{text: "Listed the workspace and completed the objective."},
+	)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("inspect the workspace", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
+		t.Fatalf("run = %+v, want a deterministic-failure cycle 1 then a mechanically complete cycle 2", m.agentLoop.run)
+	}
+	// Cycle 1: executor only (truncated, deterministic failure, no verifier).
+	// Cycle 2: executor + tool continuation, mechanically complete, no
+	// verifier call — the fast path still applies once cycle 1 is behind us.
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want executor(x1)+executor+continuation, no verifier call", len(prov.requests))
+	}
+	second := m.agentLoop.run.Cycles[1]
+	if second.Verification == nil || second.Verification.Verdict != agent.VerificationPassed {
+		t.Fatalf("second cycle verification = %+v", second.Verification)
+	}
+	if m.agentLoop.run.HasCriteria() {
+		t.Fatalf("criteria = %+v, want none pinned: neither cycle ever called the semantic verifier", m.agentLoop.run.Criteria)
 	}
 }
 

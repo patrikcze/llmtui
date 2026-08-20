@@ -359,7 +359,18 @@ func (m *Model) startAgentVerification() tea.Cmd {
 				Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
 			})
 		}
-		if !run.HasCriteria() && agent.MechanicallyComplete(execution) {
+		// Never skip semantic verification on a run's first cycle, even when
+		// execution looks mechanically complete: "every tool call I happened
+		// to make succeeded" is not the same claim as "I did everything the
+		// request asked for" — only a real verifier pass ever decomposes the
+		// request into checkable criteria at all. A run whose very first
+		// cycle takes this shortcut can reach "done" having never had its
+		// content checked against the request, silently dropping requirements
+		// a less careful executor didn't attempt (observed: a multi-part
+		// request whose file-write step never happened still exited via this
+		// path with the same confidence a fully complete run gets). Cycles
+		// after the first may still use the fast path once criteria exist.
+		if !run.HasCriteria() && run.Cycle != 1 && agent.MechanicallyComplete(execution) {
 			return syntheticResult(agent.VerificationResult{
 				Verdict: agent.VerificationPassed, Summary: "deterministic evidence is sufficient: all tool calls and tests succeeded",
 				Evidence: []string{"mechanically complete cycle"}, Confidence: 0.7,
