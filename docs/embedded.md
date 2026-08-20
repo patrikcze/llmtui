@@ -130,10 +130,17 @@ Then start chat:
 llmtui chat --provider embedded
 ```
 
-You can keep the runtime directory out of the config:
+Most setups need no `library_path` and no `YZMA_LIB` at all: a release
+archive bundles a verified runtime next to the binary, and
+`llmtui runtime install` writes one to a managed, verified directory that
+resolution finds automatically (`llmtui doctor` reports which tier a
+provider actually resolved from). Only set `library_path` (or the
+equivalent `YZMA_LIB` environment variable) to pin an explicit runtime
+llmtui does not manage itself — for example a custom-built llama.cpp, or a
+non-default location:
 
 ```bash
-export YZMA_LIB="$HOME/.local/share/llmtui/llama.cpp"
+export YZMA_LIB="/path/to/trusted/llama.cpp-libs"
 llmtui chat --provider embedded --model "$HOME/models/model.gguf"
 ```
 
@@ -145,7 +152,8 @@ only its configured main model is selectable, because guessing compatibility
 from filenames could load an unsafe or nonsensical pair. Create another
 embedded provider entry for another vision model.
 
-Vision configuration example:
+Vision configuration example (like the main example above, no
+`library_path` is needed unless you're pinning an unmanaged runtime):
 
 ```yaml
 providers:
@@ -153,7 +161,6 @@ providers:
     type: embedded
     model_path: "~/.lmstudio/models/lmstudio-community/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
     mmproj_path: "~/.lmstudio/models/lmstudio-community/gemma-4-E4B-it-GGUF/mmproj-gemma-4-E4B-it-BF16.gguf"
-    library_path: "~/.local/share/llmtui/llama.cpp"
     context_size: 8192
     gpu_layers: -1
     tool_format: auto
@@ -291,10 +298,12 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
 
 ### Runtime library missing
 
-Set `providers.embedded.library_path` or `YZMA_LIB` to the directory that
-contains `libllama` and `libggml*`; vision additionally requires `libmtmd` in
-that same directory. On Apple Silicon, rerun
-`scripts/fetch-llama-runtime.sh`; it is checksum-safe and idempotent.
+Run `llmtui runtime install` (checksum-verified, idempotent, safe to rerun);
+`llmtui doctor` shows which resolution tier a provider found (or didn't) and
+what to do next. Only fall back to an explicit
+`providers.embedded.library_path` or `YZMA_LIB` pointing at a directory
+containing `libllama` and `libggml*` (plus `libmtmd` for vision) if you need
+an unmanaged, hand-built runtime instead of the one llmtui manages.
 
 ### `libffi.8.dylib` cannot be opened on macOS
 
