@@ -20,6 +20,9 @@ func TestShippedExamplesAreValid(t *testing.T) {
 		filepath.Join(root, "skills", "code-review", "SKILL.md"),
 		filepath.Join(root, "skills", "go-agent-loop-review", "SKILL.md"),
 		filepath.Join(root, "skills", "llmtui-daily-workflow", "SKILL.md"),
+		filepath.Join(root, "skills", "investigate", "SKILL.md"),
+		filepath.Join(root, "skills", "coding", "SKILL.md"),
+		filepath.Join(root, "skills", "review-and-fix", "SKILL.md"),
 		filepath.Join(root, "plugins", "jira-tools", "skills", "jira-worklog", "SKILL.md"),
 		filepath.Join(root, "plugins", "jira-tools", "skills", "jira-task-review", "SKILL.md"),
 	} {
