@@ -571,11 +571,12 @@ func integrationOptions(t *testing.T) embedded.Options {
 		GPULayers:   gpuLayers,
 		BatchSize:   512,
 		Sampling: embedded.Sampling{
-			TopK:          40,
-			MinP:          0.05,
-			RepeatPenalty: 1.1,
-			RepeatLastN:   64,
-			Seed:          1,
+			TopK:            40,
+			MinP:            0.05,
+			RepeatPenalty:   1.1,
+			RepeatLastN:     64,
+			PresencePenalty: 0.1,
+			Seed:            1,
 		},
 	}
 }
@@ -600,11 +601,12 @@ func visionIntegrationOptions(t *testing.T) embedded.Options {
 		GPULayers:   gpuLayers,
 		BatchSize:   512,
 		Sampling: embedded.Sampling{
-			TopK:          40,
-			MinP:          0.05,
-			RepeatPenalty: 1.1,
-			RepeatLastN:   64,
-			Seed:          1,
+			TopK:            40,
+			MinP:            0.05,
+			RepeatPenalty:   1.1,
+			RepeatLastN:     64,
+			PresencePenalty: 0.1,
+			Seed:            1,
 		},
 	}
 }

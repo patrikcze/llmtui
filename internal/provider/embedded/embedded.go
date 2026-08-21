@@ -556,6 +556,7 @@ func (p *Provider) RuntimeFingerprint() string {
 	writeFloat64(h, opts.Sampling.MinP)
 	writeFloat64(h, opts.Sampling.RepeatPenalty)
 	writeInt64(h, int64(opts.Sampling.RepeatLastN))
+	writeFloat64(h, opts.Sampling.PresencePenalty)
 	writeInt64(h, int64(opts.Sampling.Seed))
 	for _, s := range opts.Sampling.Stop {
 		writeField(h, []byte(s))

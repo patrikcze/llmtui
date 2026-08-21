@@ -17,6 +17,8 @@ import (
 
 func intPtr(v int) *int { return &v }
 
+func float64Ptr(v float64) *float64 { return &v }
+
 func TestAppStartupDefersMissingLibffi(t *testing.T) {
 	if os.Getenv("LLMTUI_TEST_MISSING_LIBFFI") == "1" {
 		if err := ffi.EnsureAvailable(); err == nil {
@@ -235,7 +237,7 @@ func TestBuildEmbeddedOptionsSamplingDefaults(t *testing.T) {
 		Type:      "embedded",
 		ModelPath: "m.gguf",
 		Sampling: &config.SamplingConfig{
-			TopK: 100,
+			TopK: intPtr(100),
 			Stop: []string{"</s>"},
 		},
 	}
@@ -257,6 +259,29 @@ func TestBuildEmbeddedOptionsSamplingDefaults(t *testing.T) {
 	}
 	if len(opts.Sampling.Stop) != 1 || opts.Sampling.Stop[0] != "</s>" {
 		t.Errorf("Stop = %v, want [</s>]", opts.Sampling.Stop)
+	}
+
+	// Explicitly zeroed fields (top_k: 0, min_p: 0.0 — both legitimate
+	// "disable this filter" states in llama.cpp) must be honored, not
+	// silently treated as absent and replaced with the ADR default. This is
+	// what distinguishes *int/*float64 from a plain zero-value check.
+	pcZero := config.ProviderConfig{
+		Type:      "embedded",
+		ModelPath: "m.gguf",
+		Sampling: &config.SamplingConfig{
+			TopK: intPtr(0),
+			MinP: float64Ptr(0),
+		},
+	}
+	opts, err = buildEmbeddedOptions(pcZero, ActiveOverrides{})
+	if err != nil {
+		t.Fatalf("buildEmbeddedOptions: %v", err)
+	}
+	if opts.Sampling.TopK != 0 {
+		t.Errorf("TopK = %d, want explicit 0 honored, not the ADR default", opts.Sampling.TopK)
+	}
+	if opts.Sampling.MinP != 0 {
+		t.Errorf("MinP = %v, want explicit 0 honored, not the ADR default", opts.Sampling.MinP)
 	}
 }
 

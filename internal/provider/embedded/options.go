@@ -131,12 +131,13 @@ func ValidateKVFlashCombination(kvCacheType, flashAttention string) error {
 // Go zero values, not automatically "use the default" — callers that want
 // ADR defaults applied must do so explicitly (see internal/app/factory.go).
 type Sampling struct {
-	TopK          int
-	MinP          float64
-	RepeatPenalty float64
-	RepeatLastN   int
-	Seed          uint32 // 0 = random
-	Stop          []string
+	TopK            int
+	MinP            float64
+	RepeatPenalty   float64
+	RepeatLastN     int
+	PresencePenalty float64
+	Seed            uint32 // 0 = random
+	Stop            []string
 }
 
 // Options configures one embedded Provider instance.

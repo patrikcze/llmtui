@@ -104,10 +104,11 @@ Embedded-only provider keys:
 | `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | `auto`, `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
-| `sampling.top_k` | `40` | Top-k sampler; `0` currently means unset and restores the default |
-| `sampling.min_p` | `0.05` | Min-p sampler; `0` currently means unset and restores the default |
+| `sampling.top_k` | `40` | Top-k sampler; omit the field to use the default, or set `0` to explicitly disable top-k filtering |
+| `sampling.min_p` | `0.05` | Min-p sampler; omit the field to use the default, or set `0.0` to explicitly disable min-p filtering |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Repetition-history length |
+| `sampling.presence_penalty` | `0.0` | Flat per-token penalty for any token already seen, independent of `repeat_penalty` |
 | `sampling.seed` | `0` | Random; nonzero is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings |
 

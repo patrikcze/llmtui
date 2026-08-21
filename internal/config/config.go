@@ -80,13 +80,22 @@ type ProviderCapabilitiesConfig struct {
 }
 
 // SamplingConfig configures the embedded provider's native sampler chain.
+//
+// TopK and MinP are pointers so an explicit zero (top_k: 0 disables top-k
+// filtering; min_p: 0.0 disables min-p filtering — both are legitimate
+// llama.cpp sampler states, e.g. recommended by some model cards) is
+// distinguishable from the field being absent, which falls back to the ADR
+// defaults in internal/app/factory.go. RepeatPenalty and PresencePenalty
+// don't need this: 0 already means "no penalty" under both "unset" and
+// "explicitly disabled," so a plain float64 has no ambiguous case.
 type SamplingConfig struct {
-	TopK          int      `mapstructure:"top_k" yaml:"top_k,omitempty"`
-	MinP          float64  `mapstructure:"min_p" yaml:"min_p,omitempty"`
-	RepeatPenalty float64  `mapstructure:"repeat_penalty" yaml:"repeat_penalty,omitempty"`
-	RepeatLastN   int      `mapstructure:"repeat_last_n" yaml:"repeat_last_n,omitempty"`
-	Seed          uint32   `mapstructure:"seed" yaml:"seed,omitempty"`
-	Stop          []string `mapstructure:"stop" yaml:"stop,omitempty"`
+	TopK            *int     `mapstructure:"top_k" yaml:"top_k,omitempty"`
+	MinP            *float64 `mapstructure:"min_p" yaml:"min_p,omitempty"`
+	RepeatPenalty   float64  `mapstructure:"repeat_penalty" yaml:"repeat_penalty,omitempty"`
+	RepeatLastN     int      `mapstructure:"repeat_last_n" yaml:"repeat_last_n,omitempty"`
+	PresencePenalty float64  `mapstructure:"presence_penalty" yaml:"presence_penalty,omitempty"`
+	Seed            uint32   `mapstructure:"seed" yaml:"seed,omitempty"`
+	Stop            []string `mapstructure:"stop" yaml:"stop,omitempty"`
 }
 
 // ResolveAPIKey returns the API key, preferring an env var reference so
