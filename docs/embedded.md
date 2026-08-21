@@ -20,9 +20,11 @@ threads without adding application `import "C"` code.
 | Linux amd64 | Native CPU CI and packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
 | Linux arm64 | Packaged runtime | CPU; custom Vulkan runtime via `library_path` |
 | Windows amd64 | Packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
+| Android arm64 (Termux) | Not supported — no upstream llama.cpp release | — |
 
 The normal Ollama and OpenAI-compatible providers remain portable regardless
-of embedded-runtime support on the host.
+of embedded-runtime support on the host. See [android.md](android.md) for
+Termux/Android specifics.
 
 ## Install the native runtime
 

@@ -111,6 +111,20 @@ example, CPU/Metal choices, image limits, security notes, and troubleshooting.
 ./llmtui chat --provider openai_compatible --base-url http://localhost:8000/v1 --model <model-id>
 ```
 
+### On Android (Termux)
+
+```bash
+pkg install golang clang git
+git clone https://github.com/patrikcze/llmtui.git
+cd llmtui
+go build -o llmtui ./cmd/llmtui
+./llmtui chat --provider ollama --base-url http://<host-on-your-network>:11434 --model qwen3
+```
+
+Network providers (Ollama, LM Studio, any OpenAI-compatible endpoint) work
+normally; the embedded provider is unavailable on Android (no upstream
+llama.cpp release). See [docs/android.md](docs/android.md).
+
 ## Configuration
 
 ```bash

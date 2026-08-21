@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 )
 
@@ -226,10 +227,10 @@ func TestIsSecureOwnership_Unix_GroupWritable(t *testing.T) {
 }
 
 func TestDefaultDataDir(t *testing.T) {
-	dir, err := defaultDataDir()
+	dir, err := defaultDataDir(goruntime.GOOS)
 	if err != nil {
 		// Error is acceptable on some systems
-		t.Logf("defaultDataDir() error = %v (may be expected)", err)
+		t.Logf("defaultDataDir(%s) error = %v (may be expected)", goruntime.GOOS, err)
 		return
 	}
 
@@ -241,6 +242,36 @@ func TestDefaultDataDir(t *testing.T) {
 	if !filepath.IsAbs(dir) {
 		t.Errorf("defaultDataDir() = %q, want absolute path", dir)
 	}
+}
+
+func TestDefaultDataDirAndroid(t *testing.T) {
+	// Android/Termux is Unix-like: XDG_DATA_HOME (if set) or ~/.local/share
+	// off Termux's own $HOME, exactly like darwin and linux. Regression
+	// guard for the earlier "unsupported OS: android" gap.
+	t.Run("honors XDG_DATA_HOME", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", "/data/data/com.termux/files/home/.xdg-data")
+		dir, err := defaultDataDir("android")
+		if err != nil {
+			t.Fatalf("defaultDataDir(android) error = %v", err)
+		}
+		if dir != "/data/data/com.termux/files/home/.xdg-data" {
+			t.Errorf("defaultDataDir(android) = %q, want XDG_DATA_HOME value", dir)
+		}
+	})
+
+	t.Run("falls back to HOME/.local/share", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		dir, err := defaultDataDir("android")
+		if err != nil {
+			t.Fatalf("defaultDataDir(android) error = %v", err)
+		}
+		want := filepath.Join(home, ".local", "share")
+		if dir != want {
+			t.Errorf("defaultDataDir(android) = %q, want %q", dir, want)
+		}
+	})
 }
 
 func TestPlatformConfigDependencyInjection(t *testing.T) {

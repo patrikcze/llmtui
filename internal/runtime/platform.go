@@ -39,7 +39,7 @@ var DefaultPlatformConfig = func() *PlatformConfig {
 	return &PlatformConfig{
 		ExecutablePath: os.Executable,
 		HomeDir:        os.UserHomeDir,
-		DataDir:        defaultDataDir,
+		DataDir:        func() (string, error) { return defaultDataDir(goruntime.GOOS) },
 		GOOS:           goruntime.GOOS,
 		GOARCH:         goruntime.GOARCH,
 		Stat:           os.Stat,
@@ -47,12 +47,15 @@ var DefaultPlatformConfig = func() *PlatformConfig {
 	}
 }
 
-// defaultDataDir returns the platform-specific user data directory.
-// On macOS and Linux, this is XDG_DATA_HOME or ~/.local/share.
-// On Windows, this is %LOCALAPPDATA%.
-func defaultDataDir() (string, error) {
-	switch goruntime.GOOS {
-	case "darwin", "linux":
+// defaultDataDir returns the platform-specific user data directory for goos.
+// On macOS, Linux, and Android, this is XDG_DATA_HOME or ~/.local/share (on
+// Android/Termux, $HOME is Termux's own home directory, so this resolves
+// correctly with no special-casing). On Windows, this is %LOCALAPPDATA%.
+// goos is an explicit parameter (rather than reading goruntime.GOOS
+// internally) so tests can exercise every branch without a build-tag matrix.
+func defaultDataDir(goos string) (string, error) {
+	switch goos {
+	case "darwin", "linux", "android":
 		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 			return xdg, nil
 		}
@@ -67,7 +70,7 @@ func defaultDataDir() (string, error) {
 		}
 		return "", errors.New("LOCALAPPDATA not set")
 	default:
-		return "", fmt.Errorf("unsupported OS: %s", goruntime.GOOS)
+		return "", fmt.Errorf("unsupported OS: %s", goos)
 	}
 }
 
