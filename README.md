@@ -468,12 +468,14 @@ All common tasks are in the Makefile:
 ```bash
 make build      # compile ./llmtui with version metadata
 make run        # build and launch chat
-make check      # fmt + vet + golangci-lint + race tests
+make install    # build and install into BINDIR (default ~/.local/bin)
+make check      # fmt + vet + golangci-lint (if installed) + race tests
 make test       # unit tests
 make cover      # coverage report
+make tidy       # sync go.mod/go.sum
 make dist       # build this native release target into dist/ with checksums
 make clean      # remove artifacts
-make help       # list all targets
+make help       # list all targets, including the release-archive (dist-archive-*) ones
 ```
 
 Package layout:
@@ -487,6 +489,7 @@ internal/provider/mock/   offline demo provider
 internal/provider/ollama/ native Ollama API (NDJSON streaming)
 internal/provider/openai/ OpenAI-compatible API (SSE streaming)
 internal/provider/embedded/ in-process GGUF inference (llama.cpp via yzma)
+internal/runtime/         embedded llama.cpp runtime pin, resolver, and installer
 internal/app/             config → provider factory
 internal/chat/            session state + usage statistics
 internal/cache/           local response cache (/cache)
@@ -496,10 +499,17 @@ internal/agentverify/     fresh-context provider verifier adapter
 internal/memory/          opt-in local memory snippets (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
 internal/tools/           opt-in workspace file/command tools (/tools)
+internal/web/             opt-in web search + page fetch tools (/web)
+internal/rag/             opt-in local workspace retrieval (/rag)
+internal/mcp/             Model Context Protocol server config, registry, client (/mcp)
+internal/toolapi/         read-only HTTP mirror of the active tool catalog (docs/tool-registry.md)
+internal/untrusted/       structural framing around untrusted model-visible content
+internal/terminaltext/    terminal-escape sanitization shared by provider/MCP/RAG/web boundaries
 internal/skill/           declarative skills + plugin packages (/skills, /plugins)
 internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log
 internal/clipboard/       image paste / text copy via platform tools
+internal/procutil/        cross-platform process-group containment for run_command
 internal/tui/             Bubble Tea chat screen
 internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme

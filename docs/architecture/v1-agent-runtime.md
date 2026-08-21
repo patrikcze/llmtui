@@ -25,7 +25,7 @@ under one vocabulary:
 | Preparing | `prepareRequest`/composition | same, plus `agentDirective()` injection |
 | Model streaming | `startRequest` | same |
 | Waiting for approval | `pendingCalls` non-empty | same |
-| Executing tools | `runToolCalls` | same |
+| Executing tools | `runToolPlan` | same |
 | Processing tool results | `sendToolResults`/`continueChat` | same |
 | Verifying | n/a | `startAgentVerification` |
 | Compacting context | `contextmgr.Decide`/`Split` mid-`prepareRequest` | same |
@@ -154,7 +154,7 @@ conflated in implementation.
 
 ## 4. Live budget enforcement (new)
 
-Per ADR 0002. The check added to `startToolBatch`/`runToolCalls` answers a
+Per ADR 0002. The check added to `startToolBatch`/`runToolPlan` answers a
 strictly narrower question than `agent.Decide()`: "would executing this
 batch cross an already-known hard ceiling?" It uses the true run-level
 running totals (`AgentRun.ToolCalls`, `AgentRun.PromptTokens +

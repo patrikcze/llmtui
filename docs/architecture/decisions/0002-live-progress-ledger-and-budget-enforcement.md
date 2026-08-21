@@ -48,7 +48,7 @@ that should exist does not exist yet.
 2. **Live budget checks.** Move the hard-budget comparisons
    (`MaxToolCalls`, `MaxTokens`) that currently live only inside
    `agent.Decide()` into a check invoked from `startToolBatch`/
-   `runToolCalls` on every round, using the true run-level running totals
+   `runToolPlan` on every round, using the true run-level running totals
    (not the per-cycle-reset `execution.ToolCalls` counter). `Decide()`
    remains the authority for cycle-level stop-policy decisions
    (`continue`/`retry`/`done`/etc.); the live check only needs to answer

@@ -8,10 +8,20 @@
 | `Ctrl+J` | Newline — works in **every** terminal |
 | `\` + `Enter` | Newline — trailing backslash continues the line, works everywhere |
 | `Ctrl+U` | Clear the whole prompt box in one keystroke |
+| `Ctrl+S` | Save the session to the history directory |
+| `Ctrl+Y` | Copy the last assistant reply to the clipboard (raw Markdown) |
+| `Ctrl+O` | Toggle text-selection mode (releases the mouse so your terminal can select/copy) |
+| `Ctrl+V` | Paste an image from the clipboard (vision models) |
+| `Ctrl+X` | Remove the last pasted image |
+| `Ctrl+L` | Clear the conversation |
+| `PgUp` / `PgDn` | Scroll the chat (mouse wheel works too); typing never scrolls it |
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
-| `Esc` | Stop generation · close overlay |
-| `↑` / `↓` | Choose an item in `/models` and `/providers` |
-| `Enter` in picker | Switch to the selected model or provider |
+| `Esc` | Stop generation (keeps partial reply) · close overlay |
+| `↑` / `↓` | Choose an item in `/models`, `/providers`, `/skills list`, `/plugins list`, and other pickers |
+| `Enter` in picker | Switch to the selected model/provider, or toggle enable/disable for a skill/plugin |
+
+The in-app `/help` overlay always reflects the current build's exact
+keybindings if this table ever drifts.
 
 ## The Shift+Enter reality
 

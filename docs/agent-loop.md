@@ -135,7 +135,7 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | --- | --- |
 | `off` | No evaluation at all. The run completes on the executor's answer, recorded as explicitly unverified. |
 | `deterministic` | Mechanical checks only, never a model request. With no deterministic failure a cycle passes with low confidence. |
-| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. A mechanically complete cycle — at least one tool ran, everything that ran succeeded, every test passed, nothing errored — passes on that evidence alone. Only cycles that mechanical evidence cannot decide (a prose-only answer, mixed evidence, unresolved criteria) get a semantic evaluation. |
+| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, a mechanically complete cycle — at least one tool ran, everything that ran succeeded, every test passed, nothing errored, no pending user-input request — passes on that evidence alone, but **never on a run's first cycle**: cycle 1 always gets a real semantic evaluation so the request is decomposed into criteria at least once, even when it looks mechanically clean. Only cycles that mechanical evidence cannot decide this way get a semantic evaluation. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
@@ -156,7 +156,15 @@ it either way.
 The parser accepts one JSON object, including a fenced object or harmless prose
 around it, and rejects missing, incomplete, ambiguous, oversized, or invalid
 control data. Malformed output is classified separately from provider,
-timeout, cancellation, and execution failures. Retry attempts remain bounded.
+timeout, cancellation, and execution failures.
+
+Malformed control JSON gets one bounded, fresh-context repair attempt before
+counting as a failure: a second verifier-only request, reusing the same
+evidence and timeout, asks the model to reformat its previous response as
+valid control JSON. Usage from both requests is combined for accounting. If
+the repair also fails to parse, the existing bounded repeated-failure policy
+applies as normal. This repair is separate from — and happens before —
+cycle-level retry.
 
 Deterministic evidence always wins. A failed test, failed or malformed tool
 call, permission denial, cancellation, or timeout cannot become `passed` merely
@@ -167,14 +175,22 @@ the verifier still evaluates their bounded outcome metadata.
 ## Acceptance criteria and the evidence ledger
 
 The run's first semantic verification also decomposes the original request
-into up to 8 stable acceptance criteria, pinned on the run with fixed IDs
-(`c1`, `c2`, …). Criteria are controller state: later verifications may only
-update each criterion's status (`pending`, `satisfied`, `failed`,
-`not_applicable`) by ID — they cannot add, remove, or rename criteria, and a
-run cannot complete while a pinned criterion is unresolved, whatever the
-verifier's prose claims. Unresolved criteria drive the next objective, and
-the repeated-failure fingerprint keys on the unresolved ID set, so reworded
-verifier prose can no longer defeat repeat detection.
+into up to 8 stable acceptance criteria (an internal safety cap of 12 applies
+regardless of what the prompt requests), pinned on the run with fixed IDs
+(`c1`, `c2`, …) exactly once. Criteria are controller state from then on:
+verifications may only update a pinned criterion's status (`pending`,
+`satisfied`, `failed`, `not_applicable`) by ID — they cannot add, remove, or
+rename criteria, and a run cannot complete while a pinned criterion is
+unresolved, whatever the verifier's prose claims. The establishing cycle can
+resolve some or all of the criteria it just proposed **in that same
+response** — pinning and status updates both apply before the run completes
+that verification, so a single well-evidenced cycle can propose and satisfy
+its own criteria without waiting for a later cycle. `proposed_criteria` must
+be plain strings (never object-shaped, which is reserved for the separate
+status-update array) so a model can't confuse the two. Unresolved criteria
+drive the next objective, and the repeated-failure fingerprint keys on the
+unresolved ID set, so reworded verifier prose can no longer defeat repeat
+detection.
 
 Alongside criteria, every cycle appends structured entries to a bounded
 evidence ledger (most recent 64): test results, tool outcomes, changed
