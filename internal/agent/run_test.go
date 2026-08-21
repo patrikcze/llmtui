@@ -295,3 +295,52 @@ func TestInvalidTransitionAndMalformedVerdict(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// TestWriteMemoryRecordsToolCallRecap guards the fix for a real observed
+// regression: once a run's prior-cycle raw tool traffic stops being resent
+// to the executor (see internal/tui/pipeline.go's history projection),
+// MemoryEntry.ToolCalls is the only remaining way the next cycle can know
+// it already tried a given URL/path/query and whether it succeeded.
+// Without it, a retry cycle blindly repeats already-tried actions.
+func TestWriteMemoryRecordsToolCallRecap(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("check the weather", []string{"system", "user", "tools"}, now); err != nil {
+		t.Fatal(err)
+	}
+	exec := ExecutionResult{
+		Objective: "check the weather",
+		Summary:   "found partial data",
+		ToolCalls: []ToolCallRecord{
+			{Name: "web_fetch", Detail: "https://weather.com/prague", Succeeded: true},
+			{Name: "web_fetch", Detail: "https://accuweather.com/prague", Succeeded: false, ErrorKind: ErrorToolExecution},
+		},
+		NewEvidence: true,
+	}
+	if err := run.CompleteExecution(exec, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteVerification(VerificationResult{
+		Verdict: VerificationInconclusive, Summary: "some sources missing", Retryable: true, StrategyChanged: true,
+	}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WriteMemory(now.Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Memory) != 1 {
+		t.Fatalf("Memory = %+v, want one entry", run.Memory)
+	}
+	want := []string{
+		"web_fetch(https://weather.com/prague) succeeded",
+		"web_fetch(https://accuweather.com/prague) failed: tool_execution",
+	}
+	got := run.Memory[0].ToolCalls
+	if len(got) != len(want) {
+		t.Fatalf("ToolCalls = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ToolCalls[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

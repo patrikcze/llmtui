@@ -273,6 +273,15 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 			t.Fatalf("cycle 2 request lost current-run context %q:\n%s", current, got.String())
 		}
 	}
+	// Cycle 1's raw tool exchange is gone (asserted above), but cycle 2 must
+	// still be told cycle 1 already ran list_dir and it succeeded — without
+	// this, a retry cycle has no way to avoid blindly repeating an action
+	// whose outcome it already knows (the real regression this guards:
+	// observed as a run re-fetching an already-successful URL and
+	// re-hitting an already-failed one across consecutive cycles).
+	if !strings.Contains(got.String(), "tried: "+tools.ToolListDir+" succeeded") {
+		t.Fatalf("cycle 2 request lost the prior cycle's tool-call recap:\n%s", got.String())
+	}
 }
 
 // TestVerifiedAgentVerificationCarriesAvailableToolNames guards a real
@@ -965,5 +974,46 @@ func TestQuitPersistsCancelledAgentRun(t *testing.T) {
 	}
 	if loaded.Status != agent.DecisionCancelled {
 		t.Fatalf("persisted status = %q, want cancelled", loaded.Status)
+	}
+}
+
+// TestToolCallDetailNeverLeaksCommandArgumentsOrMCPArgs guards the
+// deliberate asymmetry in what toolCallDetail extracts: URLs/paths/queries
+// are safe to echo back to the executor across cycles, but a run_command's
+// full command line can carry an inline secret a user or model typed
+// directly (e.g. curl -H "Authorization: Bearer ..."), and MCP arguments
+// are arbitrary per-server JSON — neither may appear in agent run memory.
+func TestToolCallDetailNeverLeaksCommandArgumentsOrMCPArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		call tools.Call
+		want string
+	}{
+		{"web_fetch", tools.Call{Tool: tools.ToolWebFetch, Path: "https://weather.com/cz/prague"}, "https://weather.com/cz/prague"},
+		{"web_search", tools.Call{Tool: tools.ToolWebSearch, Body: "current weather Prague"}, "current weather Prague"},
+		{"read_file", tools.Call{Tool: tools.ToolReadFile, Path: "internal/config/config.go"}, "internal/config/config.go"},
+		{"write_file", tools.Call{Tool: tools.ToolWriteFile, Path: "out.txt", Body: "secret file content, never leaked"}, "out.txt"},
+		{"grep", tools.Call{Tool: tools.ToolGrep, Body: "TODO", Path: "internal"}, "TODO in internal"},
+		{
+			"run_command strips arguments",
+			tools.Call{Tool: tools.ToolRunCommand, Body: `curl -H "Authorization: Bearer sk-super-secret" https://api.example.com`},
+			"curl",
+		},
+		{
+			"MCP call never exposes raw args",
+			tools.Call{Tool: "mcp_tool", MCPServer: "jiraWorklog", MCPTool: "add_comment", MCPArgs: `{"token":"super-secret"}`},
+			"jiraWorklog.add_comment",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toolCallDetail(tc.call)
+			if got != tc.want {
+				t.Errorf("toolCallDetail(%+v) = %q, want %q", tc.call, got, tc.want)
+			}
+			if strings.Contains(got, "secret") {
+				t.Errorf("toolCallDetail(%+v) leaked secret material: %q", tc.call, got)
+			}
+		})
 	}
 }

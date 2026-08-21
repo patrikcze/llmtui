@@ -150,6 +150,7 @@ func (r *AgentRun) WriteMemory(now time.Time) error {
 		ExecutionSummary:  cycle.Execution.Summary,
 		Verdict:           cycle.Verification.Verdict,
 		Verification:      cycle.Verification.Summary,
+		ToolCalls:         boundedStrings(formatToolCalls(cycle.Execution.ToolCalls), 32, 256),
 		FailedCriteria:    append([]string(nil), cycle.Verification.FailedCriteria...),
 		RemainingCriteria: append([]string(nil), cycle.Verification.RemainingCriteria...),
 		Artifacts:         append([]string(nil), cycle.Execution.Artifacts...),
@@ -361,6 +362,30 @@ func boundVerification(r *VerificationResult) {
 	if r.Confidence > 1 {
 		r.Confidence = 1
 	}
+}
+
+// formatToolCalls renders one compact "name(detail) succeeded|failed: kind"
+// line per call, for MemoryEntry.ToolCalls.
+func formatToolCalls(calls []ToolCallRecord) []string {
+	if len(calls) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(calls))
+	for _, call := range calls {
+		outcome := "succeeded"
+		if !call.Succeeded {
+			outcome = "failed"
+			if call.ErrorKind != "" {
+				outcome += ": " + string(call.ErrorKind)
+			}
+		}
+		if call.Detail != "" {
+			lines = append(lines, fmt.Sprintf("%s(%s) %s", call.Name, call.Detail, outcome))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s %s", call.Name, outcome))
+		}
+	}
+	return lines
 }
 
 func boundedStrings(values []string, count, width int) []string {

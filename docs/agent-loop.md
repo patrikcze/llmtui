@@ -203,6 +203,18 @@ observed. Criteria and the ledger persist with the run and survive
 `/agent resume`. Runs simple enough to finish on deterministic evidence
 never establish criteria — that is expected, not a defect.
 
+The executor gets a separate, narrower cross-cycle memory: on a retry, prior
+cycles' raw tool-call/tool-result traffic is not resent (it would grow
+without bound across a multi-cycle run), but each prior cycle's tool calls
+still appear as one bounded `name(detail) succeeded|failed: kind` line per
+call in the `Agent Cycle` system-prompt section (`/prompt composed`) —
+enough for the executor to recognize it already tried a given URL, file
+path, or query and avoid blindly repeating it. `detail` is deliberately
+narrow: URLs, paths, and search patterns are included, but a `run_command`
+call's full command line and any MCP call's raw arguments never are, since
+either could carry something typed directly into the call that shouldn't be
+echoed back into run memory or persisted state.
+
 ## Stop conditions and budgets
 
 Default hard limits are:
