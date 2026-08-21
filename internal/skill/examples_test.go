@@ -26,6 +26,8 @@ func TestShippedExamplesAreValid(t *testing.T) {
 		filepath.Join(root, "skills", "local-assistant", "SKILL.md"),
 		filepath.Join(root, "plugins", "jira-tools", "skills", "jira-worklog", "SKILL.md"),
 		filepath.Join(root, "plugins", "jira-tools", "skills", "jira-task-review", "SKILL.md"),
+		filepath.Join(root, "plugins", "superpower-for-daily", "skills", "local-assistant", "SKILL.md"),
+		filepath.Join(root, "plugins", "superpower-for-daily", "skills", "review-and-fix", "SKILL.md"),
 	} {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -56,5 +58,27 @@ func TestShippedExamplesAreValid(t *testing.T) {
 	})
 	if got := len(mgr.Skills()); got != 2 {
 		t.Errorf("example plugin contributed %d skills, want 2 (warnings: %v)", got, mgr.Warnings())
+	}
+
+	rawDaily, err := os.ReadFile(filepath.Join(root, "plugins", "superpower-for-daily", "plugin.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mDaily, err := ParseManifest(rawDaily)
+	if err != nil {
+		t.Fatalf("example plugin manifest does not validate: %v", err)
+	}
+	if mDaily.ID != "superpower-for-daily" || len(mDaily.Skills) != 2 {
+		t.Errorf("manifest = %+v", mDaily)
+	}
+
+	// The superpower-for-daily plugin loads end to end through the manager.
+	mgrDaily := NewManager(Options{
+		Enabled:        true,
+		Paths:          Paths{UserPluginDir: filepath.Join(root, "plugins")},
+		EnabledPlugins: []string{"superpower-for-daily"},
+	})
+	if got := len(mgrDaily.Skills()); got != 2 {
+		t.Errorf("example plugin contributed %d skills, want 2 (warnings: %v)", got, mgrDaily.Warnings())
 	}
 }
