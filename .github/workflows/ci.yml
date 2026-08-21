@@ -37,7 +37,7 @@ jobs:
         run: go test -race ./...
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
       - name: Scan reachable dependencies
         run: govulncheck ./...
@@ -125,8 +125,9 @@ jobs:
             '  embedded:' \
             '    type: embedded' \
             '    model_path: /missing/ci-smoke.gguf' > "$config"
+          llama_tag=$(jq -r .llama_tag internal/runtime/pin.json)
           "$binary" --config "$config" doctor | tee "$stage/doctor.txt"
-          grep 'runtime b10066: bundled runtime, verified' "$stage/doctor.txt"
+          grep "runtime ${llama_tag}: bundled runtime, verified" "$stage/doctor.txt"
 
   native-integration:
     name: Native inference (${{ matrix.goos }}/${{ matrix.goarch }}, CPU)

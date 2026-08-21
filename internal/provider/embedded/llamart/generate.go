@@ -384,6 +384,7 @@ func (r *Runtime) newSampler(req embedded.GenRequest) (llama.Sampler, error) {
 
 	if r.opts.Sampling.RepeatPenalty > 0 {
 		if err := add("penalties", llama.SamplerInitPenalties(
+			llama.VocabNTokens(r.vocab),
 			int32(r.opts.Sampling.RepeatLastN),
 			float32(r.opts.Sampling.RepeatPenalty),
 			0,

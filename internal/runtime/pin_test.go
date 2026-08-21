@@ -11,22 +11,22 @@ func TestLoadPin(t *testing.T) {
 	}
 
 	// Verify structure
-	if pin.YzmaVersion != "v1.19.0" {
-		t.Errorf("YzmaVersion = %q, want v1.19.0", pin.YzmaVersion)
+	if pin.YzmaVersion != "v1.24.0" {
+		t.Errorf("YzmaVersion = %q, want v1.24.0", pin.YzmaVersion)
 	}
-	if pin.LlamaTag != "b10066" {
-		t.Errorf("LlamaTag = %q, want b10066", pin.LlamaTag)
+	if pin.LlamaTag != "b10549" {
+		t.Errorf("LlamaTag = %q, want b10549", pin.LlamaTag)
 	}
-	if pin.LlamaCommit != "86a9c79f866799eb0e7e89c03578ccfbcc5d808e" {
-		t.Errorf("LlamaCommit = %q, want 86a9c79f866799eb0e7e89c03578ccfbcc5d808e", pin.LlamaCommit)
+	if pin.LlamaCommit != "b2e5e9b28b2484fbf94b543432ece638996a8b97" {
+		t.Errorf("LlamaCommit = %q, want b2e5e9b28b2484fbf94b543432ece638996a8b97", pin.LlamaCommit)
 	}
 
 	// Verify compatible range
-	if pin.CompatibleRange.Min != "b9979" {
-		t.Errorf("CompatibleRange.Min = %q, want b9979", pin.CompatibleRange.Min)
+	if pin.CompatibleRange.Min != "b10545" {
+		t.Errorf("CompatibleRange.Min = %q, want b10545", pin.CompatibleRange.Min)
 	}
-	if pin.CompatibleRange.Max != "b10103" {
-		t.Errorf("CompatibleRange.Max = %q, want b10103", pin.CompatibleRange.Max)
+	if pin.CompatibleRange.Max != "b10549" {
+		t.Errorf("CompatibleRange.Max = %q, want b10549", pin.CompatibleRange.Max)
 	}
 
 	// Verify all platforms exist
@@ -144,8 +144,8 @@ func TestLlamaVersion(t *testing.T) {
 	}
 
 	version := pin.LlamaVersion()
-	if version != "b10066" {
-		t.Errorf("LlamaVersion() = %q, want b10066", version)
+	if version != "b10549" {
+		t.Errorf("LlamaVersion() = %q, want b10549", version)
 	}
 }
 
