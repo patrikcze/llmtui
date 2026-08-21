@@ -21,6 +21,10 @@ type recordingClient struct {
 	replies  []string
 	err      error
 	block    bool
+	// rejectConstrained fails only requests carrying a ResponseConstraint,
+	// simulating a backend that 400s on response_format rather than
+	// returning malformed control JSON.
+	rejectConstrained bool
 }
 
 func (c *recordingClient) Capabilities() provider.Capabilities { return c.caps }
@@ -36,6 +40,9 @@ func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<
 	c.mu.Unlock()
 	if c.err != nil {
 		return nil, c.err
+	}
+	if c.rejectConstrained && req.ResponseConstraint != nil {
+		return nil, errors.New("400 bad request: response_format not supported")
 	}
 	events := make(chan provider.ChatEvent, 2)
 	go func() {
@@ -94,6 +101,36 @@ func TestVerifierRequestsStructuredOutputWhenSupported(t *testing.T) {
 	}
 	if constraint.Grammar == "" || constraint.GrammarRoot != "root" || !json.Valid(constraint.JSONSchema) {
 		t.Fatalf("invalid dual response constraint: %+v", constraint)
+	}
+}
+
+// TestVerifierRetriesUnconstrainedOnProviderRejection guards against a
+// backend that self-reports StructuredOutput support but actually rejects
+// response_format as a request error (not malformed control JSON) — the
+// only retry path that existed before checked errors.Is(err,
+// agent.ErrMalformedControl) and never saw this failure, so verification
+// hard-failed on every cycle.
+func TestVerifierRetriesUnconstrainedOnProviderRejection(t *testing.T) {
+	client := &recordingClient{
+		reply:             validReply("passed"),
+		caps:              provider.Capabilities{StructuredOutput: provider.CapabilitySupported},
+		rejectConstrained: true,
+	}
+	out, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, Input{})
+	if err != nil {
+		t.Fatalf("Verify() error = %v, want the unconstrained retry to succeed", err)
+	}
+	if out.Result.Verdict != agent.VerificationPassed {
+		t.Fatalf("result = %+v", out.Result)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (constrained then unconstrained)", len(client.requests))
+	}
+	if client.requests[0].ResponseConstraint == nil {
+		t.Fatal("first request should have carried a ResponseConstraint")
+	}
+	if client.requests[1].ResponseConstraint != nil {
+		t.Fatal("retry should have dropped the ResponseConstraint")
 	}
 }
 

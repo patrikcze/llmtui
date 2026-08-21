@@ -576,6 +576,8 @@ func integrationOptions(t *testing.T) embedded.Options {
 			RepeatPenalty:   1.1,
 			RepeatLastN:     64,
 			PresencePenalty: 0.1,
+			DRYMultiplier:   0.8,
+			DRYBase:         1.75,
 			Seed:            1,
 		},
 	}
@@ -606,6 +608,8 @@ func visionIntegrationOptions(t *testing.T) embedded.Options {
 			RepeatPenalty:   1.1,
 			RepeatLastN:     64,
 			PresencePenalty: 0.1,
+			DRYMultiplier:   0.8,
+			DRYBase:         1.75,
 			Seed:            1,
 		},
 	}

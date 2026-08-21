@@ -876,20 +876,20 @@ providers:
   #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
   #   threads: 0 # 0 = auto
   #   tool_format: auto # native tools: auto|standard|qwen|glm|mistral|gemma|gpt|phi
-	#   # RoPE/YaRN overrides are opt-in; omit them to trust GGUF metadata.
-	#   # rope_scaling_type: yarn # none|linear|yarn|longrope
-	#   # rope_freq_base: 10000000
-	#   # rope_freq_scale: 0.25
-	#   # yarn_orig_ctx: 262144
+  #   # RoPE/YaRN overrides are opt-in; omit them to trust GGUF metadata.
+  #   # rope_scaling_type: yarn # none|linear|yarn|longrope
+  #   # rope_freq_base: 10000000
+  #   # rope_freq_scale: 0.25
+  #   # yarn_orig_ctx: 262144
   #   sampling:
   #     top_k: 40
   #     min_p: 0.05
   #     repeat_penalty: 1.1
   #     repeat_last_n: 64
-	#     # dry_multiplier: 0.8 # >0 enables DRY anti-repetition
-	#     # dry_base: 1.75
-	#     # dry_allowed_length: 2
-	#     # dry_penalty_last_n: -1 # -1 = active context size
+  #     # dry_multiplier: 0.8 # >0 enables DRY anti-repetition
+  #     # dry_base: 1.75
+  #     # dry_allowed_length: 2
+  #     # dry_penalty_last_n: -1 # -1 = active context size
   #     seed: 0 # 0 = random
   #     stop: []
 

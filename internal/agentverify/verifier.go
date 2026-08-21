@@ -144,6 +144,17 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		}
 	}
 	first, err := requestVerification(callCtx, client, req, input.Execution)
+	if err != nil && req.ResponseConstraint != nil && isProviderRejection(err) {
+		// Capabilities().StructuredOutput is the provider type's generic
+		// self-report, not a guarantee this specific deployment implements
+		// response_format — some backends reject it outright as a request
+		// error rather than returning malformed control JSON, which the
+		// check below would otherwise never see. Retry once, unconstrained,
+		// before giving up.
+		unconstrained := req
+		unconstrained.ResponseConstraint = nil
+		return requestVerification(callCtx, client, unconstrained, input.Execution)
+	}
 	if err == nil || !errors.Is(err, agent.ErrMalformedControl) {
 		return first, err
 	}
@@ -151,6 +162,14 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 	repaired, repairErr := requestVerification(callCtx, client, req, input.Execution)
 	repaired.Usage = mergeUsage(first.Usage, repaired.Usage)
 	return repaired, repairErr
+}
+
+// isProviderRejection reports whether err is a request-level provider
+// failure (e.g. an HTTP 400 for an unsupported response_format), as opposed
+// to a timeout or cancellation, which a retry wouldn't help.
+func isProviderRejection(err error) bool {
+	var re agent.RunError
+	return errors.As(err, &re) && re.Kind == agent.ErrorProvider
 }
 
 func requestVerification(callCtx context.Context, client Client, req provider.ChatRequest, execution agent.ExecutionResult) (Output, error) {

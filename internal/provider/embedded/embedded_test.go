@@ -3,6 +3,7 @@ package embedded
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -636,6 +637,22 @@ func TestRuntimeFingerprintChangesWithOptionsAndModelFile(t *testing.T) {
 	changedDRY.Sampling.DRYBase = 1.75
 	if New("embedded", changedDRY, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
 		t.Error("fingerprint did not change when DRY sampling changed")
+	}
+
+	// Large DRY values near the validated maximum (math.MaxFloat32) must
+	// not collide: a prior fixed-point int64(v*1e9) hash encoding silently
+	// overflowed int64 for values in this range, so two materially
+	// different configs could produce the same fingerprint.
+	largeA := base
+	largeA.Sampling.DRYMultiplier = 1
+	largeA.Sampling.DRYBase = math.MaxFloat32 / 2
+	largeB := base
+	largeB.Sampling.DRYMultiplier = 1
+	largeB.Sampling.DRYBase = math.MaxFloat32 / 3
+	fLargeA := New("embedded", largeA, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint()
+	fLargeB := New("embedded", largeB, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint()
+	if fLargeA == fLargeB {
+		t.Error("fingerprint collided for two different large DRYBase values near math.MaxFloat32")
 	}
 
 	freqScale := 0.25

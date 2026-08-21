@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -630,8 +631,13 @@ func writeInt64(h hash.Hash, v int64) {
 	writeField(h, b[:])
 }
 
+// writeFloat64 hashes v's exact IEEE 754 bit pattern rather than a
+// fixed-point int64(v*1e9) encoding: the latter silently overflows for
+// values sampling fields now legitimately allow up to math.MaxFloat32
+// (e.g. dry_base/dry_multiplier), letting materially different configs
+// collide to the same fingerprint.
 func writeFloat64(h hash.Hash, v float64) {
-	writeInt64(h, int64(v*1e9))
+	writeInt64(h, int64(math.Float64bits(v)))
 }
 
 func writeOptionalFloat64(h hash.Hash, value *float64) {
