@@ -133,7 +133,11 @@ func TestPutGetRoundTrip(t *testing.T) {
 }
 
 func TestTTLExpiration(t *testing.T) {
-	c := New(t.TempDir(), 50*time.Millisecond, 16, true)
+	// TTL and sleep need enough margin over the Put+Get round trip itself
+	// (real file I/O, larger still under -race) that the "fresh" check
+	// can't be flaky by racing its own TTL: seen failing in CI at 50ms.
+	const ttl = 500 * time.Millisecond
+	c := New(t.TempDir(), ttl, 16, true)
 	k := testKey()
 	if err := c.Put(k, Entry{Response: "r"}); err != nil {
 		t.Fatal(err)
@@ -141,7 +145,7 @@ func TestTTLExpiration(t *testing.T) {
 	if _, ok, err := c.Get(k); err != nil || !ok {
 		t.Fatal("fresh entry should hit")
 	}
-	time.Sleep(80 * time.Millisecond)
+	time.Sleep(ttl + 200*time.Millisecond)
 	if _, ok, err := c.Get(k); err != nil || ok {
 		t.Error("expired entry should miss")
 	}
