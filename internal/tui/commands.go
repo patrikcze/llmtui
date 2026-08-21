@@ -74,6 +74,7 @@ const (
 	pickerProvider
 	pickerProfile
 	pickerSkill
+	pickerPlugin
 )
 
 func slashCommands() []slashCommand {
@@ -396,6 +397,8 @@ func (m *Model) renderPicker() {
 		content = m.profileListOverlay()
 	case pickerSkill:
 		content = m.skillsPickerOverlay()
+	case pickerPlugin:
+		content = m.pluginsPickerOverlay()
 	}
 	m.viewport.SetContent(content)
 	m.viewport.GotoTop()

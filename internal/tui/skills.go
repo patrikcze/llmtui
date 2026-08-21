@@ -2,9 +2,9 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/skill"
@@ -12,27 +12,15 @@ import (
 )
 
 // skillCatalogMaxBytes bounds the compact catalog text added to prompts.
-const skillCatalogMaxBytes = 4096
+const skillCatalogMaxBytes = app.SkillCatalogMaxBytes
 
 // skillOptionsFromConfig translates the config section into manager options.
 // The default discovery paths derive from the platform config dir and the
 // workspace llmtui was launched from (same root the tool runner confines to).
+// Delegates to app.SkillOptions so the TUI and `llmtui doctor` always agree
+// on discovery paths and limits.
 func skillOptionsFromConfig(cfg *config.Config) skill.Options {
-	wd, _ := os.Getwd()
-	paths := skill.DefaultPaths(wd)
-	paths.Extra = cfg.Skills.Paths
-	paths.ExtraPluginDirs = cfg.Plugins.Paths
-	return skill.Options{
-		Enabled: cfg.Skills.Enabled,
-		Paths:   paths,
-		Limits: skill.Limits{
-			MaxSkillBytes:       cfg.Skills.MaxSkillKB * 1024,
-			MaxActive:           cfg.Skills.MaxActive,
-			MaxTotalActiveBytes: cfg.Skills.MaxTotalActiveKB * 1024,
-		},
-		EnabledPlugins: cfg.Plugins.Enabled,
-		ExposeCatalog:  cfg.Skills.ExposeCatalogToModel,
-	}
+	return app.SkillOptionsForCWD(cfg)
 }
 
 // skillLoadAvailable reports whether the model may drive skill loading on

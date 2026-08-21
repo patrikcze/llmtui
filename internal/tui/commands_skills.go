@@ -375,8 +375,10 @@ func cmdPlugins(m *Model, args string) tea.Cmd {
 	}
 	sub, rest := splitArgs(args)
 	switch sub {
-	case "", "status", "list":
+	case "", "status":
 		m.openOverlay(m.pluginsListOverlay())
+	case "list":
+		m.openPluginsPicker()
 	case "inspect":
 		if rest == "" {
 			return m.fail("usage: /plugins inspect <id> (see /plugins list)")
@@ -459,6 +461,105 @@ func (m *Model) pluginsListOverlay() string {
 	b.WriteString("\n" + m.theme.StatusBar.Render("  enabling a plugin registers its skills and nothing else: no skill is\n  activated, no code runs, no MCP server starts") + "\n")
 	b.WriteString("\n" + m.theme.SystemNote.Render("/plugins enable <id> · /plugins inspect <id> · persist via plugins.enabled in config"))
 	return m.overlayFooter(&b)
+}
+
+// openPluginsPicker presents discovered plugins as an arrow-key picker,
+// mirroring openSkillsPicker. Invalid plugins stay listed (so their error is
+// visible) but selecting one surfaces EnablePlugin's validation error rather
+// than silently doing nothing.
+func (m *Model) openPluginsPicker() {
+	plugins := m.skillMgr.Plugins()
+	m.pickerKind = pickerPlugin
+	m.pickerItems = make([]string, 0, len(plugins))
+	m.pickerIdx = 0
+	foundEnabled := false
+	for i, p := range plugins {
+		m.pickerItems = append(m.pickerItems, p.Manifest.ID)
+		if p.Enabled && !foundEnabled {
+			m.pickerIdx = i
+			foundEnabled = true
+		}
+	}
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+// togglePluginPicker enables a disabled plugin or disables an enabled one,
+// matching toggleSkillPicker's toggle semantics. Enabling only registers the
+// plugin's skills (see cmdPlugins' "enable" case); it never activates one.
+func (m *Model) togglePluginPicker(id string) tea.Cmd {
+	plugins := m.skillMgr.Plugins()
+	var current skill.Plugin
+	for _, p := range plugins {
+		if p.Manifest.ID == id {
+			current = p
+			break
+		}
+	}
+	if current.Enabled {
+		deactivated, err := m.skillMgr.DisablePlugin(id)
+		if err != nil {
+			return m.fail(err.Error())
+		}
+		m.notice = "◈ plugin " + id + " disabled"
+		if len(deactivated) > 0 {
+			m.notice += " — deactivated: " + strings.Join(deactivated, ", ")
+		}
+		return nil
+	}
+	p, err := m.skillMgr.EnablePlugin(id)
+	if err != nil {
+		return m.fail(err.Error())
+	}
+	m.notice = fmt.Sprintf("◈ plugin %q enabled — %d skill(s) registered (none activated; /skills list)", id, len(p.Manifest.Skills))
+	if p.Source == skill.SourceWorkspace {
+		m.errText = fmt.Sprintf("plugin %q comes from the workspace (.llmtui/plugins) — treat it as untrusted local content and /plugins inspect it before activating its skills", id)
+		m.refreshViewport()
+	}
+	return nil
+}
+
+func (m *Model) pluginsPickerOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("plugins") + "\n\n")
+	plugins := m.skillMgr.Plugins()
+	if len(plugins) == 0 {
+		b.WriteString(m.theme.SystemNote.Render("no plugins found — put one at <plugin path>/<id>/plugin.yaml (/plugins paths)") + "\n")
+		b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
+		return b.String()
+	}
+	b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%-20s %-9s %-11s %-9s %s", "id", "version", "source", "state", "description")) + "\n")
+	for i, p := range plugins {
+		state := "disabled"
+		switch {
+		case p.Err != nil:
+			state = "invalid"
+		case p.Enabled:
+			state = "enabled"
+		}
+		desc := p.Manifest.Description
+		if p.Err != nil {
+			desc = p.Err.Error()
+		}
+		row := fmt.Sprintf("%-20s %-9s %-11s %-9s %s",
+			p.Manifest.ID, orNone(p.Manifest.Version), string(p.Source), state, truncateForRow(desc))
+		marker := "  "
+		label := m.theme.SystemNote.Render(row)
+		switch {
+		case p.Err != nil:
+			label = m.theme.BadgeWarn.Render(row)
+		case p.Enabled:
+			label = m.theme.StatusValue.Render(row)
+		}
+		if m.pickerKind == pickerPlugin && i == m.pickerIdx {
+			marker = m.theme.BadgeOK.Render("▸ ")
+			label = m.theme.BadgeOK.Render(row)
+		}
+		b.WriteString(marker + label + "\n")
+	}
+	b.WriteString("\n" + m.theme.StatusBar.Render("  enabling a plugin registers its skills and nothing else: no skill is\n  activated, no code runs, no MCP server starts") + "\n")
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter enable/disable · esc cancel"))
+	return b.String()
 }
 
 func (m *Model) pluginsInspectOverlay(id string) string {

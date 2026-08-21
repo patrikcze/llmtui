@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -628,6 +629,65 @@ func TestPluginsCommands(t *testing.T) {
 	cmdPlugins(m, "enable nope")
 	if !strings.Contains(m.errText, "no plugin named") {
 		t.Errorf("errText = %q", m.errText)
+	}
+}
+
+func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
+	m := newTestModel(t)
+	pluginDir := t.TempDir()
+	for _, id := range []string{"alpha-plugin", "beta-plugin"} {
+		root := filepath.Join(pluginDir, id)
+		writeTestSkill(t, filepath.Join(root, "skills"), id+"-skill", "Do the "+id+" thing.")
+		manifest := fmt.Sprintf("schema_version: 1\nid: %s\nname: %s\nversion: 1.0.0\ndescription: %s plugin.\nskills:\n  - path: skills/%s-skill/SKILL.md\n",
+			id, id, id, id)
+		if err := os.WriteFile(filepath.Join(root, "plugin.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.skillMgr.Configure(skill.Options{Enabled: true, Paths: skill.Paths{UserPluginDir: pluginDir}})
+
+	cmdPlugins(m, "list")
+	if !m.overlayOpen || m.pickerKind != pickerPlugin {
+		t.Fatal("/plugins list should open the plugins picker")
+	}
+	if len(m.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter enable/disable") {
+		t.Fatalf("plugins picker = items %v, view:\n%s", m.pickerItems, m.viewport.View())
+	}
+
+	selected := m.pickerItems[m.pickerIdx]
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlayOpen {
+		t.Error("toggling a plugin should close the picker")
+	}
+	plugins := m.skillMgr.Plugins()
+	found := false
+	for _, p := range plugins {
+		if p.Manifest.ID == selected {
+			found = true
+			if !p.Enabled {
+				t.Errorf("plugin %q should be enabled after enter", selected)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("plugin %q missing after toggle", selected)
+	}
+	if len(m.skillMgr.Skills()) != 1 {
+		t.Errorf("enabling one plugin should register exactly its skill, got %d", len(m.skillMgr.Skills()))
+	}
+
+	cmdPlugins(m, "list")
+	if m.pickerItems[m.pickerIdx] != selected {
+		t.Errorf("picker index = %d, want previously-enabled plugin %q", m.pickerIdx, selected)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, p := range m.skillMgr.Plugins() {
+		if p.Manifest.ID == selected && p.Enabled {
+			t.Errorf("plugin %q remained enabled after toggling", selected)
+		}
+	}
+	if len(m.skillMgr.Skills()) != 0 {
+		t.Error("disabling the plugin should unregister its skill")
 	}
 }
 

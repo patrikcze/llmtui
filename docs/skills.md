@@ -191,9 +191,12 @@ paths, `..`, and symlinks that resolve outside the plugin root are rejected.
 Unknown manifest fields are rejected so nothing is silently ignored.
 
 Lifecycle: **discovered → validated → enabled/disabled**. A discovered
-plugin is visible in `/plugins list` but contributes nothing until enabled
-with `/plugins enable <id>` (session) or `plugins.enabled` in the config
-(persistent). Enabling registers its skills — it activates none of them,
+plugin is visible in `/plugins list` — an arrow-key picker like `/skills
+list`, `/models`, and `/providers`; ↑/↓ to select, enter to toggle
+enable/disable, esc to cancel — but contributes nothing until enabled with
+`/plugins enable <id>`, the picker, or `plugins.enabled` in the config
+(persistent). `/plugins status` shows the same table without the picker.
+Enabling registers its skills — it activates none of them,
 executes nothing, and cannot start an MCP server. Disabling unregisters the
 skills and deactivates any that were active; an in-flight run is unaffected
 because it composed from snapshots.
@@ -259,6 +262,12 @@ silent substitution.
   (`skills.max_active`, `skills.max_skill_kb`, `skills.max_total_active_kb`).
 - *Changed a skill file but the prompt didn't change* — active skills are
   snapshots; run `/skills use <id>` again (or check `/skills reload` notes).
+- *Need to check discovery without launching the interactive TUI* — `llmtui
+  doctor` reports a `skills` section: whether the subsystem is enabled, how
+  many skills and plugins were discovered, how many plugins are enabled,
+  whether the catalog is exposed, and any discovery/validation warnings. It
+  is read-only: it discovers and reports, the same as `/skills status` and
+  `/plugins status`, but activates nothing.
 
 Example skill and plugin: [`examples/skills/`](../examples/skills/) and
 [`examples/plugins/`](../examples/plugins/) — copy them into a search path

@@ -11,6 +11,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/app"
 	runtimemgr "github.com/patrikcze/llmtui/internal/runtime"
+	"github.com/patrikcze/llmtui/internal/skill"
 )
 
 func newDoctorCmd(r *Root) *cobra.Command {
@@ -93,6 +94,36 @@ func newDoctorCmd(r *Root) *cobra.Command {
 					if name != "mock" {
 						anyOnline = true
 					}
+				}
+			}
+
+			fmt.Fprintln(out, "\nskills")
+			mgr := skill.NewManager(app.SkillOptionsForCWD(r.cfg))
+			if !mgr.Enabled() {
+				warn("skills are disabled (skills.enabled)")
+			} else {
+				skills := mgr.Skills()
+				ok(fmt.Sprintf("%d skill(s) discovered", len(skills)))
+				plugins := mgr.Plugins()
+				enabledPlugins := 0
+				invalidPlugins := 0
+				for _, p := range plugins {
+					switch {
+					case p.Err != nil:
+						invalidPlugins++
+					case p.Enabled:
+						enabledPlugins++
+					}
+				}
+				ok(fmt.Sprintf("%d plugin(s) discovered, %d enabled", len(plugins), enabledPlugins))
+				if invalidPlugins > 0 {
+					warn(fmt.Sprintf("%d plugin(s) have an invalid manifest (see `llmtui doctor` output above or /plugins list)", invalidPlugins))
+				}
+				if mgr.ExposeCatalog() && len(skills) > 0 {
+					ok(fmt.Sprintf("catalog exposed to tool-capable models (up to %d bytes per request)", app.SkillCatalogMaxBytes))
+				}
+				for _, w := range mgr.Warnings() {
+					warn(w.String())
 				}
 			}
 

@@ -1009,6 +1009,9 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setModel(selection)
 			return m, nil
 		}
+		if kind == pickerPlugin {
+			return m, m.togglePluginPicker(selection)
+		}
 		return m, m.toggleSkillPicker(selection)
 	}
 	if msg.String() == "q" {
