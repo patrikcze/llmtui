@@ -182,11 +182,11 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		RepeatLastN:   defaultSamplingRepeatLastN,
 	}
 	if sc := pc.Sampling; sc != nil {
-		if sc.TopK != 0 {
-			sampling.TopK = sc.TopK
+		if sc.TopK != nil {
+			sampling.TopK = *sc.TopK
 		}
-		if sc.MinP != 0 {
-			sampling.MinP = sc.MinP
+		if sc.MinP != nil {
+			sampling.MinP = *sc.MinP
 		}
 		if sc.RepeatPenalty != 0 {
 			sampling.RepeatPenalty = sc.RepeatPenalty
@@ -194,6 +194,7 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		if sc.RepeatLastN != 0 {
 			sampling.RepeatLastN = sc.RepeatLastN
 		}
+		sampling.PresencePenalty = sc.PresencePenalty
 		sampling.Seed = sc.Seed
 		sampling.Stop = sc.Stop
 	}

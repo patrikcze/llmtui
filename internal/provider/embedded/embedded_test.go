@@ -593,6 +593,13 @@ func TestRuntimeFingerprintChangesWithOptionsAndModelFile(t *testing.T) {
 		t.Error("fingerprint did not change when Sampling.Stop changed")
 	}
 
+	changedPresencePenalty := base
+	changedPresencePenalty.Sampling.PresencePenalty = 1.5
+	p4b := New("embedded", changedPresencePenalty, fixedRuntime(&scriptedRuntime{}))
+	if p4b.RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when Sampling.PresencePenalty changed")
+	}
+
 	projectorPath := writeFakeModel(t, dir, "mmproj-model.gguf")
 	changedPair := base
 	changedPair.MMProjPath = projectorPath

@@ -550,7 +550,9 @@ providers:
 	if pc.Sampling == nil {
 		t.Fatal("Sampling should not be nil")
 	}
-	if pc.Sampling.TopK != 50 || pc.Sampling.MinP != 0.1 || pc.Sampling.RepeatPenalty != 1.2 ||
+	if pc.Sampling.TopK == nil || *pc.Sampling.TopK != 50 ||
+		pc.Sampling.MinP == nil || *pc.Sampling.MinP != 0.1 ||
+		pc.Sampling.RepeatPenalty != 1.2 ||
 		pc.Sampling.RepeatLastN != 128 || pc.Sampling.Seed != 42 {
 		t.Errorf("Sampling = %+v", pc.Sampling)
 	}

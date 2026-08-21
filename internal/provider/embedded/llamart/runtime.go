@@ -732,8 +732,9 @@ func validateSampling(sampling embedded.Sampling) error {
 		return fmt.Errorf("sampling.repeat_last_n %d is outside the supported range 0..%d", sampling.RepeatLastN, math.MaxInt32)
 	}
 	for name, value := range map[string]float64{
-		"min_p":          sampling.MinP,
-		"repeat_penalty": sampling.RepeatPenalty,
+		"min_p":            sampling.MinP,
+		"repeat_penalty":   sampling.RepeatPenalty,
+		"presence_penalty": sampling.PresencePenalty,
 	} {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("sampling.%s must be finite", name)

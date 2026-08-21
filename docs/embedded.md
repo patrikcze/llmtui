@@ -122,6 +122,7 @@ providers:
       min_p: 0.05
       repeat_penalty: 1.1
       repeat_last_n: 64
+      presence_penalty: 0.0
       seed: 0
       stop: []
 ```
@@ -207,10 +208,11 @@ model_profiles:
 | `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | Flash-attention mode: `auto` (llama.cpp decides per model/backend), `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
-| `sampling.top_k` | `40` | Top-k sampling; `0` currently means unset and restores the default |
-| `sampling.min_p` | `0.05` | Min-p sampling; `0` currently means unset and restores the default |
+| `sampling.top_k` | `40` | Top-k sampling; omit the field to use the default, or set `0` to explicitly disable top-k filtering |
+| `sampling.min_p` | `0.05` | Min-p sampling; omit the field to use the default, or set `0.0` to explicitly disable min-p filtering |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Token history used by the repetition penalty |
+| `sampling.presence_penalty` | `0.0` | Flat per-token penalty applied once a token has appeared at all (independent of `repeat_penalty`); some model cards (e.g. Qwen3) recommend a nonzero value for non-thinking/instruct mode and `0.0` for thinking mode |
 | `sampling.seed` | `0` | `0` selects a random seed; another value is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings, safe across token/UTF-8 boundaries |
 
