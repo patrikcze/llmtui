@@ -182,7 +182,19 @@ type chatCompletionRequest struct {
 	// them (vLLM, llama.cpp server). Only enable_thinking is set, and only
 	// when the user chose an explicit reasoning mode; backends that don't
 	// know the field ignore it.
-	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	ChatTemplateKwargs map[string]any  `json:"chat_template_kwargs,omitempty"`
+	ResponseFormat     *responseFormat `json:"response_format,omitempty"`
+}
+
+type responseFormat struct {
+	Type       string              `json:"type"`
+	JSONSchema *jsonSchemaResponse `json:"json_schema,omitempty"`
+}
+
+type jsonSchemaResponse struct {
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 type streamOptions struct {
@@ -305,6 +317,12 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 
 // Chat sends a chat completion request, streaming when req.Stream is set.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if err := provider.ValidateResponseConstraint(req); err != nil {
+		return nil, fmt.Errorf("%s: %w", p.name, err)
+	}
+	if req.ResponseConstraint != nil && len(req.ResponseConstraint.JSONSchema) == 0 {
+		return nil, fmt.Errorf("%s: response constraint requires a JSON Schema", p.name)
+	}
 	body := chatCompletionRequest{
 		Model:       req.Model,
 		Messages:    toWireMessages(req.Messages),
@@ -313,6 +331,15 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 		Tools:       toWireTools(req.Tools),
+	}
+	if constraint := req.ResponseConstraint; constraint != nil {
+		name := constraint.Name
+		if name == "" {
+			name = "response"
+		}
+		body.ResponseFormat = &responseFormat{Type: "json_schema", JSONSchema: &jsonSchemaResponse{
+			Name: name, Strict: constraint.Strict, Schema: constraint.JSONSchema,
+		}}
 	}
 	if req.Stream {
 		body.StreamOpts = &streamOptions{IncludeUsage: true}
@@ -485,7 +512,8 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		// Generic OpenAI-compatible servers vary by implementation and model.
 		// Unknown preserves a bounded optimistic tool attempt; a config
 		// override or one real rejection supplies authoritative knowledge.
-		NativeTools:     provider.CapabilityUnknown,
-		ReasoningEvents: provider.CapabilityUnknown,
+		NativeTools:      provider.CapabilityUnknown,
+		ReasoningEvents:  provider.CapabilityUnknown,
+		StructuredOutput: provider.CapabilitySupported,
 	}
 }

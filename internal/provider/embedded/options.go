@@ -6,6 +6,7 @@ package embedded
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/hybridgroup/yzma/pkg/message"
@@ -127,17 +128,92 @@ func ValidateKVFlashCombination(kvCacheType, flashAttention string) error {
 	return nil
 }
 
+// Rope scaling modes supported by the linked llama.cpp runtime. Unspecified
+// preserves the scaling mode stored in model metadata.
+type RopeScalingType string
+
+const (
+	RopeScalingUnspecified RopeScalingType = ""
+	RopeScalingNone        RopeScalingType = "none"
+	RopeScalingLinear      RopeScalingType = "linear"
+	RopeScalingYARN        RopeScalingType = "yarn"
+	RopeScalingLongRope    RopeScalingType = "longrope"
+)
+
+// ParseRopeScalingType validates a configured RoPE scaling override.
+func ParseRopeScalingType(value string) (RopeScalingType, error) {
+	normalized := RopeScalingType(strings.ToLower(strings.TrimSpace(value)))
+	switch normalized {
+	case RopeScalingUnspecified, RopeScalingNone, RopeScalingLinear, RopeScalingYARN, RopeScalingLongRope:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded rope_scaling_type %q (supported: none, linear, yarn, longrope)", value)
+	}
+}
+
+// RopeScaling contains optional context-level RoPE/YaRN overrides. Pointer
+// values preserve llama.cpp's model-metadata defaults when a field is omitted.
+type RopeScaling struct {
+	Type       RopeScalingType
+	FreqBase   *float64
+	FreqScale  *float64
+	ExtFactor  *float64
+	AttnFactor *float64
+	BetaFast   *float64
+	BetaSlow   *float64
+	OrigCtx    *int
+}
+
+// AllowsContextExtension reports whether the explicit scaling mode is meant
+// to extrapolate beyond the model's trained context window.
+func (r RopeScaling) AllowsContextExtension() bool {
+	return r.Type == RopeScalingLinear || r.Type == RopeScalingYARN || r.Type == RopeScalingLongRope
+}
+
+// Validate rejects values that cannot be represented safely by llama.cpp.
+func (r RopeScaling) Validate() error {
+	switch r.Type {
+	case RopeScalingUnspecified, RopeScalingNone, RopeScalingLinear, RopeScalingYARN, RopeScalingLongRope:
+	default:
+		return fmt.Errorf("unsupported embedded rope_scaling_type %q", r.Type)
+	}
+	for name, value := range map[string]*float64{
+		"rope_freq_base": r.FreqBase, "rope_freq_scale": r.FreqScale,
+		"yarn_ext_factor": r.ExtFactor, "yarn_attn_factor": r.AttnFactor,
+		"yarn_beta_fast": r.BetaFast, "yarn_beta_slow": r.BetaSlow,
+	} {
+		if value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || math.Abs(*value) > math.MaxFloat32) {
+			return fmt.Errorf("%s must be finite and fit in float32", name)
+		}
+	}
+	if r.FreqBase != nil && *r.FreqBase <= 0 {
+		return fmt.Errorf("rope_freq_base must be greater than zero: %g", *r.FreqBase)
+	}
+	if r.FreqScale != nil && *r.FreqScale <= 0 {
+		return fmt.Errorf("rope_freq_scale must be greater than zero: %g", *r.FreqScale)
+	}
+	if r.OrigCtx != nil && (*r.OrigCtx <= 0 || uint64(*r.OrigCtx) > math.MaxUint32) {
+		return fmt.Errorf("yarn_orig_ctx %d is outside the supported range 1..%d", *r.OrigCtx, uint64(math.MaxUint32))
+	}
+	return nil
+}
+
 // Sampling configures the native token sampler chain. Zero values are valid
 // Go zero values, not automatically "use the default" — callers that want
 // ADR defaults applied must do so explicitly (see internal/app/factory.go).
 type Sampling struct {
-	TopK            int
-	MinP            float64
-	RepeatPenalty   float64
-	RepeatLastN     int
-	PresencePenalty float64
-	Seed            uint32 // 0 = random
-	Stop            []string
+	TopK                int
+	MinP                float64
+	RepeatPenalty       float64
+	RepeatLastN         int
+	PresencePenalty     float64
+	DRYMultiplier       float64
+	DRYBase             float64
+	DRYAllowedLength    int
+	DRYPenaltyLastN     int
+	DRYSequenceBreakers []string
+	Seed                uint32 // 0 = random
+	Stop                []string
 }
 
 // Options configures one embedded Provider instance.
@@ -181,5 +257,6 @@ type Options struct {
 	// FlashAttention selects the flash-attention mode: "" or "auto"
 	// (default, llama.cpp decides), "on", or "off".
 	FlashAttention string
+	RopeScaling    RopeScaling
 	Sampling       Sampling
 }

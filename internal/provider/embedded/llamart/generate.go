@@ -374,6 +374,15 @@ func (r *Runtime) newSampler(req embedded.GenRequest) (llama.Sampler, error) {
 		llama.SamplerFree(chain)
 		return 0, err
 	}
+	if req.Grammar != "" {
+		root := req.GrammarRoot
+		if root == "" {
+			root = "root"
+		}
+		if err := add("grammar", llama.SamplerInitGrammar(r.vocab, req.Grammar, root)); err != nil {
+			return fail(err)
+		}
+	}
 
 	if req.Temperature <= 0 {
 		if err := add("greedy", llama.SamplerInitGreedy()); err != nil {
@@ -389,6 +398,22 @@ func (r *Runtime) newSampler(req embedded.GenRequest) (llama.Sampler, error) {
 			float32(r.opts.Sampling.RepeatPenalty),
 			0,
 			float32(r.opts.Sampling.PresencePenalty),
+		)); err != nil {
+			return fail(err)
+		}
+	}
+	if r.opts.Sampling.DRYMultiplier > 0 {
+		penaltyLastN := r.opts.Sampling.DRYPenaltyLastN
+		if penaltyLastN < 0 {
+			penaltyLastN = r.nCtx
+		}
+		if err := add("DRY", llama.SamplerInitDry(
+			r.vocab,
+			float32(r.opts.Sampling.DRYMultiplier),
+			float32(r.opts.Sampling.DRYBase),
+			int32(r.opts.Sampling.DRYAllowedLength),
+			int32(penaltyLastN),
+			r.opts.Sampling.DRYSequenceBreakers,
 		)); err != nil {
 			return fail(err)
 		}

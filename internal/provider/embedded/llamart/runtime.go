@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -163,6 +164,9 @@ func (r *Runtime) Load(
 	if opts.ContextSize < 0 {
 		return meta, fmt.Errorf("context_size must not be negative: %d", opts.ContextSize)
 	}
+	if err := opts.RopeScaling.Validate(); err != nil {
+		return meta, err
+	}
 	if err := validateSampling(opts.Sampling); err != nil {
 		return meta, err
 	}
@@ -235,7 +239,7 @@ func (r *Runtime) Load(
 	}
 
 	nCtxTrain := int(llama.ModelNCtxTrain(model))
-	nCtx := effectiveContextSize(opts.ContextSize, nCtxTrain)
+	nCtx := effectiveContextSize(opts.ContextSize, nCtxTrain, opts.RopeScaling.AllowsContextExtension())
 	if opts.MMProjPath != "" && nCtx > math.MaxInt32 {
 		return meta, fmt.Errorf("vision context_size %d exceeds mtmd's supported maximum %d", nCtx, math.MaxInt32)
 	}
@@ -731,13 +735,21 @@ func validateSampling(sampling embedded.Sampling) error {
 	if sampling.RepeatLastN < 0 || sampling.RepeatLastN > math.MaxInt32 {
 		return fmt.Errorf("sampling.repeat_last_n %d is outside the supported range 0..%d", sampling.RepeatLastN, math.MaxInt32)
 	}
+	if sampling.DRYAllowedLength < 0 || sampling.DRYAllowedLength > math.MaxInt32 {
+		return fmt.Errorf("sampling.dry_allowed_length %d is outside the supported range 0..%d", sampling.DRYAllowedLength, math.MaxInt32)
+	}
+	if sampling.DRYPenaltyLastN < -1 || sampling.DRYPenaltyLastN > math.MaxInt32 {
+		return fmt.Errorf("sampling.dry_penalty_last_n %d is outside the supported range -1..%d", sampling.DRYPenaltyLastN, math.MaxInt32)
+	}
 	for name, value := range map[string]float64{
 		"min_p":            sampling.MinP,
 		"repeat_penalty":   sampling.RepeatPenalty,
 		"presence_penalty": sampling.PresencePenalty,
+		"dry_multiplier":   sampling.DRYMultiplier,
+		"dry_base":         sampling.DRYBase,
 	} {
-		if math.IsNaN(value) || math.IsInf(value, 0) {
-			return fmt.Errorf("sampling.%s must be finite", name)
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > math.MaxFloat32 {
+			return fmt.Errorf("sampling.%s must be finite and fit in float32", name)
 		}
 	}
 	if sampling.MinP < 0 || sampling.MinP > 1 {
@@ -745,6 +757,17 @@ func validateSampling(sampling embedded.Sampling) error {
 	}
 	if sampling.RepeatPenalty < 0 {
 		return fmt.Errorf("sampling.repeat_penalty must not be negative: %g", sampling.RepeatPenalty)
+	}
+	if sampling.DRYMultiplier < 0 {
+		return fmt.Errorf("sampling.dry_multiplier must not be negative: %g", sampling.DRYMultiplier)
+	}
+	if sampling.DRYMultiplier > 0 && sampling.DRYBase <= 0 {
+		return fmt.Errorf("sampling.dry_base must be greater than zero when DRY is enabled: %g", sampling.DRYBase)
+	}
+	for _, breaker := range sampling.DRYSequenceBreakers {
+		if strings.IndexByte(breaker, 0) >= 0 {
+			return errors.New("sampling.dry_sequence_breakers must not contain NUL bytes")
+		}
 	}
 	return nil
 }
@@ -762,9 +785,12 @@ func validateRequestSampling(req embedded.GenRequest) error {
 	return nil
 }
 
-func effectiveContextSize(configured, trained int) int {
+func effectiveContextSize(configured, trained int, allowExtension bool) int {
 	if trained <= 0 {
 		trained = defaultContextSize
+	}
+	if configured > trained && allowExtension {
+		return configured
 	}
 	if configured > 0 && configured < trained {
 		return configured
@@ -819,6 +845,9 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 		params.NThreads = int32(opts.Threads)
 		params.NThreadsBatch = int32(opts.Threads)
 	}
+	if err := applyRopeScaling(&params, opts.RopeScaling); err != nil {
+		return llama.ContextParams{}, 0, err
+	}
 
 	// llama.cpp's C default is swa_full=true (full-size KV for every
 	// sliding-window layer, kept for API compatibility upstream). llmtui
@@ -844,6 +873,44 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 		params.FlashAttentionType = llama.FlashAttentionTypeAuto
 	}
 	return params, batchSize, nil
+}
+
+func applyRopeScaling(params *llama.ContextParams, scaling embedded.RopeScaling) error {
+	switch scaling.Type {
+	case embedded.RopeScalingNone:
+		params.RopeScalingType = llama.RopeScalingTypeNone
+	case embedded.RopeScalingLinear:
+		params.RopeScalingType = llama.RopeScalingTypeLinear
+	case embedded.RopeScalingYARN:
+		params.RopeScalingType = llama.RopeScalingTypeYARN
+	case embedded.RopeScalingLongRope:
+		params.RopeScalingType = llama.RopeScalingTypeLongROPE
+	case embedded.RopeScalingUnspecified:
+	default:
+		return fmt.Errorf("unsupported embedded rope_scaling_type %q", scaling.Type)
+	}
+	if value := scaling.FreqBase; value != nil {
+		params.RopeFreqBase = float32(*value)
+	}
+	if value := scaling.FreqScale; value != nil {
+		params.RopeFreqScale = float32(*value)
+	}
+	if value := scaling.ExtFactor; value != nil {
+		params.YarnExtFactor = float32(*value)
+	}
+	if value := scaling.AttnFactor; value != nil {
+		params.YarnAttnFactor = float32(*value)
+	}
+	if value := scaling.BetaFast; value != nil {
+		params.YarnBetaFast = float32(*value)
+	}
+	if value := scaling.BetaSlow; value != nil {
+		params.YarnBetaSlow = float32(*value)
+	}
+	if value := scaling.OrigCtx; value != nil {
+		params.YarnOrigCtx = uint32(*value)
+	}
+	return nil
 }
 
 func uint64ToInt64(value uint64) (int64, error) {

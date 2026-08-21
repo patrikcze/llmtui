@@ -39,8 +39,8 @@ type ProviderConfig struct {
 	LibraryPath string `mapstructure:"library_path" yaml:"library_path,omitempty"`
 	// ContextSize is the requested context window in tokens. 0 selects the
 	// bounded automatic default (min of the model's trained context and
-	// 8192); explicit positive values are capped only by the model's trained
-	// context.
+	// 8192); explicit positive values are capped by the trained context unless
+	// an extrapolating rope_scaling_type is explicitly selected.
 	ContextSize int `mapstructure:"context_size" yaml:"context_size,omitempty"`
 	// GPULayers is the number of layers to offload to the GPU. nil means
 	// "auto/all"; the distinction from an explicit 0 (CPU-only) matters, so
@@ -65,6 +65,16 @@ type ProviderConfig struct {
 	// FlashAttention selects the flash-attention mode: "auto" (default),
 	// "on", or "off".
 	FlashAttention string `mapstructure:"flash_attention" yaml:"flash_attention,omitempty"`
+	// RopeScalingType overrides the model's RoPE scaling mode. Empty keeps
+	// the model metadata/runtime default.
+	RopeScalingType string   `mapstructure:"rope_scaling_type" yaml:"rope_scaling_type,omitempty"`
+	RopeFreqBase    *float64 `mapstructure:"rope_freq_base" yaml:"rope_freq_base,omitempty"`
+	RopeFreqScale   *float64 `mapstructure:"rope_freq_scale" yaml:"rope_freq_scale,omitempty"`
+	YarnExtFactor   *float64 `mapstructure:"yarn_ext_factor" yaml:"yarn_ext_factor,omitempty"`
+	YarnAttnFactor  *float64 `mapstructure:"yarn_attn_factor" yaml:"yarn_attn_factor,omitempty"`
+	YarnBetaFast    *float64 `mapstructure:"yarn_beta_fast" yaml:"yarn_beta_fast,omitempty"`
+	YarnBetaSlow    *float64 `mapstructure:"yarn_beta_slow" yaml:"yarn_beta_slow,omitempty"`
+	YarnOrigCtx     *int     `mapstructure:"yarn_orig_ctx" yaml:"yarn_orig_ctx,omitempty"`
 	// Sampling configures the native token sampler chain.
 	Sampling *SamplingConfig `mapstructure:"sampling" yaml:"sampling,omitempty"`
 }
@@ -89,13 +99,18 @@ type ProviderCapabilitiesConfig struct {
 // don't need this: 0 already means "no penalty" under both "unset" and
 // "explicitly disabled," so a plain float64 has no ambiguous case.
 type SamplingConfig struct {
-	TopK            *int     `mapstructure:"top_k" yaml:"top_k,omitempty"`
-	MinP            *float64 `mapstructure:"min_p" yaml:"min_p,omitempty"`
-	RepeatPenalty   float64  `mapstructure:"repeat_penalty" yaml:"repeat_penalty,omitempty"`
-	RepeatLastN     int      `mapstructure:"repeat_last_n" yaml:"repeat_last_n,omitempty"`
-	PresencePenalty float64  `mapstructure:"presence_penalty" yaml:"presence_penalty,omitempty"`
-	Seed            uint32   `mapstructure:"seed" yaml:"seed,omitempty"`
-	Stop            []string `mapstructure:"stop" yaml:"stop,omitempty"`
+	TopK                *int     `mapstructure:"top_k" yaml:"top_k,omitempty"`
+	MinP                *float64 `mapstructure:"min_p" yaml:"min_p,omitempty"`
+	RepeatPenalty       float64  `mapstructure:"repeat_penalty" yaml:"repeat_penalty,omitempty"`
+	RepeatLastN         int      `mapstructure:"repeat_last_n" yaml:"repeat_last_n,omitempty"`
+	PresencePenalty     float64  `mapstructure:"presence_penalty" yaml:"presence_penalty,omitempty"`
+	DRYMultiplier       float64  `mapstructure:"dry_multiplier" yaml:"dry_multiplier,omitempty"`
+	DRYBase             *float64 `mapstructure:"dry_base" yaml:"dry_base,omitempty"`
+	DRYAllowedLength    *int     `mapstructure:"dry_allowed_length" yaml:"dry_allowed_length,omitempty"`
+	DRYPenaltyLastN     *int     `mapstructure:"dry_penalty_last_n" yaml:"dry_penalty_last_n,omitempty"`
+	DRYSequenceBreakers []string `mapstructure:"dry_sequence_breakers" yaml:"dry_sequence_breakers,omitempty"`
+	Seed                uint32   `mapstructure:"seed" yaml:"seed,omitempty"`
+	Stop                []string `mapstructure:"stop" yaml:"stop,omitempty"`
 }
 
 // ResolveAPIKey returns the API key, preferring an env var reference so
@@ -861,11 +876,20 @@ providers:
   #   gpu_layers: -1 # -1 = offload all layers; 0 = CPU only
   #   threads: 0 # 0 = auto
   #   tool_format: auto # native tools: auto|standard|qwen|glm|mistral|gemma|gpt|phi
+	#   # RoPE/YaRN overrides are opt-in; omit them to trust GGUF metadata.
+	#   # rope_scaling_type: yarn # none|linear|yarn|longrope
+	#   # rope_freq_base: 10000000
+	#   # rope_freq_scale: 0.25
+	#   # yarn_orig_ctx: 262144
   #   sampling:
   #     top_k: 40
   #     min_p: 0.05
   #     repeat_penalty: 1.1
   #     repeat_last_n: 64
+	#     # dry_multiplier: 0.8 # >0 enables DRY anti-repetition
+	#     # dry_base: 1.75
+	#     # dry_allowed_length: 2
+	#     # dry_penalty_last_n: -1 # -1 = active context size
   #     seed: 0 # 0 = random
   #     stop: []
 

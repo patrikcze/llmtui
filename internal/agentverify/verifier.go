@@ -16,6 +16,47 @@ import (
 
 const maxControlBytes = 256 * 1024
 
+const verifierJSONSchema = `{
+	"type": "object",
+	"properties": {
+		"verdict": {"type": "string", "enum": ["passed", "failed", "inconclusive", "blocked"]},
+		"summary": {"type": "string"},
+		"evidence": {"type": "array", "items": {"type": "string"}},
+		"failed_criteria": {"type": "array", "items": {"type": "string"}},
+		"remaining_criteria": {"type": "array", "items": {"type": "string"}},
+		"recommended_next": {"type": "string"},
+		"retryable": {"type": "boolean"},
+		"confidence": {"type": "number", "minimum": 0, "maximum": 1},
+		"new_evidence": {"type": "boolean"},
+		"strategy_changed": {"type": "boolean"},
+		"transient_failure": {"type": "boolean"},
+		"criteria": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"status": {"type": "string", "enum": ["pending", "satisfied", "failed", "not_applicable"]},
+					"note": {"type": "string"}
+				},
+				"required": ["id", "status", "note"],
+				"additionalProperties": false
+			}
+		},
+		"proposed_criteria": {"type": "array", "items": {"type": "string"}}
+	},
+	"required": ["verdict", "summary", "evidence", "failed_criteria", "remaining_criteria", "recommended_next", "retryable", "confidence", "new_evidence", "strategy_changed", "transient_failure", "criteria", "proposed_criteria"],
+	"additionalProperties": false
+}`
+
+const jsonGBNF = `root ::= object
+value ::= object | array | string | number | ("true" | "false" | "null") ws
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+array ::= "[" ws (value ("," ws value)*)? "]" ws
+string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
+number ::= "-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
+ws ::= ([ \t\n\r] ws)?`
+
 // Client is the provider capability needed for one verifier inference.
 type Client interface {
 	Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error)
@@ -94,6 +135,13 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		MaxTokens:   cfg.MaxTokens,
 		Stream:      false,
 		Reasoning:   "off",
+	}
+	if reporter, ok := client.(interface{ Capabilities() provider.Capabilities }); ok &&
+		reporter.Capabilities().StructuredOutput == provider.CapabilitySupported {
+		req.ResponseConstraint = &provider.ResponseConstraint{
+			Name: "llmtui_verification", Grammar: jsonGBNF, GrammarRoot: "root",
+			JSONSchema: json.RawMessage(verifierJSONSchema), Strict: true,
+		}
 	}
 	first, err := requestVerification(callCtx, client, req, input.Execution)
 	if err == nil || !errors.Is(err, agent.ErrMalformedControl) {

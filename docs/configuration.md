@@ -95,7 +95,7 @@ Embedded-only provider keys:
 | `model_path` | empty | Local GGUF model file |
 | `mmproj_path` | empty | Optional matching multimodal-projector GGUF; enables vision and fixes this provider to the configured pair |
 | `library_path` | automatic | Advanced override for a trusted llama.cpp library directory; otherwise resolution checks `YZMA_LIB`, the release archive, the managed runtime, then a matching stamped legacy directory |
-| `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context |
+| `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context unless an extrapolating `rope_scaling_type` is explicitly selected |
 | `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only |
 | `threads` | `0` | Automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size |
@@ -104,16 +104,34 @@ Embedded-only provider keys:
 | `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | `auto`, `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
+| `rope_scaling_type` | GGUF metadata | Optional override: `none`, `linear`, `yarn`, or `longrope` |
+| `rope_freq_base` | GGUF metadata | Positive RoPE base-frequency override |
+| `rope_freq_scale` | GGUF metadata | Positive RoPE frequency-scale override |
+| `yarn_ext_factor` | llama.cpp/model default | YaRN extrapolation mix factor |
+| `yarn_attn_factor` | llama.cpp/model default | YaRN attention magnitude factor |
+| `yarn_beta_fast` | llama.cpp/model default | YaRN low correction dimension |
+| `yarn_beta_slow` | llama.cpp/model default | YaRN high correction dimension |
+| `yarn_orig_ctx` | llama.cpp/model default | Positive original context size used by YaRN |
 | `sampling.top_k` | `40` | Top-k sampler; omit the field to use the default, or set `0` to explicitly disable top-k filtering |
 | `sampling.min_p` | `0.05` | Min-p sampler; omit the field to use the default, or set `0.0` to explicitly disable min-p filtering |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Repetition-history length |
 | `sampling.presence_penalty` | `0.0` | Flat per-token penalty for any token already seen, independent of `repeat_penalty` |
+| `sampling.dry_multiplier` | `0.0` | DRY anti-repetition strength; `0` disables DRY |
+| `sampling.dry_base` | `1.75` | Exponential base used when DRY is enabled |
+| `sampling.dry_allowed_length` | `2` | Repeated sequence length allowed before DRY applies |
+| `sampling.dry_penalty_last_n` | `-1` | DRY history window; `-1` resolves to the active context size |
+| `sampling.dry_sequence_breakers` | `["\\n", ":", "\\\"", "*"]` | Sequence boundaries; the listed llama.cpp defaults apply when DRY is enabled and this key is omitted |
 | `sampling.seed` | `0` | Random; nonzero is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings |
 
 See [embedded.md](embedded.md) for installation, platform support, examples,
 vision pairing, image limits, native tools/reasoning, and limitations.
+
+RoPE/YaRN and DRY are embedded-runtime controls. Ollama, LM Studio, vLLM,
+llama.cpp server, and other OpenAI-compatible backends own equivalent model
+loading/sampling configuration; llmtui does not send non-standard fields that
+could make otherwise compatible servers reject requests.
 
 ### `chat`
 

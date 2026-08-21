@@ -2,6 +2,7 @@ package agentverify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -15,11 +16,14 @@ import (
 type recordingClient struct {
 	mu       sync.Mutex
 	requests []provider.ChatRequest
+	caps     provider.Capabilities
 	reply    string
 	replies  []string
 	err      error
 	block    bool
 }
+
+func (c *recordingClient) Capabilities() provider.Capabilities { return c.caps }
 
 func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	c.mu.Lock()
@@ -73,6 +77,23 @@ func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
 	}
 	if strings.Contains(req.Messages[1].Content, "unrelated conversation history") {
 		t.Fatal("verifier received executor conversation history")
+	}
+}
+
+func TestVerifierRequestsStructuredOutputWhenSupported(t *testing.T) {
+	client := &recordingClient{
+		reply: validReply("passed"),
+		caps:  provider.Capabilities{StructuredOutput: provider.CapabilitySupported},
+	}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, Input{}); err != nil {
+		t.Fatal(err)
+	}
+	constraint := client.requests[0].ResponseConstraint
+	if constraint == nil || constraint.Name != "llmtui_verification" || !constraint.Strict {
+		t.Fatalf("ResponseConstraint = %+v", constraint)
+	}
+	if constraint.Grammar == "" || constraint.GrammarRoot != "root" || !json.Valid(constraint.JSONSchema) {
+		t.Fatalf("invalid dual response constraint: %+v", constraint)
 	}
 }
 

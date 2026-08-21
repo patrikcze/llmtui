@@ -238,6 +238,7 @@ func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
 		NativeTools:          nativeTools,
 		ParallelToolCalls:    nativeTools,
 		ReasoningEvents:      provider.CapabilitySupported,
+		StructuredOutput:     provider.CapabilitySupported,
 		ContextWindowTokens:  p.effectiveContextLen(),
 	}
 }
@@ -249,6 +250,12 @@ func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	if err := validateReasoning(req.Reasoning); err != nil {
 		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
+	}
+	if err := provider.ValidateResponseConstraint(req); err != nil {
+		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
+	}
+	if req.ResponseConstraint != nil && req.ResponseConstraint.Grammar == "" {
+		return nil, fmt.Errorf("embedded provider %q: response constraint requires a GBNF grammar", p.name)
 	}
 	if len(req.Tools) > 0 {
 		opts := p.activeOptions()
@@ -356,6 +363,13 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		Progress: func(message string) {
 			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: message})
 		},
+	}
+	if req.ResponseConstraint != nil {
+		genReq.Grammar = req.ResponseConstraint.Grammar
+		genReq.GrammarRoot = req.ResponseConstraint.GrammarRoot
+		if genReq.GrammarRoot == "" {
+			genReq.GrammarRoot = "root"
+		}
 	}
 	if len(req.Tools) > 0 {
 		genReq.ToolFormat, _ = ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
@@ -551,12 +565,32 @@ func (p *Provider) RuntimeFingerprint() string {
 		flashAttention = opts.FlashAttention
 	}
 	writeField(h, []byte(flashAttention))
+	ropeScalingType, err := ParseRopeScalingType(string(opts.RopeScaling.Type))
+	if err != nil {
+		ropeScalingType = opts.RopeScaling.Type
+	}
+	writeField(h, []byte(ropeScalingType))
+	writeOptionalFloat64(h, opts.RopeScaling.FreqBase)
+	writeOptionalFloat64(h, opts.RopeScaling.FreqScale)
+	writeOptionalFloat64(h, opts.RopeScaling.ExtFactor)
+	writeOptionalFloat64(h, opts.RopeScaling.AttnFactor)
+	writeOptionalFloat64(h, opts.RopeScaling.BetaFast)
+	writeOptionalFloat64(h, opts.RopeScaling.BetaSlow)
+	writeOptionalInt(h, opts.RopeScaling.OrigCtx)
 
 	writeInt64(h, int64(opts.Sampling.TopK))
 	writeFloat64(h, opts.Sampling.MinP)
 	writeFloat64(h, opts.Sampling.RepeatPenalty)
 	writeInt64(h, int64(opts.Sampling.RepeatLastN))
 	writeFloat64(h, opts.Sampling.PresencePenalty)
+	writeFloat64(h, opts.Sampling.DRYMultiplier)
+	writeFloat64(h, opts.Sampling.DRYBase)
+	writeInt64(h, int64(opts.Sampling.DRYAllowedLength))
+	writeInt64(h, int64(opts.Sampling.DRYPenaltyLastN))
+	for _, breaker := range opts.Sampling.DRYSequenceBreakers {
+		writeField(h, []byte(breaker))
+	}
+	writeField(h, []byte("dry-breakers-end"))
 	writeInt64(h, int64(opts.Sampling.Seed))
 	for _, s := range opts.Sampling.Stop {
 		writeField(h, []byte(s))
@@ -598,4 +632,22 @@ func writeInt64(h hash.Hash, v int64) {
 
 func writeFloat64(h hash.Hash, v float64) {
 	writeInt64(h, int64(v*1e9))
+}
+
+func writeOptionalFloat64(h hash.Hash, value *float64) {
+	if value == nil {
+		writeField(h, nil)
+		return
+	}
+	writeField(h, []byte("set"))
+	writeFloat64(h, *value)
+}
+
+func writeOptionalInt(h hash.Hash, value *int) {
+	if value == nil {
+		writeField(h, nil)
+		return
+	}
+	writeField(h, []byte("set"))
+	writeInt64(h, int64(*value))
 }

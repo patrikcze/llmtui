@@ -139,6 +139,37 @@ func TestChatRejectsInvalidReasoningBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestChatPassesResponseGrammarToRuntime(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "model.gguf")
+	rt := &scriptedRuntime{}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		ResponseConstraint: &provider.ResponseConstraint{Grammar: `root ::= "ok"`},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(events)
+	rt.pathMu.Lock()
+	request := rt.lastReq
+	rt.pathMu.Unlock()
+	if request.Grammar != `root ::= "ok"` || request.GrammarRoot != "root" {
+		t.Errorf("runtime grammar = %q root %q", request.Grammar, request.GrammarRoot)
+	}
+}
+
+func TestChatRejectsSchemaWithoutEmbeddedGrammar(t *testing.T) {
+	p := New("embedded", Options{}, fixedRuntime(&scriptedRuntime{}))
+	_, err := p.Chat(context.Background(), provider.ChatRequest{
+		ResponseConstraint: &provider.ResponseConstraint{JSONSchema: []byte(`{"type":"object"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a GBNF grammar") {
+		t.Fatalf("Chat error = %v, want missing GBNF error", err)
+	}
+}
+
 func TestModelLoadsOnceAcrossSequentialChats(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")
@@ -598,6 +629,20 @@ func TestRuntimeFingerprintChangesWithOptionsAndModelFile(t *testing.T) {
 	p4b := New("embedded", changedPresencePenalty, fixedRuntime(&scriptedRuntime{}))
 	if p4b.RuntimeFingerprint() == f1 {
 		t.Error("fingerprint did not change when Sampling.PresencePenalty changed")
+	}
+
+	changedDRY := base
+	changedDRY.Sampling.DRYMultiplier = 0.8
+	changedDRY.Sampling.DRYBase = 1.75
+	if New("embedded", changedDRY, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when DRY sampling changed")
+	}
+
+	freqScale := 0.25
+	changedRope := base
+	changedRope.RopeScaling = RopeScaling{Type: RopeScalingYARN, FreqScale: &freqScale}
+	if New("embedded", changedRope, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when RoPE scaling changed")
 	}
 
 	projectorPath := writeFakeModel(t, dir, "mmproj-model.gguf")

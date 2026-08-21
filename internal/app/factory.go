@@ -25,7 +25,12 @@ const (
 	defaultSamplingMinP          = 0.05
 	defaultSamplingRepeatPenalty = 1.1
 	defaultSamplingRepeatLastN   = 64
+	defaultDRYBase               = 1.75
+	defaultDRYAllowedLength      = 2
+	defaultDRYPenaltyLastN       = -1
 )
+
+var defaultDRYSequenceBreakers = []string{"\n", ":", `"`, "*"}
 
 // httpClient builds a client with a connect timeout but no overall request
 // timeout — streams are long-lived; request deadlines come from contexts.
@@ -161,6 +166,23 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	if err := embedded.ValidateKVFlashCombination(kvCacheType, flashAttention); err != nil {
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
 	}
+	ropeScalingType, err := embedded.ParseRopeScalingType(pc.RopeScalingType)
+	if err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
+	ropeScaling := embedded.RopeScaling{
+		Type:       ropeScalingType,
+		FreqBase:   pc.RopeFreqBase,
+		FreqScale:  pc.RopeFreqScale,
+		ExtFactor:  pc.YarnExtFactor,
+		AttnFactor: pc.YarnAttnFactor,
+		BetaFast:   pc.YarnBetaFast,
+		BetaSlow:   pc.YarnBetaSlow,
+		OrigCtx:    pc.YarnOrigCtx,
+	}
+	if err := ropeScaling.Validate(); err != nil {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
 
 	contextSize := pc.ContextSize
 	if ov.ContextSize != nil {
@@ -176,10 +198,13 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	}
 
 	sampling := embedded.Sampling{
-		TopK:          defaultSamplingTopK,
-		MinP:          defaultSamplingMinP,
-		RepeatPenalty: defaultSamplingRepeatPenalty,
-		RepeatLastN:   defaultSamplingRepeatLastN,
+		TopK:             defaultSamplingTopK,
+		MinP:             defaultSamplingMinP,
+		RepeatPenalty:    defaultSamplingRepeatPenalty,
+		RepeatLastN:      defaultSamplingRepeatLastN,
+		DRYBase:          defaultDRYBase,
+		DRYAllowedLength: defaultDRYAllowedLength,
+		DRYPenaltyLastN:  defaultDRYPenaltyLastN,
 	}
 	if sc := pc.Sampling; sc != nil {
 		if sc.TopK != nil {
@@ -195,6 +220,21 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 			sampling.RepeatLastN = sc.RepeatLastN
 		}
 		sampling.PresencePenalty = sc.PresencePenalty
+		sampling.DRYMultiplier = sc.DRYMultiplier
+		if sc.DRYBase != nil {
+			sampling.DRYBase = *sc.DRYBase
+		}
+		if sc.DRYAllowedLength != nil {
+			sampling.DRYAllowedLength = *sc.DRYAllowedLength
+		}
+		if sc.DRYPenaltyLastN != nil {
+			sampling.DRYPenaltyLastN = *sc.DRYPenaltyLastN
+		}
+		if sc.DRYSequenceBreakers != nil {
+			sampling.DRYSequenceBreakers = append([]string(nil), sc.DRYSequenceBreakers...)
+		} else if sc.DRYMultiplier > 0 {
+			sampling.DRYSequenceBreakers = append([]string(nil), defaultDRYSequenceBreakers...)
+		}
 		sampling.Seed = sc.Seed
 		sampling.Stop = sc.Stop
 	}
@@ -212,6 +252,7 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		SWAFull:        pc.SWAFull,
 		KVCacheType:    kvCacheType,
 		FlashAttention: flashAttention,
+		RopeScaling:    ropeScaling,
 		Sampling:       sampling,
 	}, nil
 }

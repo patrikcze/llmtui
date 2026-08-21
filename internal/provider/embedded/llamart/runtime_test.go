@@ -165,20 +165,89 @@ func TestEffectiveContextSize(t *testing.T) {
 		name       string
 		configured int
 		trained    int
+		extend     bool
 		want       int
 	}{
 		{name: "caps large trained context", trained: 1_000_000, want: defaultContextSize},
 		{name: "keeps smaller trained context", trained: 4096, want: 4096},
 		{name: "configured lower than trained", configured: 2048, trained: 8192, want: 2048},
 		{name: "configured cannot exceed trained", configured: 16384, trained: 8192, want: 8192},
+		{name: "explicit scaling extends trained context", configured: 16384, trained: 8192, extend: true, want: 16384},
 		{name: "unknown trained context stays bounded", trained: 0, want: defaultContextSize},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := effectiveContextSize(tt.configured, tt.trained); got != tt.want {
-				t.Errorf("effectiveContextSize(%d, %d) = %d, want %d", tt.configured, tt.trained, got, tt.want)
+			if got := effectiveContextSize(tt.configured, tt.trained, tt.extend); got != tt.want {
+				t.Errorf("effectiveContextSize(%d, %d, %t) = %d, want %d", tt.configured, tt.trained, tt.extend, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildContextParamsAppliesRopeScalingOverrides(t *testing.T) {
+	freqBase, freqScale := 10_000_000.0, 0.25
+	extFactor, attnFactor := 1.0, 0.1
+	betaFast, betaSlow, origCtx := 32.0, 1.0, 262_144
+	scaling := embedded.RopeScaling{
+		Type:       embedded.RopeScalingYARN,
+		FreqBase:   &freqBase,
+		FreqScale:  &freqScale,
+		ExtFactor:  &extFactor,
+		AttnFactor: &attnFactor,
+		BetaFast:   &betaFast,
+		BetaSlow:   &betaSlow,
+		OrigCtx:    &origCtx,
+	}
+	params := llama.ContextParams{}
+	err := applyRopeScaling(&params, scaling)
+	if err != nil {
+		t.Fatalf("applyRopeScaling() error = %v", err)
+	}
+	if params.RopeScalingType != llama.RopeScalingTypeYARN ||
+		params.RopeFreqBase != float32(freqBase) || params.RopeFreqScale != float32(freqScale) ||
+		params.YarnExtFactor != float32(extFactor) || params.YarnAttnFactor != float32(attnFactor) ||
+		params.YarnBetaFast != float32(betaFast) || params.YarnBetaSlow != float32(betaSlow) ||
+		params.YarnOrigCtx != uint32(origCtx) {
+		t.Fatalf("RoPE/YaRN context params not applied: %+v", params)
+	}
+}
+
+func TestBuildContextParamsPreservesRopeDefaults(t *testing.T) {
+	want := llama.ContextParams{
+		RopeScalingType: llama.RopeScalingTypeUnspecified,
+		RopeFreqBase:    123, RopeFreqScale: 456, YarnExtFactor: 789,
+		YarnAttnFactor: 12, YarnBetaFast: 34, YarnBetaSlow: 56, YarnOrigCtx: 78,
+	}
+	got := want
+	err := applyRopeScaling(&got, embedded.RopeScaling{})
+	if err != nil {
+		t.Fatalf("applyRopeScaling() error = %v", err)
+	}
+	if got.RopeScalingType != want.RopeScalingType || got.RopeFreqBase != want.RopeFreqBase ||
+		got.RopeFreqScale != want.RopeFreqScale || got.YarnExtFactor != want.YarnExtFactor ||
+		got.YarnAttnFactor != want.YarnAttnFactor || got.YarnBetaFast != want.YarnBetaFast ||
+		got.YarnBetaSlow != want.YarnBetaSlow || got.YarnOrigCtx != want.YarnOrigCtx {
+		t.Fatalf("unset RoPE options changed llama.cpp defaults: got %+v want %+v", got, want)
+	}
+}
+
+func TestValidateSamplingDRY(t *testing.T) {
+	valid := embedded.Sampling{DRYMultiplier: 0.8, DRYBase: 1.75, DRYAllowedLength: 2, DRYPenaltyLastN: -1}
+	if err := validateSampling(valid); err != nil {
+		t.Fatalf("valid DRY settings rejected: %v", err)
+	}
+	for name, sampling := range map[string]embedded.Sampling{
+		"negative multiplier": {DRYMultiplier: -1},
+		"zero base":           {DRYMultiplier: 0.8},
+		"negative allowed":    {DRYMultiplier: 0.8, DRYBase: 1.75, DRYAllowedLength: -1},
+		"invalid last n":      {DRYMultiplier: 0.8, DRYBase: 1.75, DRYPenaltyLastN: -2},
+		"NUL breaker":         {DRYMultiplier: 0.8, DRYBase: 1.75, DRYSequenceBreakers: []string{"\x00"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateSampling(sampling); err == nil {
+				t.Fatal("validateSampling() error = nil")
 			}
 		})
 	}

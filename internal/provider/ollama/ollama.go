@@ -141,6 +141,9 @@ type chatRequest struct {
 	// Think toggles a reasoning model's thinking phase (Ollama native
 	// field). nil omits it so non-reasoning models are unaffected.
 	Think *bool `json:"think,omitempty"`
+	// Format accepts either "json" or a JSON Schema object. LLMTUI uses the
+	// schema form so callers get field-level constraints where supported.
+	Format json.RawMessage `json:"format,omitempty"`
 }
 
 // wireTool declares one callable function (same shape as the OpenAI format).
@@ -259,6 +262,12 @@ type chatChunk struct {
 
 // Chat sends a chat request. Ollama streams newline-delimited JSON objects.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if err := provider.ValidateResponseConstraint(req); err != nil {
+		return nil, fmt.Errorf("%s: %w", p.name, err)
+	}
+	if req.ResponseConstraint != nil && len(req.ResponseConstraint.JSONSchema) == 0 {
+		return nil, fmt.Errorf("%s: response constraint requires a JSON Schema", p.name)
+	}
 	body := chatRequest{
 		Model:    req.Model,
 		Messages: toWireMessages(req.Messages),
@@ -269,6 +278,9 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 			TopP:        req.TopP,
 			NumPredict:  req.MaxTokens,
 		},
+	}
+	if req.ResponseConstraint != nil {
+		body.Format = req.ResponseConstraint.JSONSchema
 	}
 	switch req.Reasoning {
 	case "on":
@@ -407,7 +419,8 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		SupportsSystemPrompt: true,
 		// Support is selected-model dependent. Until model metadata is
 		// available, keep it unknown and learn from the first real request.
-		NativeTools:     provider.CapabilityUnknown,
-		ReasoningEvents: provider.CapabilityUnknown,
+		NativeTools:      provider.CapabilityUnknown,
+		ReasoningEvents:  provider.CapabilityUnknown,
+		StructuredOutput: provider.CapabilitySupported,
 	}
 }
