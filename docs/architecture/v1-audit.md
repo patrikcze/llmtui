@@ -31,7 +31,7 @@ source in this session rather than taken on the sub-investigation's word; see
 | Package | Lines | Responsibility |
 | --- | ---: | --- |
 | `internal/tui/pipeline.go` | 821 | Request composition: prompt assembly, context-fit loop, cache-key derivation (`cacheKeyFromPrepared`, pipeline.go:418-441), streaming/retry (`dispatch`/`continueChat`/`startRequest`, pipeline.go:508,683,733). Single request-origination point for **all three** lifecycles. |
-| `internal/tui/app.go` | 2365 | Bubble Tea `Model`; terminal stream-event dispatch (`handleStreamEvent`, app.go:1600-1707); tool-batch orchestration (`startToolBatch` app.go:1029, `runToolCalls` app.go:1081, `sendToolResults` app.go:1118); approval UI (app.go:1152-1258). |
+| `internal/tui/app.go` | 2365 | Bubble Tea `Model`; terminal stream-event dispatch (`handleStreamEvent`, app.go:1600-1707); tool-batch orchestration (`startToolBatch` app.go:1029, `runToolPlan` app.go:1081, `sendToolResults` app.go:1118); approval UI (app.go:1152-1258). |
 | `internal/tui/agent_loop.go` | 667 | `/agent on` state glue only. Does not stream a model or execute a tool itself; calls the same `dispatch`/`continueChat` ordinary chat uses. |
 | `internal/agent` (`types.go`,`run.go`,`policy.go`,`store.go`) | 1145 | Provider/UI-independent `AgentRun` state machine, hard budgets, `Decide()` stop policy, versioned file-backed run store. |
 | `internal/agentverify/verifier.go` | 276 | One bounded, tool-free evaluator request; strict JSON parsing; deterministic-evidence override. |
@@ -52,7 +52,7 @@ cache check → `startRequest()` (pipeline.go:733) → `handleStreamEvent`
 **(b) Tool-enabled chat.** Same `dispatch`/`startRequest`/`handleStreamEvent`
 path. On `EventDone` with `ToolCalls` present (app.go:1676) or fenced blocks
 (`maybeRunTools`, app.go:992) → `startToolBatch` (app.go:1029) → approval
-gate or `runToolCalls` (app.go:1081) → `sendToolResults` (app.go:1118) →
+gate or `runToolPlan` (app.go:1081) → `sendToolResults` (app.go:1118) →
 `continueChat()` (pipeline.go:683) → back into `startRequest`/
 `handleStreamEvent`. Loop bound: `m.toolDepth` vs `toolMaxIter()`
 (`tools.max_iterations`, default `10`) — app.go:1038, reset per user turn at
@@ -61,7 +61,7 @@ app.go:979.
 **(c) `/agent on`.** `startVerifiedRun` (agent_loop.go:132) creates an
 `AgentRun`, then calls the **identical** `dispatch()` (agent_loop.go:162).
 Every executor turn goes through the same
-`handleStreamEvent`/`startToolBatch`/`runToolCalls`/`sendToolResults`/
+`handleStreamEvent`/`startToolBatch`/`runToolPlan`/`sendToolResults`/
 `continueChat` code as (b). The only agent-specific branch inside that shared
 code is app.go:1689-1694: when a turn finally has no tool calls and no
 pending approval, it calls `startAgentVerification()` instead of just
@@ -79,7 +79,7 @@ flowchart TD
     HSE -->|tool calls present| STB[startToolBatch]
     STB --> APPROVE{approval needed?}
     APPROVE -->|yes| WAIT[wait for user]
-    APPROVE -->|no| RUN[runToolCalls]
+    APPROVE -->|no| RUN[runToolPlan]
     WAIT --> RUN
     RUN --> SEND[sendToolResults]
     SEND --> CC[continueChat / pipeline.go:683]
@@ -334,7 +334,7 @@ fixture is the next step before any implementation change (master-prompt
   composition, truncation normalization. All confirmed correct.
 - **Refactor**: budget/limit enforcement. Move `agent.Decide()`'s
   hard-budget checks (tool calls, tokens) to run live inside
-  `startToolBatch`/`runToolCalls`, not only at the cycle-boundary
+  `startToolBatch`/`runToolPlan`, not only at the cycle-boundary
   verification gate. Introduce a run-level (not cycle-reset) counter for
   `agentToolBudgetExceeded`, or replace it with a call into the same live
   check the state machine uses.

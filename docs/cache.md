@@ -4,10 +4,15 @@ Repeated prompts against slow local models answer instantly from a local
 file cache (`cache.path`, default `~/.cache/llmtui/responses`).
 
 The key includes: provider name, base URL (hashed), model, raw user message
-(hashed), system prompt (hashed), prompt mode, template, temperature, top_p,
-max tokens, the complete provider-visible conversation history (including
-images and tool metadata), and the active tool specifications. **API keys are
-never part of the key or the entries.**
+(hashed), system prompt (hashed — the fully composed prompt actually sent,
+including tool/RAG/memory instructions), prompt mode, template, temperature,
+top_p, max tokens, the complete provider-visible conversation history
+(including images and tool metadata), the active tool specifications
+(native, web, and MCP), the effective reasoning/thinking-mode toggle, the
+active skill set (IDs, content hashes, and order — see
+[docs/skills.md](skills.md)), and, for the embedded provider, a runtime
+identity fingerprint (model file path/size/mtime plus native sampling and
+context settings). **API keys are never part of the key or the entries.**
 
 The key schema is versioned. Correctness changes invalidate older keys rather
 than risking a response produced under older request-identity rules.
