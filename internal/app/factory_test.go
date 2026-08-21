@@ -285,6 +285,53 @@ func TestBuildEmbeddedOptionsSamplingDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildEmbeddedOptionsRopeAndDRY(t *testing.T) {
+	freqScale, yarnOrigCtx := 0.25, 262_144
+	dryBase, dryAllowed, dryLastN := 1.8, 3, 4096
+	opts, err := buildEmbeddedOptions(config.ProviderConfig{
+		Type: "embedded", ModelPath: "m.gguf", RopeScalingType: "YARN",
+		RopeFreqScale: &freqScale, YarnOrigCtx: &yarnOrigCtx,
+		Sampling: &config.SamplingConfig{
+			DRYMultiplier: 0.9, DRYBase: &dryBase, DRYAllowedLength: &dryAllowed,
+			DRYPenaltyLastN: &dryLastN, DRYSequenceBreakers: []string{"\n", ":"},
+		},
+	}, ActiveOverrides{})
+	if err != nil {
+		t.Fatalf("buildEmbeddedOptions: %v", err)
+	}
+	if opts.RopeScaling.Type != embedded.RopeScalingYARN || opts.RopeScaling.FreqScale != &freqScale ||
+		opts.RopeScaling.OrigCtx != &yarnOrigCtx {
+		t.Errorf("RopeScaling = %+v", opts.RopeScaling)
+	}
+	if opts.Sampling.DRYMultiplier != 0.9 || opts.Sampling.DRYBase != dryBase ||
+		opts.Sampling.DRYAllowedLength != dryAllowed || opts.Sampling.DRYPenaltyLastN != dryLastN ||
+		len(opts.Sampling.DRYSequenceBreakers) != 2 {
+		t.Errorf("DRY sampling = %+v", opts.Sampling)
+	}
+}
+
+func TestBuildEmbeddedOptionsDRYDefaultsAndRopeValidation(t *testing.T) {
+	opts, err := buildEmbeddedOptions(config.ProviderConfig{
+		Type: "embedded", ModelPath: "m.gguf",
+		Sampling: &config.SamplingConfig{DRYMultiplier: 0.8},
+	}, ActiveOverrides{})
+	if err != nil {
+		t.Fatalf("buildEmbeddedOptions: %v", err)
+	}
+	if opts.Sampling.DRYBase != 1.75 || opts.Sampling.DRYAllowedLength != 2 ||
+		opts.Sampling.DRYPenaltyLastN != -1 || len(opts.Sampling.DRYSequenceBreakers) != 4 {
+		t.Errorf("DRY defaults = %+v", opts.Sampling)
+	}
+
+	invalidScale := 0.0
+	_, err = buildEmbeddedOptions(config.ProviderConfig{
+		Type: "embedded", ModelPath: "m.gguf", RopeFreqScale: &invalidScale,
+	}, ActiveOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "rope_freq_scale") {
+		t.Fatalf("invalid rope_freq_scale error = %v", err)
+	}
+}
+
 func TestBuildActiveProviderAppliesOverridesForEmbedded(t *testing.T) {
 	cfg := &config.Config{
 		DefaultProvider: "embedded",

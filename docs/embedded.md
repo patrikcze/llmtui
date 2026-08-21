@@ -199,7 +199,7 @@ model_profiles:
 | `model_path` | empty | Local GGUF file; required unless `--model`/`LLMTUI_MODEL` supplies it |
 | `mmproj_path` | empty | Optional compatible multimodal projector GGUF; enables authoritative vision support and fixes the provider to this model/projector pair |
 | `library_path` | automatic | Advanced trusted override; otherwise use the resolution tiers above |
-| `context_size` | `0` | Bounded model default: `min(n_ctx_train, 8192)`; a positive value is capped at the trained context |
+| `context_size` | `0` | Bounded model default: `min(n_ctx_train, 8192)`; a positive value is capped at the trained context unless `linear`, `yarn`, or `longrope` scaling is explicitly selected |
 | `gpu_layers` | `-1` | `-1` offloads all possible layers, `0` is CPU-only, positive values set an exact layer count |
 | `threads` | `0` | llama.cpp automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size, capped by the context size |
@@ -208,11 +208,24 @@ model_profiles:
 | `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |
 | `flash_attention` | `auto` | Flash-attention mode: `auto` (llama.cpp decides per model/backend), `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
+| `rope_scaling_type` | model metadata | Optional override: `none`, `linear`, `yarn`, or `longrope` |
+| `rope_freq_base` | model metadata | Positive RoPE base-frequency override |
+| `rope_freq_scale` | model metadata | Positive RoPE frequency-scale override |
+| `yarn_ext_factor` | llama.cpp/model default | YaRN extrapolation mix factor |
+| `yarn_attn_factor` | llama.cpp/model default | YaRN attention magnitude factor |
+| `yarn_beta_fast` | llama.cpp/model default | YaRN low correction dimension |
+| `yarn_beta_slow` | llama.cpp/model default | YaRN high correction dimension |
+| `yarn_orig_ctx` | llama.cpp/model default | Positive original context size used by YaRN |
 | `sampling.top_k` | `40` | Top-k sampling; omit the field to use the default, or set `0` to explicitly disable top-k filtering |
 | `sampling.min_p` | `0.05` | Min-p sampling; omit the field to use the default, or set `0.0` to explicitly disable min-p filtering |
 | `sampling.repeat_penalty` | `1.1` | Repetition penalty |
 | `sampling.repeat_last_n` | `64` | Token history used by the repetition penalty |
 | `sampling.presence_penalty` | `0.0` | Flat per-token penalty applied once a token has appeared at all (independent of `repeat_penalty`); some model cards (e.g. Qwen3) recommend a nonzero value for non-thinking/instruct mode and `0.0` for thinking mode |
+| `sampling.dry_multiplier` | `0.0` | DRY anti-repetition strength; a positive value enables the sampler |
+| `sampling.dry_base` | `1.75` | DRY exponential base |
+| `sampling.dry_allowed_length` | `2` | Repeated sequence length allowed before a penalty |
+| `sampling.dry_penalty_last_n` | `-1` | History window; `-1` uses the active context size |
+| `sampling.dry_sequence_breakers` | newline, `:`, `"`, `*` | Boundaries that stop DRY sequence matching; these llama.cpp defaults apply when DRY is enabled and the key is omitted |
 | `sampling.seed` | `0` | `0` selects a random seed; another value is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings, safe across token/UTF-8 boundaries |
 
@@ -222,6 +235,24 @@ still shape each request. A temperature at or below zero uses greedy sampling.
 positions, llmtui automatically clamps that request to the remaining context
 instead of rejecting it. A prompt that already fills the context still returns
 an actionable error rather than overflowing the KV cache.
+
+Leave all RoPE/YaRN keys unset when the requested context is within the GGUF's
+trained window. Overrides are intended for model-card-directed extrapolation;
+incorrect values can sharply reduce quality even when the model loads. For
+example, a model that explicitly documents YaRN extension may use:
+
+```yaml
+providers:
+  long-context:
+    type: embedded
+    model_path: /models/model.gguf
+    context_size: 524288
+    rope_scaling_type: yarn
+    rope_freq_scale: 0.25
+    yarn_orig_ctx: 262144
+    sampling:
+      dry_multiplier: 0.8
+```
 
 Per-run overrides:
 
@@ -260,6 +291,10 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
   to the reasoning stream and keeps it out of the visible answer, history,
   subsequent prompts, and response cache. `/thoughts show|hide` expands or
   collapses that UI-only reasoning without changing the template setting.
+- The provider request API accepts a generic GBNF response grammar. Verified
+  agent checks use it to require syntactically valid JSON; native tool calls
+  and a separate response grammar are rejected together because both control
+  the model's output grammar.
 
 ## Lifecycle and behavior
 

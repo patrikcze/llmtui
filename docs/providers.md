@@ -25,6 +25,20 @@ recognized native tool grammars, and unloads its projector/model on provider
 switch or exit. Its native runtime, platform matrix, and limitations are documented in
 [embedded.md](embedded.md).
 
+Structured-output requests use each backend's native mechanism: GBNF grammar
+for embedded llama.cpp, `format` with a JSON Schema for Ollama, and
+`response_format.type: json_schema` for OpenAI-compatible chat completions.
+The verified agent supplies both representations and only enables the feature
+when the provider advertises support. Set
+`providers.<name>.capabilities.structured_output: false` for an older or
+partially compatible server that rejects its native schema field.
+
+RoPE/YaRN and DRY settings are exposed only for `embedded`. Remote runtimes
+load and tune models server-side (Ollama Modelfiles, LM Studio model settings,
+or vLLM/llama.cpp-server launch options), and there is no portable OpenAI
+request field for those controls. LLMTUI therefore does not inject proprietary
+sampling or context fields into remote requests.
+
 ## Network behavior
 
 - `network.connect_timeout` (default 10s) bounds connection attempts.

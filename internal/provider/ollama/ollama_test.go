@@ -82,6 +82,32 @@ func TestChatStreamingNDJSON(t *testing.T) {
 	}
 }
 
+func TestChatSendsJSONSchemaFormat(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if string(req.Format) != string(schema) {
+			t.Errorf("format = %s, want %s", req.Format, schema)
+		}
+		fmt.Fprintln(w, `{"message":{"content":"{\"answer\":\"ok\"}"},"done":true}`)
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model: "m", Stream: true, ResponseConstraint: &provider.ResponseConstraint{JSONSchema: schema},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, _, err := collect(t, events); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // collectDoneEvent drains the channel and returns the last EventDone seen,
 // so tests can inspect fields (like Truncated) that the plain collect
 // helper above doesn't expose.

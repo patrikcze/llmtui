@@ -497,11 +497,24 @@ providers:
     batch_size: 512
     chat_template: "custom template"
     tool_format: gemma
+    rope_scaling_type: yarn
+    rope_freq_base: 10000000
+    rope_freq_scale: 0.25
+    yarn_ext_factor: 1.0
+    yarn_attn_factor: 0.1
+    yarn_beta_fast: 32
+    yarn_beta_slow: 1
+    yarn_orig_ctx: 262144
     sampling:
       top_k: 50
       min_p: 0.1
       repeat_penalty: 1.2
       repeat_last_n: 128
+      dry_multiplier: 0.8
+      dry_base: 1.75
+      dry_allowed_length: 2
+      dry_penalty_last_n: -1
+      dry_sequence_breakers: ["paragraph", ":"]
       seed: 42
       stop: ["</s>", "STOP"]
 `)
@@ -547,14 +560,30 @@ providers:
 	if pc.ToolFormat != "gemma" {
 		t.Errorf("ToolFormat = %q, want gemma", pc.ToolFormat)
 	}
+	if pc.RopeScalingType != "yarn" || pc.RopeFreqBase == nil || *pc.RopeFreqBase != 10_000_000 ||
+		pc.RopeFreqScale == nil || *pc.RopeFreqScale != 0.25 ||
+		pc.YarnExtFactor == nil || *pc.YarnExtFactor != 1 ||
+		pc.YarnAttnFactor == nil || *pc.YarnAttnFactor != 0.1 ||
+		pc.YarnBetaFast == nil || *pc.YarnBetaFast != 32 ||
+		pc.YarnBetaSlow == nil || *pc.YarnBetaSlow != 1 ||
+		pc.YarnOrigCtx == nil || *pc.YarnOrigCtx != 262_144 {
+		t.Errorf("RoPE/YaRN config = %+v", pc)
+	}
 	if pc.Sampling == nil {
 		t.Fatal("Sampling should not be nil")
 	}
 	if pc.Sampling.TopK == nil || *pc.Sampling.TopK != 50 ||
 		pc.Sampling.MinP == nil || *pc.Sampling.MinP != 0.1 ||
 		pc.Sampling.RepeatPenalty != 1.2 ||
-		pc.Sampling.RepeatLastN != 128 || pc.Sampling.Seed != 42 {
+		pc.Sampling.RepeatLastN != 128 || pc.Sampling.DRYMultiplier != 0.8 ||
+		pc.Sampling.DRYBase == nil || *pc.Sampling.DRYBase != 1.75 ||
+		pc.Sampling.DRYAllowedLength == nil || *pc.Sampling.DRYAllowedLength != 2 ||
+		pc.Sampling.DRYPenaltyLastN == nil || *pc.Sampling.DRYPenaltyLastN != -1 ||
+		pc.Sampling.Seed != 42 {
 		t.Errorf("Sampling = %+v", pc.Sampling)
+	}
+	if len(pc.Sampling.DRYSequenceBreakers) != 2 || pc.Sampling.DRYSequenceBreakers[1] != ":" {
+		t.Errorf("Sampling.DRYSequenceBreakers = %v", pc.Sampling.DRYSequenceBreakers)
 	}
 	if len(pc.Sampling.Stop) != 2 || pc.Sampling.Stop[0] != "</s>" || pc.Sampling.Stop[1] != "STOP" {
 		t.Errorf("Sampling.Stop = %v", pc.Sampling.Stop)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -17,8 +18,9 @@ const (
 	MaxResponseBytes = 4 << 20
 	// MaxToolCalls and MaxToolCallArgumentBytes bound model-controlled native
 	// function-call accumulation independently of the overall response cap.
-	MaxToolCalls             = 128
-	MaxToolCallArgumentBytes = 1 << 20
+	MaxToolCalls               = 128
+	MaxToolCallArgumentBytes   = 1 << 20
+	MaxResponseConstraintBytes = 1 << 20
 )
 
 var ErrResponseTooLarge = errors.New("provider response exceeds the 4 MiB limit")
@@ -140,6 +142,54 @@ type ModelInfo struct {
 	Vision *bool
 }
 
+// ResponseConstraint carries provider-native structured-output constraints.
+// Grammar is GBNF for embedded llama.cpp; JSONSchema is used by remote APIs
+// that accept JSON Schema. Callers may supply both so each backend can select
+// its native representation without lossy conversion.
+type ResponseConstraint struct {
+	Name        string
+	Grammar     string
+	GrammarRoot string
+	JSONSchema  json.RawMessage
+	Strict      bool
+}
+
+// Validate checks the provider-neutral shape and size limits of a response
+// constraint. Backend-specific support is checked by each provider.
+func (c *ResponseConstraint) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Grammar == "" && len(c.JSONSchema) == 0 {
+		return errors.New("response constraint requires a GBNF grammar or JSON Schema")
+	}
+	if len(c.Grammar) > MaxResponseConstraintBytes || len(c.JSONSchema) > MaxResponseConstraintBytes {
+		return fmt.Errorf("response constraint exceeds the %d byte limit", MaxResponseConstraintBytes)
+	}
+	if len(c.Name) > 64 {
+		return errors.New("response constraint name must not exceed 64 bytes")
+	}
+	for _, char := range c.Name {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '_' && char != '-' {
+			return errors.New("response constraint name may contain only letters, digits, underscores, and hyphens")
+		}
+	}
+	if strings.IndexByte(c.Grammar, 0) >= 0 || strings.IndexByte(c.GrammarRoot, 0) >= 0 {
+		return errors.New("response constraint grammar must not contain NUL bytes")
+	}
+	if len(c.JSONSchema) > 0 {
+		var schema map[string]any
+		if err := json.Unmarshal(c.JSONSchema, &schema); err != nil {
+			return fmt.Errorf("response constraint JSON Schema must be a JSON object: %w", err)
+		}
+		if schema == nil {
+			return errors.New("response constraint JSON Schema must be a JSON object")
+		}
+	}
+	return nil
+}
+
 // ChatRequest carries everything a provider needs to run one completion.
 type ChatRequest struct {
 	Model       string
@@ -156,6 +206,21 @@ type ChatRequest struct {
 	// reasoning model's thinking phase. Empty means backend default: the
 	// provider must omit the corresponding wire field entirely.
 	Reasoning string
+	// ResponseConstraint asks the backend to enforce structured output. It is
+	// mutually exclusive with native tool calling because both install an
+	// output grammar on embedded and many remote runtimes.
+	ResponseConstraint *ResponseConstraint
+}
+
+// ValidateResponseConstraint validates a request's structured-output fields.
+func ValidateResponseConstraint(req ChatRequest) error {
+	if err := req.ResponseConstraint.Validate(); err != nil {
+		return err
+	}
+	if req.ResponseConstraint != nil && len(req.Tools) > 0 {
+		return errors.New("response constraints cannot be combined with native tools")
+	}
+	return nil
 }
 
 // Usage reports token accounting for a completed request. Estimated is set

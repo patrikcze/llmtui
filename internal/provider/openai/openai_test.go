@@ -86,6 +86,36 @@ func TestChatStreaming(t *testing.T) {
 	}
 }
 
+func TestChatSendsJSONSchemaResponseFormat(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_schema" || req.ResponseFormat.JSONSchema == nil {
+			t.Fatalf("response_format = %+v", req.ResponseFormat)
+		}
+		got := req.ResponseFormat.JSONSchema
+		if got.Name != "answer" || !got.Strict || string(got.Schema) != string(schema) {
+			t.Errorf("json_schema = %+v", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{"content": `{"answer":"ok"}`}}}})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model: "m", ResponseConstraint: &provider.ResponseConstraint{Name: "answer", JSONSchema: schema, Strict: true},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, _, err := collect(t, events); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestChatStreamingEstimatesUsageWhenAbsent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

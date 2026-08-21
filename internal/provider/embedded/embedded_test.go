@@ -3,6 +3,7 @@ package embedded
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -136,6 +137,37 @@ func TestChatRejectsInvalidReasoningBeforeRuntime(t *testing.T) {
 	}
 	if rt.loadCallCount() != 0 || rt.genCallCount() != 0 {
 		t.Fatalf("invalid request reached runtime: loads=%d generations=%d", rt.loadCallCount(), rt.genCallCount())
+	}
+}
+
+func TestChatPassesResponseGrammarToRuntime(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "model.gguf")
+	rt := &scriptedRuntime{}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		ResponseConstraint: &provider.ResponseConstraint{Grammar: `root ::= "ok"`},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(events)
+	rt.pathMu.Lock()
+	request := rt.lastReq
+	rt.pathMu.Unlock()
+	if request.Grammar != `root ::= "ok"` || request.GrammarRoot != "root" {
+		t.Errorf("runtime grammar = %q root %q", request.Grammar, request.GrammarRoot)
+	}
+}
+
+func TestChatRejectsSchemaWithoutEmbeddedGrammar(t *testing.T) {
+	p := New("embedded", Options{}, fixedRuntime(&scriptedRuntime{}))
+	_, err := p.Chat(context.Background(), provider.ChatRequest{
+		ResponseConstraint: &provider.ResponseConstraint{JSONSchema: []byte(`{"type":"object"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a GBNF grammar") {
+		t.Fatalf("Chat error = %v, want missing GBNF error", err)
 	}
 }
 
@@ -598,6 +630,36 @@ func TestRuntimeFingerprintChangesWithOptionsAndModelFile(t *testing.T) {
 	p4b := New("embedded", changedPresencePenalty, fixedRuntime(&scriptedRuntime{}))
 	if p4b.RuntimeFingerprint() == f1 {
 		t.Error("fingerprint did not change when Sampling.PresencePenalty changed")
+	}
+
+	changedDRY := base
+	changedDRY.Sampling.DRYMultiplier = 0.8
+	changedDRY.Sampling.DRYBase = 1.75
+	if New("embedded", changedDRY, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when DRY sampling changed")
+	}
+
+	// Large DRY values near the validated maximum (math.MaxFloat32) must
+	// not collide: a prior fixed-point int64(v*1e9) hash encoding silently
+	// overflowed int64 for values in this range, so two materially
+	// different configs could produce the same fingerprint.
+	largeA := base
+	largeA.Sampling.DRYMultiplier = 1
+	largeA.Sampling.DRYBase = math.MaxFloat32 / 2
+	largeB := base
+	largeB.Sampling.DRYMultiplier = 1
+	largeB.Sampling.DRYBase = math.MaxFloat32 / 3
+	fLargeA := New("embedded", largeA, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint()
+	fLargeB := New("embedded", largeB, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint()
+	if fLargeA == fLargeB {
+		t.Error("fingerprint collided for two different large DRYBase values near math.MaxFloat32")
+	}
+
+	freqScale := 0.25
+	changedRope := base
+	changedRope.RopeScaling = RopeScaling{Type: RopeScalingYARN, FreqScale: &freqScale}
+	if New("embedded", changedRope, fixedRuntime(&scriptedRuntime{})).RuntimeFingerprint() == f1 {
+		t.Error("fingerprint did not change when RoPE scaling changed")
 	}
 
 	projectorPath := writeFakeModel(t, dir, "mmproj-model.gguf")
