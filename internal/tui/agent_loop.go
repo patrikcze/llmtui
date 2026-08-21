@@ -284,6 +284,16 @@ func (m *Model) agentDirective() string {
 			fmt.Fprintf(&b, "- cycle %d, objective %q, verdict %s, result %q, remaining %q, next %q\n",
 				memory.Cycle, memory.Objective, memory.Verdict, memory.Verification,
 				strings.Join(memory.RemainingCriteria, "; "), memory.RecommendedNext)
+			// Prior cycles' raw tool traffic is deliberately not resent (see
+			// requestHistory/projectCompletedAgentHistory) to control token
+			// growth, so this bounded per-call recap is the executor's only
+			// remaining way to know it already tried a given URL/path/query
+			// and whether it succeeded — without it, a retry cycle has no
+			// signal against blindly repeating an already-failed (or
+			// already-succeeded) action.
+			for _, call := range memory.ToolCalls {
+				fmt.Fprintf(&b, "  tried: %s\n", call)
+			}
 		}
 	}
 	return truncateAgentText(b.String(), maxAgentDirectiveBytes)
@@ -582,6 +592,35 @@ func (m *Model) recordAgentTruncation() {
 	m.agentLoop.execution.NewEvidence = true
 }
 
+// toolCallDetail extracts the one argument most useful for recognizing
+// "I already tried this exact thing" across agent cycles — a URL, file
+// path, or search pattern. Deliberately narrow: unlike those, a
+// run_command's full command line can carry an inline secret a user or
+// model typed directly (e.g. curl -H "Authorization: Bearer ..."), so only
+// its program name survives, never its arguments. MCP calls get the
+// server/tool name only, never the raw per-server argument JSON.
+func toolCallDetail(call tools.Call) string {
+	switch call.Tool {
+	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolListDir, tools.ToolSkillLoad:
+		return call.Path
+	case tools.ToolGrep, tools.ToolGlob:
+		if call.Path != "" {
+			return call.Body + " in " + call.Path
+		}
+		return call.Body
+	case tools.ToolWebSearch:
+		return call.Body
+	case tools.ToolRunCommand:
+		program, _, _ := strings.Cut(strings.TrimSpace(call.Body), " ")
+		return program
+	default:
+		if call.MCPServer != "" {
+			return call.MCPServer + "." + call.MCPTool
+		}
+		return ""
+	}
+}
+
 // recordAgentToolResultsCount records the complete tool-result-shaped
 // evidence while charging only calls that actually executed to the live
 // tool-call budget. Synthetic progress blocks, denials, and budget rejections
@@ -603,7 +642,7 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			kind = classifyToolError(result, denied)
 		}
 		record := agent.ToolCallRecord{
-			ID: result.Call.ID, Name: result.Call.Tool, Succeeded: result.Err == nil,
+			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
 			ErrorKind: kind, Summary: map[bool]string{true: "completed", false: "failed"}[result.Err == nil],
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)

@@ -88,11 +88,18 @@ type Event struct {
 	Detail string    `json:"detail,omitempty"`
 }
 
-// ToolCallRecord stores only bounded outcome metadata, never arguments or
+// ToolCallRecord stores bounded outcome metadata, never full arguments or
 // output, so run memory cannot become a second transcript or secret store.
+// Detail is the one narrow, deliberate exception: a single dedup-relevant
+// argument (a URL, file path, or search pattern) the executor needs to
+// recognize "I already tried this exact thing" across cycles — see
+// internal/tui/agent_loop.go's toolCallDetail for exactly what is and is
+// not considered safe to echo back (notably: never a run_command's full
+// command line, which can carry an inline secret).
 type ToolCallRecord struct {
 	ID        string    `json:"id,omitempty"`
 	Name      string    `json:"name"`
+	Detail    string    `json:"detail,omitempty"`
 	Succeeded bool      `json:"succeeded"`
 	ErrorKind ErrorKind `json:"error_kind,omitempty"`
 	Summary   string    `json:"summary,omitempty"`
@@ -142,18 +149,28 @@ type VerificationResult struct {
 }
 
 // MemoryEntry is concise cycle-to-cycle state. It deliberately excludes raw
-// prompts, tool arguments/output, and model reasoning.
+// prompts, tool output, and model reasoning.
 type MemoryEntry struct {
-	Cycle             int                 `json:"cycle"`
-	Objective         string              `json:"objective"`
-	ExecutionSummary  string              `json:"execution_summary,omitempty"`
-	Verdict           VerificationVerdict `json:"verdict"`
-	Verification      string              `json:"verification,omitempty"`
-	FailedCriteria    []string            `json:"failed_criteria,omitempty"`
-	RemainingCriteria []string            `json:"remaining_criteria,omitempty"`
-	Artifacts         []string            `json:"artifacts,omitempty"`
-	RecommendedNext   string              `json:"recommended_next,omitempty"`
-	RecordedAt        time.Time           `json:"recorded_at"`
+	Cycle            int                 `json:"cycle"`
+	Objective        string              `json:"objective"`
+	ExecutionSummary string              `json:"execution_summary,omitempty"`
+	Verdict          VerificationVerdict `json:"verdict"`
+	Verification     string              `json:"verification,omitempty"`
+	// ToolCalls is one bounded line per call this cycle made ("name(detail)
+	// succeeded|failed: kind" — see ToolCallRecord.Detail for what "detail"
+	// is and is not). Without this, an executor whose next cycle no longer
+	// sees the prior cycle's raw tool traffic (see requestHistory's
+	// per-cycle projection) has no way to tell it already fetched a URL
+	// that failed, or already got a URL that succeeded, and will blindly
+	// repeat both — observed in practice as a run re-fetching an
+	// already-successful page and re-hitting an already-failed one across
+	// consecutive cycles.
+	ToolCalls         []string  `json:"tool_calls,omitempty"`
+	FailedCriteria    []string  `json:"failed_criteria,omitempty"`
+	RemainingCriteria []string  `json:"remaining_criteria,omitempty"`
+	Artifacts         []string  `json:"artifacts,omitempty"`
+	RecommendedNext   string    `json:"recommended_next,omitempty"`
+	RecordedAt        time.Time `json:"recorded_at"`
 }
 
 // Cycle records one objective and its observable execution and verification.
