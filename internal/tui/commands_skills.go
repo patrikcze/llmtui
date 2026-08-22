@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/skill"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -247,7 +248,7 @@ func (m *Model) skillsPickerOverlay() string {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(row)
 		}
-		b.WriteString(marker + label + "\n")
+		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter activate/deactivate (session) · esc cancel"))
 	return b.String()
@@ -555,7 +556,7 @@ func (m *Model) pluginsPickerOverlay() string {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(row)
 		}
-		b.WriteString(marker + label + "\n")
+		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
 	}
 	b.WriteString("\n" + m.theme.StatusBar.Render("  enabling a plugin registers its skills and nothing else: no skill is\n  activated, no code runs, no MCP server starts") + "\n")
 	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter enable/disable · esc cancel"))

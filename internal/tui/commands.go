@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/history"
@@ -497,7 +498,7 @@ func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
 		if mi.Description != "" {
 			line += "  " + m.theme.StatusBar.Render(terminaltext.Sanitize(mi.Description))
 		}
-		b.WriteString(line + "\n")
+		b.WriteString(zone.Mark(pickerRowZoneID(i), line) + "\n")
 	}
 
 	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
@@ -522,8 +523,9 @@ func (m *Model) providersOverlay() string {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-20s", name))
 		}
-		fmt.Fprintf(&b, "%s%s %s\n", marker, label,
+		row := fmt.Sprintf("%s%s %s", marker, label,
 			m.theme.StatusBar.Render(pc.Type+"  "+pc.BaseURL))
+		b.WriteString(zone.Mark(pickerRowZoneID(i), row) + "\n")
 	}
 
 	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
