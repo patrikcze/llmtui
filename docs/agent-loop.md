@@ -249,6 +249,13 @@ limits, concise execution/verifier summaries, artifact paths, outcome classes,
 and bounded lifecycle events. They do not contain tool arguments/output, full
 transcripts, hidden reasoning, or provider reasoning events.
 
+When a cycle's request triggers context-budget compression (see
+[Context management](context-management.md)), a `context_compressed` event
+records the resolved strategy and estimated used/budget token counts.
+This makes "did truncation or summarization eat evidence this cycle needed"
+directly answerable from a run's persisted JSON instead of requiring
+after-the-fact message-size reconstruction.
+
 `privacy.store_prompts: false` disables agent persistence even when
 `agent.persist: true`, because a resumable run necessarily needs its request.
 Set `agent.persist: false` to keep runs in memory only. `/agent resume` loads the

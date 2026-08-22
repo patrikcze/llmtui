@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -343,4 +344,40 @@ func TestWriteMemoryRecordsToolCallRecap(t *testing.T) {
 			t.Errorf("ToolCalls[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+}
+
+// TestRecordContextCompressionAppendsDiagnosticEvent locks in the
+// observability fix for diagnosing whether context-budget compression ate
+// evidence a cycle needed: without this, "did truncation fire, and how
+// much was cut" can only be reconstructed after the fact from message
+// sizes, as a real stalled/hallucinating run required. A
+// contextmgr.Decide().Compress == true request must be visible directly in
+// the persisted run's events.
+func TestRecordContextCompressionAppendsDiagnosticEvent(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("check the weather", []string{"system", "user"}, now); err != nil {
+		t.Fatal(err)
+	}
+	before := len(run.Events)
+	run.RecordContextCompression("summarize", 30000, 28672, now.Add(time.Second))
+	if len(run.Events) != before+1 {
+		t.Fatalf("Events = %d, want %d", len(run.Events), before+1)
+	}
+	event := run.Events[len(run.Events)-1]
+	if event.Kind != "context_compressed" {
+		t.Fatalf("event kind = %q, want context_compressed", event.Kind)
+	}
+	for _, want := range []string{"summarize", "30000", "28672"} {
+		if !strings.Contains(event.Detail, want) {
+			t.Fatalf("event detail = %q, missing %q", event.Detail, want)
+		}
+	}
+}
+
+// TestRecordContextCompressionOnNilRunIsSafe mirrors RecordUsage's existing
+// nil-receiver contract so callers checked only by higher-level agent-run
+// activity flags cannot panic if invoked at the wrong time.
+func TestRecordContextCompressionOnNilRunIsSafe(t *testing.T) {
+	var run *AgentRun
+	run.RecordContextCompression("truncate", 100, 50, time.Now())
 }

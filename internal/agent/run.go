@@ -252,6 +252,19 @@ func (r *AgentRun) RecordUsage(prompt, completion int, now time.Time) {
 	r.UpdatedAt = now.UTC()
 }
 
+// RecordContextCompression appends a diagnostic event noting that this
+// cycle's request triggered context-budget compression, and which strategy
+// and estimated used/budget token counts drove it. Without this, whether
+// truncation or summarization ate evidence the executor needed for this
+// cycle can only be reconstructed after the fact from message sizes; this
+// makes it directly visible in the persisted run.
+func (r *AgentRun) RecordContextCompression(strategy string, used, budget int, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.addEvent(now, "context_compressed", fmt.Sprintf("strategy=%s used=%d budget=%d", strategy, used, budget))
+}
+
 // LatestCycle returns the current cycle or nil before the first cycle.
 func (r *AgentRun) LatestCycle() *Cycle {
 	if r == nil || len(r.Cycles) == 0 {

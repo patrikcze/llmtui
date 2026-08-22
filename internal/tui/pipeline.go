@@ -737,6 +737,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
+	if m.agentRunActive() && prepared.decision.Compress {
+		m.agentLoop.run.RecordContextCompression(prepared.decision.Strategy, prepared.decision.Used, prepared.decision.Budget, time.Now())
+	}
 
 	key := m.cacheKeyFromPrepared(raw, prepared)
 	var cacheErr error
