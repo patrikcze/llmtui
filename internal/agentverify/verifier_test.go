@@ -213,6 +213,60 @@ func TestVerifierEvidenceCarriesAvailableToolsAndPromptUsesThem(t *testing.T) {
 	}
 }
 
+// TestVerifierPromptTeachesNeedsUserInput guards the instruction and schema
+// wiring for detecting a clarifying question addressed to the user: without
+// this, an executor that asks "which source should I check first?" and
+// hedges instead of proceeding has no way to stop the run with the question
+// surfaced, and the run just grinds through retries to DecisionFailed.
+func TestVerifierPromptTeachesNeedsUserInput(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	input := Input{RunID: "r", Cycle: 1, Task: "task", Objective: "objective", Execution: agent.ExecutionResult{Summary: "done"}}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, input); err != nil {
+		t.Fatal(err)
+	}
+	system := client.requests[0].Messages[0].Content
+	if !strings.Contains(system, `"needs_user_input"`) {
+		t.Fatalf("system prompt does not mention needs_user_input: %q", system)
+	}
+	if !strings.Contains(verifierJSONSchema, `"needs_user_input": {"type": "boolean"}`) {
+		t.Fatal("verifier JSON schema is missing needs_user_input")
+	}
+	if !strings.Contains(verifierJSONSchema, `"required": [`) || !strings.Contains(verifierJSONSchema[strings.Index(verifierJSONSchema, `"required"`):], `"needs_user_input"`) {
+		t.Fatal("verifier JSON schema must declare needs_user_input as required")
+	}
+}
+
+// TestParseNeedsUserInputRoundTrips confirms a raw verifier response setting
+// needs_user_input survives Parse into the agent.VerificationResult.
+func TestParseNeedsUserInputRoundTrips(t *testing.T) {
+	raw := `{"verdict":"inconclusive","summary":"Which source would you like me to check first?","confidence":0.5,"needs_user_input":true}`
+	result, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NeedsUserInput {
+		t.Fatalf("result = %+v, want NeedsUserInput true", result)
+	}
+}
+
+// TestApplyDeterministicEvidencePreservesNeedsUserInput locks in that a
+// conclusive deterministic failure (e.g. a failed tool call) does not erase
+// the verifier's own signal that the executor also asked a genuine question
+// this same cycle — both were true in the real run this fix addresses.
+func TestApplyDeterministicEvidencePreservesNeedsUserInput(t *testing.T) {
+	result := agent.VerificationResult{
+		Verdict: agent.VerificationPassed, Summary: "claims done", NeedsUserInput: true,
+	}
+	execution := agent.ExecutionResult{TestsRun: []agent.TestResult{{Name: "go test", Passed: false}}}
+	clamped := ApplyDeterministicEvidence(result, execution)
+	if clamped.Verdict != agent.VerificationFailed {
+		t.Fatalf("clamped verdict = %v, want failed", clamped.Verdict)
+	}
+	if !clamped.NeedsUserInput {
+		t.Fatal("ApplyDeterministicEvidence must not clear NeedsUserInput")
+	}
+}
+
 func TestParseCriteriaProposalsAndUpdates(t *testing.T) {
 	raw := `{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,
 "proposed_criteria":["current time determined","forecast covers six hours"],
