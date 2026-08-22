@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
 
@@ -162,7 +164,10 @@ func TestRenderExitSummaryWrapsLongModelNames(t *testing.T) {
 		t.Errorf("wrapped model name mangled:\n%s", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if w := len([]rune(line)); w > 80 {
+		// ANSI-aware: lipgloss v2 always emits color codes (no more
+		// auto-disable for a non-tty test process), so a raw rune count
+		// would count escape-sequence bytes as display width.
+		if w := lipgloss.Width(line); w > 80 {
 			t.Errorf("line exceeds width 80 (%d): %q", w, line)
 		}
 	}

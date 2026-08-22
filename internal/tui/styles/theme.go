@@ -3,20 +3,51 @@
 // automatically degrades TrueColor values on limited terminals.
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+	"os"
+	"sync"
+
+	"charm.land/lipgloss/v2"
+)
+
+// adaptiveColor is a {Light, Dark} hex pair, the local stand-in for lipgloss
+// v1's removed AdaptiveColor type. newTheme resolves each pair once (not
+// per-render) via HasDarkBackground, matching v1's effective per-session
+// behavior.
+type adaptiveColor struct {
+	Light, Dark string
+}
+
+var (
+	isDarkOnce   sync.Once
+	isDarkCached bool
+)
+
+// IsDark reports whether the terminal has a dark background, queried once
+// per process and cached: HasDarkBackground does a live terminal round-trip
+// on a real tty, and every AdaptiveColor-equivalent resolution site (themes,
+// the textarea input box, dot/pulse palettes) needs the same answer, not a
+// fresh query each.
+func IsDark() bool {
+	isDarkOnce.Do(func() {
+		isDarkCached = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+	})
+	return isDarkCached
+}
 
 // Theme groups every style the TUI needs.
 type Theme struct {
 	Name string
 
-	Accent    lipgloss.AdaptiveColor
-	Subtle    lipgloss.AdaptiveColor
-	Text      lipgloss.AdaptiveColor
-	Faint     lipgloss.AdaptiveColor
-	Good      lipgloss.AdaptiveColor
-	Bad       lipgloss.AdaptiveColor
-	PanelEdge lipgloss.AdaptiveColor
-	UserEdge  lipgloss.AdaptiveColor
+	Accent    color.Color
+	Subtle    color.Color
+	Text      color.Color
+	Faint     color.Color
+	Good      color.Color
+	Bad       color.Color
+	PanelEdge color.Color
+	UserEdge  color.Color
 
 	UserLabel      lipgloss.Style
 	AssistantLabel lipgloss.Style
@@ -42,17 +73,22 @@ type Theme struct {
 // newTheme builds every derived style from one base palette, so each theme
 // only has to declare its eight colors — the styling built on top of them
 // (borders, weights, italics) stays identical and in one place.
-func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, userEdge lipgloss.AdaptiveColor) Theme {
+func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, userEdge adaptiveColor) Theme {
+	pick := lipgloss.LightDark(IsDark())
+	resolve := func(c adaptiveColor) color.Color {
+		return pick(lipgloss.Color(c.Light), lipgloss.Color(c.Dark))
+	}
+
 	t := Theme{
 		Name:      name,
-		Accent:    accent,
-		Subtle:    subtle,
-		Text:      text,
-		Faint:     faint,
-		Good:      good,
-		Bad:       bad,
-		PanelEdge: panelEdge,
-		UserEdge:  userEdge,
+		Accent:    resolve(accent),
+		Subtle:    resolve(subtle),
+		Text:      resolve(text),
+		Faint:     resolve(faint),
+		Good:      resolve(good),
+		Bad:       resolve(bad),
+		PanelEdge: resolve(panelEdge),
+		UserEdge:  resolve(userEdge),
 	}
 
 	t.UserLabel = lipgloss.NewStyle().Bold(true).Foreground(t.Accent)
@@ -91,42 +127,42 @@ func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, us
 // ClaudeInspired returns the default theme: calm, warm-accented, terminal-native.
 func ClaudeInspired() Theme {
 	return newTheme("claude_inspired",
-		lipgloss.AdaptiveColor{Light: "#B4551F", Dark: "#E58E54"}, // Accent: burnt orange / warm peach
-		lipgloss.AdaptiveColor{Light: "#8A8580", Dark: "#6E6A65"}, // Subtle
-		lipgloss.AdaptiveColor{Light: "#2A2622", Dark: "#DDD8D2"}, // Text
-		lipgloss.AdaptiveColor{Light: "#A8A29B", Dark: "#57534E"}, // Faint
-		lipgloss.AdaptiveColor{Light: "#3D7A45", Dark: "#7CBF85"}, // Good
-		lipgloss.AdaptiveColor{Light: "#B03A30", Dark: "#E07870"}, // Bad
-		lipgloss.AdaptiveColor{Light: "#D6D0C8", Dark: "#3F3B37"}, // PanelEdge
-		lipgloss.AdaptiveColor{Light: "#2563B8", Dark: "#58A6FF"}, // UserEdge: blue, pops against the warm accent
+		adaptiveColor{Light: "#B4551F", Dark: "#E58E54"}, // Accent: burnt orange / warm peach
+		adaptiveColor{Light: "#8A8580", Dark: "#6E6A65"}, // Subtle
+		adaptiveColor{Light: "#2A2622", Dark: "#DDD8D2"}, // Text
+		adaptiveColor{Light: "#A8A29B", Dark: "#57534E"}, // Faint
+		adaptiveColor{Light: "#3D7A45", Dark: "#7CBF85"}, // Good
+		adaptiveColor{Light: "#B03A30", Dark: "#E07870"}, // Bad
+		adaptiveColor{Light: "#D6D0C8", Dark: "#3F3B37"}, // PanelEdge
+		adaptiveColor{Light: "#2563B8", Dark: "#58A6FF"}, // UserEdge: blue, pops against the warm accent
 	)
 }
 
 // Midnight returns a cool, sleek theme: indigo accent, cyan user rail, dark-native.
 func Midnight() Theme {
 	return newTheme("midnight",
-		lipgloss.AdaptiveColor{Light: "#4B4FB8", Dark: "#8C85FF"}, // Accent: indigo / electric periwinkle
-		lipgloss.AdaptiveColor{Light: "#7B8394", Dark: "#5B6270"}, // Subtle: cool slate
-		lipgloss.AdaptiveColor{Light: "#1E2230", Dark: "#D8DBE8"}, // Text: cool near-black / cool off-white
-		lipgloss.AdaptiveColor{Light: "#A0A6B5", Dark: "#4A4F5E"}, // Faint
-		lipgloss.AdaptiveColor{Light: "#2F7A52", Dark: "#6FCB93"}, // Good: clean green, kept distinct from indigo
-		lipgloss.AdaptiveColor{Light: "#C13B3B", Dark: "#F0827A"}, // Bad: warm red, unambiguous against the cool palette
-		lipgloss.AdaptiveColor{Light: "#D2D5DE", Dark: "#363B4A"}, // PanelEdge: dark slate border
-		lipgloss.AdaptiveColor{Light: "#0E7C86", Dark: "#4FD1D9"}, // UserEdge: cyan, pops against the indigo accent
+		adaptiveColor{Light: "#4B4FB8", Dark: "#8C85FF"}, // Accent: indigo / electric periwinkle
+		adaptiveColor{Light: "#7B8394", Dark: "#5B6270"}, // Subtle: cool slate
+		adaptiveColor{Light: "#1E2230", Dark: "#D8DBE8"}, // Text: cool near-black / cool off-white
+		adaptiveColor{Light: "#A0A6B5", Dark: "#4A4F5E"}, // Faint
+		adaptiveColor{Light: "#2F7A52", Dark: "#6FCB93"}, // Good: clean green, kept distinct from indigo
+		adaptiveColor{Light: "#C13B3B", Dark: "#F0827A"}, // Bad: warm red, unambiguous against the cool palette
+		adaptiveColor{Light: "#D2D5DE", Dark: "#363B4A"}, // PanelEdge: dark slate border
+		adaptiveColor{Light: "#0E7C86", Dark: "#4FD1D9"}, // UserEdge: cyan, pops against the indigo accent
 	)
 }
 
 // Forest returns a calm, natural theme: mossy-olive accent, warm amber user rail.
 func Forest() Theme {
 	return newTheme("forest",
-		lipgloss.AdaptiveColor{Light: "#5C6B2F", Dark: "#9BB26A"}, // Accent: deep moss / olive green
-		lipgloss.AdaptiveColor{Light: "#8B8A78", Dark: "#6B6A58"}, // Subtle: warm sage
-		lipgloss.AdaptiveColor{Light: "#24261E", Dark: "#DEDCC8"}, // Text: warm near-black / warm off-white
-		lipgloss.AdaptiveColor{Light: "#A6A38C", Dark: "#54523F"}, // Faint
-		lipgloss.AdaptiveColor{Light: "#2E7D4F", Dark: "#7ED9A0"}, // Good: brighter forest green, distinct from the mossy accent
-		lipgloss.AdaptiveColor{Light: "#B33A2E", Dark: "#E58579"}, // Bad: terracotta red
-		lipgloss.AdaptiveColor{Light: "#D6D2BE", Dark: "#43412F"}, // PanelEdge: dark moss border
-		lipgloss.AdaptiveColor{Light: "#A6740A", Dark: "#E8B84B"}, // UserEdge: warm amber/gold, pops against the olive accent
+		adaptiveColor{Light: "#5C6B2F", Dark: "#9BB26A"}, // Accent: deep moss / olive green
+		adaptiveColor{Light: "#8B8A78", Dark: "#6B6A58"}, // Subtle: warm sage
+		adaptiveColor{Light: "#24261E", Dark: "#DEDCC8"}, // Text: warm near-black / warm off-white
+		adaptiveColor{Light: "#A6A38C", Dark: "#54523F"}, // Faint
+		adaptiveColor{Light: "#2E7D4F", Dark: "#7ED9A0"}, // Good: brighter forest green, distinct from the mossy accent
+		adaptiveColor{Light: "#B33A2E", Dark: "#E58579"}, // Bad: terracotta red
+		adaptiveColor{Light: "#D6D2BE", Dark: "#43412F"}, // PanelEdge: dark moss border
+		adaptiveColor{Light: "#A6740A", Dark: "#E8B84B"}, // UserEdge: warm amber/gold, pops against the olive accent
 	)
 }
 

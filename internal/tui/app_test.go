@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
@@ -57,7 +58,7 @@ func newTestModel(t *testing.T) *Model {
 func TestCtrlVAttachesClipboardImage(t *testing.T) {
 	m := newTestModel(t)
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("ctrl+v should return a clipboard command for a vision model")
 	}
@@ -67,7 +68,7 @@ func TestCtrlVAttachesClipboardImage(t *testing.T) {
 	if len(m.attachments) != 1 {
 		t.Fatalf("attachments = %d, want 1", len(m.attachments))
 	}
-	if !strings.Contains(m.View(), "image 1") {
+	if !strings.Contains(m.render(), "image 1") {
 		t.Error("view should show the attachment chip")
 	}
 }
@@ -98,7 +99,7 @@ func TestCtrlVRefusedForNonVisionModel(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "qwen3:8b"
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Fatal("ctrl+v should be refused for a non-vision model")
 	}
@@ -112,7 +113,7 @@ func TestCtrlVAllowedWithForceVision(t *testing.T) {
 	m.model = "qwen3:8b"
 	m.cfg.Chat.ForceVision = true
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("force_vision should allow image paste")
 	}
@@ -127,7 +128,7 @@ func TestCtrlVUsesCachedBackendVisionCapability(t *testing.T) {
 	m.model = "qwen/qwen3.6-27b"
 	m.cacheVisionInfo([]provider.ModelInfo{{ID: "qwen/qwen3.6-27b", Vision: &yes}})
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("cached backend vision capability should allow image paste even though the ID heuristic misses this model")
 	}
@@ -141,7 +142,7 @@ func TestCtrlVRefusedWhenCachedBackendDataSaysNoVision(t *testing.T) {
 	m.model = "gpt-4o"
 	m.cacheVisionInfo([]provider.ModelInfo{{ID: "gpt-4o", Vision: &no}})
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Fatal("cached backend vision capability should refuse image paste even though the ID heuristic matches")
 	}
@@ -151,7 +152,7 @@ func TestCtrlXRemovesAttachment(t *testing.T) {
 	m := newTestModel(t)
 	m.attachments = []provider.Image{{Data: []byte("a")}, {Data: []byte("b")}}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if len(m.attachments) != 1 {
 		t.Fatalf("attachments = %d, want 1 after ctrl+x", len(m.attachments))
 	}
@@ -162,7 +163,7 @@ func TestSendAttachesImagesToUserMessage(t *testing.T) {
 	m.attachments = []provider.Image{{Data: []byte("img"), MIME: "image/png"}}
 	m.input.SetValue("what is this?")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	last := m.session.Messages[len(m.session.Messages)-1]
 	if last.Role != provider.RoleUser || len(last.Images) != 1 {
@@ -177,7 +178,7 @@ func TestCtrlYCopiesLastReply(t *testing.T) {
 	m := newTestModel(t)
 
 	// Nothing to copy yet.
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Error("ctrl+y with no assistant reply should not return a command")
 	}
@@ -186,7 +187,7 @@ func TestCtrlYCopiesLastReply(t *testing.T) {
 	}
 
 	m.session.AddAssistant("the **answer**")
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("ctrl+y should return a clipboard write command")
 	}
@@ -195,7 +196,7 @@ func TestCtrlYCopiesLastReply(t *testing.T) {
 	if !strings.Contains(m.notice, "copied") {
 		t.Errorf("notice = %q, want copy confirmation", m.notice)
 	}
-	if !strings.Contains(m.View(), "copied") {
+	if !strings.Contains(m.render(), "copied") {
 		t.Error("view should show the copy confirmation")
 	}
 }
@@ -206,26 +207,33 @@ func TestCtrlOTogglesMouseCapture(t *testing.T) {
 		t.Fatal("mouse should start enabled")
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	// v2 removed tea.EnableMouseCellMotion/tea.DisableMouse: mouse mode is
+	// now a View() field read fresh every render instead of a Cmd, so the
+	// toggle's effect shows up in View().MouseMode rather than a returned
+	// tea.Cmd.
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if m.mouseEnabled {
 		t.Error("ctrl+o should disable mouse capture")
 	}
-	if cmd == nil {
-		t.Error("toggling should return a mouse command")
+	if mode := m.View().MouseMode; mode != tea.MouseModeNone {
+		t.Errorf("View().MouseMode = %v, want MouseModeNone after disabling", mode)
 	}
 	if !strings.Contains(m.notice, "text selection on") {
 		t.Errorf("notice = %q, want selection-mode hint", m.notice)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if !m.mouseEnabled {
 		t.Error("second ctrl+o should re-enable mouse capture")
+	}
+	if mode := m.View().MouseMode; mode != tea.MouseModeCellMotion {
+		t.Errorf("View().MouseMode = %v, want MouseModeCellMotion after re-enabling", mode)
 	}
 }
 
 func typeText(m *Model, s string) {
 	for _, r := range s {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 }
 
@@ -236,7 +244,7 @@ func TestSlashShowsSuggestions(t *testing.T) {
 	if len(m.sugs) == 0 {
 		t.Fatal("typing / should show command suggestions")
 	}
-	if !strings.Contains(m.View(), "/help") {
+	if !strings.Contains(m.render(), "/help") {
 		t.Error("view should list /help in the popup")
 	}
 
@@ -258,16 +266,16 @@ func TestSuggestionNavigationAndTabComplete(t *testing.T) {
 	typeText(m, "/")
 	first := m.sugs[m.sugIdx].name
 
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.sugs[m.sugIdx].name == first {
 		t.Error("down should move the selection")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.sugs[m.sugIdx].name != first {
 		t.Error("up should move the selection back")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := m.input.Value(); got != "/"+first+" " {
 		t.Errorf("tab completed to %q, want /%s ", got, first)
 	}
@@ -277,11 +285,11 @@ func TestHelpCommandOpensAndClosesOverlay(t *testing.T) {
 	m := newTestModel(t)
 
 	typeText(m, "/help")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.overlayOpen {
 		t.Fatal("/help should open the overlay")
 	}
-	if !strings.Contains(m.View(), "ctrl+y") {
+	if !strings.Contains(m.render(), "ctrl+y") {
 		t.Error("help overlay should show shortcuts")
 	}
 	// Full content (scrollable) lists commands further down.
@@ -298,7 +306,7 @@ func TestHelpCommandOpensAndClosesOverlay(t *testing.T) {
 		t.Error("keys should not reach the input while overlay is open")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.overlayOpen {
 		t.Error("esc should close the overlay")
 	}
@@ -309,11 +317,11 @@ func TestEnterRunsSelectedSuggestion(t *testing.T) {
 
 	// "/st" narrows to stats; enter should run it even though not fully typed.
 	typeText(m, "/st")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.overlayOpen {
 		t.Fatal("enter on the stats suggestion should open the stats overlay")
 	}
-	if !strings.Contains(m.View(), "session statistics") {
+	if !strings.Contains(m.render(), "session statistics") {
 		t.Error("overlay should show session statistics")
 	}
 }
@@ -322,7 +330,7 @@ func TestModelCommandSwitchesModel(t *testing.T) {
 	m := newTestModel(t)
 
 	typeText(m, "/model demo-model-mini")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.model != "demo-model-mini" {
 		t.Errorf("model = %q, want demo-model-mini", m.model)
 	}
@@ -338,7 +346,7 @@ func TestProviderCommandSwitchesProvider(t *testing.T) {
 	}
 
 	typeText(m, "/provider mock")
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.prov.Name() != "mock" {
 		t.Errorf("provider = %q, want mock", m.prov.Name())
 	}
@@ -347,7 +355,7 @@ func TestProviderCommandSwitchesProvider(t *testing.T) {
 	}
 
 	typeText(m, "/provider nope")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !strings.Contains(m.errText, "not configured") {
 		t.Errorf("errText = %q, want not-configured error", m.errText)
 	}
@@ -365,11 +373,16 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 	if m.pickerIdx != 1 {
 		t.Fatalf("initial picker index = %d, want active model at 1", m.pickerIdx)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if m.pickerIdx != 2 || !strings.Contains(m.viewport.View(), "▸ omega") {
-		t.Fatalf("down did not select omega:\n%s", m.viewport.View())
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	// The marker and the label are separate Render() calls; lipgloss v2
+	// always emits color codes (no more auto-disable for a non-tty test
+	// process), so strip them before checking the two land next to each
+	// other as plain text.
+	view := ansi.Strip(m.viewport.View())
+	if m.pickerIdx != 2 || !strings.Contains(view, "▸ omega") {
+		t.Fatalf("down did not select omega:\n%s", view)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.model != "omega" {
 		t.Errorf("model = %q, want omega", m.model)
 	}
@@ -389,11 +402,11 @@ func TestProvidersPickerNavigatesAndSelects(t *testing.T) {
 	if m.pickerIdx != 1 {
 		t.Fatalf("initial picker index = %d, want active provider at 1", m.pickerIdx)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.pickerIdx != 0 {
 		t.Fatalf("up picker index = %d, want 0", m.pickerIdx)
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.prov.Name() != "mock" || m.cfg.Provider != "alpha" {
 		t.Errorf("selected provider = %q (config %q), want alpha", m.prov.Name(), m.cfg.Provider)
 	}
@@ -418,12 +431,17 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 		t.Fatalf("initial profile selection = %q, want auto-matched qwen", selected)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	want := m.pickerItems[m.pickerIdx]
-	if want == "qwen" || !strings.Contains(m.viewport.View(), "▸ "+want) {
-		t.Fatalf("down did not move profile selection to %q:\n%s", want, m.viewport.View())
+	// The marker and the label are separate Render() calls; lipgloss v2
+	// always emits color codes (no more auto-disable for a non-tty test
+	// process), so strip them before checking the two land next to each
+	// other as plain text.
+	view := ansi.Strip(m.viewport.View())
+	if want == "qwen" || !strings.Contains(view, "▸ "+want) {
+		t.Fatalf("down did not move profile selection to %q:\n%s", want, view)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if m.profileMode != want {
 		t.Errorf("profileMode = %q, want pinned profile %q", m.profileMode, want)
@@ -439,8 +457,8 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 func TestPickerEscapeCancelsSelection(t *testing.T) {
 	m := newTestModel(t)
 	m.openModelsPicker([]provider.ModelInfo{{ID: "demo-model"}, {ID: "other"}})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 
 	if m.model != "demo-model" {
 		t.Errorf("model = %q after cancel, want demo-model", m.model)
@@ -454,7 +472,7 @@ func TestUnknownCommandShowsError(t *testing.T) {
 	m := newTestModel(t)
 
 	typeText(m, "/bogus")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !strings.Contains(m.errText, "unknown command /bogus") {
 		t.Errorf("errText = %q, want unknown command error", m.errText)
 	}
@@ -464,7 +482,7 @@ func TestEscClearsSlashInput(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "/mod")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.input.Value() != "" || len(m.sugs) != 0 {
 		t.Error("esc should clear the pending command and popup")
 	}
@@ -486,13 +504,13 @@ func TestMouseWheelScrollsChatNotPrompt(t *testing.T) {
 	m.syncInputHeight()
 
 	inputBefore := m.input.View()
-	vpBefore := m.viewport.YOffset
+	vpBefore := m.viewport.YOffset()
 
 	for i := 0; i < 5; i++ {
-		m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	}
 
-	if m.viewport.YOffset == vpBefore {
+	if m.viewport.YOffset() == vpBefore {
 		t.Errorf("mouse wheel did not scroll the chat viewport (offset stayed %d)", vpBefore)
 	}
 	if m.input.View() != inputBefore {
@@ -506,7 +524,7 @@ func TestCtrlUClearsWholePrompt(t *testing.T) {
 	m.input.SetValue("first line\nsecond line\nthird line")
 	m.syncInputHeight()
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 
 	if m.input.Value() != "" {
 		t.Errorf("ctrl+u left content in the box: %q", m.input.Value())
@@ -522,7 +540,7 @@ func TestCtrlUClearsSlashSuggestions(t *testing.T) {
 	if len(m.sugs) == 0 {
 		t.Fatal("expected command suggestions after typing /mod")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	if m.input.Value() != "" || len(m.sugs) != 0 {
 		t.Errorf("ctrl+u should clear input and suggestions: value=%q sugs=%d", m.input.Value(), len(m.sugs))
 	}
@@ -560,14 +578,14 @@ func TestInputBoxGrowsAndShrinks(t *testing.T) {
 
 	// Ctrl+J adds explicit newlines.
 	before := m.inputLines
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	if m.inputLines <= before && before < 6 {
 		t.Errorf("inputLines = %d, want growth after ctrl+j", m.inputLines)
 	}
 
 	// Sending resets the box to one row.
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.inputLines != 1 {
 		t.Errorf("inputLines = %d, want 1 after send", m.inputLines)
 	}
@@ -579,7 +597,7 @@ func TestCtrlSSavesSession(t *testing.T) {
 	m.session.AddUser("hi")
 	m.session.AddAssistant("hello")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if !strings.Contains(m.notice, "session saved") {
 		t.Fatalf("notice = %q, want save confirmation", m.notice)
 	}
@@ -597,7 +615,7 @@ func TestSaveDisabledShowsError(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = ""
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if !strings.Contains(m.errText, "disabled") {
 		t.Errorf("errText = %q, want disabled error", m.errText)
 	}
@@ -642,7 +660,7 @@ func TestFinishStreamAppendsUsageRecord(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()
 	m.input.SetValue("hello")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	m.streamBuf.WriteString("reply")
 	m.finishStream(&provider.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8}, false)
@@ -696,7 +714,7 @@ func TestHistoryOverlayListsSessions(t *testing.T) {
 	m.saveWithNotice()
 
 	typeText(m, "/history")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.overlayOpen {
 		t.Fatal("/history should open an overlay")
 	}
@@ -709,7 +727,7 @@ func TestAltEnterInsertsNewline(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "line one")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
 	typeText(m, "line two")
 
 	if got := m.input.Value(); got != "line one\nline two" {
@@ -728,7 +746,7 @@ func TestDoubleCtrlCQuits(t *testing.T) {
 	m.historyDir = t.TempDir()
 	m.session.AddUser("hi")
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Fatal("first ctrl+c must not quit")
 	}
@@ -736,7 +754,7 @@ func TestDoubleCtrlCQuits(t *testing.T) {
 		t.Errorf("notice = %q, want arm hint", m.notice)
 	}
 
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("second ctrl+c should quit")
 	}
@@ -754,7 +772,7 @@ func TestCtrlCClearsInputFirst(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "draft text")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if m.input.Value() != "" {
 		t.Error("first ctrl+c should clear the input")
 	}
@@ -766,12 +784,12 @@ func TestCtrlCClearsInputFirst(t *testing.T) {
 func TestCtrlCStopsGenerationFirst(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue("hello")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.thinking {
 		t.Fatal("should be thinking")
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Fatal("first ctrl+c while thinking must not quit")
 	}
@@ -791,7 +809,7 @@ func TestUsageCommandOpensDashboard(t *testing.T) {
 	}
 
 	typeText(m, "/usage")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.overlayOpen {
 		t.Fatal("/usage should open an overlay")
 	}
@@ -809,13 +827,13 @@ func TestUsageCommandOpensDashboard(t *testing.T) {
 func TestEscStopsGeneration(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue("hello")
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.thinking {
 		t.Fatal("model should be thinking after send")
 	}
 	_ = cmd
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.thinking {
 		t.Error("esc should stop generation")
 	}

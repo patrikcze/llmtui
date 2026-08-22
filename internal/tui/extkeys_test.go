@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/tools"
 )
@@ -27,7 +27,7 @@ func TestExtendedKeySeq(t *testing.T) {
 	if !ok || seq != "27;2;13~" {
 		t.Errorf("extendedKeySeq = (%q, %v), want round-trip", seq, ok)
 	}
-	if _, ok := extendedKeySeq(tea.KeyMsg{Type: tea.KeyEnter}); ok {
+	if _, ok := extendedKeySeq(tea.KeyPressMsg{Code: tea.KeyEnter}); ok {
 		t.Error("plain KeyMsg must not match")
 	}
 	if _, ok := extendedKeySeq("random string"); ok {
@@ -100,7 +100,7 @@ func TestBackslashEnterContinuesLine(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "first line\\")
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if got := m.input.Value(); got != "first line\n" {
 		t.Errorf("input = %q, want backslash replaced by newline", got)
 	}
@@ -109,7 +109,7 @@ func TestBackslashEnterContinuesLine(t *testing.T) {
 	}
 
 	typeText(m, "second line")
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if userMessages(m) == 0 {
 		t.Fatal("plain enter should send")
 	}

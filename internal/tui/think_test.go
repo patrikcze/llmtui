@@ -111,7 +111,11 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	})
 	m.refreshViewport()
 
-	view := m.viewport.View()
+	// lipgloss v2 no longer auto-detects a non-tty test process and drops
+	// color codes the way v1 did; strip them so a literal substring check
+	// isn't broken by a style boundary landing mid-string (e.g. between the
+	// "┃ " rail and the message body, each its own Render() call).
+	view := ansi.Strip(m.viewport.View())
 	for _, want := range []string{"┃ How does this work?", "Thought", "private scratch work", "It works carefully."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("conversation view missing %q:\n%s", want, view)

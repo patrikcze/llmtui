@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -44,7 +44,7 @@ func startTestBatch(t *testing.T, m *Model, id string) tea.Cmd {
 
 func TestAsyncBatchShowsActivityRegion(t *testing.T) {
 	m := newActivityTestModel(t, time.Second)
-	hBefore := m.viewport.Height
+	hBefore := m.viewport.Height()
 
 	startTestBatch(t, m, "c1")
 	if m.activity == nil {
@@ -53,10 +53,10 @@ func TestAsyncBatchShowsActivityRegion(t *testing.T) {
 	if got := m.activityHeight(); got != 1 {
 		t.Fatalf("activityHeight = %d, want 1", got)
 	}
-	if m.viewport.Height != hBefore-1 {
-		t.Errorf("viewport height = %d, want %d (shrunk by the region)", m.viewport.Height, hBefore-1)
+	if m.viewport.Height() != hBefore-1 {
+		t.Errorf("viewport height = %d, want %d (shrunk by the region)", m.viewport.Height(), hBefore-1)
 	}
-	if !strings.Contains(m.View(), "jiraWorklog: session_start") {
+	if !strings.Contains(m.render(), "jiraWorklog: session_start") {
 		t.Error("view should show the running call's describe line")
 	}
 }
@@ -74,7 +74,7 @@ func TestActivityClearsWhenResultsLandAndGlyphsSettle(t *testing.T) {
 	}
 	// While running, the transcript must not duplicate the live region's
 	// call line (the static ⚒ form is suppressed for the running batch).
-	if strings.Contains(m.View(), "⚒ jiraWorklog: session_start") {
+	if strings.Contains(m.render(), "⚒ jiraWorklog: session_start") {
 		t.Error("running batch should suppress the transcript's static ⚒ line")
 	}
 
@@ -90,15 +90,15 @@ func TestActivityClearsWhenResultsLandAndGlyphsSettle(t *testing.T) {
 	if m.activityHeight() != 0 {
 		t.Errorf("activityHeight = %d after settle, want 0", m.activityHeight())
 	}
-	if !strings.Contains(m.View(), "● jiraWorklog: session_start") {
+	if !strings.Contains(m.render(), "● jiraWorklog: session_start") {
 		t.Error("settled ok call should render with ● in the transcript")
 	}
 }
 
 func TestActivityClearedOnCancel(t *testing.T) {
-	for name, key := range map[string]tea.KeyMsg{
-		"esc":    {Type: tea.KeyEsc},
-		"ctrl+c": {Type: tea.KeyCtrlC},
+	for name, key := range map[string]tea.KeyPressMsg{
+		"esc":    {Code: tea.KeyEsc},
+		"ctrl+c": {Code: 'c', Mod: tea.ModCtrl},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := newActivityTestModel(t, time.Second)
@@ -114,7 +114,7 @@ func TestActivityClearedOnCancel(t *testing.T) {
 func TestStaleResultsDoNotClearNewBatchActivity(t *testing.T) {
 	m := newActivityTestModel(t, time.Second)
 	cmdA := startTestBatch(t, m, "a")
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cancel batch A
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc}) // cancel batch A
 	startTestBatch(t, m, "b")
 	if m.activity == nil {
 		t.Fatal("batch B should be live")
@@ -145,7 +145,7 @@ func TestSettledGlyphsFromToolResults(t *testing.T) {
 		provider.Message{Role: provider.RoleTool, ToolCallID: "c_bad", ToolName: "write_file", Content: "error: denied"},
 	)
 	m.refreshViewport()
-	view := m.View()
+	view := m.render()
 	// Describe() renders these as "read_file a.txt" and "write b.txt (…)".
 	if !strings.Contains(view, "● read_file a.txt") {
 		t.Error("ok call should render with ●")
@@ -164,7 +164,7 @@ func TestWorkingLineShowsVerbElapsedTokens(t *testing.T) {
 	m.workingVerb = "Ideating"
 	m.streamStart = time.Now().Add(-2 * time.Second)
 	m.streamBuf.WriteString(strings.Repeat("x", 400))
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{"Ideating", "2s", "tokens", "esc to interrupt"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("working line missing %q", want)
@@ -175,7 +175,7 @@ func TestWorkingLineShowsVerbElapsedTokens(t *testing.T) {
 func TestWorkingLineDuringMCPBatch(t *testing.T) {
 	m := newActivityTestModel(t, time.Second)
 	startTestBatch(t, m, "c1")
-	if !strings.Contains(m.View(), "Running tools") {
+	if !strings.Contains(m.render(), "Running tools") {
 		t.Error("footer should show the tool-batch working line")
 	}
 }

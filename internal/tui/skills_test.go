@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/skill"
@@ -492,9 +492,9 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 		t.Fatalf("skills picker = items %v, view:\n%s", m.pickerItems, m.viewport.View())
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	selected := m.pickerItems[m.pickerIdx]
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.overlayOpen {
 		t.Error("activating a skill should close the picker")
 	}
@@ -506,7 +506,7 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 	if m.pickerItems[m.pickerIdx] != selected {
 		t.Errorf("picker index = %d, want active skill %q", m.pickerIdx, selected)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if _, active := m.skillMgr.IsActive(selected); active {
 		t.Errorf("selected skill %q remained active after toggling", selected)
 	}
@@ -534,7 +534,7 @@ func TestSkillsPickerActiveSkillDoesNotTruncateNavigation(t *testing.T) {
 	}
 
 	for range 3 {
-		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	if got := m.pickerItems[m.pickerIdx]; got != "user:gamma" {
 		t.Errorf("selection after moving to the last row = %q, want user:gamma", got)
@@ -655,7 +655,7 @@ func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
 	}
 
 	selected := m.pickerItems[m.pickerIdx]
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.overlayOpen {
 		t.Error("toggling a plugin should close the picker")
 	}
@@ -680,7 +680,7 @@ func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
 	if m.pickerItems[m.pickerIdx] != selected {
 		t.Errorf("picker index = %d, want previously-enabled plugin %q", m.pickerIdx, selected)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	for _, p := range m.skillMgr.Plugins() {
 		if p.Manifest.ID == selected && p.Enabled {
 			t.Errorf("plugin %q remained enabled after toggling", selected)
@@ -817,7 +817,7 @@ func TestSkillLoadBatchWithWriteWaitsForApproval(t *testing.T) {
 	if len(m.skillMgr.Active()) != 0 {
 		t.Fatal("skill activated before the batch was approved")
 	}
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'y', Text: string('y')})
 	if cmd == nil {
 		t.Fatal("approval did not run the batch")
 	}
