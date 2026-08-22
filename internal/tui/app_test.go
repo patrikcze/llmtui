@@ -207,12 +207,16 @@ func TestCtrlOTogglesMouseCapture(t *testing.T) {
 		t.Fatal("mouse should start enabled")
 	}
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	// v2 removed tea.EnableMouseCellMotion/tea.DisableMouse: mouse mode is
+	// now a View() field read fresh every render instead of a Cmd, so the
+	// toggle's effect shows up in View().MouseMode rather than a returned
+	// tea.Cmd.
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if m.mouseEnabled {
 		t.Error("ctrl+o should disable mouse capture")
 	}
-	if cmd == nil {
-		t.Error("toggling should return a mouse command")
+	if mode := m.View().MouseMode; mode != tea.MouseModeNone {
+		t.Errorf("View().MouseMode = %v, want MouseModeNone after disabling", mode)
 	}
 	if !strings.Contains(m.notice, "text selection on") {
 		t.Errorf("notice = %q, want selection-mode hint", m.notice)
@@ -221,6 +225,9 @@ func TestCtrlOTogglesMouseCapture(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if !m.mouseEnabled {
 		t.Error("second ctrl+o should re-enable mouse capture")
+	}
+	if mode := m.View().MouseMode; mode != tea.MouseModeCellMotion {
+		t.Errorf("View().MouseMode = %v, want MouseModeCellMotion after re-enabling", mode)
 	}
 }
 
@@ -367,8 +374,13 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 		t.Fatalf("initial picker index = %d, want active model at 1", m.pickerIdx)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.pickerIdx != 2 || !strings.Contains(m.viewport.View(), "▸ omega") {
-		t.Fatalf("down did not select omega:\n%s", m.viewport.View())
+	// The marker and the label are separate Render() calls; lipgloss v2
+	// always emits color codes (no more auto-disable for a non-tty test
+	// process), so strip them before checking the two land next to each
+	// other as plain text.
+	view := ansi.Strip(m.viewport.View())
+	if m.pickerIdx != 2 || !strings.Contains(view, "▸ omega") {
+		t.Fatalf("down did not select omega:\n%s", view)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.model != "omega" {
