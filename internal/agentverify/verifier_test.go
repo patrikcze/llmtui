@@ -267,6 +267,64 @@ func TestApplyDeterministicEvidencePreservesNeedsUserInput(t *testing.T) {
 	}
 }
 
+// TestVerifierPromptTeachesUserOptions guards the instruction and schema
+// wiring for extracting discrete choices from the executor's question: a
+// real run showed the executor writing numbered options as plain prose
+// ("1. Prague / 2. Humpolec / 3. Brno") — without this, the TUI has no way
+// to present them as a pickable overlay and always falls back to free text.
+func TestVerifierPromptTeachesUserOptions(t *testing.T) {
+	client := &recordingClient{reply: validReply("passed")}
+	input := Input{RunID: "r", Cycle: 1, Task: "task", Objective: "objective", Execution: agent.ExecutionResult{Summary: "done"}}
+	if _, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, input); err != nil {
+		t.Fatal(err)
+	}
+	system := client.requests[0].Messages[0].Content
+	if !strings.Contains(system, `"user_options"`) {
+		t.Fatalf("system prompt does not mention user_options: %q", system)
+	}
+	if !strings.Contains(verifierJSONSchema, `"user_options": {"type": "array", "items": {"type": "string"}}`) {
+		t.Fatal("verifier JSON schema is missing user_options")
+	}
+	if !strings.Contains(verifierJSONSchema[strings.Index(verifierJSONSchema, `"required"`):], `"user_options"`) {
+		t.Fatal("verifier JSON schema must declare user_options as required")
+	}
+}
+
+// TestParseUserOptionsRoundTrips confirms a raw verifier response setting
+// user_options survives Parse into the agent.VerificationResult.
+func TestParseUserOptionsRoundTrips(t *testing.T) {
+	raw := `{"verdict":"inconclusive","summary":"Which city first?","confidence":0.5,"needs_user_input":true,"user_options":["Prague","Humpolec","Brno"]}`
+	result, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Prague", "Humpolec", "Brno"}
+	if len(result.UserOptions) != len(want) {
+		t.Fatalf("result = %+v, want UserOptions %v", result, want)
+	}
+	for i := range want {
+		if result.UserOptions[i] != want[i] {
+			t.Fatalf("UserOptions[%d] = %q, want %q", i, result.UserOptions[i], want[i])
+		}
+	}
+}
+
+// TestApplyDeterministicEvidencePreservesUserOptions mirrors the existing
+// NeedsUserInput preservation test: a conclusive deterministic failure must
+// not erase the verifier's extracted options for the same reason it must
+// not erase NeedsUserInput itself.
+func TestApplyDeterministicEvidencePreservesUserOptions(t *testing.T) {
+	result := agent.VerificationResult{
+		Verdict: agent.VerificationPassed, Summary: "claims done",
+		NeedsUserInput: true, UserOptions: []string{"Prague", "Humpolec", "Brno"},
+	}
+	execution := agent.ExecutionResult{TestsRun: []agent.TestResult{{Name: "go test", Passed: false}}}
+	clamped := ApplyDeterministicEvidence(result, execution)
+	if len(clamped.UserOptions) != 3 {
+		t.Fatalf("ApplyDeterministicEvidence must not clear UserOptions: %+v", clamped)
+	}
+}
+
 func TestParseCriteriaProposalsAndUpdates(t *testing.T) {
 	raw := `{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,
 "proposed_criteria":["current time determined","forecast covers six hours"],

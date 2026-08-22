@@ -139,6 +139,10 @@ type Model struct {
 	pickerItems          []string
 	pickerIdx            int
 	pickerModels         []provider.ModelInfo
+	// pickerHeader is the executor's actual question text, shown above the
+	// options list when pickerKind == pickerAgentQuestion. Unused by every
+	// other picker kind.
+	pickerHeader string
 	// visionByID caches backend-reported vision capability (model ID ->
 	// supports images) from the last successful ListModels call, so the
 	// paste-image gate can use real data instead of the SupportsVision
@@ -996,6 +1000,9 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.profileMode = selection
 			m.notice = "profile pinned to " + selection
 			return m, nil
+		}
+		if kind == pickerAgentQuestion {
+			return m, m.resumeVerifiedRunWithInput(selection, nil)
 		}
 		if m.busy() {
 			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"

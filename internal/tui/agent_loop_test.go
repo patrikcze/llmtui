@@ -600,6 +600,91 @@ func TestVerifiedAgentClarifyingQuestionStopsForUser(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes extends
+// TestVerifiedAgentClarifyingQuestionStopsForUser: when the verifier also
+// extracts discrete choices into user_options (matching a real run where
+// the executor wrote "1. Prague / 2. Humpolec / 3. Brno" as plain prose),
+// the TUI must present them as a pickable overlay instead of only the
+// free-text errText path, and selecting one must resume the run exactly
+// like typing that same text would.
+func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
+	const question = "Which city would you like me to check first?"
+	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","retryable":true,"confidence":0.8,` +
+		`"needs_user_input":true,"user_options":["Prague","Humpolec","Brno"]}`
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{text: question},
+		agentScriptStep{text: verifierReply},
+		agentScriptStep{text: "Checked Humpolec's weather."},
+		agentScriptStep{text: verifierJSON("passed", "weather reported", "", false, false)},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("check the weather", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionNeedsUserInput {
+		t.Fatalf("status = %q, want needs_user_input", m.agentLoop.run.Status)
+	}
+	if m.pickerKind != pickerAgentQuestion {
+		t.Fatalf("pickerKind = %v, want pickerAgentQuestion", m.pickerKind)
+	}
+	if m.pickerHeader != question {
+		t.Fatalf("pickerHeader = %q, want %q", m.pickerHeader, question)
+	}
+	want := []string{"Prague", "Humpolec", "Brno"}
+	if len(m.pickerItems) != len(want) {
+		t.Fatalf("pickerItems = %v, want %v", m.pickerItems, want)
+	}
+	for i := range want {
+		if m.pickerItems[i] != want[i] {
+			t.Fatalf("pickerItems[%d] = %q, want %q", i, m.pickerItems[i], want[i])
+		}
+	}
+
+	runID := m.agentLoop.run.ID
+	_, downCmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	driveAgentCommands(t, m, downCmd)
+	if m.pickerIdx != 1 {
+		t.Fatalf("pickerIdx = %d, want 1 (Humpolec) after one down-arrow", m.pickerIdx)
+	}
+	_, enterCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	driveAgentCommands(t, m, enterCmd)
+
+	if m.pickerKind != pickerNone {
+		t.Fatalf("pickerKind = %v, want pickerNone after selection", m.pickerKind)
+	}
+	if m.agentLoop.run.ID != runID || m.agentLoop.run.Cycle != 2 || m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("selecting an option did not resume the same run: %+v", m.agentLoop.run)
+	}
+}
+
+// TestPendingToolApprovalOutranksAgentQuestionPicker locks in the
+// CLAUDE.md safety invariant that a pending tool approval must always be
+// what the next keypress resolves, even if some other input-owning overlay
+// state exists at the same time. Decide() cannot structurally produce this
+// combination today (a cycle's tool calls always resolve before
+// verification runs), but app.go's top-level Update must still fail safe
+// if that assumption is ever violated by a future bug — an unrelated
+// keypress must never silently resolve the agent's pending tool approval.
+func TestPendingToolApprovalOutranksAgentQuestionPicker(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.pendingCalls = []tools.Call{{Tool: tools.ToolListDir, Path: "."}}
+	m.openAgentQuestionPicker("pick a city", []string{"Prague", "Humpolec", "Brno"})
+
+	// Enter resolves the tool approval at its default row (approve), which
+	// synchronously clears pendingCalls — the point under test is that this
+	// is what actually ran, not the picker's Enter-selects-an-option
+	// handling. If the picker had won instead, pendingCalls would remain
+	// untouched (the picker's Enter branch never looks at it) while
+	// pickerKind would already be pickerNone; a resolved approval with the
+	// question picker still open shows the approval path ran first.
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.pendingCalls) != 0 {
+		t.Fatalf("tool approval was not resolved: pendingCalls=%d", len(m.pendingCalls))
+	}
+	if m.pickerKind != pickerAgentQuestion {
+		t.Fatalf("pickerKind = %v, want pickerAgentQuestion untouched by the approval keypress", m.pickerKind)
+	}
+}
+
 func TestNonAgentChatPathRemainsUnchanged(t *testing.T) {
 	m := newTestModel(t)
 	prov := &scriptedAgentProvider{steps: []agentScriptStep{{text: "ordinary answer"}}}

@@ -346,6 +346,37 @@ func TestWriteMemoryRecordsToolCallRecap(t *testing.T) {
 	}
 }
 
+// TestCompleteVerificationBoundsUserOptions confirms UserOptions is bounded
+// the same way every other verifier-controlled string list is
+// (Evidence/FailedCriteria/RemainingCriteria/ProposedCriteria) — a picker
+// overlay with hundreds of entries or paragraph-length options would not be
+// usable, regardless of what a model returns.
+func TestCompleteVerificationBoundsUserOptions(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("check the weather", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteExecution(ExecutionResult{Summary: "asked which city first"}, now); err != nil {
+		t.Fatal(err)
+	}
+	huge := make([]string, 100)
+	for i := range huge {
+		huge[i] = strings.Repeat("x", 1000)
+	}
+	if err := run.CompleteVerification(VerificationResult{
+		Verdict: VerificationInconclusive, Summary: "pick a city", NeedsUserInput: true, UserOptions: huge,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	got := run.LatestCycle().Verification.UserOptions
+	if len(got) != 16 {
+		t.Fatalf("UserOptions length = %d, want bounded to 16", len(got))
+	}
+	if !strings.HasSuffix(got[0], "…") || len(got[0]) > 260 {
+		t.Fatalf("UserOptions[0] = %d bytes, want truncated to ~256 bytes with an ellipsis suffix", len(got[0]))
+	}
+}
+
 // TestRecordContextCompressionAppendsDiagnosticEvent locks in the
 // observability fix for diagnosing whether context-budget compression ate
 // evidence a cycle needed: without this, "did truncation fire, and how

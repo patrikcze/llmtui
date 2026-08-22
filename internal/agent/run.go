@@ -360,6 +360,10 @@ func boundVerification(r *VerificationResult) {
 	r.Evidence = boundedStrings(r.Evidence, 64, 512)
 	r.FailedCriteria = boundedStrings(r.FailedCriteria, 64, 512)
 	r.RemainingCriteria = boundedStrings(r.RemainingCriteria, 64, 512)
+	// 16/256 keeps a question overlay usable — a picker list of hundreds of
+	// entries or paragraph-length options would not be, regardless of what a
+	// model returns.
+	r.UserOptions = boundedStrings(r.UserOptions, 16, 256)
 	r.RecommendedNext = truncate(r.RecommendedNext, 2048)
 	r.ProposedCriteria = boundedStrings(r.ProposedCriteria, MaxCriteria, 256)
 	if len(r.CriteriaUpdates) > MaxCriteria {
