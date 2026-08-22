@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,10 +101,56 @@ func TestTypingDoesNotScrollViewport(t *testing.T) {
 		t.Errorf("input lost keystrokes: %q", m.input.Value())
 	}
 
-	// The dedicated scroll keys still work.
+	// PgUp/PgDown belong to the input's own paging now (see
+	// TestPgUpPgDownScrollsInputNotViewport) — they must not scroll the
+	// chat either.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	if m.viewport.YOffset() >= before {
-		t.Error("PgUp did not scroll the viewport")
+	if m.viewport.YOffset() != before {
+		t.Error("PgUp scrolled the chat viewport; it should page the input instead")
+	}
+}
+
+// A long pasted prompt outgrows the input box's max height (bounded so the
+// chat viewport never starves below its minimum rows — see
+// (*Model).maxInputLines); bubbles/v2's textarea already has PageUp/PageDown
+// in its default keymap for exactly this, but app.go used to intercept both
+// keys for the chat viewport before the textarea ever saw them. PgUp/PgDown
+// must now page the input's own overflow, and must leave the chat viewport
+// alone — it stays reachable via the mouse wheel.
+func TestPgUpPgDownScrollsInputNotViewport(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	for i := 0; i < 40; i++ {
+		m.session.AddAssistant("line")
+	}
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("pasted line %d", i)
+	}
+	m.input.SetValue(strings.Join(lines, "\n"))
+	m.syncInputHeight() // grows the input box, shrinking (and re-clamping) the chat viewport
+	m.input.MoveToBegin()
+	inputScrollBefore := m.input.ScrollYOffset()
+	// Captured after the layout settles: growing the input for the long
+	// paste reflows the chat viewport's height and re-clamps its offset,
+	// which must not be mistaken for movement caused by PgDown below.
+	vpBefore := m.viewport.YOffset()
+
+	// textarea's PageDown() snaps the cursor to the bottom of the current
+	// page on its first call and only scrolls on a second — send both to
+	// exercise real scrolling, matching how a user pages through content
+	// taller than the box.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+
+	if got := m.input.ScrollYOffset(); got <= inputScrollBefore {
+		t.Errorf("PgDown did not page the input: ScrollYOffset stayed at %d", got)
+	}
+	if got := m.viewport.YOffset(); got != vpBefore {
+		t.Errorf("PgDown moved the chat viewport (%d -> %d); it should only page the input", vpBefore, got)
 	}
 }
 

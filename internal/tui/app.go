@@ -919,17 +919,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if key, ok := msg.(tea.KeyPressMsg); ok {
+	if _, ok := msg.(tea.KeyPressMsg); ok {
 		// Typed keys must never scroll the chat: the viewport's default
 		// keymap binds letters (j/k/u/d/b/f/h/l) and space, so feeding it
-		// keystrokes makes the screen jump around while typing. It only
-		// ever sees the dedicated scroll keys; everything else belongs to
-		// the input box.
-		switch key.Code {
-		case tea.KeyPgUp, tea.KeyPgDown:
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		}
+		// keystrokes makes the screen jump around while typing. Everything,
+		// including PgUp/PgDown, belongs to the input box — its own
+		// bubbles/v2 textarea already pages through long pasted content
+		// (PageUp/PageDown are in its default keymap); the chat transcript
+		// stays reachable via the mouse wheel regardless.
 		m.input, cmd = m.input.Update(msg)
 		m.updateSuggestions()
 		m.syncInputHeight()
