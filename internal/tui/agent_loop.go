@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/agentverify"
@@ -179,7 +180,7 @@ func (m *Model) agentQuestionPickerOverlay() string {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(option)
 		}
-		b.WriteString(marker + label + "\n")
+		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ pick · enter confirm · esc type a custom answer instead"))
 	return b.String()

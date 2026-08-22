@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
@@ -391,6 +392,28 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 	}
 }
 
+func TestModelsPickerClickSelectsRow(t *testing.T) {
+	m := newTestModel(t)
+	models := []provider.ModelInfo{
+		{ID: "alpha"},
+		{ID: "demo-model"},
+		{ID: "omega"},
+	}
+	m.openModelsPicker(models)
+
+	m.View() // triggers zone.Scan(), registering row bounds
+	z := waitForZone(t, pickerRowZoneID(2))
+
+	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+
+	if m.model != "omega" {
+		t.Errorf("model = %q, want omega (clicked row 2)", m.model)
+	}
+	if m.overlayOpen {
+		t.Error("clicking a model should close the picker")
+	}
+}
+
 func TestProvidersPickerNavigatesAndSelects(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.Providers = map[string]config.ProviderConfig{
@@ -452,6 +475,55 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 	if !strings.Contains(m.notice, "profile pinned to "+want) {
 		t.Errorf("notice = %q, want profile confirmation", m.notice)
 	}
+}
+
+func TestProfilePickerClickSelectsRow(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "qwen3:8b"
+	m.profileMode = "auto"
+
+	runCommand(m, "/profile list")
+	if m.pickerKind != pickerProfile || !m.overlayOpen {
+		t.Fatal("/profile list should open the profile picker")
+	}
+
+	// Any row other than the auto-matched default, so a successful click
+	// is unambiguous.
+	targetIdx := (m.pickerIdx + 1) % len(m.pickerItems)
+	target := m.pickerItems[targetIdx]
+
+	m.View() // triggers zone.Scan(), registering row bounds
+	z := waitForZone(t, pickerRowZoneID(targetIdx))
+
+	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+
+	if m.profileMode != target {
+		t.Errorf("profileMode = %q, want clicked profile %q", m.profileMode, target)
+	}
+	if m.overlayOpen || m.pickerKind != pickerNone {
+		t.Error("clicking a profile should close and clear the picker")
+	}
+	if !strings.Contains(m.notice, "profile pinned to "+target) {
+		t.Errorf("notice = %q, want profile confirmation", m.notice)
+	}
+}
+
+// waitForZone polls zone.Get: Scan() (called from View()) registers zone
+// bounds via a background worker rather than synchronously, so a click
+// immediately after View() in a test needs to wait for that to land — a
+// real Program never hits this since Update always trails View by at least
+// one event-loop tick.
+func waitForZone(t *testing.T, id string) *zone.ZoneInfo {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if z := zone.Get(id); z != nil {
+			return z
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("zone %q never registered", id)
+	return nil
 }
 
 func TestPickerEscapeCancelsSelection(t *testing.T) {
@@ -836,6 +908,27 @@ func TestEscStopsGeneration(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.thinking {
 		t.Error("esc should stop generation")
+	}
+	if m.errText != "generation stopped" {
+		t.Errorf("errText = %q, want generation stopped", m.errText)
+	}
+}
+
+func TestStopButtonClickStopsGeneration(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue("hello")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.thinking {
+		t.Fatal("model should be thinking after send")
+	}
+
+	m.View() // triggers zone.Scan(), registering the stop button's bounds
+	z := waitForZone(t, stopButtonZoneID)
+
+	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+
+	if m.thinking {
+		t.Error("clicking the stop button should stop generation")
 	}
 	if m.errText != "generation stopped" {
 		t.Errorf("errText = %q, want generation stopped", m.errText)

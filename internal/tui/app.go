@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/cache"
@@ -273,6 +275,12 @@ type Model struct {
 
 // New builds the chat model.
 func New(opts Options) *Model {
+	// Idempotent: safe to call from every New() (production and tests
+	// alike) even though the real Program only ever runs once. Every
+	// zone.Mark/Scan/Get call panics if the global manager was never
+	// initialized, so this has to happen before any of them can run.
+	zone.NewGlobal()
+
 	t := styles.ByName(opts.Config.UI.Theme)
 
 	ta := textarea.New()
@@ -604,6 +612,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
+
+	case tea.MouseReleaseMsg:
+		// Click-to-select on picker rows, additive to the existing
+		// arrow+enter path (see updatePickerClick). A miss (click outside
+		// every zone, or no picker open) falls through to the generic
+		// mouse handling below, unchanged.
+		if m.overlayOpen {
+			if model, cmd, handled := m.updatePickerClick(msg); handled {
+				return model, cmd
+			}
+		}
+		if model, cmd, handled := m.updateApprovalClick(msg); handled {
+			return model, cmd
+		}
+		if model, cmd, handled := m.updateStopButtonClick(msg); handled {
+			return model, cmd
+		}
 
 	case tea.KeyPressMsg:
 		if m.overlayOpen {
@@ -1034,6 +1059,55 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// pickerRowZoneID is the bubblezone ID for the i-th row of whichever picker
+// is currently open. Index-based, not content-based: every picker kind
+// (profile/model/provider/skill/plugin/agent-question) selects by
+// m.pickerIdx into the shared m.pickerItems, so position is what identifies
+// a row, not its label.
+func pickerRowZoneID(i int) string {
+	return "picker-row-" + strconv.Itoa(i)
+}
+
+// updatePickerClick handles a left-click release while any picker overlay
+// is open, selecting whichever row's zone was clicked. It reuses
+// updatePicker's Enter-key handling so a click does exactly what pressing
+// Enter on the highlighted row does — not a second, parallel selection
+// path. The bool return reports whether the click hit a zone at all, so
+// the caller can fall through to normal mouse handling on a miss.
+func (m *Model) updatePickerClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.Button != tea.MouseLeft || m.pickerKind == pickerNone {
+		return m, nil, false
+	}
+	for i := range m.pickerItems {
+		if zone.Get(pickerRowZoneID(i)).InBounds(msg) {
+			m.pickerIdx = i
+			model, cmd := m.updatePicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+			return model, cmd, true
+		}
+	}
+	return m, nil, false
+}
+
+// stopButtonZoneID marks the stop button shown while generating (see
+// components.StopButton) — a single, fixed zone, unlike the index-based
+// picker rows, since only one is ever on screen at a time.
+const stopButtonZoneID = "stop-button"
+
+// updateStopButtonClick handles a left-click release on the stop button,
+// reusing the exact same "esc" key handling a keyboard user gets in that
+// state (agentVerifying/thinking/mcp-batch-cancel — whichever applies) —
+// not a second, parallel cancellation path.
+func (m *Model) updateStopButtonClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.Button != tea.MouseLeft || !m.busy() || len(m.pendingCalls) != 0 {
+		return m, nil, false
+	}
+	if !zone.Get(stopButtonZoneID).InBounds(msg) {
+		return m, nil, false
+	}
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	return model, cmd, true
+}
+
 // busy reports whether the model is currently occupied by a streaming
 // response or an in-flight async MCP tool batch — either way, starting a
 // second, concurrent dispatch would corrupt session.Messages ordering and
@@ -1412,6 +1486,37 @@ func (m *Model) updateToolApproval(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		moveDown()
 	}
 	return m, nil
+}
+
+// approvalRowZoneID is the bubblezone ID for the i-th row of the tool
+// approval / budget prompt. A separate namespace from pickerRowZoneID even
+// though both are index-based rows, since the two are conceptually
+// different prompts (they're never shown at the same time, so there's no
+// collision risk either way, but the distinct name keeps intent clear).
+func approvalRowZoneID(i int) string {
+	return "approval-row-" + strconv.Itoa(i)
+}
+
+// updateApprovalClick handles a left-click release while a tool approval or
+// budget prompt is showing, selecting whichever row's zone was clicked. It
+// reuses updateToolApproval's Enter-key handling so a click does exactly
+// what pressing Enter on the highlighted row does.
+func (m *Model) updateApprovalClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.Button != tea.MouseLeft || len(m.pendingCalls) == 0 {
+		return m, nil, false
+	}
+	rowCount := approvalCount
+	if m.pendingBudget {
+		rowCount = 2
+	}
+	for i := 0; i < rowCount; i++ {
+		if zone.Get(approvalRowZoneID(i)).InBounds(msg) {
+			m.approvalIdx = i
+			model, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEnter})
+			return model, cmd, true
+		}
+	}
+	return m, nil, false
 }
 
 // resolveApproval executes the chosen menu row for the pending batch.
@@ -2530,11 +2635,13 @@ func (m *Model) renderApprovalPrompt() string {
 			"2. No, ask for the final answer now",
 		}
 		for i, row := range rows {
+			var styled string
 			if i == m.approvalIdx {
-				b.WriteString(m.theme.StatusValue.Render("❯ " + row))
+				styled = m.theme.StatusValue.Render("❯ " + row)
 			} else {
-				b.WriteString(m.theme.SystemNote.Render("  " + row))
+				styled = m.theme.SystemNote.Render("  " + row)
 			}
+			b.WriteString(zone.Mark(approvalRowZoneID(i), styled))
 			b.WriteString("\n")
 		}
 		b.WriteString(m.theme.HelpFooter.Render("↑/↓ select · enter confirm · esc = final answer · y/n shortcuts"))
@@ -2581,11 +2688,13 @@ func (m *Model) renderApprovalPrompt() string {
 		"3. No",
 	}
 	for i, row := range rows {
+		var styled string
 		if i == m.approvalIdx {
-			b.WriteString(m.theme.StatusValue.Render("❯ " + row))
+			styled = m.theme.StatusValue.Render("❯ " + row)
 		} else {
-			b.WriteString(m.theme.SystemNote.Render("  " + row))
+			styled = m.theme.SystemNote.Render("  " + row)
 		}
+		b.WriteString(zone.Mark(approvalRowZoneID(i), styled))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.theme.HelpFooter.Render("↑/↓ select · enter confirm · esc cancels · y/a/n shortcuts"))
@@ -2678,7 +2787,7 @@ func (m *Model) render() string {
 		}
 		help = components.WorkingLine(m.theme, m.frame, verb,
 			components.FormatElapsed(time.Since(start)), tokens, false, m.cfg.UI.Animations) +
-			"  " + components.StopButton(m.theme, m.frame)
+			"  " + zone.Mark(stopButtonZoneID, components.StopButton(m.theme, m.frame))
 	}
 
 	sections := []string{m.viewport.View()}
@@ -2700,7 +2809,11 @@ func (m *Model) render() string {
 // ctrl+o; v2 removed both in favor of fields read fresh on every render, so
 // MouseMode here just mirrors m.mouseEnabled instead of a Cmd toggling it.
 func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
+	// zone.Scan must run exactly once, at the outermost render — it
+	// strips every zone.Mark() marker (and registers their positions)
+	// from the fully composed frame. Nothing below this may re-wrap or
+	// re-sanitize the result, or the markers/positions would be lost.
+	v := tea.NewView(zone.Scan(m.render()))
 	v.AltScreen = true
 	if m.mouseEnabled {
 		v.MouseMode = tea.MouseModeCellMotion
@@ -2719,6 +2832,9 @@ func Run(opts Options) error {
 	// nil-safe and idempotent, so this is harmless alongside quit()'s own
 	// m.mcpRegistry.Close() on the happy path.
 	defer m.mcpRegistry.Close()
+	// Stops the zone manager's background worker goroutine. New() already
+	// guaranteed it's initialized.
+	defer zone.Close()
 
 	// Ask the terminal to report modified Enter (Shift+Enter, Ctrl+Enter)
 	// via modifyOtherKeys; unsupported terminals ignore this sequence.

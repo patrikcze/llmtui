@@ -176,6 +176,24 @@ func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
 	}
 }
 
+func TestApprovalMenuClickSelectsYes(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	root := pendingWrite(t, m)
+
+	m.View() // triggers zone.Scan(), registering row bounds
+	z := waitForZone(t, approvalRowZoneID(approvalYes))
+
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("expected execution after clicking Yes")
+	}
+	finishToolBatch(t, m, cmd)
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Fatalf("file not written after clicking Yes: %v", err)
+	}
+}
+
 func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
 	m := newTestModel(t)
 	m.resize(80, 24)
