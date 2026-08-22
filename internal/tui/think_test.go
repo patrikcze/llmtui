@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
 )
 
@@ -253,6 +255,58 @@ func TestBuildRequestCarriesReasoning(t *testing.T) {
 	m.reasoningMode = "auto"
 	if req := m.buildRequest(nil); req.Reasoning != "" {
 		t.Fatalf("auto must map to empty, got %q", req.Reasoning)
+	}
+}
+
+// TestAutoReasoningUsesProfileHintForEmbeddedProvider verifies that "auto"
+// resolves enable_thinking to on for the embedded provider when the active
+// model profile's ReasoningHint is set. Gemma 4's real GGUF chat template
+// only injects its thinking token when "enable_thinking is defined and
+// enable_thinking" — an omitted variable (the previous "auto" behavior) is
+// indistinguishable from an explicit off for that template, which is what
+// made "auto" silently behave as "always off" for this model.
+func TestAutoReasoningUsesProfileHintForEmbeddedProvider(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Providers = map[string]config.ProviderConfig{
+		"embedded_gemma4": {Type: "embedded"},
+	}
+	m.cfg.Provider = "embedded_gemma4"
+	m.profiles = []modelprofile.Profile{{
+		Name:          "gemma4-e4b",
+		Match:         []string{"gemma-4-e4b"},
+		ReasoningHint: true,
+	}}
+	m.model = "google/gemma-4-e4b-it"
+	m.reasoningMode = "auto"
+
+	if req := m.buildRequest(nil); req.Reasoning != "on" {
+		t.Fatalf("embedded provider auto reasoning = %q, want on", req.Reasoning)
+	}
+}
+
+// TestAutoReasoningLeavesRemoteProvidersAlone confirms the profile-hint
+// promotion is scoped to the embedded provider only. A remote host (LM
+// Studio, Ollama, any OpenAI-compatible server) applies its own chat
+// template and may already have its own independent default (e.g. LM
+// Studio's own "Enable Thinking" toggle) — llmtui must keep omitting
+// enable_thinking for "auto" there rather than overriding a host default it
+// does not control.
+func TestAutoReasoningLeavesRemoteProvidersAlone(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Providers = map[string]config.ProviderConfig{
+		"lmstudio": {Type: "openai_compatible"},
+	}
+	m.cfg.Provider = "lmstudio"
+	m.profiles = []modelprofile.Profile{{
+		Name:          "gemma4-e4b",
+		Match:         []string{"gemma-4-e4b"},
+		ReasoningHint: true,
+	}}
+	m.model = "google/gemma-4-e4b-it"
+	m.reasoningMode = "auto"
+
+	if req := m.buildRequest(nil); req.Reasoning != "" {
+		t.Fatalf("remote provider auto reasoning = %q, want empty (omitted)", req.Reasoning)
 	}
 }
 

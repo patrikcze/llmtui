@@ -101,6 +101,15 @@ func (m *Model) activeProfile() (modelprofile.Profile, bool) {
 	return modelprofile.Match(m.profiles, m.model)
 }
 
+// isEmbeddedProvider reports whether the currently active provider is the
+// in-process embedded provider, as opposed to a remote host (Ollama, LM
+// Studio, or any other OpenAI-compatible server) that applies its own chat
+// template and may have its own independent defaults.
+func (m *Model) isEmbeddedProvider() bool {
+	pc, ok := m.cfg.Providers[m.cfg.Provider]
+	return ok && pc.Type == "embedded"
+}
+
 // contextWindow resolves the window size: config override, then provider
 // capabilities, then model profile, then a safe fallback.
 // The source string feeds /doctor.
@@ -894,6 +903,21 @@ func (m *Model) buildRequestWithTools(messages []provider.Message, specs []provi
 	reasoning := m.effectiveReasoning()
 	if reasoning == "auto" {
 		reasoning = ""
+		// The embedded provider renders the model's own GGUF chat template
+		// directly, with no separate host-level default (unlike LM Studio's
+		// own "Enable Thinking" toggle, or a remote server's own default).
+		// Omitting enable_thinking there is not neutral: a template that
+		// only checks "enable_thinking is defined and enable_thinking"
+		// (verified against Gemma 4's real metadata template) treats the
+		// omitted variable as off. Use the model profile's ReasoningHint —
+		// already correct for models known to default to thinking — so
+		// "auto" resolves to the model's actual intended default instead of
+		// always landing on off.
+		if m.isEmbeddedProvider() {
+			if prof, ok := m.activeProfile(); ok && prof.ReasoningHint {
+				reasoning = "on"
+			}
+		}
 	}
 	return provider.ChatRequest{
 		Model:       m.model,

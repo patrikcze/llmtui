@@ -285,8 +285,16 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
   model to answer after tool results and is applied to a cloned request—it is
   not written into the conversation history.
 - `/think on|off|auto` and `chat.reasoning` are passed to the GGUF Jinja
-  template as `enable_thinking`: `auto` omits it, `on` sets true, and `off`
-  sets false. A model may still choose to answer directly when thinking is on.
+  template as `enable_thinking`: `on` sets true and `off` sets false. `auto`
+  omits it unless the active model profile sets `reasoning_hint: true`, in
+  which case `auto` resolves to `on` for this provider — some chat templates
+  (Gemma 4's confirmed among them) treat an omitted `enable_thinking` as off,
+  so leaving it unset would make "auto" silently behave like "always off" for
+  those models. Remote providers (Ollama, LM Studio, any OpenAI-compatible
+  server) still omit it under `auto`, since those hosts apply their own
+  template and may have their own independent default — this promotion is
+  embedded-provider-only. A model may still choose to answer directly when
+  thinking is on.
   When the model emits supported thought delimiters, llmtui routes the content
   to the reasoning stream and keeps it out of the visible answer, history,
   subsequent prompts, and response cache. `/thoughts show|hide` expands or
