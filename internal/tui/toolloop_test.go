@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/mcp"
@@ -56,7 +56,7 @@ func TestMaybeRunToolsAsksBeforeWriting(t *testing.T) {
 	}
 
 	// Approve with y.
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'y', Text: string('y')})
 	if cmd == nil {
 		t.Fatal("expected an async tool command after approval")
 	}
@@ -131,7 +131,7 @@ func TestDenyPendingToolsReportsToModel(t *testing.T) {
 	withToolReply(m, "```tool write_file a.txt\ndata\n```")
 	m.maybeRunTools()
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'n', Text: string('n')})
 	if cmd == nil {
 		t.Fatal("denial must be dispatched back to the model")
 	}
@@ -192,7 +192,7 @@ func TestPendingApprovalClosesKeysInspector(t *testing.T) {
 		t.Fatal("keys inspector must close once a tool approval is pending")
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Text: string('y')})
 	if cmd == nil || len(m.pendingCalls) != 0 {
 		t.Fatal("approval key was not routed to the pending tool prompt")
 	}
@@ -205,7 +205,7 @@ func TestApprovalSwallowsOtherKeys(t *testing.T) {
 	withToolReply(m, "```tool write_file a.txt\ndata\n```")
 	m.maybeRunTools()
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'x', Text: string('x')})
 	if cmd != nil || len(m.pendingCalls) != 1 {
 		t.Error("stray key must neither execute nor clear the pending batch")
 	}
@@ -248,7 +248,7 @@ func TestIterationCapAsksUserToContinue(t *testing.T) {
 	}
 
 	// "Yes, continue" renews the budget and executes the batch.
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'y', Text: string('y')})
 	if cmd == nil {
 		t.Fatal("expected execution after granting more rounds")
 	}
@@ -270,7 +270,7 @@ func TestIterationCapDeclineAsksModelToWrapUp(t *testing.T) {
 	m.maybeRunTools()
 
 	// "No" sends the wrap-up request instead of executing anything.
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: 'n', Text: string('n')})
 	if cmd == nil {
 		t.Fatal("expected a wrap-up dispatch after declining")
 	}
@@ -579,7 +579,7 @@ func TestNativeToolCallsRespectApproval(t *testing.T) {
 		t.Fatal("file written before approval")
 	}
 
-	_, cmd = m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd = m.updateToolApproval(tea.KeyPressMsg{Code: 'y', Text: string('y')})
 	if cmd == nil {
 		t.Fatal("expected a continuation command after approval")
 	}
@@ -904,7 +904,7 @@ func TestNativeCommandBatchCancelViaEsc(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.mcpBatchCancel != nil {
 		t.Fatal("Esc did not clear the native batch cancellation handle")
 	}
@@ -992,7 +992,7 @@ func TestMCPBatchCancelViaEsc(t *testing.T) {
 		t.Fatal("expected an in-flight async batch with a cancel func set")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.mcpBatchCancel != nil {
 		t.Error("Esc should have cleared mcpBatchCancel")
 	}
@@ -1042,7 +1042,7 @@ func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
 	toolOKBefore, toolErrBefore := m.toolOK, m.toolErr
 
 	// Plain Esc — no resend follows.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.mcpBatchCancel != nil {
 		t.Fatal("Esc should have cleared mcpBatchCancel")
 	}
@@ -1101,7 +1101,7 @@ func TestMCPStaleBatchDoesNotClobberResendBatch(t *testing.T) {
 	}
 
 	// Cancel A via Esc — no resend has happened yet.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.mcpBatchCancel != nil {
 		t.Fatal("Esc should have cleared mcpBatchCancel")
 	}

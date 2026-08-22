@@ -1,9 +1,8 @@
 package styles
 
 import (
+	"image/color"
 	"testing"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 func TestByNameResolvesEveryBuiltInTheme(t *testing.T) {
@@ -27,19 +26,20 @@ func TestByNameFallsBackToDefaultForUnknownNames(t *testing.T) {
 	}
 }
 
-// Every theme must fully populate its palette and derived styles — an empty
-// AdaptiveColor would silently render as the terminal's default foreground,
-// which is easy to miss visually but easy to catch here.
+// Every theme must fully populate its palette and derived styles — a missing
+// adaptiveColor pair would resolve to a nil color.Color and silently render
+// as the terminal's default foreground, which is easy to miss visually but
+// easy to catch here.
 func TestBuiltInThemesHaveNoEmptyColors(t *testing.T) {
 	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
-		colors := map[string]lipgloss.AdaptiveColor{
+		colors := map[string]color.Color{
 			"Accent": theme.Accent, "Subtle": theme.Subtle, "Text": theme.Text,
 			"Faint": theme.Faint, "Good": theme.Good, "Bad": theme.Bad,
 			"PanelEdge": theme.PanelEdge, "UserEdge": theme.UserEdge,
 		}
-		for field, color := range colors {
-			if color.Light == "" || color.Dark == "" {
-				t.Errorf("%s.%s has an empty AdaptiveColor variant: %+v", theme.Name, field, color)
+		for field, c := range colors {
+			if c == nil {
+				t.Errorf("%s.%s resolved to a nil color", theme.Name, field)
 			}
 		}
 	}

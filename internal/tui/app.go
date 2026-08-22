@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/cache"
@@ -281,7 +281,12 @@ func New(opts Options) *Model {
 	ta.CharLimit = 0
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	// textarea.New() defaults to DefaultDarkStyles() unconditionally; v1's
+	// equivalent defaults used AdaptiveColor throughout, so replace them
+	// with the light/dark pair actually resolved for this terminal.
+	taStyles := textarea.DefaultStyles(styles.IsDark())
+	taStyles.Focused.CursorLine = lipgloss.NewStyle()
+	ta.SetStyles(taStyles)
 	ta.Focus()
 
 	sp := spinner.New()
@@ -550,7 +555,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// A pending tool approval owns the keyboard until answered.
 	if len(m.pendingCalls) > 0 {
-		if key, ok := msg.(tea.KeyMsg); ok {
+		if key, ok := msg.(tea.KeyPressMsg); ok {
 			return m.updateToolApproval(key)
 		}
 		// Modified keys arrive as terminal-specific CSI messages rather than
@@ -564,7 +569,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The /keys inspector sees every input event when no approval is pending.
 	if m.keysMode {
 		switch msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			return m.updateKeysMode(msg)
 		default:
 			if _, ok := extendedKeySeq(msg); ok {
@@ -600,41 +605,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.overlayOpen {
 			return m.updateOverlay(msg)
 		}
 		if len(m.sugs) > 0 {
-			switch msg.Type {
-			case tea.KeyUp:
+			switch msg.String() {
+			case "up":
 				m.sugIdx = (m.sugIdx - 1 + len(m.sugs)) % len(m.sugs)
 				return m, nil
-			case tea.KeyDown:
+			case "down":
 				m.sugIdx = (m.sugIdx + 1) % len(m.sugs)
 				return m, nil
-			case tea.KeyTab:
+			case "tab":
 				m.input.SetValue("/" + m.sugs[m.sugIdx].name + " ")
 				m.input.CursorEnd()
 				m.updateSuggestions()
 				return m, nil
 			}
 		}
-		switch msg.Type {
-		case tea.KeyCtrlC:
+		switch msg.String() {
+		case "ctrl+c":
 			return m.handleCtrlC()
-		case tea.KeyCtrlS:
+		case "ctrl+s":
 			m.saveWithNotice()
 			return m, nil
-		case tea.KeyCtrlJ:
+		case "ctrl+j":
 			// Insert a newline; the input box grows with the content.
 			m.input.InsertString("\n")
 			m.syncInputHeight()
 			return m, nil
-		case tea.KeyCtrlL:
+		case "ctrl+l":
 			m.session.Clear()
 			m.refreshViewport()
 			return m, nil
-		case tea.KeyCtrlU:
+		case "ctrl+u":
 			// Clear the whole prompt box in one keystroke (readline-style line
 			// discard). Handy after pasting a large block you want to drop —
 			// far quicker than holding backspace. The textarea's own ctrl+u
@@ -645,27 +650,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 			}
 			return m, nil
-		case tea.KeyCtrlV:
+		case "ctrl+v":
 			return m, m.pasteImage()
-		case tea.KeyCtrlX:
+		case "ctrl+x":
 			if len(m.attachments) > 0 {
 				m.attachments = m.attachments[:len(m.attachments)-1]
 				m.relayout()
 			}
 			return m, nil
-		case tea.KeyCtrlY:
+		case "ctrl+y":
 			return m, m.copyLastReply()
-		case tea.KeyCtrlO:
+		case "ctrl+o":
 			// Release the mouse so the terminal's native selection works;
-			// press again to get wheel scrolling back.
+			// press again to get wheel scrolling back. Mouse mode itself is
+			// now a View() field (v2 removed the Enable/DisableMouse cmds),
+			// so View() reads m.mouseEnabled on the next render.
 			m.mouseEnabled = !m.mouseEnabled
 			if m.mouseEnabled {
 				m.notice = "mouse scrolling on — text selection captured by app"
-				return m, tea.EnableMouseCellMotion
+				return m, nil
 			}
 			m.notice = "text selection on — select & copy with your terminal, ctrl+o to switch back"
-			return m, tea.DisableMouse
-		case tea.KeyEsc:
+			return m, nil
+		case "esc":
 			var agentSave tea.Cmd
 			if m.agentVerifying() {
 				m.cancelVerifiedRun("verification cancelled by the user")
@@ -699,10 +706,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 			}
 			return m, agentSave
-		case tea.KeyEnter:
+		case "enter", "alt+enter":
 			// Alt/Option+Enter inserts a newline (with "Option as Meta"
 			// enabled on macOS terminals; see README).
-			if msg.Alt {
+			if msg.Mod.Contains(tea.ModAlt) {
 				m.input.InsertString("\n")
 				m.syncInputHeight()
 				return m, nil
@@ -912,13 +919,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		// Typed keys must never scroll the chat: the viewport's default
 		// keymap binds letters (j/k/u/d/b/f/h/l) and space, so feeding it
 		// keystrokes makes the screen jump around while typing. It only
 		// ever sees the dedicated scroll keys; everything else belongs to
 		// the input box.
-		switch key.Type {
+		switch key.Code {
 		case tea.KeyPgUp, tea.KeyPgDown:
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
@@ -948,17 +955,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // updateOverlay handles keys while an overlay is open. Picker overlays use
 // arrows to choose an item and Enter to apply it; regular overlays retain
 // their scroll-and-close behavior.
-func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) updateOverlay(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.pickerKind != pickerNone {
 		return m.updatePicker(msg)
 	}
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	switch msg.String() {
+	case "ctrl+c":
 		return m.handleCtrlC()
-	case tea.KeyEsc, tea.KeyEnter:
+	case "esc", "enter":
 		m.closeOverlay()
 		return m, nil
-	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+	case "up", "down", "pgup", "pgdown":
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
@@ -969,26 +976,26 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
 		return m.handleCtrlC()
-	case tea.KeyEsc:
+	case "esc":
 		m.closeOverlay()
 		return m, nil
-	case tea.KeyUp:
+	case "up":
 		if len(m.pickerItems) > 0 {
 			m.pickerIdx = (m.pickerIdx - 1 + len(m.pickerItems)) % len(m.pickerItems)
 			m.renderPicker()
 		}
 		return m, nil
-	case tea.KeyDown:
+	case "down":
 		if len(m.pickerItems) > 0 {
 			m.pickerIdx = (m.pickerIdx + 1) % len(m.pickerItems)
 			m.renderPicker()
 		}
 		return m, nil
-	case tea.KeyEnter:
+	case "enter":
 		if len(m.pickerItems) == 0 {
 			m.closeOverlay()
 			return m, nil
@@ -1346,7 +1353,7 @@ const (
 // updateToolApproval owns the keyboard while an approval or budget prompt is
 // showing. Ctrl+C still quits; everything else is swallowed so stray typing
 // cannot approve anything by accident.
-func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) updateToolApproval(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rowCount := approvalCount
 	if m.pendingBudget {
 		rowCount = 2 // Yes, continue / No, wrap up
@@ -1359,21 +1366,21 @@ func (m *Model) updateToolApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.approvalIdx = (m.approvalIdx + 1) % rowCount
 		m.refreshViewport()
 	}
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	switch msg.String() {
+	case "ctrl+c":
 		return m.handleCtrlC()
-	case tea.KeyUp:
+	case "up":
 		moveUp()
 		return m, nil
-	case tea.KeyDown, tea.KeyTab:
+	case "down", "tab":
 		moveDown()
 		return m, nil
-	case tea.KeyEnter:
+	case "enter":
 		if m.pendingBudget {
 			return m, m.resolveBudget(m.approvalIdx)
 		}
 		return m, m.resolveApproval(m.approvalIdx)
-	case tea.KeyEsc:
+	case "esc":
 		if m.pendingBudget {
 			return m, m.resolveBudget(1)
 		}
@@ -2234,11 +2241,11 @@ func (m *Model) resize(w, h int) {
 		vpHeight = 3
 	}
 	if !m.ready {
-		m.viewport = viewport.New(w, vpHeight)
+		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
 		m.ready = true
 	} else {
-		m.viewport.Width = w
-		m.viewport.Height = vpHeight
+		m.viewport.SetWidth(w)
+		m.viewport.SetHeight(vpHeight)
 	}
 
 	renderWidth := w - 4
@@ -2249,8 +2256,10 @@ func (m *Model) resize(w, h int) {
 		m.renderWidth = renderWidth
 		// A fixed standard style avoids WithAutoStyle's terminal query,
 		// which can stall the update loop on terminals that never answer.
+		// styles.IsDark caches its own query so this doesn't pay for a
+		// second terminal round-trip on top of the theme's.
 		style := "light"
-		if lipgloss.HasDarkBackground() {
+		if styles.IsDark() {
 			style = "dark"
 		}
 		r, err := glamour.NewTermRenderer(
@@ -2454,7 +2463,7 @@ func (m *Model) refreshViewport() {
 		b.WriteString(m.renderApprovalPrompt())
 	}
 
-	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width).Render(b.String()))
+	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
 	m.viewport.GotoBottom()
 }
 
@@ -2584,8 +2593,10 @@ func (m *Model) renderApprovalPrompt() string {
 	return b.String()
 }
 
-// View renders the full screen.
-func (m *Model) View() string {
+// render builds the full-screen frame as a plain string. View() wraps it
+// into the tea.View the v2 runtime expects; tests call render() directly
+// when they just need the rendered text.
+func (m *Model) render() string {
 	if !m.ready {
 		return "loading…"
 	}
@@ -2683,6 +2694,22 @@ func (m *Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+// View renders the full screen. Alt-screen and mouse reporting used to be
+// tea.NewProgram options (tea.WithAltScreen(), tea.WithMouseCellMotion())
+// plus runtime tea.EnableMouseCellMotion/tea.DisableMouse commands from
+// ctrl+o; v2 removed both in favor of fields read fresh on every render, so
+// MouseMode here just mirrors m.mouseEnabled instead of a Cmd toggling it.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	if m.mouseEnabled {
+		v.MouseMode = tea.MouseModeCellMotion
+	} else {
+		v.MouseMode = tea.MouseModeNone
+	}
+	return v
+}
+
 // Run starts the chat TUI and blocks until it exits.
 func Run(opts Options) error {
 	m := New(opts)
@@ -2698,7 +2725,7 @@ func Run(opts Options) error {
 	fmt.Print(enableModifyOtherKeys)
 	defer fmt.Print(disableModifyOtherKeys)
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m)
 
 	var registryServer *toolapi.Server
 	if opts.Config.ToolRegistry.Enabled {

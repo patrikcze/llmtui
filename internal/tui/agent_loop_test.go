@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -551,7 +551,7 @@ func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 	if len(m.pendingCalls) != 1 {
 		t.Fatalf("pending calls = %d, want 1", len(m.pendingCalls))
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'n', Text: string('n')})
 	driveAgentCommands(t, m, cmd)
 
 	if m.agentLoop.run.Status != agent.DecisionNeedsUserInput {
@@ -639,12 +639,12 @@ func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 	}
 
 	runID := m.agentLoop.run.ID
-	_, downCmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	_, downCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	driveAgentCommands(t, m, downCmd)
 	if m.pickerIdx != 1 {
 		t.Fatalf("pickerIdx = %d, want 1 (Humpolec) after one down-arrow", m.pickerIdx)
 	}
-	_, enterCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, enterCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	driveAgentCommands(t, m, enterCmd)
 
 	if m.pickerKind != pickerNone {
@@ -676,7 +676,7 @@ func TestPendingToolApprovalOutranksAgentQuestionPicker(t *testing.T) {
 	// untouched (the picker's Enter branch never looks at it) while
 	// pickerKind would already be pickerNone; a resolved approval with the
 	// question picker still open shows the approval path ran first.
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if len(m.pendingCalls) != 0 {
 		t.Fatalf("tool approval was not resolved: pendingCalls=%d", len(m.pendingCalls))
 	}
@@ -763,7 +763,7 @@ func TestAgentLifecycleCommandIsNonBlockingAndCancellationResponsive(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("provider did not start")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	select {
 	case <-result:
 	case <-time.After(time.Second):

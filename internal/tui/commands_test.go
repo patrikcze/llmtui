@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/config"
@@ -18,7 +18,7 @@ import (
 func runCommand(m *Model, line string) {
 	m.input.SetValue(line)
 	m.updateSuggestions()
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 }
 
 func TestCommandAliases(t *testing.T) {
@@ -354,7 +354,7 @@ func TestKeysCommandEntersInspector(t *testing.T) {
 		t.Fatal("/keys should enter the inspector")
 	}
 	// Keys are logged, not executed.
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	m.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	if len(m.keyLog) != 1 || !strings.Contains(m.keyLog[0], "ctrl+l") {
 		t.Errorf("keyLog = %v", m.keyLog)
 	}
@@ -363,7 +363,7 @@ func TestKeysCommandEntersInspector(t *testing.T) {
 	if !strings.Contains(strings.Join(m.keyLog, "|"), "shift+enter") {
 		t.Errorf("keyLog = %v, want shift+enter entry", m.keyLog)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.keysMode {
 		t.Error("esc should exit the inspector")
 	}

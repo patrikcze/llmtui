@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -35,8 +35,8 @@ func TestInputGrowthNeverStarvesViewport(t *testing.T) {
 	// Far more input lines than could ever fit on screen.
 	m.input.SetValue(strings.Repeat("x\n", 100))
 	m.syncInputHeight()
-	if m.viewport.Height < 3 {
-		t.Errorf("viewport starved to %d rows by a huge input", m.viewport.Height)
+	if m.viewport.Height() < 3 {
+		t.Errorf("viewport starved to %d rows by a huge input", m.viewport.Height())
 	}
 	if m.inputLines > m.maxInputLines() {
 		t.Errorf("inputLines %d exceeds cap %d", m.inputLines, m.maxInputLines())
@@ -85,24 +85,24 @@ func TestTypingDoesNotScrollViewport(t *testing.T) {
 	}
 	m.refreshViewport()
 	m.viewport.GotoBottom()
-	before := m.viewport.YOffset
+	before := m.viewport.YOffset()
 
 	// Space, letters bound in the viewport keymap (j/k/u/d/b/f), arrows —
 	// none of them may move the chat while the user is typing.
 	for _, r := range "hello worldjkudbf" {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeySpace})
-	if m.viewport.YOffset != before {
-		t.Errorf("viewport scrolled from %d to %d while typing", before, m.viewport.YOffset)
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	if m.viewport.YOffset() != before {
+		t.Errorf("viewport scrolled from %d to %d while typing", before, m.viewport.YOffset())
 	}
 	if !strings.Contains(m.input.Value(), "hello world") {
 		t.Errorf("input lost keystrokes: %q", m.input.Value())
 	}
 
 	// The dedicated scroll keys still work.
-	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.viewport.YOffset >= before {
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.viewport.YOffset() >= before {
 		t.Error("PgUp did not scroll the viewport")
 	}
 }
@@ -112,7 +112,7 @@ func TestInputGrowsWithWrappedText(t *testing.T) {
 	m.resize(40, 24)
 	// Type enough words to word-wrap well past two rows at width 32.
 	for _, r := range strings.Repeat("word medium words here ", 6) {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if m.inputLines < 3 {
 		t.Errorf("inputLines = %d, want >= 3 for long wrapped text", m.inputLines)
@@ -141,12 +141,12 @@ func TestApprovalMenuArrowSelection(t *testing.T) {
 	root := pendingWrite(t, m)
 
 	// Down twice lands on "No", Enter confirms it: batch denied, no file.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.approvalIdx != approvalNo {
 		t.Fatalf("approvalIdx = %d, want %d", m.approvalIdx, approvalNo)
 	}
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("denial must be dispatched back to the model")
 	}
@@ -166,7 +166,7 @@ func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
 	if m.approvalIdx != approvalYes {
 		t.Fatalf("menu must start on Yes, got row %d", m.approvalIdx)
 	}
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected execution after confirming Yes")
 	}
@@ -181,7 +181,7 @@ func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
 	m.resize(80, 24)
 	pendingWrite(t, m)
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: '2', Text: string('2')})
 	if cmd == nil {
 		t.Fatal("expected execution after choosing 2")
 	}
@@ -199,7 +199,7 @@ func TestApprovalMenuEscDenies(t *testing.T) {
 	m.resize(80, 24)
 	root := pendingWrite(t, m)
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("esc must deny and report back to the model")
 	}
