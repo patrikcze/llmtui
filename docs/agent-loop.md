@@ -269,6 +269,14 @@ When a live run stops as `needs_user_input`, the next normal user message
 resumes that same run in a fresh cycle and is included as the new input; it does
 not silently grant a previously denied permission.
 
+If the verifier also extracted discrete choices from the executor's question
+(a numbered or lettered list, copied into the run's evidence rather than
+invented), the TUI presents them as a pickable overlay instead of requiring a
+free-typed reply: arrow keys navigate, Enter resumes the run with the chosen
+option exactly as if it had been typed, and Esc always falls back to the
+normal input box for a free-text answer — the extraction is a model output,
+not guaranteed exhaustive or correct, so it is never a hard constraint.
+
 ## Cancellation and safety
 
 `Esc`, the first `Ctrl+C`, or `/agent cancel` cancels the current executor,

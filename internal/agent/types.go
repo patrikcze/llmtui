@@ -147,6 +147,13 @@ type VerificationResult struct {
 	// approval): this is the verifier's own semantic judgment of the
 	// executor's text.
 	NeedsUserInput bool `json:"needs_user_input,omitempty"`
+	// UserOptions holds discrete choices the verifier extracted from the
+	// executor's question, when NeedsUserInput is true and the question
+	// presented a numbered/lettered list rather than being open-ended. Empty
+	// (the common case, and always true for an open-ended question) means
+	// the TUI falls back to a free-text prompt — this field is optional
+	// enrichment, never a requirement for NeedsUserInput to function.
+	UserOptions []string `json:"user_options,omitempty"`
 	// ProposedCriteria decomposes the task into stable acceptance criteria.
 	// Only the first semantic verification may propose them; PinCriteria
 	// ignores proposals once a set is pinned.

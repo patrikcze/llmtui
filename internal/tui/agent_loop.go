@@ -151,6 +151,40 @@ func (m *Model) agentNeedsUserInput() bool {
 	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
 }
 
+// openAgentQuestionPicker presents the executor's own discrete choices (as
+// extracted by the verifier into VerificationResult.UserOptions) as a
+// pickable overlay, instead of leaving the question as plain errText that
+// only a free-typed reply can answer. question is the executor's actual
+// question (stop.Reason, which already carries the verifier's summary
+// verbatim). Extraction is a small-model output and not guaranteed
+// exhaustive or correct, so Esc always falls back to the normal free-text
+// input box — this overlay is a convenience, never a hard constraint.
+func (m *Model) openAgentQuestionPicker(question string, options []string) {
+	m.pickerKind = pickerAgentQuestion
+	m.pickerHeader = question
+	m.pickerItems = append([]string{}, options...)
+	m.pickerIdx = 0
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+func (m *Model) agentQuestionPickerOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("agent needs your input") + "\n\n")
+	b.WriteString(m.theme.UserLabel.Render(m.pickerHeader) + "\n\n")
+	for i, option := range m.pickerItems {
+		marker := "  "
+		label := m.theme.SystemNote.Render(option)
+		if i == m.pickerIdx {
+			marker = m.theme.BadgeOK.Render("▸ ")
+			label = m.theme.BadgeOK.Render(option)
+		}
+		b.WriteString(marker + label + "\n")
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ pick · enter confirm · esc type a custom answer instead"))
+	return b.String()
+}
+
 func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cmd {
 	if m.agentLoop == nil {
 		m.configureAgentLoop()
@@ -473,7 +507,11 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
 	case agent.DecisionNeedsUserInput:
-		m.errText = "agent needs user input: " + stop.Reason + ". What permitted alternative or missing fact should the next cycle use?"
+		if len(result.UserOptions) > 0 {
+			m.openAgentQuestionPicker(stop.Reason, result.UserOptions)
+		} else {
+			m.errText = "agent needs user input: " + stop.Reason + ". What permitted alternative or missing fact should the next cycle use?"
+		}
 		m.notice = fmt.Sprintf("agent %s stopped for user input", shortRunID(run.ID))
 	case agent.DecisionParked:
 		m.notice = fmt.Sprintf("agent %s parked: %s", shortRunID(run.ID), stop.Reason)
