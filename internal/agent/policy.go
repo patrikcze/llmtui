@@ -31,6 +31,9 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 	if hasErrorKind(exec.Errors, ErrorPermissionDenied) || exec.NeedsUserInput {
 		return StopResult{Decision: DecisionNeedsUserInput, Reason: "execution requires explicit user input or permission"}
 	}
+	if verify.NeedsUserInput {
+		return StopResult{Decision: DecisionNeedsUserInput, Reason: nonempty(verify.Summary, "the executor's response requires your input to continue")}
+	}
 	if hasErrorKind(exec.Errors, ErrorSafety, ErrorInvariant) {
 		return StopResult{Decision: DecisionEscalated, Reason: "execution encountered a safety constraint or internal invariant failure"}
 	}

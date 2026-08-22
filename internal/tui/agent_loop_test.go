@@ -569,6 +569,37 @@ func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentClarifyingQuestionStopsForUser exercises the verifier's
+// own semantic detection of a clarifying question, distinct from
+// TestVerifiedAgentPermissionDenialStopsForUser above (which fires only on a
+// denied tool approval). Observed in a real run: the executor asked "Which
+// source would you like me to check first?" but nothing inspected the
+// executor's response text, so the run just ground through retries to
+// DecisionFailed instead of surfacing the question. The verifier response is
+// written as a raw JSON literal, not through the shared verifierJSON()
+// helper, because that helper has several existing call sites and adding a
+// needs_user_input parameter would touch all of them for this one test.
+func TestVerifiedAgentClarifyingQuestionStopsForUser(t *testing.T) {
+	const question = "Which source would you like me to check first: AccuWeather or the Met Office?"
+	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","retryable":true,"confidence":0.8,"needs_user_input":true}`
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{text: question},
+		agentScriptStep{text: verifierReply},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("check the weather", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionNeedsUserInput {
+		t.Fatalf("status = %q, want needs_user_input", m.agentLoop.run.Status)
+	}
+	cycle := m.agentLoop.run.LatestCycle()
+	if !cycle.Verification.NeedsUserInput {
+		t.Fatalf("verification = %+v, want NeedsUserInput true", cycle.Verification)
+	}
+	if !strings.Contains(m.errText, question) {
+		t.Fatalf("errText = %q, want it to surface the executor's actual question, not a generic message", m.errText)
+	}
+}
+
 func TestNonAgentChatPathRemainsUnchanged(t *testing.T) {
 	m := newTestModel(t)
 	prov := &scriptedAgentProvider{steps: []agentScriptStep{{text: "ordinary answer"}}}

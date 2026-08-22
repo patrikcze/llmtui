@@ -140,6 +140,13 @@ type VerificationResult struct {
 	NewEvidence       bool                `json:"new_evidence,omitempty"`
 	StrategyChanged   bool                `json:"strategy_changed,omitempty"`
 	TransientFailure  bool                `json:"transient_failure,omitempty"`
+	// NeedsUserInput reports that this cycle's response is substantively a
+	// question or choice addressed to the user — not real task progress —
+	// and only the user can supply what the next cycle needs. Distinct from
+	// ExecutionResult.NeedsUserInput (set when the user denies a tool
+	// approval): this is the verifier's own semantic judgment of the
+	// executor's text.
+	NeedsUserInput bool `json:"needs_user_input,omitempty"`
 	// ProposedCriteria decomposes the task into stable acceptance criteria.
 	// Only the first semantic verification may propose them; PinCriteria
 	// ignores proposals once a set is pinned.

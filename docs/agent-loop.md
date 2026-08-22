@@ -230,10 +230,13 @@ Default hard limits are:
 Passing all observable criteria ends as `done`. Verified progress with
 remaining criteria becomes `continue`. A failed/inconclusive but meaningfully
 changed attempt becomes `retry`. Missing user permission/input becomes
-`needs_user_input`; an external block may become `parked`; cancellation and
-hard-budget exhaustion are terminal. Safety constraints and internal
-invariants escalate; provider failures are explicit and never swallowed merely
-to keep the loop running.
+`needs_user_input` — either the user denied a tool approval, or the verifier
+judged the executor's response to be substantively a question or choice
+addressed to the user rather than task progress, in which case the surfaced
+message is the executor's actual question, not a generic notice; an external
+block may become `parked`; cancellation and hard-budget exhaustion are
+terminal. Safety constraints and internal invariants escalate; provider
+failures are explicit and never swallowed merely to keep the loop running.
 
 ## Run memory, privacy, and resume
 
