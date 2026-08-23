@@ -1268,6 +1268,135 @@ func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *te
 	}
 }
 
+func newAgentVerificationTestRun(t *testing.T, m *Model, request string, criteria []agent.CriterionSpec, execution agent.ExecutionResult) *agent.AgentRun {
+	t.Helper()
+	run, err := agent.NewRun("verification-test", request, agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle(request, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	run.PinTypedCriteria(criteria)
+	m.agentLoop.run = run
+	m.agentLoop.execution = execution
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	m.resetAgentContext()
+	t.Cleanup(m.releaseAgentContext)
+	return run
+}
+
+func TestAdaptiveDeterministicTaskCompletesWithoutSemanticVerifier(t *testing.T) {
+	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not be requested"})
+	run := newAgentVerificationTestRun(t, m, "run tests", nil, agent.ExecutionResult{
+		TestsRun:    []agent.TestResult{{Name: "go test ./...", Passed: true}},
+		NewEvidence: true,
+	})
+	driveAgentCommands(t, m, m.startAgentVerification())
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %q, want done", run.Status)
+	}
+	if len(prov.requests) != 0 {
+		t.Fatalf("provider requests = %d, want no semantic verifier", len(prov.requests))
+	}
+}
+
+func TestAdaptiveMixedCriteriaVerifiesOnlySemanticRemainder(t *testing.T) {
+	minimalPass := `{"verdict":"passed","summary":"report is complete","recommended_next":"","retryable":false,` +
+		`"needs_user_input":false,"user_options":[],"criteria":[{"id":"c2","status":"satisfied","note":"observed"}],` +
+		`"proposed_criteria":[],"atomic_task":false}`
+	m, prov := configureAgentTestModel(t, agentScriptStep{text: minimalPass})
+	run := newAgentVerificationTestRun(t, m, "run tests and explain the result", []agent.CriterionSpec{
+		{Text: "tests pass", Kind: agent.CriterionTestResult, Target: "go test ./..."},
+		{Text: "result is explained", Kind: agent.CriterionSemantic},
+	}, agent.ExecutionResult{
+		TestsRun:    []agent.TestResult{{Name: "go test ./...", Passed: true}},
+		NewEvidence: true,
+	})
+	driveAgentCommands(t, m, m.startAgentVerification())
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %q, want done", run.Status)
+	}
+	if len(prov.requests) != 1 {
+		t.Fatalf("provider requests = %d, want one semantic verifier", len(prov.requests))
+	}
+	evidence := prov.requests[0].Messages[1].Content
+	if !strings.Contains(evidence, "result is explained") || strings.Contains(evidence, `\"Text\":\"tests pass\"`) {
+		t.Fatalf("verifier received more than the unresolved semantic criterion: %s", evidence)
+	}
+}
+
+func TestAdaptiveUserCriterionStopsWithoutSemanticVerifier(t *testing.T) {
+	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not be requested"})
+	run := newAgentVerificationTestRun(t, m, "ask which target to use", []agent.CriterionSpec{
+		{Text: "Choose a deployment target", Kind: agent.CriterionUserInput},
+	}, agent.ExecutionResult{Summary: "target is required"})
+	driveAgentCommands(t, m, m.startAgentVerification())
+	if run.Status != agent.DecisionNeedsUserInput {
+		t.Fatalf("status = %q, want needs_user_input", run.Status)
+	}
+	if len(prov.requests) != 0 {
+		t.Fatalf("provider requests = %d, want no semantic verifier", len(prov.requests))
+	}
+}
+
+func TestAgentDirectiveTokenSnapshots(t *testing.T) {
+	tests := []struct {
+		name      string
+		populate  func(*agent.AgentRun)
+		maxTokens int
+	}{
+		{name: "small_local_compact_state", maxTokens: 220},
+		{
+			name: "large_model_maximum_bounded_state", maxTokens: 3100,
+			populate: func(run *agent.AgentRun) {
+				criteria := make([]agent.CriterionSpec, agent.MaxCriteria)
+				for i := range criteria {
+					criteria[i] = agent.CriterionSpec{Text: fmt.Sprintf("criterion %02d %s", i, strings.Repeat("x", 180)), Kind: agent.CriterionSemantic}
+				}
+				run.PinTypedCriteria(criteria)
+				for i := 0; i < agent.MaxEvidence; i++ {
+					run.AppendEvidence([]agent.EvidenceItem{{Source: fmt.Sprintf("source-%02d", i), Summary: strings.Repeat("e", 220), Success: i%2 == 0}})
+				}
+				for cycle := 1; cycle <= 4; cycle++ {
+					calls := make([]string, 32)
+					for i := range calls {
+						calls[i] = fmt.Sprintf("operation-%d-%02d %s", cycle, i, strings.Repeat("o", 120))
+					}
+					run.Memory = append(run.Memory, agent.MemoryEntry{Cycle: cycle, ToolCalls: calls})
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			run, err := agent.NewRun("prompt-snapshot", "complete the bounded task", agent.DefaultLimits(), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := run.BeginCycle("complete the bounded task", nil, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.populate != nil {
+				tt.populate(run)
+			}
+			m.agentOn = true
+			m.agentLoop.run = run
+			directive := m.agentDirective()
+			if tokens := provider.EstimateTokens(directive); tokens > tt.maxTokens {
+				t.Fatalf("directive token snapshot = %d, want <= %d", tokens, tt.maxTokens)
+			}
+			for _, controllerOnly := range []string{"Run ID", "failure fingerprint", "Stage:"} {
+				if strings.Contains(directive, controllerOnly) {
+					t.Fatalf("directive leaked controller field %q", controllerOnly)
+				}
+			}
+		})
+	}
+}
+
 // Adaptive mode: once a run's first cycle has genuinely had its chance at
 // semantic verification — even if that cycle took the deterministic-failure
 // shortcut, which never calls the verifier at all — a later mechanically

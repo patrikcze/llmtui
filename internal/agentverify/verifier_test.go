@@ -340,8 +340,8 @@ func TestVerifierPromptTeachesUserOptions(t *testing.T) {
 	if !strings.Contains(verifierJSONSchema, `"user_options": {"type": "array", "items": {"type": "string"}}`) {
 		t.Fatal("verifier JSON schema is missing user_options")
 	}
-	if !strings.Contains(verifierJSONSchema[strings.Index(verifierJSONSchema, `"required"`):], `"user_options"`) {
-		t.Fatal("verifier JSON schema must declare user_options as required")
+	if strings.Contains(verifierJSONSchema[strings.Index(verifierJSONSchema, `"required"`):], `"user_options"`) {
+		t.Fatal("verifier JSON schema must keep user_options optional")
 	}
 }
 
@@ -540,11 +540,16 @@ func TestVerifierTimeoutAndCancellation(t *testing.T) {
 	})
 }
 
-// verifierRequiredFieldOrder mirrors verifier.go's verifierRequiredFields —
+// verifierRequiredFieldOrder mirrors verifier.go's minimal required fields —
 // kept as an independent literal (not a reference to the unexported package
 // var) so these tests would themselves fail loudly if a required field were
 // ever added to the schema without a matching entry here.
 var verifierRequiredFieldOrder = []string{
+	"verdict", "summary", "recommended_next", "retryable", "needs_user_input",
+	"criteria", "proposed_criteria", "atomic_task",
+}
+
+var verifierEnvelopeFieldOrder = []string{
 	"verdict", "summary", "evidence", "failed_criteria", "remaining_criteria",
 	"recommended_next", "retryable", "confidence", "new_evidence", "strategy_changed",
 	"transient_failure", "needs_user_input", "user_options", "criteria",
@@ -593,7 +598,7 @@ func buildEnvelope(overrides map[string]string, omit ...string) string {
 	var b strings.Builder
 	b.WriteByte('{')
 	first := true
-	for _, key := range verifierRequiredFieldOrder {
+	for _, key := range verifierEnvelopeFieldOrder {
 		if omitSet[key] {
 			continue
 		}
@@ -611,8 +616,8 @@ func buildEnvelope(overrides map[string]string, omit ...string) string {
 }
 
 // TestParseRejectsEachMissingRequiredField is the table-driven guard for
-// verifierJSONSchema's full "required" list: omitting any single one of the
-// 16 required keys must fail Parse, and the error must name that field so
+// verifierJSONSchema's minimal "required" list: omitting any required key
+// must fail Parse, and the error must name that field so
 // the repair-prompt round-trip has something concrete to act on.
 func TestParseRejectsEachMissingRequiredField(t *testing.T) {
 	for _, field := range verifierRequiredFieldOrder {
@@ -629,9 +634,90 @@ func TestParseRejectsEachMissingRequiredField(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsMinimalAndLegacyVerifierEnvelopes(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "minimal atomic pass",
+			raw:  `{"verdict":"passed","summary":"done","recommended_next":"","retryable":false,"needs_user_input":false,"user_options":[],"criteria":[],"proposed_criteria":[],"atomic_task":true}`,
+		},
+		{
+			name: "legacy full envelope",
+			raw:  buildEnvelope(nil),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Parse(tt.raw, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Verdict != agent.VerificationPassed {
+				t.Fatalf("verdict = %q", result.Verdict)
+			}
+		})
+	}
+}
+
+func TestVerifierSchemaExposesOnlyMinimalContract(t *testing.T) {
+	for _, legacy := range []string{"evidence", "failed_criteria", "remaining_criteria", "confidence", "new_evidence", "strategy_changed", "transient_failure"} {
+		if strings.Contains(verifierJSONSchema, `"`+legacy+`"`) {
+			t.Fatalf("schema still asks new verifiers for legacy field %q", legacy)
+		}
+	}
+}
+
+func TestWeakModelMinimalJSONCorpus(t *testing.T) {
+	tests := []struct {
+		name         string
+		raw          string
+		establishing bool
+		verdict      agent.VerificationVerdict
+	}{
+		{
+			name:         "markdown fenced atomic pass",
+			raw:          "```json\n" + `{"verdict":"passed","summary":"done","recommended_next":"","retryable":false,"needs_user_input":false,"user_options":[],"criteria":[],"proposed_criteria":[],"atomic_task":true}` + "\n```",
+			establishing: true,
+			verdict:      agent.VerificationPassed,
+		},
+		{
+			name:         "proposal and update without optional note",
+			raw:          `{"summary":"done","verdict":"passed","retryable":false,"recommended_next":"","criteria":[{"id":"c1","status":"satisfied"}],"needs_user_input":false,"user_options":[],"atomic_task":false,"proposed_criteria":["tests pass"]}`,
+			establishing: true,
+			verdict:      agent.VerificationPassed,
+		},
+		{
+			name:         "open ended user question with null options",
+			raw:          `{"verdict":"inconclusive","summary":"Which target?","recommended_next":"","retryable":false,"needs_user_input":true,"user_options":null,"criteria":[],"proposed_criteria":[],"atomic_task":false}`,
+			establishing: false,
+			verdict:      agent.VerificationInconclusive,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Parse(tt.raw, tt.establishing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Verdict != tt.verdict {
+				t.Fatalf("verdict = %q, want %q", result.Verdict, tt.verdict)
+			}
+		})
+	}
+}
+
+func TestVerifierPromptTokenSnapshot(t *testing.T) {
+	messages := verifierMessages(`{"Task":"bounded task","EstablishCriteria":true}`)
+	if tokens := provider.EstimateMessagesTokens(messages); tokens > 1300 {
+		t.Fatalf("minimal verifier prompt snapshot = %d tokens, want <= 1300", tokens)
+	}
+}
+
 // TestParseRejectsSparseREL002Repro is the exact regression this task
 // exists to close: a minimal {"verdict":"passed","summary":"ok"} object
-// (missing all 14 other required fields) must never again parse
+// (missing the other controller-required fields) must never again parse
 // successfully — under the old plain json.Unmarshal, Go zero-filled every
 // omitted field and this object completed a run's establishing cycle having
 // pinned zero acceptance criteria.
@@ -659,14 +745,13 @@ func TestParseRejectsUnknownField(t *testing.T) {
 	}
 }
 
-// TestParseRejectsNullRequiredScalars covers the 9 scalar-typed required
-// fields (the original 8 plus the new atomic_task): a key present but set to
+// TestParseRejectsNullRequiredScalars covers non-nullable scalar fields in
+// the minimal contract: a key present but set to
 // JSON null is not the same as a real value and must be rejected, not
 // silently zero-valued.
 func TestParseRejectsNullRequiredScalars(t *testing.T) {
 	for _, field := range []string{
-		"verdict", "summary", "retryable", "confidence", "new_evidence",
-		"strategy_changed", "transient_failure", "needs_user_input", "atomic_task",
+		"verdict", "summary", "retryable", "needs_user_input", "atomic_task",
 	} {
 		t.Run(field, func(t *testing.T) {
 			raw := buildEnvelope(map[string]string{field: "null"})
@@ -677,10 +762,9 @@ func TestParseRejectsNullRequiredScalars(t *testing.T) {
 	}
 }
 
-// TestParseAcceptsNullRequiredArraysAsEmpty covers the 6 array-typed
-// required fields: some backends legitimately emit null for an empty
-// required array under schema enforcement, so null must be accepted and
-// normalized to a non-nil empty slice, not rejected like a null scalar.
+// TestParseAcceptsNullArraysAsEmpty covers both minimal and legacy arrays:
+// some backends emit null for an empty array, so null must be accepted and
+// normalized to empty rather than rejected like a null scalar.
 func TestParseAcceptsNullRequiredArraysAsEmpty(t *testing.T) {
 	for _, field := range []string{
 		"evidence", "failed_criteria", "remaining_criteria", "user_options", "criteria", "proposed_criteria",
