@@ -178,6 +178,7 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
 | `verifier.max_tokens` | `1024` | Evaluator response cap; raise it if the verifier itself gets cut off mid-JSON on a slower/weaker model |
 | `verifier.timeout` | `120s` | Whole evaluator-request deadline |
+| `verifier.max_attempts` | `2` | Verifier-inference attempts per cycle (a provider error, timeout, or exhausted internal format repair) before the cycle is parked as `verification_unavailable` instead of restarting the executor — see [agent-loop.md](agent-loop.md#verification) |
 | `enforce_budgets_live` | `true` | Check `max_tool_calls`/`max_tokens` on every tool round using the run's true running totals, not only when a cycle completes. Set `false` to fall back to the cycle-boundary-only check if this causes an unexpected early stop — see [agent-loop.md](agent-loop.md#stop-conditions-and-budgets) |
 
 ### `tools`

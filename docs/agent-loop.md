@@ -159,12 +159,28 @@ control data. Malformed output is classified separately from provider,
 timeout, cancellation, and execution failures.
 
 Malformed control JSON gets one bounded, fresh-context repair attempt before
-counting as a failure: a second verifier-only request, reusing the same
-evidence and timeout, asks the model to reformat its previous response as
-valid control JSON. Usage from both requests is combined for accounting. If
-the repair also fails to parse, the existing bounded repeated-failure policy
-applies as normal. This repair is separate from — and happens before —
-cycle-level retry.
+counting as a failed verifier attempt: a second verifier-only request, reusing
+the same evidence and timeout, asks the model to reformat its previous
+response as valid control JSON. Usage from both requests is combined for
+accounting.
+
+A verifier attempt can still fail after that repair — the repair itself
+returns unparseable JSON, the request times out, or the provider errors
+outright. That is a failure of the *verifier*, not a rejection of the
+executor's work, so it is never routed through the normal cycle-completion
+pipeline (memory write, stop-check policy, a new executor cycle). Instead the
+TUI agent loop retries the verifier itself, for the same cycle, up to
+`agent.verifier.max_attempts` times (default `2`; each attempt may still
+perform its own one-shot repair as above). If every attempt is exhausted, the
+run ends immediately as `verification_unavailable`: the executor's
+`ExecutionResult` for that cycle is preserved, but no further executor cycle
+is scheduled and the cycle's verification is left unrecorded. This is
+distinct from `failed` (the verifier rejected observable evidence) and from
+the repeated-failure policy below (which keys on the verifier producing a
+verdict the executor keeps failing to satisfy) — `verification_unavailable`
+means the verifier never produced a verdict to evaluate at all. A resumable
+run stopped this way can still be continued with `/agent resume`, which
+starts a fresh cycle rather than replaying anything.
 
 Deterministic evidence always wins. A failed test, failed or malformed tool
 call, permission denial, cancellation, or timeout cannot become `passed` merely
@@ -226,6 +242,7 @@ Default hard limits are:
 | Tokens | `100000` | Executor plus verifier usage when reported/estimated |
 | Elapsed time | `30m` | Wall-clock run duration |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
+| Verifier attempts | `2` | `agent.verifier.max_attempts` per cycle, see [Verification](#verification) |
 
 Passing all observable criteria ends as `done`. Verified progress with
 remaining criteria becomes `continue`. A failed/inconclusive but meaningfully
@@ -235,8 +252,12 @@ judged the executor's response to be substantively a question or choice
 addressed to the user rather than task progress, in which case the surfaced
 message is the executor's actual question, not a generic notice; an external
 block may become `parked`; cancellation and hard-budget exhaustion are
-terminal. Safety constraints and internal invariants escalate; provider
-failures are explicit and never swallowed merely to keep the loop running.
+terminal. Exhausting `agent.verifier.max_attempts` is also terminal, as
+`verification_unavailable` (see [Verification](#verification)) — distinct
+from a hard-budget stop because the cause is the verifier's own
+infrastructure, not a run limit. Safety constraints and internal invariants
+escalate; provider failures are explicit and never swallowed merely to keep
+the loop running.
 
 ## Run memory, privacy, and resume
 

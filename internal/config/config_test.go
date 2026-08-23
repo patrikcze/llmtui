@@ -199,6 +199,50 @@ func TestAgentVerifierModeDefaultsToEmptyAndResolvesAdaptive(t *testing.T) {
 	}
 }
 
+func TestAgentVerifierMaxAttemptsDefaultsToTwoAndIsOverridable(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Verifier.MaxAttempts != 2 {
+		t.Fatalf("Agent.Verifier.MaxAttempts default = %d, want 2", cfg.Agent.Verifier.MaxAttempts)
+	}
+
+	path := writeConfig(t, `
+agent:
+  verifier:
+    max_attempts: 5
+`)
+	v, err = NewViper(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Verifier.MaxAttempts != 5 {
+		t.Fatalf("Agent.Verifier.MaxAttempts from YAML = %d, want 5", cfg.Agent.Verifier.MaxAttempts)
+	}
+
+	t.Setenv("LLMTUI_AGENT_VERIFIER_MAX_ATTEMPTS", "3")
+	v, err = NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Verifier.MaxAttempts != 3 {
+		t.Fatalf("Agent.Verifier.MaxAttempts from env = %d, want 3", cfg.Agent.Verifier.MaxAttempts)
+	}
+}
+
 func TestVerifierModeResolution(t *testing.T) {
 	cases := []struct {
 		name    string

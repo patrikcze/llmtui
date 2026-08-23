@@ -244,6 +244,16 @@ type AgentVerifierConfig struct {
 	Model     string `mapstructure:"model" yaml:"model,omitempty"`
 	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"`
 	Timeout   string `mapstructure:"timeout" yaml:"timeout"`
+	// MaxAttempts bounds how many verifier-inference attempts the TUI agent
+	// loop will make for a single cycle before giving up on that cycle's
+	// verification (each attempt may still internally perform agentverify's
+	// own one-shot malformed-JSON repair, which is a separate, earlier
+	// layer). Exhausting this budget parks the cycle as
+	// agent.DecisionVerificationUnavailable instead of restarting the
+	// executor — a verifier transport/format failure is not evidence the
+	// executor's work was wrong. See REL-001 in
+	// .claude/tasks/llmtui-audit-report.md.
+	MaxAttempts int `mapstructure:"max_attempts" yaml:"max_attempts"`
 }
 
 // Verification policy modes; see AgentVerifierConfig.Mode.
@@ -774,6 +784,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.model", "")
 	v.SetDefault("agent.verifier.max_tokens", 1024)
 	v.SetDefault("agent.verifier.timeout", "120s")
+	v.SetDefault("agent.verifier.max_attempts", 2)
 	v.SetDefault("agent.enforce_budgets_live", true)
 
 	v.SetDefault("tools.enabled", false)

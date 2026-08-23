@@ -82,6 +82,12 @@ func configureAgentTestModel(t *testing.T, steps ...agentScriptStep) (*Model, *s
 	m.cfg.Agent.Verifier.Mode = "always"
 	m.cfg.Agent.Verifier.Timeout = "1s"
 	m.cfg.Agent.Verifier.MaxTokens = 256
+	// This harness builds config.Config directly rather than through viper,
+	// so viper's SetDefault("agent.verifier.max_attempts", 2) never applies;
+	// mirror that production default explicitly here, matching the pattern
+	// already used for Timeout/MaxTokens above. Individual tests override it
+	// when they need a different bound.
+	m.cfg.Agent.Verifier.MaxAttempts = 2
 	m.cfg.Agent.Persist = false
 	m.agentLoop.store = nil
 	return m, prov
@@ -479,41 +485,233 @@ func TestVerifiedAgentRepeatedFailureStops(t *testing.T) {
 	}
 }
 
-// TestVerifiedAgentVerifierParseFailureRepeatedStops guards against a
-// regression where verificationFailureResult nested a new
-// "Retry the bounded objective..." prefix onto the objective every time the
-// verifier's own response failed to parse. That growth made RecommendedNext
-// (and therefore agent.failureKey) different on every cycle, so the
-// repeated-failure dedup never fired and the run looped until an unrelated
-// budget (cycles/elapsed/tokens) finally stopped it.
+// TestVerifiedAgentVerifierParseFailureRepeatedStops is the audit's smoking
+// gun for REL-001 part 2: two consecutive verifier failures for the SAME
+// cycle (each already exhausting agentverify.Verify's own internal one-shot
+// malformed-JSON repair) must exhaust the default MaxAttempts=2 verifier
+// budget and park the run as agent.DecisionVerificationUnavailable, without
+// ever scheduling a second executor cycle. The script deliberately offers no
+// second executor reply — if handleAgentVerification regressed to the old
+// "treat a verifier failure as a retryable cycle result and restart the
+// executor" behavior, driveAgentCommands would fail with "script exhausted"
+// instead of silently passing, so an accidental executor retry cannot go
+// unnoticed here.
 func TestVerifiedAgentVerifierParseFailureRepeatedStops(t *testing.T) {
-	m, _ := configureAgentTestModel(t,
+	m, prov := configureAgentTestModel(t,
 		agentScriptStep{text: "Attempt one."},
 		agentScriptStep{text: "not a json object at all"},
 		agentScriptStep{text: "still not a json object"},
-		agentScriptStep{text: "Attempt two."},
 		agentScriptStep{text: "not a json object at all"},
 		agentScriptStep{text: "still not a json object"},
 	)
-	m.cfg.Agent.MaxRepeatedFailures = 2
 	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
 
-	if m.agentLoop.run.Status != agent.DecisionFailed || m.agentLoop.run.RepeatedFailures != 2 {
-		t.Fatalf("run = %+v", m.agentLoop.run)
+	if m.agentLoop.run.Status != agent.DecisionVerificationUnavailable {
+		t.Fatalf("status = %q, want verification_unavailable: run = %+v", m.agentLoop.run.Status, m.agentLoop.run)
 	}
-	if len(m.agentLoop.run.Cycles) != 2 {
-		t.Fatalf("cycles = %+v", m.agentLoop.run.Cycles)
+	if len(m.agentLoop.run.Cycles) != 1 {
+		t.Fatalf("cycles = %+v, want exactly one (no second executor cycle)", m.agentLoop.run.Cycles)
 	}
-	first := m.agentLoop.run.Cycles[0].Verification
-	second := m.agentLoop.run.Cycles[1].Verification
-	if first == nil || second == nil {
-		t.Fatalf("missing verification: first=%+v second=%+v", first, second)
+	cycle := m.agentLoop.run.Cycles[0]
+	if cycle.Execution == nil || cycle.Execution.Summary != "Attempt one." {
+		t.Fatalf("cycle.Execution = %+v, want the executor's result preserved", cycle.Execution)
 	}
-	if first.RecommendedNext != second.RecommendedNext {
-		t.Fatalf("recommended_next grew across cycles: first=%q second=%q", first.RecommendedNext, second.RecommendedNext)
+	if cycle.Verification != nil {
+		t.Fatalf("cycle.Verification = %+v, want nil: verification never completed for this cycle", cycle.Verification)
 	}
-	if n := strings.Count(second.RecommendedNext, "Retry the bounded objective"); n != 1 {
-		t.Fatalf("recommended_next nested the retry prefix %d times: %q", n, second.RecommendedNext)
+	// Two verifier requests (the malformed reply plus agentverify's own
+	// internal repair attempt, which also fails) are consumed for the FIRST
+	// outer verifier attempt, then two more for the SECOND (and, with the
+	// default MaxAttempts=2, final) outer attempt — one executor request
+	// plus two independent malformed+repair pairs.
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want 5 (executor + 2x(malformed+repair))", len(prov.requests))
+	}
+}
+
+// TestVerifiedAgentVerifierParseFailureThenValidSucceedsWithoutExecutorRepeat
+// proves the retry budget doesn't block a legitimate eventual success: with
+// MaxAttempts=3, two malformed verifier replies (each already exhausting the
+// internal repair) followed by a valid verdict on the third attempt must
+// reach the verdict-driven outcome with exactly one executor cycle.
+func TestVerifiedAgentVerifierParseFailureThenValidSucceedsWithoutExecutorRepeat(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Attempt one."},
+		agentScriptStep{text: "not a json object at all"},
+		agentScriptStep{text: "still not a json object"},
+		agentScriptStep{text: "not a json object at all"},
+		agentScriptStep{text: "still not a json object"},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+	)
+	m.cfg.Agent.Verifier.MaxAttempts = 3
+	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("status = %q, want done: run = %+v", m.agentLoop.run.Status, m.agentLoop.run)
+	}
+	if len(m.agentLoop.run.Cycles) != 1 {
+		t.Fatalf("cycles = %+v, want exactly one executor cycle", m.agentLoop.run.Cycles)
+	}
+	// executor(1) + attempt1(malformed+repair, 2) + attempt2(malformed+repair, 2) + attempt3(valid, 1) = 6.
+	if len(prov.requests) != 6 {
+		t.Fatalf("provider requests = %d, want 6", len(prov.requests))
+	}
+}
+
+// TestVerifiedAgentVerifierTimeoutExhaustsToVerificationUnavailable and
+// TestVerifiedAgentVerifierProviderErrorExhaustsToVerificationUnavailable
+// cover the other two verifier-infrastructure failure kinds the audit
+// called out (timeout, provider error) alongside the malformed-JSON case
+// above: each must produce the identical one-executor-cycle outcome.
+func TestVerifiedAgentVerifierTimeoutExhaustsToVerificationUnavailable(t *testing.T) {
+	timeoutErr := agent.NewError(agent.ErrorTimeout, "verify", context.DeadlineExceeded)
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Attempt one."},
+		agentScriptStep{err: timeoutErr},
+		agentScriptStep{err: timeoutErr},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionVerificationUnavailable {
+		t.Fatalf("status = %q, want verification_unavailable: run = %+v", m.agentLoop.run.Status, m.agentLoop.run)
+	}
+	if len(m.agentLoop.run.Cycles) != 1 {
+		t.Fatalf("cycles = %+v, want exactly one", m.agentLoop.run.Cycles)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want 3 (executor + 2 verifier attempts)", len(prov.requests))
+	}
+}
+
+func TestVerifiedAgentVerifierProviderErrorExhaustsToVerificationUnavailable(t *testing.T) {
+	providerErr := agent.NewError(agent.ErrorProvider, "verify", errors.New("connection refused"))
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Attempt one."},
+		agentScriptStep{err: providerErr},
+		agentScriptStep{err: providerErr},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("fix repeated failure", nil))
+
+	if m.agentLoop.run.Status != agent.DecisionVerificationUnavailable {
+		t.Fatalf("status = %q, want verification_unavailable: run = %+v", m.agentLoop.run.Status, m.agentLoop.run)
+	}
+	if len(m.agentLoop.run.Cycles) != 1 {
+		t.Fatalf("cycles = %+v, want exactly one", m.agentLoop.run.Cycles)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want 3 (executor + 2 verifier attempts)", len(prov.requests))
+	}
+}
+
+// executorThenBlockingProvider answers the first Chat call (the executor
+// turn) immediately with scripted text, then blocks every later call (the
+// verifier turn) until its context is cancelled — letting a test hold a
+// verifier request genuinely in flight to exercise real concurrent
+// cancellation, the same shape as blockingAgentProvider but only for calls
+// after the first.
+type executorThenBlockingProvider struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+}
+
+func (p *executorThenBlockingProvider) Name() string                      { return "executor-then-blocking" }
+func (p *executorThenBlockingProvider) HealthCheck(context.Context) error { return nil }
+func (p *executorThenBlockingProvider) ListModels(context.Context) ([]provider.ModelInfo, error) {
+	return []provider.ModelInfo{{ID: "test-model"}}, nil
+}
+func (p *executorThenBlockingProvider) Chat(ctx context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		events := make(chan provider.ChatEvent, 2)
+		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: "Attempt one."}
+		events <- provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}}
+		close(events)
+		return events, nil
+	}
+	close(p.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestVerifiedAgentCancellationWhileVerifyingEndsCancelled locks in that a
+// cancellation racing a genuinely in-flight verifier attempt still ends the
+// run DecisionCancelled, never DecisionVerificationUnavailable —
+// cancellation is not an infra failure to retry. cancelVerifiedRun bumps
+// m.agentLoop.verifyGen synchronously before cancelling the verify context,
+// so the ErrorCancelled result the blocked call eventually returns carries a
+// stale gen and is discarded by the guard at the top of
+// handleAgentVerification before the new retry-budget logic ever runs.
+func TestVerifiedAgentCancellationWhileVerifyingEndsCancelled(t *testing.T) {
+	m := newTestModel(t)
+	prov := &executorThenBlockingProvider{started: make(chan struct{})}
+	m.prov = prov
+	m.model = "test-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Enabled = true
+	m.cfg.Agent.Verifier.Mode = "always"
+	m.cfg.Agent.Verifier.Timeout = "5s"
+	m.cfg.Agent.Verifier.MaxTokens = 256
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+
+	// Drive commands synchronously up to (but not through) the verifier
+	// dispatch: everything before it is fast and non-blocking, so the normal
+	// driver loop works until the verifying stage is reached. app.go's
+	// EventDone handler returns m.startAgentVerification()'s Cmd directly
+	// (not wrapped in a batch), and m.agentLoop.verifying is already true by
+	// the time that Update call returns, so `next` right after that call is
+	// exactly the verify Cmd — captured here instead of executed.
+	queue := []tea.Cmd{m.startVerifiedRun("cancel during verification", nil)}
+	var verifyCmd tea.Cmd
+	for len(queue) > 0 {
+		cmd := queue[0]
+		queue = queue[1:]
+		if cmd == nil {
+			continue
+		}
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		_, next := m.Update(msg)
+		if m.agentVerifying() {
+			verifyCmd = next
+			break
+		}
+		if next != nil {
+			queue = append(queue, next)
+		}
+	}
+	if verifyCmd == nil || !m.agentVerifying() {
+		t.Fatal("run did not reach the verifying stage")
+	}
+
+	result := make(chan tea.Msg, 1)
+	go func() { result <- verifyCmd() }()
+	select {
+	case <-prov.started:
+	case <-time.After(time.Second):
+		t.Fatal("verifier provider did not start")
+	}
+
+	m.cancelVerifiedRun("cancelled by test")
+	m.endAgentRun()
+
+	select {
+	case msg := <-result:
+		// The stale-gen guard must discard this without changing run state.
+		m.Update(msg)
+	case <-time.After(time.Second):
+		t.Fatal("verifier command did not unblock after cancellation")
+	}
+
+	if m.agentLoop.run.Status != agent.DecisionCancelled {
+		t.Fatalf("status = %q, want cancelled", m.agentLoop.run.Status)
 	}
 }
 

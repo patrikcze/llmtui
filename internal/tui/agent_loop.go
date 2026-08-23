@@ -45,7 +45,16 @@ type agentLoopState struct {
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
-	persistErr      error
+	// verifierAttempts counts verifier-inference attempts made for the
+	// current cycle's verification (transport/format failures only —
+	// agentverify.Verify's own internal malformed-JSON repair is a separate,
+	// earlier layer and does not increment this). Reset to 0 at the start of
+	// each cycle's verification in startAgentVerification. Exhausting
+	// m.cfg.Agent.Verifier.MaxAttempts parks the cycle as
+	// agent.DecisionVerificationUnavailable instead of restarting the
+	// executor.
+	verifierAttempts int
+	persistErr       error
 	// liveToolCalls is the run's true cumulative tool-call count, updated as
 	// each round completes. Unlike execution.ToolCalls (reset every cycle by
 	// startNextAgentCycle), this never resets for the life of the run, so
@@ -376,6 +385,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		return m.persistAgentRun()
 	}
 	m.agentLoop.execution = execution
+	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
 	m.agentLoop.verifying = true
@@ -442,6 +452,19 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verifying in fresh context", shortRunID(runID), cycle, run.Limits.MaxCycles)
 	m.refreshViewport()
 
+	return m.dispatchVerifierAttempt(run, execution, ctx, gen)
+}
+
+// dispatchVerifierAttempt builds and sends one fresh-context, tool-free
+// verifier inference request for the run's current cycle. ctx and gen must
+// already be established by the caller (a new context.WithCancel derived
+// from m.agentContext, and the value captured immediately after the
+// caller's own m.agentLoop.verifyGen++) so every dispatch — the first
+// attempt from startAgentVerification and every bounded retry from
+// handleAgentVerification — is gated by the same staleness guard at the top
+// of handleAgentVerification.
+func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.ExecutionResult, ctx context.Context, gen int) tea.Cmd {
+	runID, cycle := run.ID, run.Cycle
 	input := agentverify.Input{
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request},
@@ -463,6 +486,24 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 }
 
+// retryAgentVerification re-dispatches another verifier attempt for the
+// current cycle after the previous attempt failed with a transport/format
+// error (provider error, timeout, or agentverify.Verify's own malformed-JSON
+// repair exhausted). It never touches executor state or begins a new cycle
+// — only the verifier is retried, within the bound
+// m.cfg.Agent.Verifier.MaxAttempts enforced by the caller. It mirrors the
+// ctx/verifying/verifyGen setup startAgentVerification's first attempt uses
+// so the retried call is gated by the exact same staleness guard: a
+// cancellation or an even-later stale result cannot corrupt state.
+func (m *Model) retryAgentVerification(run *agent.AgentRun) tea.Cmd {
+	ctx, cancel := context.WithCancel(m.agentContext())
+	m.agentLoop.verifyCancel = cancel
+	m.agentLoop.verifying = true
+	m.agentLoop.verifyGen++
+	gen := m.agentLoop.verifyGen
+	return m.dispatchVerifierAttempt(run, m.agentLoop.execution, ctx, gen)
+}
+
 func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, tea.Cmd) {
 	if m.agentLoop == nil || m.agentLoop.run == nil || msg.runID != m.agentLoop.run.ID ||
 		msg.cycle != m.agentLoop.run.Cycle || msg.gen != m.agentLoop.verifyGen {
@@ -479,11 +520,50 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		run.RecordUsage(msg.out.Usage.PromptTokens, msg.out.Usage.CompletionTokens, time.Now())
 	}
 	if msg.err != nil {
+		// A verifier transport/format failure (provider error, timeout, or
+		// agentverify.Verify's own internal one-shot malformed-JSON repair
+		// exhausted) is not the verifier rejecting the executor's work — it
+		// is the verifier itself failing to produce a verdict at all.
+		// Restarting the executor here would repeat its side effects for no
+		// reason related to whether that work was correct, so this cycle's
+		// verification gets its own small bounded retry budget instead of
+		// being routed through the normal cycle-completion pipeline
+		// (CompleteVerification/WriteMemory/Decide/ApplyStop) at all.
+		//
+		// Cancellation is deliberately not special-cased here: cancelVerifiedRun
+		// bumps m.agentLoop.verifyGen synchronously before cancelling the
+		// verify context, so a subsequently-arriving ErrorCancelled result
+		// for this dispatch always carries a stale gen and is discarded by
+		// the guard at the top of this function before reaching this branch
+		// at all. See TestVerifiedAgentCancellationWhileVerifyingEndsCancelled.
 		var runErr agent.RunError
 		if !errors.As(msg.err, &runErr) {
 			runErr = agent.NewError(agent.ErrorVerification, "verify", msg.err)
 		}
-		result = verificationFailureResult(runErr, run.Objective)
+		m.agentLoop.verifierAttempts++
+		maxAttempts := m.cfg.Agent.Verifier.MaxAttempts
+		if maxAttempts < 1 {
+			maxAttempts = 1
+		}
+		if m.agentLoop.verifierAttempts < maxAttempts {
+			m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verifier attempt %d/%d failed (%s) — retrying the verifier only",
+				shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles, m.agentLoop.verifierAttempts, maxAttempts, runErr.Kind)
+			m.refreshViewport()
+			return m, m.retryAgentVerification(run)
+		}
+		reason := fmt.Sprintf("verifier unavailable after %d attempt(s): %s (%s) — the executor's result was preserved but never verified",
+			maxAttempts, runErr.Message, runErr.Kind)
+		if err := run.Terminate(agent.DecisionVerificationUnavailable, reason, time.Now()); err != nil {
+			m.failVerifiedRun(err)
+			return m, m.persistAgentRun()
+		}
+		m.syncAgentDebug()
+		persist := m.persistAgentRun()
+		m.errText = "agent verification unavailable: " + reason
+		m.notice = fmt.Sprintf("agent %s · verification unavailable after %d attempt(s)", shortRunID(run.ID), maxAttempts)
+		m.endAgentRun()
+		m.refreshViewport()
+		return m, persist
 	}
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)
@@ -523,39 +603,6 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	m.endAgentRun()
 	m.refreshViewport()
 	return m, persist
-}
-
-// verifierRetryPrefix marks an objective as a verifier-failure retry. It is
-// stripped from the incoming objective before being reapplied so repeated
-// verifier failures on the same underlying objective produce an identical
-// RecommendedNext string instead of nesting a new prefix every cycle — an
-// ever-growing string would defeat agent.failureKey's repeated-failure dedup
-// (each cycle would look like a "new" failure) and never trip
-// MaxRepeatedFailures.
-const verifierRetryPrefix = "Retry the bounded objective with a concise observable evidence summary: "
-
-func verificationFailureResult(runErr agent.RunError, objective string) agent.VerificationResult {
-	base := strings.TrimSpace(objective)
-	for strings.HasPrefix(base, verifierRetryPrefix) {
-		base = strings.TrimSpace(strings.TrimPrefix(base, verifierRetryPrefix))
-	}
-	result := agent.VerificationResult{
-		Verdict:         agent.VerificationInconclusive,
-		Summary:         "verifier failed: " + runErr.Message,
-		Evidence:        []string{"verifier error: " + string(runErr.Kind)},
-		Retryable:       true,
-		RecommendedNext: verifierRetryPrefix + base,
-		StrategyChanged: true,
-	}
-	if runErr.Kind == agent.ErrorTimeout || runErr.Kind == agent.ErrorProvider {
-		result.TransientFailure = true
-	}
-	if runErr.Kind == agent.ErrorCancelled {
-		result.Verdict = agent.VerificationBlocked
-		result.Retryable = false
-		result.RecommendedNext = ""
-	}
-	return result
 }
 
 func (m *Model) persistAgentRun() tea.Cmd {
