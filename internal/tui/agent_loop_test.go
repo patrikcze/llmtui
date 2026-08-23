@@ -63,10 +63,22 @@ func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatReque
 	return events, nil
 }
 
+// verifierJSON builds a complete verifier envelope: every field
+// verifierJSONSchema declares required, plus atomic_task, present. Parse
+// rejects any envelope missing a required field, so this must stay
+// exhaustive even though most call sites only care about a few of these
+// values. atomic_task is fixed true because these tests are not exercising
+// criteria decomposition (a "passed" first-cycle verdict must otherwise
+// either propose criteria or declare the task atomic — see REL-002); tests
+// that specifically exercise proposed_criteria build their own literal
+// envelope instead of using this helper.
 func verifierJSON(verdict, summary, next string, retryable, changed bool) string {
-	return `{"verdict":"` + verdict + `","summary":"` + summary + `","recommended_next":"` + next + `","retryable":` +
-		map[bool]string{true: "true", false: "false"}[retryable] + `,"strategy_changed":` +
-		map[bool]string{true: "true", false: "false"}[changed] + `,"confidence":0.9}`
+	return `{"verdict":"` + verdict + `","summary":"` + summary + `","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"` + next + `","retryable":` +
+		map[bool]string{true: "true", false: "false"}[retryable] + `,"confidence":0.9,"new_evidence":false,` +
+		`"strategy_changed":` + map[bool]string{true: "true", false: "false"}[changed] +
+		`,"transient_failure":false,"needs_user_input":false,"user_options":[],"criteria":[],` +
+		`"proposed_criteria":[],"atomic_task":true}`
 }
 
 func configureAgentTestModel(t *testing.T, steps ...agentScriptStep) (*Model, *scriptedAgentProvider) {
@@ -718,8 +730,14 @@ func TestVerifiedAgentCancellationWhileVerifyingEndsCancelled(t *testing.T) {
 func TestVerifiedAgentRepairsVerifierFormatWithoutRepeatingExecutor(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{text: "Completed the requested work."},
-		agentScriptStep{text: `{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.9,"proposed_criteria":[{"criterion":"complete the work"}]}`},
-		agentScriptStep{text: `{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.9,"proposed_criteria":["complete the work"],"criteria":[{"id":"c1","status":"satisfied"}]}`},
+		agentScriptStep{text: `{"verdict":"passed","summary":"checked","evidence":[],"failed_criteria":[],"remaining_criteria":[],` +
+			`"recommended_next":"","retryable":false,"confidence":0.9,"new_evidence":false,"strategy_changed":false,` +
+			`"transient_failure":false,"needs_user_input":false,"user_options":[],"criteria":[],"atomic_task":false,` +
+			`"proposed_criteria":[{"criterion":"complete the work"}]}`},
+		agentScriptStep{text: `{"verdict":"passed","summary":"checked","evidence":[],"failed_criteria":[],"remaining_criteria":[],` +
+			`"recommended_next":"","retryable":false,"confidence":0.9,"new_evidence":false,"strategy_changed":false,` +
+			`"transient_failure":false,"needs_user_input":false,"user_options":[],"atomic_task":false,` +
+			`"proposed_criteria":["complete the work"],"criteria":[{"id":"c1","status":"satisfied","note":""}]}`},
 	)
 	driveAgentCommands(t, m, m.startVerifiedRun("complete the work", nil))
 
@@ -779,7 +797,10 @@ func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 // needs_user_input parameter would touch all of them for this one test.
 func TestVerifiedAgentClarifyingQuestionStopsForUser(t *testing.T) {
 	const question = "Which source would you like me to check first: AccuWeather or the Met Office?"
-	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","retryable":true,"confidence":0.8,"needs_user_input":true}`
+	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":true,"confidence":0.8,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":true,"user_options":[],` +
+		`"criteria":[],"proposed_criteria":[],"atomic_task":false}`
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{text: question},
 		agentScriptStep{text: verifierReply},
@@ -807,8 +828,11 @@ func TestVerifiedAgentClarifyingQuestionStopsForUser(t *testing.T) {
 // like typing that same text would.
 func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 	const question = "Which city would you like me to check first?"
-	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","retryable":true,"confidence":0.8,` +
-		`"needs_user_input":true,"user_options":["Prague","Humpolec","Brno"]}`
+	verifierReply := `{"verdict":"inconclusive","summary":"` + question + `","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":true,"confidence":0.8,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,` +
+		`"needs_user_input":true,"user_options":["Prague","Humpolec","Brno"],"criteria":[],` +
+		`"proposed_criteria":[],"atomic_task":false}`
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{text: question},
 		agentScriptStep{text: verifierReply},
@@ -1113,7 +1137,10 @@ func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
 // establishing cycle" fix) is what keeps this a one-cycle UX for a genuinely
 // simple objective, not a shortcut around ever checking it.
 func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *testing.T) {
-	verifierPass := `{"verdict":"passed","summary":"workspace inspected as requested","retryable":false,"confidence":0.9,` +
+	verifierPass := `{"verdict":"passed","summary":"workspace inspected as requested","evidence":[],` +
+		`"failed_criteria":[],"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.9,` +
+		`"new_evidence":false,"strategy_changed":false,"transient_failure":false,"needs_user_input":false,` +
+		`"user_options":[],"atomic_task":false,` +
 		`"proposed_criteria":["list the workspace contents"],` +
 		`"criteria":[{"id":"c1","status":"satisfied","note":"listed"}]}`
 	m, prov := configureAgentTestModel(t,
@@ -1211,12 +1238,17 @@ func TestAdaptiveDeterministicFailureSkipsSemanticVerifier(t *testing.T) {
 // semantic verifier is still consulted — and its proposed criteria are
 // pinned on the run and persist across cycles with stable IDs.
 func TestAdaptiveProseAnswerVerifiedAndCriteriaPersistAcrossCycles(t *testing.T) {
-	proposeAndFail := `{"verdict":"failed","summary":"report criterion unresolved","retryable":true,` +
-		`"recommended_next":"produce the report","strategy_changed":true,"confidence":0.8,` +
+	proposeAndFail := `{"verdict":"failed","summary":"report criterion unresolved","evidence":[],` +
+		`"failed_criteria":[],"remaining_criteria":[],` +
+		`"recommended_next":"produce the report","retryable":true,"strategy_changed":true,"confidence":0.8,` +
+		`"new_evidence":false,"transient_failure":false,"needs_user_input":false,"user_options":[],"atomic_task":false,` +
 		`"proposed_criteria":["gather data","produce report"],` +
 		`"criteria":[{"id":"c1","status":"satisfied","note":"data gathered"}]}`
-	satisfyRest := `{"verdict":"passed","summary":"report produced","retryable":false,"confidence":0.9,` +
-		`"criteria":[{"id":"c2","status":"satisfied"}]}`
+	satisfyRest := `{"verdict":"passed","summary":"report produced","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.9,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":false,"user_options":[],` +
+		`"proposed_criteria":[],"atomic_task":false,` +
+		`"criteria":[{"id":"c2","status":"satisfied","note":""}]}`
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{text: "Gathered the data and reported findings."},
 		agentScriptStep{text: proposeAndFail},

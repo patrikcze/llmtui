@@ -167,6 +167,13 @@ type VerificationResult struct {
 	ProposedCriteria []string `json:"proposed_criteria,omitempty"`
 	// CriteriaUpdates are per-ID status changes for the pinned criteria.
 	CriteriaUpdates []CriterionUpdate `json:"criteria,omitempty"`
+	// AtomicTask, when true and this is the run's establishing verification
+	// (Input.EstablishCriteria was set), explicitly declares that the task is
+	// a single indivisible check with no useful further decomposition, so an
+	// empty ProposedCriteria list on this cycle is a deliberate verifier
+	// judgment rather than an omission. See REL-002 in
+	// .claude/tasks/llmtui-audit-report.md.
+	AtomicTask bool `json:"atomic_task,omitempty"`
 }
 
 // MemoryEntry is concise cycle-to-cycle state. It deliberately excludes raw

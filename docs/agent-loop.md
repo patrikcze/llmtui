@@ -154,8 +154,24 @@ opinion, not independent validation — deterministic evidence always outranks
 it either way.
 
 The parser accepts one JSON object, including a fenced object or harmless prose
-around it, and rejects missing, incomplete, ambiguous, oversized, or invalid
-control data. Malformed output is classified separately from provider,
+around it, and strictly validates the resulting envelope before any of it
+reaches run state: every one of the schema's 16 required fields must be
+present and correctly typed (a scalar field set to explicit JSON `null` is
+rejected the same as a missing key; a required array field set to `null` is
+accepted and normalized to an empty slice, since some backends legitimately
+emit `null` for an empty required array under schema enforcement), and any
+key outside that set is rejected as unexpected — there is no partial-credit
+parse where an omitted field is silently zero-valued. On a run's establishing
+verification (its first semantic evaluation, before any acceptance criteria
+are pinned), a `"passed"` verdict is additionally rejected unless the
+envelope either proposes at least one criterion in `proposed_criteria` or
+sets `atomic_task:true` to explicitly declare the task a single indivisible
+check — this closes the case where a sparse but technically-parseable reply
+(`{"verdict":"passed","summary":"ok"}` under the old permissive parser) could
+otherwise complete a run having never been decomposed into checkable
+acceptance criteria at all. Malformed or invalid control data — missing,
+incomplete, ambiguous, oversized, wrongly typed, or failing the
+establishing-pass check above — is classified separately from provider,
 timeout, cancellation, and execution failures.
 
 Malformed control JSON gets one bounded, fresh-context repair attempt before

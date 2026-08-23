@@ -58,8 +58,16 @@ func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<
 	return events, nil
 }
 
+// validReply builds a complete verifier envelope: all 15 fields
+// verifierJSONSchema declares required, plus atomic_task, all present. Tests
+// that need to exercise a specific field's value should start from this and
+// override, rather than hand-writing a sparse object — Parse now rejects any
+// envelope missing a required field.
 func validReply(verdict string) string {
-	return `{"verdict":"` + verdict + `","summary":"checked evidence","retryable":false,"confidence":0.8}`
+	return `{"verdict":"` + verdict + `","summary":"checked evidence","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.8,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":false,"user_options":[],` +
+		`"criteria":[],"proposed_criteria":[],"atomic_task":false}`
 }
 
 func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
@@ -158,10 +166,15 @@ func TestVerifierPromptDoesNotModelPrematureFailureAsTheExample(t *testing.T) {
 }
 
 func TestVerifierRepairsMalformedCriteriaShapeWithoutExecutorCycle(t *testing.T) {
-	client := &recordingClient{replies: []string{
-		`{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.8,"proposed_criteria":[{"criterion":"write report"}]}`,
-		`{"verdict":"passed","summary":"checked","retryable":false,"confidence":0.8,"proposed_criteria":["write report"]}`,
-	}}
+	malformedProposedCriteria := `{"verdict":"passed","summary":"checked","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.8,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":false,"user_options":[],` +
+		`"criteria":[],"atomic_task":false,"proposed_criteria":[{"criterion":"write report"}]}`
+	repairedProposedCriteria := `{"verdict":"passed","summary":"checked","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.8,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":false,"user_options":[],` +
+		`"criteria":[],"atomic_task":false,"proposed_criteria":["write report"]}`
+	client := &recordingClient{replies: []string{malformedProposedCriteria, repairedProposedCriteria}}
 	out, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, Input{
 		Task: "write a report", EstablishCriteria: true,
 	})
@@ -239,8 +252,11 @@ func TestVerifierPromptTeachesNeedsUserInput(t *testing.T) {
 // TestParseNeedsUserInputRoundTrips confirms a raw verifier response setting
 // needs_user_input survives Parse into the agent.VerificationResult.
 func TestParseNeedsUserInputRoundTrips(t *testing.T) {
-	raw := `{"verdict":"inconclusive","summary":"Which source would you like me to check first?","confidence":0.5,"needs_user_input":true}`
-	result, err := Parse(raw)
+	raw := `{"verdict":"inconclusive","summary":"Which source would you like me to check first?","evidence":[],` +
+		`"failed_criteria":[],"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.5,` +
+		`"new_evidence":false,"strategy_changed":false,"transient_failure":false,"needs_user_input":true,` +
+		`"user_options":[],"criteria":[],"proposed_criteria":[],"atomic_task":false}`
+	result, err := Parse(raw, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,8 +309,11 @@ func TestVerifierPromptTeachesUserOptions(t *testing.T) {
 // TestParseUserOptionsRoundTrips confirms a raw verifier response setting
 // user_options survives Parse into the agent.VerificationResult.
 func TestParseUserOptionsRoundTrips(t *testing.T) {
-	raw := `{"verdict":"inconclusive","summary":"Which city first?","confidence":0.5,"needs_user_input":true,"user_options":["Prague","Humpolec","Brno"]}`
-	result, err := Parse(raw)
+	raw := `{"verdict":"inconclusive","summary":"Which city first?","evidence":[],"failed_criteria":[],` +
+		`"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.5,"new_evidence":false,` +
+		`"strategy_changed":false,"transient_failure":false,"needs_user_input":true,` +
+		`"user_options":["Prague","Humpolec","Brno"],"criteria":[],"proposed_criteria":[],"atomic_task":false}`
+	result, err := Parse(raw, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,10 +345,12 @@ func TestApplyDeterministicEvidencePreservesUserOptions(t *testing.T) {
 }
 
 func TestParseCriteriaProposalsAndUpdates(t *testing.T) {
-	raw := `{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,
+	raw := `{"verdict":"passed","summary":"ok","evidence":[],"failed_criteria":[],"remaining_criteria":[],
+"recommended_next":"","retryable":false,"confidence":0.8,"new_evidence":false,"strategy_changed":false,
+"transient_failure":false,"needs_user_input":false,"user_options":[],"atomic_task":false,
 "proposed_criteria":["current time determined","forecast covers six hours"],
-"criteria":[{"id":"c1","status":"satisfied","note":"time from tool output"},{"id":"c2","status":"failed"}]}`
-	result, err := Parse(raw)
+"criteria":[{"id":"c1","status":"satisfied","note":"time from tool output"},{"id":"c2","status":"failed","note":""}]}`
+	result, err := Parse(raw, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +367,7 @@ func TestParseRejectsInvalidCriterionUpdates(t *testing.T) {
 		`{"verdict":"passed","summary":"ok","confidence":0.5,"criteria":[{"id":"c1","status":"probably"}]}`,
 		`{"verdict":"passed","summary":"ok","confidence":0.5,"criteria":[{"id":"","status":"satisfied"}]}`,
 	} {
-		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
+		if _, err := Parse(raw, false); !errors.Is(err, agent.ErrMalformedControl) {
 			t.Errorf("Parse(%q) error = %v, want malformed control", raw, err)
 		}
 	}
@@ -406,11 +427,11 @@ func TestDeterministicOverrideDropsCriteriaUpdates(t *testing.T) {
 
 func TestMalformedControlOutput(t *testing.T) {
 	for _, raw := range []string{"not json", `{"verdict":"maybe","summary":"x"}`, `{"verdict":"passed"}`, validReply("passed") + validReply("failed")} {
-		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
+		if _, err := Parse(raw, false); !errors.Is(err, agent.ErrMalformedControl) {
 			t.Errorf("Parse(%q) error = %v", raw, err)
 		}
 	}
-	result, err := Parse("```json\n" + validReply("passed") + "\n```")
+	result, err := Parse("```json\n"+validReply("passed")+"\n```", false)
 	if err != nil || result.Verdict != agent.VerificationPassed {
 		t.Fatalf("fenced parse = %+v, %v", result, err)
 	}
@@ -422,7 +443,7 @@ func TestParseRejectsMalformedProposedCriteriaShapes(t *testing.T) {
 		`{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,"proposed_criteria":{"criterion":"write report"}}`,
 		`{"verdict":"passed","summary":"ok","retryable":false,"confidence":0.8,"proposed_criteria":[{"criterion":"write report"}]}`,
 	} {
-		if _, err := Parse(raw); !errors.Is(err, agent.ErrMalformedControl) {
+		if _, err := Parse(raw, false); !errors.Is(err, agent.ErrMalformedControl) {
 			t.Errorf("Parse(%q) error = %v, want malformed control", raw, err)
 		}
 	}
@@ -478,4 +499,317 @@ func TestVerifierTimeoutAndCancellation(t *testing.T) {
 			t.Fatalf("error = %#v", err)
 		}
 	})
+}
+
+// verifierRequiredFieldOrder mirrors verifier.go's verifierRequiredFields —
+// kept as an independent literal (not a reference to the unexported package
+// var) so these tests would themselves fail loudly if a required field were
+// ever added to the schema without a matching entry here.
+var verifierRequiredFieldOrder = []string{
+	"verdict", "summary", "evidence", "failed_criteria", "remaining_criteria",
+	"recommended_next", "retryable", "confidence", "new_evidence", "strategy_changed",
+	"transient_failure", "needs_user_input", "user_options", "criteria",
+	"proposed_criteria", "atomic_task",
+}
+
+// completeEnvelopeFields holds one valid raw-JSON value per required field —
+// the canonical "everything present, everything well-typed" envelope that
+// buildEnvelope starts from for every strict-validation test below.
+var completeEnvelopeFields = map[string]string{
+	"verdict":            `"passed"`,
+	"summary":            `"checked evidence"`,
+	"evidence":           `["ran go test"]`,
+	"failed_criteria":    `[]`,
+	"remaining_criteria": `[]`,
+	"recommended_next":   `""`,
+	"retryable":          `false`,
+	"confidence":         `0.8`,
+	"new_evidence":       `false`,
+	"strategy_changed":   `false`,
+	"transient_failure":  `false`,
+	"needs_user_input":   `false`,
+	"user_options":       `[]`,
+	"criteria":           `[{"id":"c1","status":"satisfied","note":"done"}]`,
+	"proposed_criteria":  `["criterion one"]`,
+	"atomic_task":        `false`,
+}
+
+// buildEnvelope renders a complete verifier envelope from
+// completeEnvelopeFields, applying overrides (by field name) and omitting
+// any field named in omit — the shared fixture builder for every strict
+// presence/type/null test below, so each test only spells out the one field
+// it is actually exercising.
+func buildEnvelope(overrides map[string]string, omit ...string) string {
+	fields := make(map[string]string, len(completeEnvelopeFields))
+	for k, v := range completeEnvelopeFields {
+		fields[k] = v
+	}
+	for k, v := range overrides {
+		fields[k] = v
+	}
+	omitSet := make(map[string]bool, len(omit))
+	for _, k := range omit {
+		omitSet[k] = true
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	first := true
+	for _, key := range verifierRequiredFieldOrder {
+		if omitSet[key] {
+			continue
+		}
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		b.WriteByte('"')
+		b.WriteString(key)
+		b.WriteString(`":`)
+		b.WriteString(fields[key])
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// TestParseRejectsEachMissingRequiredField is the table-driven guard for
+// verifierJSONSchema's full "required" list: omitting any single one of the
+// 16 required keys must fail Parse, and the error must name that field so
+// the repair-prompt round-trip has something concrete to act on.
+func TestParseRejectsEachMissingRequiredField(t *testing.T) {
+	for _, field := range verifierRequiredFieldOrder {
+		t.Run(field, func(t *testing.T) {
+			raw := buildEnvelope(nil, field)
+			_, err := Parse(raw, false)
+			if !errors.Is(err, agent.ErrMalformedControl) {
+				t.Fatalf("Parse() with %q omitted: err = %v, want malformed control", field, err)
+			}
+			if !strings.Contains(err.Error(), field) {
+				t.Fatalf("Parse() with %q omitted: error %v does not name the missing field", field, err)
+			}
+		})
+	}
+}
+
+// TestParseRejectsSparseREL002Repro is the exact regression this task
+// exists to close: a minimal {"verdict":"passed","summary":"ok"} object
+// (missing all 14 other required fields) must never again parse
+// successfully — under the old plain json.Unmarshal, Go zero-filled every
+// omitted field and this object completed a run's establishing cycle having
+// pinned zero acceptance criteria.
+func TestParseRejectsSparseREL002Repro(t *testing.T) {
+	raw := `{"verdict":"passed","summary":"ok"}`
+	for _, establishing := range []bool{true, false} {
+		if _, err := Parse(raw, establishing); !errors.Is(err, agent.ErrMalformedControl) {
+			t.Errorf("Parse(%q, establishing=%v) err = %v, want malformed control", raw, establishing, err)
+		}
+	}
+}
+
+// TestParseRejectsUnknownField enforces "additionalProperties": false at the
+// application layer: an otherwise-complete envelope carrying one extra key
+// must be rejected, and the error must name it.
+func TestParseRejectsUnknownField(t *testing.T) {
+	valid := buildEnvelope(nil)
+	raw := valid[:len(valid)-1] + `,"unexpected_field":"surprise"}`
+	_, err := Parse(raw, false)
+	if !errors.Is(err, agent.ErrMalformedControl) {
+		t.Fatalf("err = %v, want malformed control", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected_field") {
+		t.Fatalf("error does not name the unexpected field: %v", err)
+	}
+}
+
+// TestParseRejectsNullRequiredScalars covers the 9 scalar-typed required
+// fields (the original 8 plus the new atomic_task): a key present but set to
+// JSON null is not the same as a real value and must be rejected, not
+// silently zero-valued.
+func TestParseRejectsNullRequiredScalars(t *testing.T) {
+	for _, field := range []string{
+		"verdict", "summary", "retryable", "confidence", "new_evidence",
+		"strategy_changed", "transient_failure", "needs_user_input", "atomic_task",
+	} {
+		t.Run(field, func(t *testing.T) {
+			raw := buildEnvelope(map[string]string{field: "null"})
+			if _, err := Parse(raw, false); !errors.Is(err, agent.ErrMalformedControl) {
+				t.Fatalf("field %q = null: err = %v, want malformed control", field, err)
+			}
+		})
+	}
+}
+
+// TestParseAcceptsNullRequiredArraysAsEmpty covers the 6 array-typed
+// required fields: some backends legitimately emit null for an empty
+// required array under schema enforcement, so null must be accepted and
+// normalized to a non-nil empty slice, not rejected like a null scalar.
+func TestParseAcceptsNullRequiredArraysAsEmpty(t *testing.T) {
+	for _, field := range []string{
+		"evidence", "failed_criteria", "remaining_criteria", "user_options", "criteria", "proposed_criteria",
+	} {
+		t.Run(field, func(t *testing.T) {
+			raw := buildEnvelope(map[string]string{field: "null"})
+			result, err := Parse(raw, false)
+			if err != nil {
+				t.Fatalf("field %q = null: err = %v, want accepted", field, err)
+			}
+			var length int
+			switch field {
+			case "evidence":
+				length = len(result.Evidence)
+			case "failed_criteria":
+				length = len(result.FailedCriteria)
+			case "remaining_criteria":
+				length = len(result.RemainingCriteria)
+			case "user_options":
+				length = len(result.UserOptions)
+			case "criteria":
+				length = len(result.CriteriaUpdates)
+			case "proposed_criteria":
+				length = len(result.ProposedCriteria)
+			}
+			if length != 0 {
+				t.Fatalf("field %q = null: length = %d, want 0", field, length)
+			}
+		})
+	}
+}
+
+// TestParseAcceptsNullRecommendedNextAsEmptyString covers recommended_next,
+// the one required scalar documented as "one changed bounded objective or
+// empty" — unlike the other 8 required scalars, an explicit null here is
+// treated the same as "", not rejected.
+func TestParseAcceptsNullRecommendedNextAsEmptyString(t *testing.T) {
+	raw := buildEnvelope(map[string]string{"recommended_next": "null"})
+	result, err := Parse(raw, false)
+	if err != nil {
+		t.Fatalf("err = %v, want accepted", err)
+	}
+	if result.RecommendedNext != "" {
+		t.Fatalf("RecommendedNext = %q, want empty", result.RecommendedNext)
+	}
+}
+
+// TestParseNonEstablishingEmptyProposedCriteriaAccepted confirms the
+// atomic-task requirement is scoped to establishing passes only: a complete,
+// non-establishing "passed" envelope with empty proposed_criteria and
+// atomic_task:false is a perfectly normal later-cycle verification and must
+// be accepted.
+func TestParseNonEstablishingEmptyProposedCriteriaAccepted(t *testing.T) {
+	raw := buildEnvelope(map[string]string{"verdict": `"passed"`, "proposed_criteria": `[]`, "atomic_task": "false"})
+	if _, err := Parse(raw, false); err != nil {
+		t.Fatalf("err = %v, want accepted (establishing=false)", err)
+	}
+}
+
+// TestParseEstablishingPassedEmptyCriteriaWithoutAtomicTaskRejected is the
+// exact false-completion scenario REL-002 describes: an establishing pass
+// reporting "passed" with nothing proposed and atomic_task left false must
+// be rejected, not allowed to silently pin zero acceptance criteria.
+func TestParseEstablishingPassedEmptyCriteriaWithoutAtomicTaskRejected(t *testing.T) {
+	raw := buildEnvelope(map[string]string{"verdict": `"passed"`, "proposed_criteria": `[]`, "atomic_task": "false"})
+	if _, err := Parse(raw, true); !errors.Is(err, agent.ErrMalformedControl) {
+		t.Fatalf("err = %v, want malformed control", err)
+	}
+}
+
+// TestParseEstablishingPassedEmptyCriteriaWithAtomicTaskAccepted confirms
+// the escape hatch: the same envelope as above, but with atomic_task:true,
+// is a deliberate verifier judgment that the task doesn't decompose, and
+// must be accepted.
+func TestParseEstablishingPassedEmptyCriteriaWithAtomicTaskAccepted(t *testing.T) {
+	raw := buildEnvelope(map[string]string{"verdict": `"passed"`, "proposed_criteria": `[]`, "atomic_task": "true"})
+	result, err := Parse(raw, true)
+	if err != nil {
+		t.Fatalf("err = %v, want accepted", err)
+	}
+	if !result.AtomicTask {
+		t.Fatalf("AtomicTask = %v, want true", result.AtomicTask)
+	}
+}
+
+// TestParseEstablishingNonEmptyProposedCriteriaAcceptedRegardlessOfAtomicTask
+// confirms atomic_task is only consulted when proposed_criteria is empty: a
+// non-empty proposal satisfies the establishing-pass requirement on its own,
+// whatever atomic_task says.
+func TestParseEstablishingNonEmptyProposedCriteriaAcceptedRegardlessOfAtomicTask(t *testing.T) {
+	for _, atomic := range []string{"true", "false"} {
+		t.Run("atomic_task="+atomic, func(t *testing.T) {
+			raw := buildEnvelope(map[string]string{
+				"verdict":           `"passed"`,
+				"proposed_criteria": `["criterion one","criterion two"]`,
+				"atomic_task":       atomic,
+			})
+			if _, err := Parse(raw, true); err != nil {
+				t.Fatalf("err = %v, want accepted", err)
+			}
+		})
+	}
+}
+
+// TestParseFullEnvelopeRoundTrip is the positive-path safety net: every
+// field type appears once with a distinguishable, non-default value, and
+// every one of them must map correctly into agent.VerificationResult — not
+// merely "Parse returns no error" — so the strict validation above cannot
+// have accidentally started rejecting (or mis-mapping) a well-formed real
+// verifier response.
+func TestParseFullEnvelopeRoundTrip(t *testing.T) {
+	raw := `{"verdict":"failed","summary":"go test failed","evidence":["ran go test","observed failure"],` +
+		`"failed_criteria":["tests pass"],"remaining_criteria":["tests pass","docs updated"],` +
+		`"recommended_next":"fix the failing test","retryable":true,"confidence":0.42,"new_evidence":true,` +
+		`"strategy_changed":true,"transient_failure":false,"needs_user_input":false,` +
+		`"user_options":["retry","abort"],"criteria":[{"id":"c1","status":"failed","note":"go test ./... failed"}],` +
+		`"proposed_criteria":["tests pass","docs updated"],"atomic_task":false}`
+	result, err := Parse(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verdict != agent.VerificationFailed {
+		t.Errorf("Verdict = %q, want failed", result.Verdict)
+	}
+	if result.Summary != "go test failed" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "go test failed")
+	}
+	if len(result.Evidence) != 2 || result.Evidence[0] != "ran go test" || result.Evidence[1] != "observed failure" {
+		t.Errorf("Evidence = %#v", result.Evidence)
+	}
+	if len(result.FailedCriteria) != 1 || result.FailedCriteria[0] != "tests pass" {
+		t.Errorf("FailedCriteria = %#v", result.FailedCriteria)
+	}
+	if len(result.RemainingCriteria) != 2 || result.RemainingCriteria[0] != "tests pass" || result.RemainingCriteria[1] != "docs updated" {
+		t.Errorf("RemainingCriteria = %#v", result.RemainingCriteria)
+	}
+	if result.RecommendedNext != "fix the failing test" {
+		t.Errorf("RecommendedNext = %q", result.RecommendedNext)
+	}
+	if !result.Retryable {
+		t.Error("Retryable = false, want true")
+	}
+	if result.Confidence != 0.42 {
+		t.Errorf("Confidence = %v, want 0.42", result.Confidence)
+	}
+	if !result.NewEvidence {
+		t.Error("NewEvidence = false, want true")
+	}
+	if !result.StrategyChanged {
+		t.Error("StrategyChanged = false, want true")
+	}
+	if result.TransientFailure {
+		t.Error("TransientFailure = true, want false")
+	}
+	if result.NeedsUserInput {
+		t.Error("NeedsUserInput = true, want false")
+	}
+	if len(result.UserOptions) != 2 || result.UserOptions[0] != "retry" || result.UserOptions[1] != "abort" {
+		t.Errorf("UserOptions = %#v", result.UserOptions)
+	}
+	if len(result.CriteriaUpdates) != 1 || result.CriteriaUpdates[0].ID != "c1" ||
+		result.CriteriaUpdates[0].Status != agent.CriterionFailed || result.CriteriaUpdates[0].Note != "go test ./... failed" {
+		t.Errorf("CriteriaUpdates = %#v", result.CriteriaUpdates)
+	}
+	if len(result.ProposedCriteria) != 2 || result.ProposedCriteria[0] != "tests pass" || result.ProposedCriteria[1] != "docs updated" {
+		t.Errorf("ProposedCriteria = %#v", result.ProposedCriteria)
+	}
+	if result.AtomicTask {
+		t.Error("AtomicTask = true, want false")
+	}
 }
