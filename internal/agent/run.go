@@ -221,7 +221,7 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 		return fmt.Errorf("%w: cannot resume a nil run", ErrInvalidTransition)
 	}
 	switch r.Status {
-	case DecisionRunning, DecisionParked, DecisionNeedsUserInput:
+	case DecisionRunning, DecisionParked, DecisionNeedsUserInput, DecisionVerificationUnavailable:
 	default:
 		return fmt.Errorf("%w: run status %s is terminal", ErrInvalidTransition, r.Status)
 	}

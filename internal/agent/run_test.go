@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -279,6 +280,117 @@ func TestResumeStartsFreshCycleWithoutReplayingWork(t *testing.T) {
 	if run.Cycles[0].Execution == nil || run.Cycles[1].Execution != nil {
 		t.Fatal("resume replayed or discarded prior observable execution")
 	}
+}
+
+// TestTerminateVerificationUnavailablePreservesExecution guards REL-001's
+// fix: when the verifier itself fails (provider error, timeout, or repeated
+// malformed JSON) after a successful CompleteExecution, the caller must be
+// able to terminate the run as DecisionVerificationUnavailable without
+// losing the executor's already-observed evidence — Terminate is valid from
+// any active stage, including mid-verification, and must not touch the
+// cycle it did not complete.
+func TestTerminateVerificationUnavailablePreservesExecution(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("check the weather", []string{"system", "user", "tools"}, now); err != nil {
+		t.Fatal(err)
+	}
+	exec := ExecutionResult{
+		Objective: "check the weather",
+		Summary:   "fetched partial data",
+		ToolCalls: []ToolCallRecord{
+			{Name: "web_fetch", Detail: "https://weather.com/prague", Succeeded: true},
+		},
+		NewEvidence: true,
+	}
+	if err := run.CompleteExecution(exec, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Stage != StageVerifier {
+		t.Fatalf("stage = %q, want verifier", run.Stage)
+	}
+	// Capture the post-CompleteExecution state (which normalizes nil slices
+	// to empty ones — see boundExecution) as the baseline, since the
+	// assertion under test is that Terminate itself leaves it untouched, not
+	// that CompleteExecution is a no-op transform of its input.
+	wantExecution := *run.LatestCycle().Execution
+
+	if err := run.Terminate(DecisionVerificationUnavailable, "verifier exhausted its retry budget with malformed JSON", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	if run.Status != DecisionVerificationUnavailable {
+		t.Fatalf("status = %q, want verification_unavailable", run.Status)
+	}
+	cycle := run.LatestCycle()
+	if cycle.Execution == nil {
+		t.Fatal("execution was discarded by Terminate")
+	}
+	if !reflect.DeepEqual(*cycle.Execution, wantExecution) {
+		t.Fatalf("execution = %+v, want unchanged %+v", *cycle.Execution, wantExecution)
+	}
+	if cycle.Verification != nil {
+		t.Fatalf("verification = %+v, want nil (verifier never produced a verdict)", cycle.Verification)
+	}
+	// Unlike ApplyStop, Terminate does not set CompletedAt for any decision
+	// it already handles (DecisionFailed, DecisionBudgetExhausted,
+	// DecisionNoProgress from internal/tui call sites) — this is consistent
+	// with that existing generic contract, not a gap specific to this new
+	// decision. See the task report for the full rationale.
+	if !cycle.CompletedAt.IsZero() {
+		t.Fatalf("completed at = %v, want zero", cycle.CompletedAt)
+	}
+}
+
+// TestResumeFromVerificationUnavailable confirms Resume treats
+// DecisionVerificationUnavailable the same as Parked/NeedsUserInput: a
+// fresh cycle with no replay of the incomplete verification attempt. Other
+// terminal statuses must continue to refuse resume.
+func TestResumeFromVerificationUnavailable(t *testing.T) {
+	t.Run("succeeds and starts a fresh cycle without replay", func(t *testing.T) {
+		run, now := newTestRun(t, DefaultLimits())
+		if err := run.BeginCycle("check the weather", nil, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.CompleteExecution(ExecutionResult{Summary: "fetched partial data", NewEvidence: true}, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.Terminate(DecisionVerificationUnavailable, "verifier timed out", now.Add(2*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.Resume("retry verification with a fresh cycle", now.Add(3*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if run.Status != DecisionRunning || run.Stage != StageStopCheck {
+			t.Fatalf("run = %+v", run)
+		}
+		if err := run.BeginCycle(run.Objective, []string{"system"}, now.Add(4*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if run.Cycle != 2 || run.Cycles[0].Execution == nil || run.Cycles[1].Execution != nil {
+			t.Fatal("resume replayed or discarded prior observable execution")
+		}
+	})
+
+	t.Run("other terminal statuses still refuse resume", func(t *testing.T) {
+		for _, decision := range []Decision{DecisionDone, DecisionFailed, DecisionBudgetExhausted, DecisionEscalated, DecisionCancelled, DecisionNoProgress} {
+			decision := decision
+			t.Run(string(decision), func(t *testing.T) {
+				run, now := newTestRun(t, DefaultLimits())
+				if err := run.BeginCycle("work", nil, now); err != nil {
+					t.Fatal(err)
+				}
+				if err := run.CompleteExecution(ExecutionResult{Summary: "work"}, now); err != nil {
+					t.Fatal(err)
+				}
+				if err := run.Terminate(decision, "terminal", now.Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := run.Resume("try again", now.Add(2*time.Second)); !errors.Is(err, ErrInvalidTransition) {
+					t.Fatalf("resume error = %v, want ErrInvalidTransition", err)
+				}
+			})
+		}
+	})
 }
 
 func TestInvalidTransitionAndMalformedVerdict(t *testing.T) {

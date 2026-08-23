@@ -44,6 +44,13 @@ const (
 	// docs/architecture/v1-agent-runtime.md §3), not because a verifier
 	// rejected the work or an unexpected error occurred.
 	DecisionNoProgress Decision = "no_progress"
+	// DecisionVerificationUnavailable is a terminal outcome distinct from
+	// DecisionFailed: the *verifier* could not produce a valid verdict after
+	// its bounded retry budget (provider error, timeout, or repeated malformed
+	// JSON) — not because the executor's work was rejected. The cycle's
+	// ExecutionResult is preserved; no further executor cycle may be scheduled
+	// from this outcome. See REL-001 in .claude/tasks/llmtui-audit-report.md.
+	DecisionVerificationUnavailable Decision = "verification_unavailable"
 )
 
 // VerificationVerdict is the verifier's assessment of observable evidence.

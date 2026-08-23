@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestVerifierNeedsUserInputStopsForUser locks in the verifier's own
 // semantic detection path for a clarifying question: distinct from
@@ -67,5 +70,36 @@ func TestVerifierNeedsUserInputOutranksConclusiveFailure(t *testing.T) {
 	}
 	if got := Decide(run, now).Decision; got != DecisionNeedsUserInput {
 		t.Fatalf("decision = %q, want needs_user_input even with a failed verdict present", got)
+	}
+}
+
+// TestDecideRejectsIncompleteVerificationCycle is a defensive regression
+// test for REL-001: while a verifier-attempt retry is still in progress (the
+// executor has produced evidence but the verifier has not yet produced a
+// verdict), the caller must never call Decide on that cycle — Task 3 wires
+// the TUI to call Terminate(DecisionVerificationUnavailable, ...) instead.
+// This test locks in that if Decide is ever called on this exact in-between
+// state anyway, it fails closed as DecisionFailed rather than silently
+// treating the missing verification as retryable.
+func TestDecideRejectsIncompleteVerificationCycle(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("check the weather", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteExecution(ExecutionResult{Summary: "fetched partial data", NewEvidence: true}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.LatestCycle().Execution == nil || run.LatestCycle().Verification != nil {
+		t.Fatalf("cycle = %+v, want execution set and verification nil", run.LatestCycle())
+	}
+
+	stop := Decide(run, now.Add(2*time.Second))
+
+	if stop.Decision != DecisionFailed {
+		t.Fatalf("decision = %q, want failed", stop.Decision)
+	}
+	const wantReason = "cycle is missing execution or verification evidence"
+	if stop.Reason != wantReason {
+		t.Fatalf("reason = %q, want %q", stop.Reason, wantReason)
 	}
 }
