@@ -281,7 +281,7 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 	}
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
-	m.toolDepth = 0
+	m.turnRuntime.resetCycle()
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · resumed with user input", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(input, images), m.persistAgentRun())
@@ -312,7 +312,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	}
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
-	m.toolDepth = 0
+	m.turnRuntime.resetCycle()
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · executing", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
 	return m.dispatch(agentContinueDirective, nil)
@@ -982,14 +982,11 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 			return m.fail("no active agent run")
 		}
 		if m.thinking && m.cancelStream != nil {
-			m.cancelStream()
 			m.finishStream(nil, false)
+			m.turnRuntime.complete(turnOutcomeCancelled)
 		}
 		if m.mcpBatchCancel != nil {
-			m.mcpBatchCancel()
-			m.mcpBatchCancel = nil
-			m.mcpBatchGen++
-			m.activity = nil
+			m.turnRuntime.cancelToolBatch()
 			m.relayout()
 		}
 		m.cancelVerifiedRun("cancelled by /agent cancel")

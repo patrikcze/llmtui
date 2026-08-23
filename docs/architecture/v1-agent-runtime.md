@@ -1,8 +1,8 @@
 # v1 Agent Runtime — Implemented Design
 
-> The progress ledger, dedicated `no_progress` outcome, ordinary-mode
-> truncation guard, and live budget enforcement described below are
-> implemented on `feat/v1-agent-runtime`. Historical “new”/“gap” wording is
+> The explicit `tui.turnRuntime`, progress ledger, dedicated `no_progress`
+> outcome, ordinary-mode truncation guard, and live budget enforcement
+> described below are implemented. Historical “new”/“gap” wording is
 > retained where it explains the audit trail.
 
 This document defines the v1 target for the shared orchestration kernel
@@ -13,11 +13,15 @@ justified).
 
 ## 1. Explicit state machine
 
-The current implementation already has a real (if implicit) state machine
-distributed across `tui.Model` fields (`toolDepth`, `pendingCalls`,
-`streamGen`, `mcpBatchGen`) and `agent.AgentRun.Stage`/`Status`. v1 makes the
-states explicit and typed, covering both ordinary tool chat and `/agent on`
-under one vocabulary:
+`tui.turnRuntime` is the explicit shared execution state machine for ordinary
+tool chat and `/agent on`. It owns provider request generation, cancellation,
+the inactivity watchdog, tool depth and retry flags, pending approval plans,
+tool-batch generation/cancellation, live activity, and the progress ledger.
+`tui.Model` remains the Bubble Tea adapter and owns rendering, transcript
+mutation, provider/tool invocation commands, and Chat/Agent policy. Durable
+Agent acceptance state remains in `agent.AgentRun.Stage`/`Status`.
+
+The runtime and Agent controller use this common state vocabulary:
 
 | State | Ordinary tool chat | `/agent on` |
 | --- | --- | --- |
@@ -44,11 +48,13 @@ what the evidence justifies (master-prompt §3.1). The state table above is
 descriptive/unifying vocabulary, not a mandate to make ordinary chat behave
 like `/agent on`.
 
-Illegal transitions (e.g. a verify message arriving for a stage that already
-moved past verification) are already guarded by the run/cycle/gen triple
-check at `agent_loop.go:325-327` and the `streamGen`/`mcpBatchGen` checks at
-`app.go:1601,796`. These are confirmed correct (`v1-audit.md` §6) and are
-preserved as-is.
+Illegal transitions are rejected at their owning boundary. `turnRuntime`
+accepts stream and tool results only for its active generation and prevents a
+second request or batch from starting concurrently. Agent verifier messages
+retain their independent run/cycle/generation checks. Typed runtime outcomes
+(`final_answer`, `needs_approval`, `tool_continuation`, `execution_failure`,
+and `cancelled`) let the Model adapter apply mode-specific policy without
+creating a second execution path.
 
 ## 2. Deterministic termination
 
