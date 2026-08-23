@@ -128,11 +128,15 @@ add` reminds you).
     recommended default.
   - **Command classifier** — a command is auto-approved only when it is an
     allowlisted read-only program (`ls`, `cat`, `grep`, `rg`, `find`,
-    `git status/log/diff`, `go test/vet/fmt/list`, …) with no shell
-    metacharacters (pipes, redirects, chaining, substitution) and no
-    escalating arguments (`find -delete/-exec`). Known-dangerous programs
-    (`rm`, `mv`, `chmod`, `sudo`, `curl`, package managers, cloud/container
-    CLIs) always ask, as does anything unrecognized.
+    `git status/log/diff/show`, `go list/version/env` in its observational
+    form, …) with no shell metacharacters (pipes, redirects, chaining,
+    substitution) and no escalating arguments (`find -delete/-exec`). `go
+    test`, `go vet`, and `go fmt` always ask — they compile/execute or
+    rewrite repository code, not just inspect it — and so does `go env -w`/
+    `-u` or any other flag, since those mutate persistent go env config.
+    Known-dangerous programs (`rm`, `mv`, `chmod`, `sudo`, `curl`, package
+    managers, cloud/container CLIs) always ask, as does anything
+    unrecognized.
   - **Confinement** — file tools reject absolute paths, `..`, and symlinks
     resolving outside the launch directory. Commands run with the workspace
     as their working directory; path-like arguments are symlink-resolved

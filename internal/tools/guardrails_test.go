@@ -14,14 +14,35 @@ func TestSafeCommands(t *testing.T) {
 		"ls", "ls -la", "cat README.md", "head -20 main.go",
 		"tail -5 server.log", "grep -rn TODO .", "rg pattern src/",
 		"wc -l main.go", "pwd", "find . -name main.go",
-		"git status", "git log --oneline", "git diff HEAD",
-		"go test ./...", "go vet ./...", "go fmt ./...", "go list ./...",
+		"git status", "git log --oneline", "git diff HEAD", "git show HEAD",
+		"go list ./...", "go version", "go env GOPROXY",
 	}
 	p := DefaultGuardrails()
 	for _, cmd := range safe {
 		cl := p.ClassifyCommand(cmd, ".")
 		if cl.Verdict != VerdictAuto {
 			t.Errorf("ClassifyCommand(%q) = %v (%s), want auto", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+// TestGoCommandsThatExecuteOrMutateAsk locks in the fix for SEC-001: go
+// subcommands that compile/execute repository code (test, vet) or write
+// files/config (fmt, env -w/-u) must ask, not auto-approve. These were
+// previously (incorrectly) asserted as VerdictAuto in TestSafeCommands.
+func TestGoCommandsThatExecuteOrMutateAsk(t *testing.T) {
+	cases := []string{
+		"go test ./...",
+		"go vet ./...",
+		"go fmt ./...",
+		"go env -w GOPROXY=x",
+		"go env -u GOPROXY",
+	}
+	p := DefaultGuardrails()
+	for _, cmd := range cases {
+		cl := p.ClassifyCommand(cmd, ".")
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("ClassifyCommand(%q) = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
 		}
 	}
 }
@@ -348,6 +369,145 @@ func TestClassifyCommandGitNoIndexAndSensitivePathsAsk(t *testing.T) {
 		cl := p.ClassifyCommand(cmd, root)
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("%q = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+func TestClassifyCommandGitDiffShowOutputAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	for _, cmd := range []string{
+		"git diff --output=result.txt",
+		"git diff --output result.txt",
+		"git diff -o result.txt",
+		"git diff -oresult.txt",
+		"git show --output=result.txt",
+		"git show --output result.txt",
+		"git show -o result.txt",
+	} {
+		cl := p.ClassifyCommand(cmd, ".")
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%q = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+func TestFindWriteOutputEscalatingArgsAsk(t *testing.T) {
+	cases := []string{
+		"find . -fls result.txt",
+		"find . -fprint0 result.txt",
+	}
+	p := DefaultGuardrails()
+	for _, cmd := range cases {
+		cl := p.ClassifyCommand(cmd, ".")
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("ClassifyCommand(%q) = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+// ---- flag-value path smuggling ---------------------------------------------
+
+// TestFlagValuePathSmugglingAsks locks in the fix for the gap where a path
+// embedded in a flag's value ("--file=/etc/passwd") skipped the path-escape
+// check entirely because the argument starts with "-". The fix lives in the
+// shared per-argument loop (flagPathValue), not as a per-program special
+// case, so both grep and cat (an unrelated program) must be caught the same
+// way.
+func TestFlagValuePathSmugglingAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	for _, cmd := range []string{
+		"grep --file=/absolute/path x .",
+		"cat --file=/absolute/path",
+		"cat --output=/etc/passwd",
+	} {
+		cl := p.ClassifyCommand(cmd, root)
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%q = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+// ---- adversarial verdict table (SEC-001) -----------------------------------
+
+// TestCommandApprovalAdversarialTable asserts the exact verdict table from
+// the SEC-001 remediation brief / .claude/tasks/llmtui-test-plan.md
+// §"Command approval adversarial table".
+func TestCommandApprovalAdversarialTable(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want CommandVerdict
+	}{
+		// Must ask: executes repository code, mutates state, or smuggles a
+		// path past the naive "skip anything starting with -" check.
+		{"go test ./...", VerdictAsk},
+		{"go vet ./...", VerdictAsk},
+		{"go fmt ./...", VerdictAsk},
+		{"go env -w GOPROXY=x", VerdictAsk},
+		{"go env -u GOPROXY", VerdictAsk},
+		{"git diff --output=result.txt", VerdictAsk},
+		{"git show --output=result.txt", VerdictAsk},
+		{"find . -fls result.txt", VerdictAsk},
+		{"grep --file=/absolute/path x .", VerdictAsk},
+		{"cat --file=/absolute/path", VerdictAsk},
+
+		// Must already ask: regression tests locking in existing behavior.
+		{"cat -- /absolute/path", VerdictAsk},
+		{"go env -unknownflag", VerdictAsk},
+		{"go env @file", VerdictAsk},
+
+		// Must remain auto: do not regress currently-safe forms.
+		{"ls", VerdictAuto},
+		{"ls -la", VerdictAuto},
+		{"cat README.md", VerdictAuto},
+		{"head -20 main.go", VerdictAuto},
+		{"grep -rn TODO .", VerdictAuto},
+		{"find . -name main.go", VerdictAuto},
+		{"git status", VerdictAuto},
+		{"git log --oneline", VerdictAuto},
+		{"git diff HEAD", VerdictAuto},
+		{"git show HEAD", VerdictAuto},
+		{"go list ./...", VerdictAuto},
+		{"go version", VerdictAuto},
+		{"go env GOPROXY", VerdictAuto},
+	}
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	for _, c := range cases {
+		cl := p.ClassifyCommand(c.cmd, root)
+		if cl.Verdict != c.want {
+			t.Errorf("ClassifyCommand(%q) = %v (%s), want %v", c.cmd, cl.Verdict, cl.Reason, c.want)
+		}
+	}
+}
+
+// ---- fuzz-style: unrecognized suffixes never flip ask->auto or auto->ask'd-then-auto ----
+
+// TestUnrecognizedSuffixNeverBecomesAuto is the regression form of the
+// CLAUDE.md invariant: appending an arbitrary/unrecognized token to a
+// currently-auto command must never turn it into VerdictAuto unless that
+// exact new form has an explicit recognizer. Every case here is expected to
+// ask precisely because the appended token is not (yet) understood.
+func TestUnrecognizedSuffixNeverBecomesAuto(t *testing.T) {
+	cases := []string{
+		"go env -unknownflag",
+		"go env GOPROXY -w",
+		"go env GOPROXY=x",      // not a bare KEY token
+		"go env lowercase",      // not KEY-shaped
+		"go test -run TestFoo",  // still go test, still asks
+		"go vet -unsafeptr",     // still go vet, still asks
+		"go fmt -n",             // still go fmt, still asks
+		"go banana",             // unknown go subcommand
+		"git diff --output",     // flag alone, no "="
+		"git show -oresult.txt", // attached-value short flag
+		"find . -fprint0 x",
+		"find . -fls x",
+	}
+	p := DefaultGuardrails()
+	for _, cmd := range cases {
+		cl := p.ClassifyCommand(cmd, ".")
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("ClassifyCommand(%q) = %v (%s), want ask (unrecognized/escalating form must not auto-approve)", cmd, cl.Verdict, cl.Reason)
 		}
 	}
 }

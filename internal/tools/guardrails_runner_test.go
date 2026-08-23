@@ -83,8 +83,13 @@ func TestRunnerSecretReadPolicyOff(t *testing.T) {
 
 func TestRunnerCommandApprovalUsesClassifier(t *testing.T) {
 	r := NewRunner(t.TempDir(), 64)
-	if r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "go test ./..."}) {
-		t.Error("go test should be auto-approved")
+	if r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "go list ./..."}) {
+		t.Error("go list should be auto-approved")
+	}
+	// go test executes repository code and must require approval (SEC-001):
+	// it must not be auto-approved just because it looks like a project check.
+	if !r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "go test ./..."}) {
+		t.Error("go test should require approval (executes repository code)")
 	}
 	if !r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "rm -rf ."}) {
 		t.Error("rm -rf should require approval")

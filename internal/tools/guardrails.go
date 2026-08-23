@@ -80,11 +80,36 @@ var riskyPrograms = map[string]string{
 	"kubectl": "cluster CLI", "docker": "container runtime",
 }
 
-// autoAllowedGoSubcommands are go toolchain operations treated as safe
-// project checks.
+// autoAllowedGoSubcommands are go toolchain subcommands that are purely
+// observational and never build, execute, or write repository/user state.
+// "test", "vet", and "fmt" are deliberately excluded: test/vet compile and
+// load (vet also runs analyzers with side effects for some checks) the
+// repository's own code, and fmt rewrites source files. "env" is handled
+// separately by goEnvArgsAreObservational since only some of its forms are
+// safe.
 var autoAllowedGoSubcommands = map[string]bool{
-	"test": true, "vet": true, "fmt": true, "list": true,
-	"version": true, "env": true,
+	"list": true, "version": true,
+}
+
+// goEnvKeyPattern matches a bare Go environment variable name such as
+// GOPROXY or GO111MODULE — the only argument shape "go env" accepts for a
+// read-only, observational query.
+var goEnvKeyPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+// goEnvArgsAreObservational reports whether the arguments following "go env"
+// form a read-only query: zero or more bare KEY tokens and nothing else. Any
+// flag (including -w/-u, which persist changes to the go env config file)
+// or response file (@file) makes the invocation ask instead.
+func goEnvArgsAreObservational(args []string) bool {
+	for _, a := range args {
+		if a == "" || strings.HasPrefix(a, "-") || strings.HasPrefix(a, "@") {
+			return false
+		}
+		if !goEnvKeyPattern.MatchString(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // ClassifyCommand classifies one run_command line conservatively: only an
@@ -128,19 +153,32 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 		if !gitSubcommandIsReadOnly(fields) {
 			return CommandClass{VerdictAsk, "git subcommand can modify the repository"}
 		}
-		if fields[1] == "diff" {
+		if fields[1] == "diff" || fields[1] == "show" {
 			for _, f := range fields[2:] {
-				if f == "--no-index" {
+				if fields[1] == "diff" && f == "--no-index" {
 					return CommandClass{VerdictAsk, "git diff --no-index can read arbitrary filesystem paths"}
+				}
+				if f == "--output" || strings.HasPrefix(f, "--output=") || strings.HasPrefix(f, "-o") {
+					return CommandClass{VerdictAsk, "git " + fields[1] + " --output writes a file"}
 				}
 			}
 		}
 		classReason = "read-only git subcommand"
 	case "go":
-		if len(fields) <= 1 || !autoAllowedGoSubcommands[fields[1]] {
+		if len(fields) <= 1 {
 			return CommandClass{VerdictAsk, "go subcommand can modify files or fetch modules"}
 		}
-		classReason = "go toolchain check"
+		switch sub := fields[1]; {
+		case sub == "env":
+			if !goEnvArgsAreObservational(fields[2:]) {
+				return CommandClass{VerdictAsk, "go env with flags or a response file can read or write persistent go env config"}
+			}
+			classReason = "go env observational query"
+		case autoAllowedGoSubcommands[sub]:
+			classReason = "go toolchain check"
+		default:
+			return CommandClass{VerdictAsk, "go subcommand can execute repository code, write files, or fetch modules"}
+		}
 	default:
 		if !autoAllowedCommands[prog] {
 			return CommandClass{VerdictAsk, "not an allowlisted read-only command"}
@@ -148,25 +186,26 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	}
 	for _, f := range fields[1:] {
 		switch f {
-		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf":
+		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls", "-fprint0":
 			return CommandClass{VerdictAsk, f + " escalates a read into a write or execution"}
 		}
 	}
 	for _, f := range fields[1:] {
-		if strings.HasPrefix(f, "-") {
-			continue // a flag, not a path argument
+		value := flagPathValue(f)
+		if value == "" {
+			continue
 		}
-		if looksLikePathEscape(f, root) {
+		if looksLikePathEscape(value, root) {
 			return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
 		}
-		if p.BlockSymlinkEscape && pathResolvesOutsideWorkspace(f, root) {
+		if p.BlockSymlinkEscape && pathResolvesOutsideWorkspace(value, root) {
 			return CommandClass{VerdictAsk, "argument " + f + " resolves outside the workspace"}
 		}
 	}
 	if p.RequireApprovalForSecretReads {
 		for _, f := range fields[1:] {
-			if !strings.HasPrefix(f, "-") && IsSecretPath(f) {
-				return CommandClass{VerdictAsk, "reads a likely secret file (" + f + ")"}
+			if value := flagPathValue(f); value != "" && IsSecretPath(value) {
+				return CommandClass{VerdictAsk, "reads a likely secret file (" + value + ")"}
 			}
 		}
 	}
@@ -179,6 +218,23 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 // (*Runner).NeedsApproval, which passes the runner's real root instead.
 func ClassifyCommand(body string) CommandClass {
 	return DefaultGuardrails().ClassifyCommand(body, ".")
+}
+
+// flagPathValue returns the path-like value an argument carries: the
+// argument itself when it is a bare (non-flag) token, or the substring after
+// "=" when it is a "--flag=value"/"-f=value" flag — this is how a path gets
+// smuggled past a naive "skip anything starting with -" check (for example
+// "grep --file=/etc/passwd"). It returns "" for a flag with no "=" (a bare
+// flag like "-la", or a short flag with an attached value and no "=" such as
+// "-f/etc/passwd"), which callers must treat as "no path to check".
+func flagPathValue(f string) string {
+	if !strings.HasPrefix(f, "-") {
+		return f
+	}
+	if idx := strings.Index(f, "="); idx >= 0 {
+		return f[idx+1:]
+	}
+	return ""
 }
 
 // looksLikePathEscape reports whether argument f, treated as a path relative
