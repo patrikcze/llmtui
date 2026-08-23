@@ -97,6 +97,7 @@ type nativeArgs struct {
 	Skill      string `json:"skill"`
 	Pattern    string `json:"pattern"`
 	Glob       string `json:"glob"`
+	Freshness  string `json:"freshness_token"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -207,8 +208,10 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		case ToolWebSearch:
 			c.Body = args.Query
 			c.Max = args.MaxResults
+			c.Freshness = strings.TrimSpace(args.Freshness)
 		case ToolWebFetch:
 			c.Path = args.URL
+			c.Freshness = strings.TrimSpace(args.Freshness)
 		case ToolSkillLoad:
 			c.Path = args.Skill
 		}
@@ -228,7 +231,8 @@ func WebSpecs() []provider.ToolSpec {
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "description": "The search query."},
-					"max_results": {"type": "integer", "description": "Maximum results to return. Optional."}
+					"max_results": {"type": "integer", "description": "Maximum results to return. Optional."},
+					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh poll is intentionally required."}
 				},
 				"required": ["query"]
 			}`),
@@ -239,7 +243,8 @@ func WebSpecs() []provider.ToolSpec {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"url": {"type": "string", "description": "The http(s) URL to fetch."}
+					"url": {"type": "string", "description": "The http(s) URL to fetch."},
+					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."}
 				},
 				"required": ["url"]
 			}`),

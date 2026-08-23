@@ -67,6 +67,11 @@ type Call struct {
 	InputErr string
 	// Max caps web_search results (native max_results argument).
 	Max int
+	// Freshness is an explicit caller-supplied observation epoch for volatile
+	// read tools. Reusing the same token remains the same operation; changing
+	// it deliberately requests a new poll without disguising it through
+	// incidental argument variation.
+	Freshness string
 
 	// MCPServer, when non-empty, marks this as a call to an MCP server's
 	// tool rather than a built-in one. MCPTool is the tool's name on that

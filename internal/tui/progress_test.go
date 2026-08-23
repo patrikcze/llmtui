@@ -2,6 +2,8 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -40,6 +42,63 @@ func TestProgressFingerprintNormalizesIncidentalDifferences(t *testing.T) {
 	compactCommand := progressFingerprint(tools.Call{Tool: tools.ToolRunCommand, Body: `printf '%s' "a b"`})
 	if spacedCommand == compactCommand {
 		t.Fatal("semantically significant quoted command whitespace collapsed")
+	}
+}
+
+func TestProgressIdentityCanonicalizesWorkspaceResources(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias.txt")
+	if err := os.Symlink("target.txt", alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		a    tools.Call
+		b    tools.Call
+	}{
+		{name: "lexical path alias", a: tools.Call{Tool: tools.ToolReadFile, Path: "sub/../target.txt"}, b: tools.Call{Tool: tools.ToolReadFile, Path: "target.txt"}},
+		{name: "resolved symlink alias", a: tools.Call{Tool: tools.ToolReadFile, Path: "alias.txt"}, b: tools.Call{Tool: tools.ToolReadFile, Path: "target.txt"}},
+		{name: "read-only command whitespace", a: tools.Call{Tool: tools.ToolRunCommand, Body: "git   status"}, b: tools.Call{Tool: tools.ToolRunCommand, Body: "git status"}},
+		{name: "read-only command path", a: tools.Call{Tool: tools.ToolRunCommand, Body: "cat ./target.txt"}, b: tools.Call{Tool: tools.ToolRunCommand, Body: "cat target.txt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotA, gotB := progressFingerprintAtRoot(root, tt.a), progressFingerprintAtRoot(root, tt.b); gotA != gotB {
+				t.Fatalf("identities differ:\n%s\n%s", gotA, gotB)
+			}
+		})
+	}
+
+	opaqueA := tools.Call{Tool: tools.ToolRunCommand, Body: `printf '%s' "a  b"`}
+	opaqueB := tools.Call{Tool: tools.ToolRunCommand, Body: `printf '%s' "a b"`}
+	if progressFingerprintAtRoot(root, opaqueA) == progressFingerprintAtRoot(root, opaqueB) {
+		t.Fatal("approved opaque commands lost exact identity")
+	}
+}
+
+func TestProgressIdentityUsesExplicitFreshnessAndPagination(t *testing.T) {
+	base := tools.Call{Tool: tools.ToolWebSearch, Body: "weather", Max: 5, Freshness: "poll-1"}
+	same := base
+	nextPoll := base
+	nextPoll.Freshness = "poll-2"
+	if progressFingerprint(base) != progressFingerprint(same) {
+		t.Fatal("same polling token changed identity")
+	}
+	if progressFingerprint(base) == progressFingerprint(nextPoll) {
+		t.Fatal("explicit new polling epoch did not change identity")
+	}
+
+	page1 := tools.Call{MCPServer: "srv", MCPTool: "list", MCPArgs: `{"page":1,"filter":"open"}`}
+	page2 := tools.Call{MCPServer: "srv", MCPTool: "list", MCPArgs: `{"filter":"open","page":2}`}
+	if progressFingerprint(page1) == progressFingerprint(page2) {
+		t.Fatal("pagination state collapsed")
 	}
 }
 
