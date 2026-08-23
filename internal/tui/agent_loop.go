@@ -20,7 +20,12 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
-const maxAgentDirectiveBytes = 12 * 1024
+const (
+	maxAgentDirectiveBytes    = 12 * 1024
+	maxAgentStartSummaryBytes = 16 * 1024
+	maxAgentStartTurnBytes    = 4 * 1024
+	maxAgentStartTurns        = 8
+)
 
 type agentLoopState struct {
 	run   *agent.AgentRun
@@ -214,6 +219,9 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 		m.refreshViewport()
 		return nil
 	}
+	run.StartContextCaptured = true
+	run.StartSummary = truncateAgentText(m.summary, maxAgentStartSummaryBytes)
+	run.StartTurns = snapshotAgentStartTurns(m.session.Messages)
 	if err := run.BeginCycle(request, m.agentContextSources(), time.Now()); err != nil {
 		m.errText = err.Error()
 		m.refreshViewport()
@@ -229,6 +237,27 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(id), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
+}
+
+func snapshotAgentStartTurns(messages []provider.Message) []agent.ContextTurn {
+	projected := projectCompletedAgentHistory(messages)
+	turns := make([]agent.ContextTurn, 0, min(len(projected), maxAgentStartTurns))
+	for _, message := range projected {
+		if message.Role != provider.RoleUser && message.Role != provider.RoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		turns = append(turns, agent.ContextTurn{
+			Role: string(message.Role), Content: truncateAgentText(content, maxAgentStartTurnBytes),
+		})
+	}
+	if len(turns) > maxAgentStartTurns {
+		turns = append([]agent.ContextTurn(nil), turns[len(turns)-maxAgentStartTurns:]...)
+	}
+	return turns
 }
 
 func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image) tea.Cmd {

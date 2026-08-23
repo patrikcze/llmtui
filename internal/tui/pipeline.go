@@ -419,8 +419,20 @@ func (m *Model) requestHistory() (messages []provider.Message, summary string, a
 	}
 	if m.agentLoop.run.Cycle <= 1 {
 		prior := projectCompletedAgentHistory(messages[:start])
+		summary := ""
+		if m.agentLoop.run.StartContextCaptured {
+			prior = make([]provider.Message, 0, len(m.agentLoop.run.StartTurns))
+			for _, turn := range m.agentLoop.run.StartTurns {
+				role := provider.Role(turn.Role)
+				if role != provider.RoleUser && role != provider.RoleAssistant {
+					continue
+				}
+				prior = append(prior, provider.Message{Role: role, Content: turn.Content})
+			}
+			summary = m.agentLoop.run.StartSummary
+		}
 		current := append([]provider.Message(nil), messages[start:]...)
-		return append(prior, current...), "", true
+		return append(prior, current...), summary, true
 	}
 	return projectPriorCyclesInRun(messages, start, m.agentLoop.cycleBoundaries), "", true
 }

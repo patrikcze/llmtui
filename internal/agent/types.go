@@ -212,6 +212,14 @@ type Cycle struct {
 	Verification   *VerificationResult `json:"verification,omitempty"`
 }
 
+// ContextTurn is a bounded, provider-neutral prior final turn captured when a
+// run starts. Tool protocol and controller messages are excluded by the TUI
+// before persistence.
+type ContextTurn struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // AgentRun is the serializable state of one bounded user request.
 type AgentRun struct {
 	Version          int           `json:"version"`
@@ -238,6 +246,13 @@ type AgentRun struct {
 	// to schema v1: older records load with empty slices.
 	Criteria []Criterion    `json:"criteria,omitempty"`
 	Evidence []EvidenceItem `json:"evidence,omitempty"`
+	// StartContext preserves the exact bounded conversation context selected
+	// at admission. It is used only for cycle one; later cycles remain scoped
+	// to verified run memory. Captured distinguishes an intentionally empty
+	// snapshot from an older persisted record that predates this field.
+	StartContextCaptured bool          `json:"start_context_captured,omitempty"`
+	StartSummary         string        `json:"start_summary,omitempty"`
+	StartTurns           []ContextTurn `json:"start_turns,omitempty"`
 }
 
 // StopResult is the explicit stop-check output.

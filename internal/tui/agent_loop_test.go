@@ -245,12 +245,12 @@ func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
 		firstContext.WriteString(message.Content)
 		firstContext.WriteByte('\n')
 	}
-	for _, stale := range []string{agentContinueDirective, "old-benchmark-output", "OLD BENCHMARK SUMMARY"} {
+	for _, stale := range []string{agentContinueDirective, "old-benchmark-output"} {
 		if strings.Contains(firstContext.String(), stale) {
 			t.Fatalf("new run leaked completed agent machinery %q:\n%s", stale, firstContext.String())
 		}
 	}
-	for _, conversational := range []string{"OLD BENCHMARK INSTRUCTIONS", "OLD BENCHMARK COMPLETE"} {
+	for _, conversational := range []string{"OLD BENCHMARK INSTRUCTIONS", "OLD BENCHMARK COMPLETE", "OLD BENCHMARK SUMMARY"} {
 		if !strings.Contains(firstContext.String(), conversational) {
 			t.Fatalf("new run lost conversational history %q:\n%s", conversational, firstContext.String())
 		}
@@ -273,6 +273,57 @@ func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
 		if !strings.Contains(got, current) {
 			t.Fatalf("retry lost current-run context %q:\n%s", current, got)
 		}
+	}
+}
+
+func TestVerifiedAgentStartContextIsBoundedAndProtocolFree(t *testing.T) {
+	m := newTestModel(t)
+	m.summary = "summary-only fact: the deployment is blue"
+	m.session.AddUser("ordinary prior question")
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir}}})
+	m.session.AddMessage(provider.Message{Role: provider.RoleTool, ToolCallID: "call-1", Content: "private protocol output"})
+	m.session.AddUser(agentContinueDirective)
+	m.session.AddAssistant("ordinary prior final answer")
+
+	run, err := agent.NewRun("run-start-snapshot", "next task", m.agentLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.StartContextCaptured = true
+	run.StartSummary = truncateAgentText(m.summary, maxAgentStartSummaryBytes)
+	run.StartTurns = snapshotAgentStartTurns(m.session.Messages)
+	if err := run.BeginCycle("next task", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.historyStart = len(m.session.Messages)
+	m.resetAgentContext()
+	t.Cleanup(m.releaseAgentContext)
+
+	messages, summary, scoped := m.requestHistory()
+	if !scoped || summary != m.summary {
+		t.Fatalf("snapshot = scoped:%v summary:%q", scoped, summary)
+	}
+	var content strings.Builder
+	for _, message := range messages {
+		content.WriteString(message.Content)
+		content.WriteByte('\n')
+	}
+	for _, want := range []string{"ordinary prior question", "ordinary prior final answer"} {
+		if !strings.Contains(content.String(), want) {
+			t.Fatalf("snapshot lost %q: %s", want, content.String())
+		}
+	}
+	for _, forbidden := range []string{"private protocol output", agentContinueDirective} {
+		if strings.Contains(content.String(), forbidden) {
+			t.Fatalf("snapshot retained protocol %q: %s", forbidden, content.String())
+		}
+	}
+
+	run.Cycle = 2
+	_, laterSummary, _ := m.requestHistory()
+	if laterSummary != "" {
+		t.Fatalf("cycle two summary = %q, want isolated run memory only", laterSummary)
 	}
 }
 

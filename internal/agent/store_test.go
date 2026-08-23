@@ -63,6 +63,29 @@ func TestFileStoreCorruptRecovery(t *testing.T) {
 	}
 }
 
+func TestFileStorePreservesAndRedactsRunStartContext(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	run, _ := newTestRun(t, DefaultLimits())
+	run.StartContextCaptured = true
+	run.StartSummary = "deployment blue api_key=super-secret-value"
+	run.StartTurns = []ContextTurn{{Role: "user", Content: "use token=another-secret-value"}}
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.StartContextCaptured || !strings.Contains(loaded.StartSummary, "deployment blue") {
+		t.Fatalf("loaded start context = %+v", loaded)
+	}
+	if strings.Contains(loaded.StartSummary, "super-secret-value") ||
+		len(loaded.StartTurns) != 1 || strings.Contains(loaded.StartTurns[0].Content, "another-secret-value") {
+		t.Fatalf("start context was not redacted: summary=%q turns=%+v", loaded.StartSummary, loaded.StartTurns)
+	}
+}
+
 func TestFileStoreAtomicPermissionsAndBounds(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStore(dir, 64*1024, 1)
