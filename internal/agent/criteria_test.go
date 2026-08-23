@@ -297,3 +297,37 @@ func TestVerificationStateSurvivesPersistenceRoundtrip(t *testing.T) {
 		t.Fatalf("unresolved after reload = %+v", unresolved)
 	}
 }
+
+func TestTypedCriteriaUseOnlyRuntimeObservations(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{
+		{Text: "tests pass", Kind: CriterionTestResult, Target: "go test ./..."},
+		{Text: "report exists", Kind: CriterionFileState, Target: "report.md"},
+		{Text: "meaning is correct", Kind: CriterionSemantic},
+	})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		Summary:      "model claims everything passed",
+		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
+		ChangedFiles: []string{"report.md"},
+	}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied || run.Criteria[1].Status != CriterionSatisfied {
+		t.Fatalf("deterministic criteria = %+v", run.Criteria)
+	}
+	if run.Criteria[2].Status != CriterionPending {
+		t.Fatal("executor prose resolved a semantic criterion")
+	}
+	semantic := run.UnresolvedSemanticCriteria()
+	if len(semantic) != 1 || semantic[0].Text != "meaning is correct" {
+		t.Fatalf("semantic criteria = %+v", semantic)
+	}
+}
+
+func TestInferMechanicalCriteriaRejectsMultipartRequests(t *testing.T) {
+	execution := ExecutionResult{TestsRun: []TestResult{{Name: "go test ./...", Passed: true}}}
+	if got := InferMechanicalCriteria("run the tests", execution); len(got) != 1 || got[0].Kind != CriterionTestResult {
+		t.Fatalf("single mechanical request = %+v", got)
+	}
+	if got := InferMechanicalCriteria("run the tests and write a report", execution); len(got) != 0 {
+		t.Fatalf("multipart request inferred unsafe criteria: %+v", got)
+	}
+}

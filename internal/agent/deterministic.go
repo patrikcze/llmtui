@@ -2,6 +2,37 @@ package agent
 
 import "strings"
 
+// InferMechanicalCriteria recognizes deliberately narrow, single-purpose
+// requests after observing their runtime operations. Multi-part or ambiguous
+// requests remain semantic so missing work cannot be blessed by inference.
+func InferMechanicalCriteria(request string, execution ExecutionResult) []CriterionSpec {
+	normalized := strings.ToLower(strings.TrimSpace(request))
+	if normalized == "" || strings.Contains(normalized, "\n") || strings.Contains(normalized, ";") ||
+		strings.Contains(normalized, " and ") || strings.Count(normalized, ",") > 0 {
+		return nil
+	}
+	startsWith := func(prefixes ...string) bool {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(normalized, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	if startsWith("run ", "execute ") {
+		if len(execution.TestsRun) == 1 {
+			return []CriterionSpec{{Text: "requested test or check passes", Kind: CriterionTestResult, Target: execution.TestsRun[0].Name}}
+		}
+		if len(execution.ToolCalls) == 1 && execution.ToolCalls[0].Name == "run_command" {
+			return []CriterionSpec{{Text: "requested command exits successfully", Kind: CriterionCommandExit, Target: "*"}}
+		}
+	}
+	if startsWith("write ", "create ", "save ") && len(execution.ChangedFiles) == 1 {
+		return []CriterionSpec{{Text: "requested file state is written", Kind: CriterionFileState, Target: execution.ChangedFiles[0]}}
+	}
+	return nil
+}
+
 // EvaluateDeterministic derives a verdict from mechanical evidence alone.
 // It is conclusive (ok=true) only for observable failure or blockage — a
 // failed test, a failed or denied tool call, a typed execution error. It
