@@ -94,6 +94,46 @@ func TestIdleClassification(t *testing.T) {
 	}
 }
 
+func TestCancelBeforeFirstProviderEventReturnsPromptly(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Network.Timeout = "5s"
+	called := make(chan struct{})
+	m.prov = &neverEventProvider{called: called}
+	cmd := m.dispatch("hello", nil)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("provider was not called")
+	}
+	m.cancelStream()
+
+	select {
+	case msg := <-result:
+		first, ok := msg.(firstStreamMsg)
+		if !ok {
+			t.Fatalf("message = %T, want firstStreamMsg", msg)
+		}
+		if first.gen == m.streamGen {
+			t.Fatal("user-cancelled first event was not marked stale")
+		}
+		m.Update(first)
+	case <-time.After(time.Second):
+		t.Fatal("first-event wait did not honor cancellation")
+	}
+}
+
+func TestAbandonedStreamDrainIsBounded(t *testing.T) {
+	never := make(chan provider.ChatEvent)
+	done := drainProviderStream(never)
+	select {
+	case <-done:
+	case <-time.After(abandonedStreamDrainTimeout + time.Second):
+		t.Fatal("abandoned stream drain did not stop at its deadline")
+	}
+}
+
 func lastAssistant(m *Model) string {
 	for i := len(m.session.Messages) - 1; i >= 0; i-- {
 		if m.session.Messages[i].Role == provider.RoleAssistant {
@@ -130,6 +170,20 @@ type pacedProvider struct {
 	chunks          int
 	reasoningChunks int
 	stallAfter      bool
+}
+
+type neverEventProvider struct {
+	called chan<- struct{}
+}
+
+func (p *neverEventProvider) Name() string                      { return "never-event" }
+func (p *neverEventProvider) HealthCheck(context.Context) error { return nil }
+func (p *neverEventProvider) ListModels(context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *neverEventProvider) Chat(context.Context, provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	close(p.called)
+	return make(chan provider.ChatEvent), nil
 }
 
 func (p *pacedProvider) Name() string { return "paced" }

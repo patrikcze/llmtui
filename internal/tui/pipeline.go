@@ -1038,8 +1038,22 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 		for attempt := 1; attempt <= attempts; attempt++ {
 			stream, err := prov.Chat(ctx, req)
 			if err == nil {
-				ev, ok := <-stream
-				return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1, toolsFellBack: fellBack, gen: gen}
+				select {
+				case ev, ok := <-stream:
+					return firstStreamMsg{stream: stream, event: ev, ok: ok, retries: attempt - 1, toolsFellBack: fellBack, gen: gen}
+				case <-ctx.Done():
+					cause := context.Cause(ctx)
+					if cause == nil {
+						cause = ctx.Err()
+					}
+					cancelGen := gen
+					if errors.Is(cause, context.Canceled) {
+						// User cancellation already finalized the UI state. Mark
+						// this synthetic first event stale so it cannot overwrite it.
+						cancelGen--
+					}
+					return firstStreamMsg{stream: stream, event: provider.ChatEvent{Type: provider.EventError, Err: cause}, ok: true, retries: attempt - 1, toolsFellBack: fellBack, gen: cancelGen}
+				}
 			}
 			// A backend without native tool support rejects the whole request;
 			// retry immediately without the specs (the TUI then switches to

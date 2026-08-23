@@ -817,12 +817,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// finally connected. Adopting its stream would splice a dead
 			// request into whatever is running now; drain it instead so the
 			// producer goroutine can exit.
-			if msg.stream != nil {
-				go func(s <-chan provider.ChatEvent) {
-					for range s {
-					}
-				}(msg.stream)
-			}
+			drainProviderStream(msg.stream)
 			return m, nil
 		}
 		m.stream = msg.stream
@@ -2215,17 +2210,42 @@ func (m *Model) streamFailed(err error) {
 	m.refreshViewport()
 }
 
-// drainStream consumes any remaining events of an abandoned stream in the
-// background. The provider goroutine may still be blocked sending; reading
-// until the channel closes lets it exit and release its HTTP connection.
+const abandonedStreamDrainTimeout = 250 * time.Millisecond
+
+// drainProviderStream gives a conforming provider a bounded opportunity to
+// observe cancellation, finish its send, and close. A broken provider that
+// never closes cannot leave an unbounded TUI drain goroutine behind.
+func drainProviderStream(stream <-chan provider.ChatEvent) <-chan struct{} {
+	done := make(chan struct{})
+	if stream == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(abandonedStreamDrainTimeout)
+		defer timer.Stop()
+		for {
+			select {
+			case _, ok := <-stream:
+				if !ok {
+					return
+				}
+			case <-timer.C:
+				return
+			}
+		}
+	}()
+	return done
+}
+
+// drainStream consumes remaining events of an abandoned stream without
+// waiting forever for a provider that violates the cancellation contract.
 func (m *Model) drainStream() {
 	if m.stream == nil {
 		return
 	}
-	go func(s <-chan provider.ChatEvent) {
-		for range s {
-		}
-	}(m.stream)
+	drainProviderStream(m.stream)
 	m.stream = nil
 }
 
