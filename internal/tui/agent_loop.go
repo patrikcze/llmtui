@@ -480,9 +480,35 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 	maxTokens := m.cfg.Agent.Verifier.MaxTokens
 	timeout, _ := time.ParseDuration(m.cfg.Agent.Verifier.Timeout)
 	prov := m.prov
+	admit := m.verifierRequestAdmission(run)
 	return func() tea.Msg {
-		out, err := agentverify.Verify(ctx, prov, agentverify.Config{Model: model, MaxTokens: maxTokens, Timeout: timeout}, input)
+		out, err := agentverify.Verify(ctx, prov, agentverify.Config{
+			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
+		}, input)
 		return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: out, err: err}
+	}
+}
+
+// verifierRequestAdmission snapshots accounted usage and reserves each
+// verifier request prospectively. The closure is private to one Verify call,
+// so it also covers optional fallback and repair requests before dispatch.
+func (m *Model) verifierRequestAdmission(run *agent.AgentRun) func(int, int) error {
+	if run == nil || !m.cfg.Agent.EnforceBudgetsLive || run.Limits.MaxTokens <= 0 {
+		return nil
+	}
+	used := run.PromptTokens + run.CompletionTokens
+	limit := run.Limits.MaxTokens
+	reserved := 0
+	return func(promptEstimate, maxCompletion int) error {
+		cost := max(promptEstimate, 0) + max(maxCompletion, 0)
+		remaining := max(limit-used-reserved, 0)
+		if cost > remaining {
+			return agent.NewError(agent.ErrorBudget, "admit verifier request",
+				fmt.Errorf("%w: verifier request needs up to %d tokens, but %d of %d remain",
+					agent.ErrBudgetExhausted, cost, remaining, limit))
+		}
+		reserved += cost
+		return nil
 	}
 }
 
@@ -539,6 +565,14 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		var runErr agent.RunError
 		if !errors.As(msg.err, &runErr) {
 			runErr = agent.NewError(agent.ErrorVerification, "verify", msg.err)
+		}
+		if runErr.Kind == agent.ErrorBudget {
+			reason := runErr.Error()
+			_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
+			m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
+			m.endAgentRun()
+			m.refreshViewport()
+			return m, m.persistAgentRun()
 		}
 		m.agentLoop.verifierAttempts++
 		maxAttempts := m.cfg.Agent.Verifier.MaxAttempts
@@ -809,6 +843,38 @@ func (m *Model) agentHardBudgetExceeded(incoming int) (exceeded bool, reason str
 		return true, fmt.Sprintf("agent token budget exhausted (maximum %d)", run.Limits.MaxTokens)
 	}
 	return false, ""
+}
+
+// agentModelRequestBudgetExceeded admits an executor request only when its
+// estimated prompt plus maximum completion fits after actual prior usage.
+func (m *Model) agentModelRequestBudgetExceeded(kind string, promptEstimate, maxCompletion int) (bool, string) {
+	if !m.agentRunActive() || !m.cfg.Agent.EnforceBudgetsLive {
+		return false, ""
+	}
+	run := m.agentLoop.run
+	if run.Limits.MaxTokens <= 0 {
+		return false, ""
+	}
+	used := run.PromptTokens + run.CompletionTokens
+	cost := max(promptEstimate, 0) + max(maxCompletion, 0)
+	remaining := max(run.Limits.MaxTokens-used, 0)
+	if cost <= remaining {
+		return false, ""
+	}
+	return true, fmt.Sprintf("agent token budget admission rejected %s request: needs up to %d tokens, but %d of %d remain",
+		kind, cost, remaining, run.Limits.MaxTokens)
+}
+
+func (m *Model) terminateAgentModelRequestBudget(reason string) tea.Cmd {
+	if !m.agentRunActive() {
+		return nil
+	}
+	run := m.agentLoop.run
+	_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
+	m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
+	m.endAgentRun()
+	m.refreshViewport()
+	return m.persistAgentRun()
 }
 
 // terminateAgentBudget stops the run immediately when a hard tool-call or

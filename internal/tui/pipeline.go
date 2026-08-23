@@ -785,6 +785,10 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			return nil
 		}
 	}
+	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
+	if exceeded, reason := m.agentModelRequestBudgetExceeded("executor", prepared.estimate.Total, req.MaxTokens); exceeded {
+		return m.terminateAgentModelRequestBudget(reason)
+	}
 
 	m.commitPrepared(prepared)
 	m.session.AddUser(raw, images...)
@@ -806,8 +810,6 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
-	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
-
 	cacheStatus := "miss"
 	if m.responseCache == nil || !m.responseCache.Enabled() {
 		cacheStatus = "disabled"
@@ -945,6 +947,10 @@ func (m *Model) continueChat() tea.Cmd {
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
+	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
+	if exceeded, reason := m.agentModelRequestBudgetExceeded("continuation", prepared.estimate.Total, req.MaxTokens); exceeded {
+		return m.terminateAgentModelRequestBudget(reason)
+	}
 	m.commitPrepared(prepared)
 	m.thinking = true
 	m.streamBuf.Reset()
@@ -961,7 +967,6 @@ func (m *Model) continueChat() tea.Cmd {
 	m.refreshViewport()
 
 	prof, _ := m.activeProfile()
-	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 	m.lastDebug = debugInfo{
 		When:          time.Now(),
 		RawMessage:    "(tool results continuation)",

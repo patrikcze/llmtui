@@ -71,6 +71,9 @@ type Config struct {
 	Model     string
 	MaxTokens int
 	Timeout   time.Duration
+	// AdmitRequest is called immediately before every provider request,
+	// including constrained-output fallback and malformed-JSON repair.
+	AdmitRequest func(promptEstimate, maxCompletion int) error
 }
 
 // Input contains only observable cycle evidence; no conversation history or
@@ -147,7 +150,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 			JSONSchema: json.RawMessage(verifierJSONSchema), Strict: true,
 		}
 	}
-	first, err := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria)
+	first, err := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
 	if err != nil && req.ResponseConstraint != nil && isProviderRejection(err) {
 		// Capabilities().StructuredOutput is the provider type's generic
 		// self-report, not a guarantee this specific deployment implements
@@ -157,13 +160,13 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		// before giving up.
 		unconstrained := req
 		unconstrained.ResponseConstraint = nil
-		return requestVerification(callCtx, client, unconstrained, input.Execution, input.EstablishCriteria)
+		return requestVerification(callCtx, client, unconstrained, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
 	}
 	if err == nil || !errors.Is(err, agent.ErrMalformedControl) {
 		return first, err
 	}
 	req.Messages = verifierRepairMessages(string(evidence))
-	repaired, repairErr := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria)
+	repaired, repairErr := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
 	repaired.Usage = mergeUsage(first.Usage, repaired.Usage)
 	return repaired, repairErr
 }
@@ -176,7 +179,16 @@ func isProviderRejection(err error) bool {
 	return errors.As(err, &re) && re.Kind == agent.ErrorProvider
 }
 
-func requestVerification(callCtx context.Context, client Client, req provider.ChatRequest, execution agent.ExecutionResult, establishing bool) (Output, error) {
+func requestVerification(callCtx context.Context, client Client, req provider.ChatRequest, execution agent.ExecutionResult, establishing bool, admit func(int, int) error) (Output, error) {
+	if admit != nil {
+		promptEstimate := 0
+		for _, message := range req.Messages {
+			promptEstimate += provider.EstimateMessageTokens(message)
+		}
+		if err := admit(promptEstimate, req.MaxTokens); err != nil {
+			return Output{}, err
+		}
+	}
 	events, err := client.Chat(callCtx, req)
 	if err != nil {
 		return Output{}, classifyProviderError(callCtx, err)

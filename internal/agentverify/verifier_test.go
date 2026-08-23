@@ -58,6 +58,45 @@ func (c *recordingClient) Chat(ctx context.Context, req provider.ChatRequest) (<
 	return events, nil
 }
 
+func TestVerifyAdmissionStopsBeforeProviderAndBeforeRepair(t *testing.T) {
+	t.Run("initial request", func(t *testing.T) {
+		client := &recordingClient{}
+		_, err := Verify(context.Background(), client, Config{
+			Model: "test", MaxTokens: 64,
+			AdmitRequest: func(int, int) error {
+				return agent.NewError(agent.ErrorBudget, "admit", agent.ErrBudgetExhausted)
+			},
+		}, Input{})
+		if !errors.Is(err, agent.ErrBudgetExhausted) {
+			t.Fatalf("error = %v, want budget exhaustion", err)
+		}
+		if len(client.requests) != 0 {
+			t.Fatalf("provider requests = %d, want 0", len(client.requests))
+		}
+	})
+
+	t.Run("repair request", func(t *testing.T) {
+		client := &recordingClient{reply: `not json`}
+		calls := 0
+		_, err := Verify(context.Background(), client, Config{
+			Model: "test", MaxTokens: 64,
+			AdmitRequest: func(int, int) error {
+				calls++
+				if calls == 2 {
+					return agent.NewError(agent.ErrorBudget, "admit repair", agent.ErrBudgetExhausted)
+				}
+				return nil
+			},
+		}, Input{})
+		if !errors.Is(err, agent.ErrBudgetExhausted) {
+			t.Fatalf("error = %v, want budget exhaustion", err)
+		}
+		if len(client.requests) != 1 {
+			t.Fatalf("provider requests = %d, want only the admitted initial request", len(client.requests))
+		}
+	})
+}
+
 // validReply builds a complete verifier envelope: all 15 fields
 // verifierJSONSchema declares required, plus atomic_task, all present. Tests
 // that need to exercise a specific field's value should start from this and

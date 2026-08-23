@@ -105,6 +105,51 @@ func configureAgentTestModel(t *testing.T, steps ...agentScriptStep) (*Model, *s
 	return m, prov
 }
 
+func TestAgentProspectiveBudgetRejectsBeforeExecutorDispatch(t *testing.T) {
+	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not run"})
+	m.cfg.Agent.EnforceBudgetsLive = true
+	m.cfg.Agent.MaxTokens = 1
+	m.cfg.Chat.MaxTokens = 1
+
+	_ = m.startVerifiedRun("do a task", nil)
+	if len(prov.requests) != 0 {
+		t.Fatalf("provider requests = %d, want 0", len(prov.requests))
+	}
+	if m.agentLoop.run.Status != agent.DecisionBudgetExhausted {
+		t.Fatalf("status = %s, want %s", m.agentLoop.run.Status, agent.DecisionBudgetExhausted)
+	}
+	if !strings.Contains(m.agentLoop.run.StopReason, "admission rejected executor request") {
+		t.Fatalf("stop reason = %q", m.agentLoop.run.StopReason)
+	}
+}
+
+func TestAgentProspectiveBudgetUsesActualUsageForContinuation(t *testing.T) {
+	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not run"})
+	m.cfg.Agent.EnforceBudgetsLive = true
+	m.cfg.Chat.MaxTokens = 1
+	run, err := agent.NewRun("run-budget-continuation", "task", agent.Limits{
+		MaxCycles: 2, MaxToolCalls: 2, MaxTokens: 20, MaxElapsed: time.Minute, MaxRepeatedFailures: 2,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("task", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	run.RecordUsage(19, 0, time.Now())
+	m.agentLoop.run = run
+	m.resetAgentContext()
+	t.Cleanup(m.releaseAgentContext)
+
+	_ = m.continueChat()
+	if len(prov.requests) != 0 {
+		t.Fatalf("provider requests = %d, want 0", len(prov.requests))
+	}
+	if run.Status != agent.DecisionBudgetExhausted {
+		t.Fatalf("status = %s, want %s", run.Status, agent.DecisionBudgetExhausted)
+	}
+}
+
 func driveAgentCommands(t *testing.T, m *Model, first tea.Cmd) {
 	t.Helper()
 	queue := []tea.Cmd{first}
