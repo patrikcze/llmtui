@@ -418,6 +418,75 @@ func TestExtractZipRejectsAllowlistedSymlink(t *testing.T) {
 	}
 }
 
+func TestExtractArchiveEntryRejectsResourceBombBeforeOpen(t *testing.T) {
+	rootDir := t.TempDir()
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Errorf("close root: %v", err)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		size      int64
+		total     int64
+		wantError string
+	}{
+		{name: "per entry", size: maxRuntimeEntryBytes + 1, wantError: "extracted size"},
+		{name: "total payload", size: 1, total: maxRuntimeExtractBytes, wantError: "total extraction limit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opened := false
+			total := tt.total
+			err := extractArchiveEntry(root, tt.name, tt.name, true, tt.size, func() (io.ReadCloser, error) {
+				opened = true
+				return io.NopCloser(strings.NewReader("x")), nil
+			}, map[string]bool{}, &total)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
+			}
+			if opened {
+				t.Fatal("oversized entry was opened before its metadata limit was enforced")
+			}
+		})
+	}
+}
+
+func TestExtractZipRejectsDuplicateAllowlistedBasename(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "duplicate.zip")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	for _, name := range []string{"first/libtest.dll", "second/libtest.dll"} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(entry, "same"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = extractZipSafe(archive, filepath.Join(dir, "extract"), &PlatformPin{Files: map[string]string{"libtest.dll": "unused"}})
+	if err == nil || !strings.Contains(err.Error(), "duplicate file") {
+		t.Fatalf("error = %v, want duplicate-file rejection", err)
+	}
+}
+
 // TestInstall_AlreadyInstalled tests that re-installing returns existing installation.
 func TestInstall_AlreadyInstalled(t *testing.T) {
 	files := map[string]string{

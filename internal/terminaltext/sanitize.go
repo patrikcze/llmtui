@@ -6,6 +6,7 @@ package terminaltext
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -27,4 +28,38 @@ func Sanitize(s string) string {
 		}
 		return r
 	}, stripped)
+}
+
+// TruncateBytes returns valid UTF-8 containing at most maxBytes. Invalid
+// input bytes become replacement runes, and neither a replacement nor a
+// multibyte rune is split at the boundary.
+func TruncateBytes(s string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		return "", s != ""
+	}
+	valid := strings.ToValidUTF8(s, "�")
+	if len(valid) <= maxBytes {
+		return valid, valid != s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(valid[:cut]) {
+		cut--
+	}
+	return valid[:cut], true
+}
+
+// TailBytes returns the largest valid UTF-8 suffix no larger than maxBytes.
+func TailBytes(s string, maxBytes int) (string, bool) {
+	valid := strings.ToValidUTF8(s, "�")
+	if maxBytes <= 0 {
+		return "", valid != ""
+	}
+	if len(valid) <= maxBytes {
+		return valid, valid != s
+	}
+	start := len(valid) - maxBytes
+	for start < len(valid) && !utf8.RuneStart(valid[start]) {
+		start++
+	}
+	return valid[start:], true
 }

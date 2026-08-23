@@ -1,8 +1,10 @@
 package terminaltext
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSanitizeStripsTerminalSequencesAndControls(t *testing.T) {
@@ -28,5 +30,21 @@ func TestSanitizePreservesUnicodeNewlinesAndTabs(t *testing.T) {
 	want := "Příliš žluťoučký\n\t🙂"
 	if got := Sanitize(want); got != want {
 		t.Fatalf("Sanitize = %q, want %q", got, want)
+	}
+}
+
+func TestByteTruncationPreservesUTF8(t *testing.T) {
+	input := "abc€🙂"
+	for _, maxBytes := range []int{1, 4, 5, 7, 8} {
+		t.Run(fmt.Sprintf("max_%d", maxBytes), func(t *testing.T) {
+			head, _ := TruncateBytes(input, maxBytes)
+			tail, _ := TailBytes(input, maxBytes)
+			if !utf8.ValidString(head) || len(head) > maxBytes {
+				t.Fatalf("head = %q (%d bytes)", head, len(head))
+			}
+			if !utf8.ValidString(tail) || len(tail) > maxBytes {
+				t.Fatalf("tail = %q (%d bytes)", tail, len(tail))
+			}
+		})
 	}
 }

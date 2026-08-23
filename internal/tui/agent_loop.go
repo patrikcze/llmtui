@@ -17,6 +17,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -1041,5 +1042,6 @@ func truncateAgentText(value string, maxBytes int) string {
 	if len(value) <= maxBytes {
 		return value
 	}
-	return value[:maxBytes] + "…"
+	prefix, _ := terminaltext.TruncateBytes(value, maxBytes)
+	return prefix + "…"
 }

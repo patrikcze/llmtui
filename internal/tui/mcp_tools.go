@@ -114,7 +114,8 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	}
 	content := terminaltext.Sanitize(out.Content)
 	if maxBytes > 0 && len(content) > maxBytes {
-		content = content[:maxBytes] + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", maxBytes, len(out.Content))
+		content, _ = terminaltext.TruncateBytes(content, maxBytes)
+		content += fmt.Sprintf("\n… truncated (%d of %d bytes shown)", len(content), len(out.Content))
 	}
 	server := terminaltext.Sanitize(c.MCPServer)
 	tool := terminaltext.Sanitize(c.MCPTool)

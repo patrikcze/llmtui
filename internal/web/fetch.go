@@ -13,6 +13,8 @@ import (
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	readability "github.com/go-shiori/go-readability"
 	"golang.org/x/net/html"
+
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
 // rawReadCap bounds how much of a response body is read at all; maxPageKB
@@ -119,5 +121,6 @@ func (c *Client) capContent(content string, rawBytes int) (string, bool) {
 	if len(content) <= limit {
 		return content, false
 	}
-	return content[:limit] + fmt.Sprintf("\n… truncated (%d KB of %d bytes shown)", c.maxPageKB, rawBytes), true
+	prefix, _ := terminaltext.TruncateBytes(content, limit)
+	return prefix + fmt.Sprintf("\n… truncated (%d KB of %d bytes shown)", c.maxPageKB, rawBytes), true
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
 // NewID returns a random, log-friendly run identifier.
@@ -422,7 +424,8 @@ func truncate(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
 	}
-	return value[:maxBytes] + "…"
+	prefix, _ := terminaltext.TruncateBytes(value, maxBytes)
+	return prefix + "…"
 }
 
 func hasErrorKind(errorsIn []RunError, kinds ...ErrorKind) bool {

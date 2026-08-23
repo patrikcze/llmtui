@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
@@ -203,6 +204,20 @@ func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
 	res = executeMCPCall(context.Background(), reg, c, 0)
 	if !strings.Contains(res.Output, "\n"+huge+"\n<<<LLMTUI_UNTRUSTED_END ") {
 		t.Errorf("maxBytes=0 should not truncate (got %d bytes)", len(res.Output))
+	}
+}
+
+func TestExecuteMCPCallTruncatesAtUTF8Boundary(t *testing.T) {
+	huge := strings.Repeat("é", 1024)
+	reg := newConnectedMCPRegistry(t, "utf8", nil, func(string, json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: huge}, nil
+	})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "utf8", MCPTool: "dump", MCPArgs: `{}`}, 1023)
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if !utf8.ValidString(res.Output) || !strings.Contains(res.Output, "truncated") {
+		t.Fatalf("invalid UTF-8 truncation result: %q", res.Output)
 	}
 }
 
