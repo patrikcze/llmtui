@@ -4,7 +4,7 @@ This is an implementation plan, not an authorization to change production code. 
 
 ## Implementation status — 2026-08-23
 
-Status is recorded against local Git history. P0 and P1 are merged into local `master` at `38ad9ca`. P2/P3 work is committed on `fix/architecture-reliability-remediation-p2-p3` and has not yet been merged into `master` because P2 remains incomplete.
+Status is recorded against local Git history. The completed P0, P1, P2, and P3 work listed below is merged into local `master`. The separate P2 `TurnRuntime` extraction remains open.
 
 ### Completed
 
@@ -17,33 +17,20 @@ Status is recorded against local Git history. P0 and P1 are merged into local `m
 - [x] P1 — Bound file reads at I/O (`38ad9ca`).
 - [x] P2 — Strengthen no-progress operation identity (`3ad4c32`).
 - [x] P2 — Make tests hermetic and uncached in critical CI jobs (`23f36f2`).
+- [x] P2 — Simplify Agent prompts and deterministic acceptance (`6d4cb73`, `6fd3314`). The verifier now emits an eight-field required contract, accepts legacy 16-field responses, keeps `user_options` and criterion notes optional, preserves the establishing-cycle safety invariant, and has prompt-budget, deterministic-only, mixed-criteria, user-input, and weak-model regression coverage.
 - [x] P3 — Defense-in-depth hardening (`519c82f`). This includes descriptor-relative file operations, archive extraction limits and duplicate rejection, UTF-8-safe truncation, continuously bounded/redacted MCP stderr, and security-sensitive cleanup/close error handling.
-
-### Partially completed
-
-- [ ] P2 — Simplify Agent prompts and deterministic acceptance.
-  - [x] Remove controller-only run IDs, stages, and failure fingerprints from executor instructions.
-  - [x] Send the goal, current objective, constraints, unresolved criteria, compact evidence, and recent observed operations.
-  - [x] Add explicit `semantic`, `command_exit`, `file_state`, `test_result`, and `user_input` criterion types.
-  - [x] Evaluate deterministic criteria exclusively from runtime observations.
-  - [x] Invoke semantic verification only while semantic criteria remain unresolved in adaptive mode.
-  - [x] Route unresolved user-input criteria to a user-input outcome.
-  - [ ] Shrink the verifier response/schema to the minimum controller contract while preserving legacy response compatibility.
-  - [ ] Add prompt-token snapshots, no-verifier deterministic-flow coverage, mixed deterministic/semantic coverage, user-input stop coverage, and a weak-model JSON corpus.
-  - Current implementation commit: `6d4cb73`. Targeted verification passed with `go test -count=1 ./internal/agent ./internal/tui`.
 
 ### Remaining
 
 - [ ] P2 — Extract an explicit turn execution runtime. No implementation has started. The complete goal, conceptual changes, and required state-machine tests remain as specified below.
-- [ ] Finish the two unchecked Agent prompt/verifier items above.
 - [ ] Run final repository-wide verification after P2 is complete: fresh `go test -count=1 ./...`, `go vet ./...`, available `govulncheck`, and targeted race tests.
-- [ ] Review the final diff and merge `fix/architecture-reliability-remediation-p2-p3` into local `master` only after the remaining P2 work and final verification succeed.
+- [ ] Review the final combined diff after `TurnRuntime` implementation and final verification.
 
 ### Verification notes
 
-- The latest Agent changes passed fresh targeted tests for `internal/agent` and `internal/tui`.
+- The completed Agent prompt/verifier work passed fresh targeted tests for `internal/agent`, `internal/agentverify`, and `internal/tui`.
 - The hermetic-test, no-progress, and P3 groups passed their targeted package and race tests when implemented.
-- A final fresh repository-wide test/vet/vulnerability run has not yet been performed on the combined P2/P3 branch; completion of individual groups must not be interpreted as final branch acceptance.
+- A final fresh repository-wide test/vet/vulnerability run has not yet been performed on the combined local `master`; completion of individual groups must not be interpreted as final acceptance.
 
 ## P0 — Restore the tool approval boundary
 
