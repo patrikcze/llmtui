@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func collect(t *testing.T, events <-chan provider.ChatEvent) (string, *provider.Usage, error) {
@@ -34,7 +34,7 @@ func collect(t *testing.T, events <-chan provider.ChatEvent) (string, *provider.
 }
 
 func TestChatStreaming(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("path = %s, want /v1/chat/completions", r.URL.Path)
 		}
@@ -88,7 +88,7 @@ func TestChatStreaming(t *testing.T) {
 
 func TestChatSendsJSONSchemaResponseFormat(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -117,7 +117,7 @@ func TestChatSendsJSONSchemaResponseFormat(t *testing.T) {
 }
 
 func TestChatStreamingEstimatesUsageWhenAbsent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"response text here\"}}]}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -146,7 +146,7 @@ func TestChatStreamingEstimatesUsageWhenAbsent(t *testing.T) {
 }
 
 func TestChatNonStreaming(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{"message": map[string]any{"content": "full reply"}}},
 			"usage":   map[string]int{"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
@@ -186,7 +186,7 @@ func collectDoneEvent(t *testing.T, events <-chan provider.ChatEvent) provider.C
 }
 
 func TestChatStreamingSurfacesTruncation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n")
@@ -206,7 +206,7 @@ func TestChatStreamingSurfacesTruncation(t *testing.T) {
 }
 
 func TestChatStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -225,7 +225,7 @@ func TestChatStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
 }
 
 func TestChatNonStreamingSurfacesTruncation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"message":       map[string]any{"content": "cut off mid-"},
@@ -247,7 +247,7 @@ func TestChatNonStreamingSurfacesTruncation(t *testing.T) {
 }
 
 func TestChatNonStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"message":       map[string]any{"content": "complete reply"},
@@ -269,7 +269,7 @@ func TestChatNonStreamingFinishReasonStopIsNotTruncated(t *testing.T) {
 }
 
 func TestChatHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -285,7 +285,7 @@ func TestChatHTTPError(t *testing.T) {
 }
 
 func TestChatMalformedStreamChunk(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {not json}\n\n")
 	}))
@@ -304,7 +304,7 @@ func TestChatMalformedStreamChunk(t *testing.T) {
 
 func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
 	chunk := strings.Repeat("x", 600*1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := 0; i < 8; i++ {
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", chunk)
@@ -324,7 +324,7 @@ func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
 }
 
 func TestChatNonStreamingRejectsOversizedResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, strings.Repeat("x", provider.MaxResponseBytes))
 	}))
 	defer srv.Close()
@@ -341,7 +341,7 @@ func TestChatNonStreamingRejectsOversizedResponse(t *testing.T) {
 }
 
 func TestListModels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
 			json.NewEncoder(w).Encode(map[string]any{
@@ -371,7 +371,7 @@ func TestListModels(t *testing.T) {
 }
 
 func TestListModelsUsesLMStudioVisionCapability(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
 			json.NewEncoder(w).Encode(map[string]any{
@@ -420,7 +420,7 @@ func TestHealthCheckUnreachable(t *testing.T) {
 func captureChatBody(t *testing.T, req provider.ChatRequest) string {
 	t.Helper()
 	var body string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read request body: %v", err)
@@ -448,7 +448,7 @@ func captureChatBody(t *testing.T, req provider.ChatRequest) string {
 // openai/gpt-oss-20b). That text must not be surfaced as a normal answer.
 func TestChatNonStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
 	const leaked = `to=functions.read_file?<|constrain|>json<|message|>{"path":"llmtui-agent","content?"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
@@ -494,7 +494,7 @@ func TestChatNonStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
 // a real, verified answer and short-circuit the agent loop's verifier.
 func TestChatNonStreamingFlagsLeakedToolCallWithoutHarmonyTokens(t *testing.T) {
 	const leaked = "to=functions.grep...commentary?"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
@@ -528,7 +528,7 @@ func TestChatNonStreamingFlagsLeakedToolCallWithoutHarmonyTokens(t *testing.T) {
 }
 
 func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{"message": map[string]any{"content": "a normal, complete reply"}}},
 		})
@@ -559,7 +559,7 @@ func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
 // has arrived), but it must still flag EventDone so the caller can drop the
 // turn from conversation history instead of keeping it as a real answer.
 func TestChatStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"to=functions.read_file?\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"<|constrain|>json<|message|>{\\\"path\\\":\\\"x\\\"}\"}}]}\n\n")

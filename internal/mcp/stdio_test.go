@@ -213,6 +213,9 @@ func TestServerEnvRejectsMissingSecretReference(t *testing.T) {
 func TestServerStderrIsBoundedAndRedacted(t *testing.T) {
 	c := &StdioClient{}
 	_, _ = c.stderr.Write([]byte(strings.Repeat("x", 5000) + "\nstartup failed token=supersecret"))
+	if raw := c.stderr.String(); strings.Contains(raw, "supersecret") || len(raw) > maxServerStderrBytes {
+		t.Fatalf("stderr buffer was not continuously bounded/redacted: %q", raw)
+	}
 
 	err := c.withServerStderr(context.DeadlineExceeded)
 	msg := err.Error()

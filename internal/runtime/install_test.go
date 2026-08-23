@@ -9,12 +9,13 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 // createTestArchive creates a test tar.gz archive with specified files.
@@ -115,7 +116,7 @@ func TestInstall_Success(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	// Create test HTTP server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, err := os.ReadFile(archivePath)
 		if err != nil {
 			t.Fatalf("read archive: %v", err)
@@ -210,7 +211,7 @@ func TestInstall_ChecksumMismatch(t *testing.T) {
 	// Use wrong SHA256
 	wrongSHA256 := strings.Repeat("0", 64)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
@@ -257,7 +258,7 @@ func TestInstall_RejectsWrongArchiveSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	data = append(data, 0)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(data)
 	}))
 	defer server.Close()
@@ -345,7 +346,7 @@ func TestInstall_TraversalRejection(t *testing.T) {
 	h := sha256.Sum256(data)
 	archiveSHA256 := hex.EncodeToString(h[:])
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
 	}))
@@ -417,6 +418,75 @@ func TestExtractZipRejectsAllowlistedSymlink(t *testing.T) {
 	}
 }
 
+func TestExtractArchiveEntryRejectsResourceBombBeforeOpen(t *testing.T) {
+	rootDir := t.TempDir()
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Errorf("close root: %v", err)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		size      int64
+		total     int64
+		wantError string
+	}{
+		{name: "per entry", size: maxRuntimeEntryBytes + 1, wantError: "extracted size"},
+		{name: "total payload", size: 1, total: maxRuntimeExtractBytes, wantError: "total extraction limit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opened := false
+			total := tt.total
+			err := extractArchiveEntry(root, tt.name, tt.name, true, tt.size, func() (io.ReadCloser, error) {
+				opened = true
+				return io.NopCloser(strings.NewReader("x")), nil
+			}, map[string]bool{}, &total)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
+			}
+			if opened {
+				t.Fatal("oversized entry was opened before its metadata limit was enforced")
+			}
+		})
+	}
+}
+
+func TestExtractZipRejectsDuplicateAllowlistedBasename(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "duplicate.zip")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	for _, name := range []string{"first/libtest.dll", "second/libtest.dll"} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(entry, "same"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = extractZipSafe(archive, filepath.Join(dir, "extract"), &PlatformPin{Files: map[string]string{"libtest.dll": "unused"}})
+	if err == nil || !strings.Contains(err.Error(), "duplicate file") {
+		t.Fatalf("error = %v, want duplicate-file rejection", err)
+	}
+}
+
 // TestInstall_AlreadyInstalled tests that re-installing returns existing installation.
 func TestInstall_AlreadyInstalled(t *testing.T) {
 	files := map[string]string{
@@ -426,7 +496,7 @@ func TestInstall_AlreadyInstalled(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	downloadCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		downloadCount++
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
@@ -488,7 +558,7 @@ func TestInstall_BackendVariant(t *testing.T) {
 		"libtest-vulkan.so": "vulkan backend",
 	}
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		data, readErr := os.ReadFile(archivePath)
 		if readErr != nil {
 			t.Error(readErr)
@@ -545,7 +615,7 @@ func TestInstall_ConcurrentInstall(t *testing.T) {
 
 	var downloadCount int
 	var mu sync.Mutex
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		downloadCount++
 		mu.Unlock()
@@ -630,7 +700,7 @@ func TestUninstall_Success(t *testing.T) {
 
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
@@ -694,7 +764,7 @@ func TestUninstall_RefusesExtraFiles(t *testing.T) {
 
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
@@ -807,7 +877,7 @@ func TestList(t *testing.T) {
 
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
@@ -882,7 +952,7 @@ func TestVerify(t *testing.T) {
 
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := os.ReadFile(archivePath)
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)

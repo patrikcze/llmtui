@@ -52,7 +52,7 @@ type InstallResult struct {
 // Network access occurs only during this call. Returns an error if download
 // fails, checksums mismatch, or extraction fails. Concurrent installs to the
 // same destination converge safely or return an already-installed result.
-func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
+func Install(ctx context.Context, opts InstallOptions) (result *InstallResult, err error) {
 	// Load embedded pin
 	pin, err := LoadPin()
 	if err != nil {
@@ -134,7 +134,12 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create staging directory: %w", err)
 	}
-	defer os.RemoveAll(stagingDir) // Cleanup on failure
+	defer func() {
+		if cleanupErr := os.RemoveAll(stagingDir); cleanupErr != nil {
+			result = nil
+			err = errors.Join(err, fmt.Errorf("remove runtime staging directory: %w", cleanupErr))
+		}
+	}()
 
 	// Set restrictive permissions on staging directory
 	if err := os.Chmod(stagingDir, 0700); err != nil {
@@ -346,23 +351,37 @@ func extractArchiveSafe(archivePath, extractDir string, platformPin *PlatformPin
 	return fmt.Errorf("unsupported archive format: %s", archivePath)
 }
 
+const (
+	maxRuntimeEntryBytes   int64 = 1 << 30 // one extracted runtime file
+	maxRuntimeExtractBytes int64 = 2 << 30 // complete allowlisted payload
+)
+
 // extractTarGzSafe extracts a tar.gz archive safely.
-func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) error {
+func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) (err error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("open gzip: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { err = errors.Join(err, gzr.Close()) }()
 
 	tr := tar.NewReader(gzr)
 	allowlist := archiveAllowlist(platformPin)
 	extracted := make(map[string]bool)
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		return fmt.Errorf("create extraction root: %w", err)
+	}
+	extractRoot, err := os.OpenRoot(extractDir)
+	if err != nil {
+		return fmt.Errorf("open extraction root: %w", err)
+	}
+	defer func() { err = errors.Join(err, extractRoot.Close()) }()
+	var extractedBytes int64
 
 	for {
 		header, err := tr.Next()
@@ -380,7 +399,7 @@ func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) 
 			continue
 		}
 		open := func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }
-		if err := extractArchiveEntry(extractDir, header.Name, basename, header.Typeflag == tar.TypeReg, open, extracted); err != nil {
+		if err := extractArchiveEntry(extractRoot, header.Name, basename, header.Typeflag == tar.TypeReg, header.Size, open, extracted, &extractedBytes); err != nil {
 			return err
 		}
 	}
@@ -389,15 +408,24 @@ func extractTarGzSafe(archivePath, extractDir string, platformPin *PlatformPin) 
 }
 
 // extractZipSafe extracts a zip archive safely.
-func extractZipSafe(archivePath, extractDir string, platformPin *PlatformPin) error {
+func extractZipSafe(archivePath, extractDir string, platformPin *PlatformPin) (err error) {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { err = errors.Join(err, r.Close()) }()
 
 	allowlist := archiveAllowlist(platformPin)
 	extracted := make(map[string]bool)
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		return fmt.Errorf("create extraction root: %w", err)
+	}
+	extractRoot, err := os.OpenRoot(extractDir)
+	if err != nil {
+		return fmt.Errorf("open extraction root: %w", err)
+	}
+	defer func() { err = errors.Join(err, extractRoot.Close()) }()
+	var extractedBytes int64
 
 	for _, entry := range r.File {
 		if err := validateArchivePath(entry.Name); err != nil {
@@ -408,7 +436,10 @@ func extractZipSafe(archivePath, extractDir string, platformPin *PlatformPin) er
 			continue
 		}
 		isRegular := entry.Mode()&os.ModeType == 0 && entry.Mode().IsRegular()
-		if err := extractArchiveEntry(extractDir, entry.Name, basename, isRegular, entry.Open, extracted); err != nil {
+		if entry.UncompressedSize64 > uint64(maxRuntimeEntryBytes) {
+			return fmt.Errorf("archive entry %q exceeds the %d byte extracted-file limit", entry.Name, maxRuntimeEntryBytes)
+		}
+		if err := extractArchiveEntry(extractRoot, entry.Name, basename, isRegular, int64(entry.UncompressedSize64), entry.Open, extracted, &extractedBytes); err != nil {
 			return err
 		}
 	}
@@ -431,30 +462,51 @@ func archiveAllowlist(platformPin *PlatformPin) map[string]bool {
 // safety fix (duplicate rejection, non-regular-file rejection) applies to
 // both formats identically. name is the raw archive-internal path, used only
 // for error messages.
-func extractArchiveEntry(extractDir, name, basename string, isRegular bool, open func() (io.ReadCloser, error), extracted map[string]bool) error {
+func extractArchiveEntry(extractRoot *os.Root, name, basename string, isRegular bool, declaredSize int64, open func() (io.ReadCloser, error), extracted map[string]bool, extractedBytes *int64) error {
 	if !isRegular {
 		return fmt.Errorf("allowlisted archive entry %q is not a regular file", name)
 	}
 	if extracted[basename] {
 		return fmt.Errorf("duplicate file in archive: %s", basename)
 	}
+	if declaredSize < 0 || declaredSize > maxRuntimeEntryBytes {
+		return fmt.Errorf("archive entry %q has invalid extracted size %d (maximum %d)", name, declaredSize, maxRuntimeEntryBytes)
+	}
+	if extractedBytes == nil || *extractedBytes > maxRuntimeExtractBytes-declaredSize {
+		return fmt.Errorf("archive payload exceeds the %d byte total extraction limit", maxRuntimeExtractBytes)
+	}
 
 	rc, err := open()
 	if err != nil {
 		return fmt.Errorf("open file in archive %s: %w", basename, err)
 	}
-	defer rc.Close()
-
-	outFile, err := os.OpenFile(filepath.Join(extractDir, basename), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	outFile, err := extractRoot.OpenFile(basename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
 	if err != nil {
+		_ = rc.Close()
 		return fmt.Errorf("create file %s: %w", basename, err)
 	}
-	defer outFile.Close()
-
-	if _, err := io.Copy(outFile, rc); err != nil {
-		return fmt.Errorf("extract file %s: %w", basename, err)
+	remaining := maxRuntimeExtractBytes - *extractedBytes
+	limit := min(maxRuntimeEntryBytes, remaining)
+	written, copyErr := io.Copy(outFile, io.LimitReader(rc, limit+1))
+	closeOutErr := outFile.Close()
+	closeInErr := rc.Close()
+	if copyErr != nil {
+		_ = extractRoot.Remove(basename)
+		return fmt.Errorf("extract file %s: %w", basename, copyErr)
 	}
-
+	if closeOutErr != nil || closeInErr != nil {
+		_ = extractRoot.Remove(basename)
+		return fmt.Errorf("close extracted file %s: %w", basename, errors.Join(closeOutErr, closeInErr))
+	}
+	if written > limit {
+		_ = extractRoot.Remove(basename)
+		return fmt.Errorf("archive entry %q exceeds extraction limits", name)
+	}
+	if written != declaredSize {
+		_ = extractRoot.Remove(basename)
+		return fmt.Errorf("archive entry %q extracted %d bytes, metadata declared %d", name, written, declaredSize)
+	}
+	*extractedBytes += written
 	extracted[basename] = true
 	return nil
 }

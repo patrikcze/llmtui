@@ -220,6 +220,30 @@ func ClassifyCommand(body string) CommandClass {
 	return DefaultGuardrails().ClassifyCommand(body, ".")
 }
 
+// CanonicalReadOnlyCommandIdentity returns a conservative semantic identity
+// only for commands already proven auto/read-only by the same policy used for
+// execution. Approved opaque commands deliberately retain exact identity.
+func CanonicalReadOnlyCommandIdentity(body, root string) (string, bool) {
+	if DefaultGuardrails().ClassifyCommand(body, root).Verdict != VerdictAuto {
+		return strings.TrimSpace(body), false
+	}
+	fields := strings.Fields(body)
+	for i := 1; i < len(fields); i++ {
+		field := fields[i]
+		value := flagPathValue(field)
+		if value == "" || (!strings.ContainsAny(value, `/\`) && !strings.HasPrefix(value, ".")) {
+			continue
+		}
+		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+		if eq := strings.Index(field, "="); eq >= 0 {
+			fields[i] = field[:eq+1] + clean
+		} else {
+			fields[i] = clean
+		}
+	}
+	return strings.Join(fields, " "), true
+}
+
 // flagPathValue returns the path-like value an argument carries: the
 // argument itself when it is a bare (non-flag) token, or the substring after
 // "=" when it is a "--flag=value"/"-f=value" flag — this is how a path gets

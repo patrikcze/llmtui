@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,19 +52,24 @@ type StdioClient struct {
 
 type lockedBuffer struct {
 	mu sync.Mutex
-	b  bytes.Buffer
+	s  string
 }
+
+const maxServerStderrBytes = 4096
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.b.Write(p)
+	combined := b.s + terminaltext.Sanitize(string(p))
+	combined = stderrSecretPattern.ReplaceAllString(combined, `${1}***REDACTED***`)
+	b.s, _ = terminaltext.TailBytes(combined, maxServerStderrBytes)
+	return len(p), nil
 }
 
 func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.b.String()
+	return b.s
 }
 
 // StdioFactory returns a ClientFactory that builds stdio MCP clients. It is
@@ -161,11 +165,6 @@ func (c *StdioClient) withServerStderr(err error) error {
 	msg := strings.TrimSpace(c.stderr.String())
 	if msg == "" {
 		return err
-	}
-	msg = stderrSecretPattern.ReplaceAllString(msg, `${1}***REDACTED***`)
-	const max = 4096
-	if len(msg) > max {
-		msg = msg[len(msg)-max:]
 	}
 	return fmt.Errorf("%w; server stderr: %s", err, msg)
 }

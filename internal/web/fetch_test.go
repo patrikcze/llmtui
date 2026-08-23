@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func testClient(kb int) *Client {
@@ -17,7 +18,7 @@ func testClient(kb int) *Client {
 }
 
 func TestFetchHTMLBecomesMarkdown(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, `<html><head><title>My Page</title></head><body>
 			<nav>menu junk</nav>
@@ -42,7 +43,7 @@ func TestFetchHTMLBecomesMarkdown(t *testing.T) {
 
 func TestFetchPlainTextAndJSONPassThrough(t *testing.T) {
 	for _, ct := range []string{"text/plain", "application/json"} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", ct)
 			fmt.Fprint(w, `{"ok":true}`)
 		}))
@@ -58,7 +59,7 @@ func TestFetchPlainTextAndJSONPassThrough(t *testing.T) {
 }
 
 func TestFetchRejectsBinaryContentType(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		if _, err := w.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
 			t.Errorf("write response: %v", err)
@@ -71,7 +72,7 @@ func TestFetchRejectsBinaryContentType(t *testing.T) {
 }
 
 func TestFetchTruncatesToCap(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, strings.Repeat("x", 3*1024))
 	}))
@@ -86,7 +87,7 @@ func TestFetchTruncatesToCap(t *testing.T) {
 }
 
 func TestFetchNon2xxReturnsErrorWithBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gone fishing", http.StatusNotFound)
 	}))
 	defer srv.Close()

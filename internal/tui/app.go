@@ -1169,10 +1169,10 @@ func (m *Model) send() tea.Cmd {
 			// still recognized after it (docs/architecture/v1-agent-runtime.md §3).
 			return m.resumeVerifiedRunWithInput(text, images)
 		}
-		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 		return m.startVerifiedRun(text, images)
 	}
-	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	return m.dispatch(text, images)
 }
 
@@ -1628,10 +1628,10 @@ func (m *Model) retryLast() tea.Cmd {
 		if m.agentNeedsUserInput() {
 			return m.resumeVerifiedRunWithInput(m.lastUserMsg, m.lastImages)
 		}
-		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 		return m.startVerifiedRun(m.lastUserMsg, m.lastImages)
 	}
-	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold)
+	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	return m.dispatch(m.lastUserMsg, m.lastImages)
 }
 

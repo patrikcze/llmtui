@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,7 @@ import (
 type progressLedger struct {
 	threshold int
 	entries   map[string]*progressEntry
+	root      string
 	// blockedStreak counts consecutive rounds where the entire incoming
 	// batch was already blocked. A single block is a forcing function —
 	// the model gets a chance to change strategy (master-prompt §7.2) —
@@ -127,11 +129,22 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 // for anyone reasoning about run behavior.
 const defaultProgressThreshold = 3
 
-func newProgressLedger(threshold int) *progressLedger {
+func newProgressLedger(threshold int, roots ...string) *progressLedger {
 	if threshold <= 0 {
 		threshold = defaultProgressThreshold
 	}
-	return &progressLedger{threshold: threshold, entries: make(map[string]*progressEntry)}
+	root := ""
+	if len(roots) > 0 {
+		root = roots[0]
+	}
+	return &progressLedger{threshold: threshold, entries: make(map[string]*progressEntry), root: root}
+}
+
+func (m *Model) progressRoot() string {
+	if m.toolRunner == nil {
+		return ""
+	}
+	return m.toolRunner.Root()
 }
 
 // fingerprint canonicalizes a tool call into a stable key: tool identity
@@ -139,6 +152,10 @@ func newProgressLedger(threshold int) *progressLedger {
 // that differ only in incidental formatting collide to the same
 // fingerprint; two calls to a genuinely different resource do not.
 func progressFingerprint(c tools.Call) string {
+	return progressFingerprintAtRoot("", c)
+}
+
+func progressFingerprintAtRoot(root string, c tools.Call) string {
 	if c.InputErr != "" {
 		return strings.Join([]string{c.Tool, "invalid", digestText(c.InputErr)}, "\x1f")
 	}
@@ -148,23 +165,54 @@ func progressFingerprint(c tools.Call) string {
 	resource := strings.TrimSpace(c.Path)
 	switch c.Tool {
 	case tools.ToolWebSearch:
-		resource = normalizeText(c.Body) + "\x1e" + strconv.Itoa(c.Max)
+		resource = normalizeText(c.Body) + "\x1e" + strconv.Itoa(c.Max) + "\x1e" + strings.TrimSpace(c.Freshness)
 	case tools.ToolRunCommand:
-		// Shell whitespace can be semantic inside quoted arguments. Only trim
-		// the block edges; do not collapse or case-fold the command itself.
-		resource = strings.TrimSpace(c.Body)
+		if canonical, ok := tools.CanonicalReadOnlyCommandIdentity(c.Body, root); ok {
+			resource = "read-only\x1e" + canonical
+		} else {
+			resource = "opaque\x1e" + strings.TrimSpace(c.Body)
+		}
 	case tools.ToolGlob, tools.ToolGrep:
-		resource = strings.Join([]string{resource, strings.TrimSpace(c.Body), strings.TrimSpace(c.Filter)}, "\x1e")
+		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strings.TrimSpace(c.Body), strings.TrimSpace(c.Filter)}, "\x1e")
 	case tools.ToolWriteFile:
-		resource += "\x1e" + digestText(c.Body)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body)
 	case tools.ToolWebFetch:
-		resource = normalizeURL(c.Path)
+		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness)
+	case tools.ToolReadFile, tools.ToolListDir:
+		resource = normalizeWorkspacePath(root, resource)
 	default:
 		if resource == "" {
 			resource = normalizeText(c.Body)
 		}
 	}
 	return strings.Join([]string{c.Tool, resource}, "\x1f")
+}
+
+func normalizeWorkspacePath(root, raw string) string {
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
+	if clean == "." && strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	if root == "" {
+		return filepath.ToSlash(clean)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return filepath.ToSlash(clean)
+	}
+	candidate := clean
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(rootAbs, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
+		candidate = resolved
+	}
+	rel, err := filepath.Rel(rootAbs, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "outside:" + filepath.ToSlash(candidate)
+	}
+	return filepath.ToSlash(filepath.Clean(rel))
 }
 
 func normalizeText(s string) string {
@@ -282,7 +330,7 @@ func (l *progressLedger) planBatch(calls []tools.Call) (toolBatchPlan, bool) {
 	}
 	const reason = "repeated tool call blocked: no new evidence since the last identical call"
 	for i, call := range calls {
-		if l.wouldBlock(progressFingerprint(call)) {
+		if l.wouldBlock(progressFingerprintAtRoot(l.root, call)) {
 			plan.block(i, reason)
 		}
 	}
@@ -308,6 +356,6 @@ func progressBlockReason(plan toolBatchPlan) string {
 // /agent on — they share this ledger via the shared kernel (ADR 0001).
 func (l *progressLedger) observeResults(results []tools.Result) {
 	for _, r := range results {
-		l.observe(progressFingerprint(r.Call), progressDigest(r))
+		l.observe(progressFingerprintAtRoot(l.root, r.Call), progressDigest(r))
 	}
 }

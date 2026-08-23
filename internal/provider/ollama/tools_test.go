@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func TestChatRequestEncodesToolsAndToolMessages(t *testing.T) {
 	var got chatRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -68,7 +68,7 @@ func TestChatRequestEncodesToolsAndToolMessages(t *testing.T) {
 }
 
 func TestChatParsesNativeToolCalls(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Ollama sends arguments as a JSON object, not a string.
 		fmt.Fprintln(w, `{"message":{"content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"a.txt"}}}]},"done":false}`)
 		fmt.Fprintln(w, `{"message":{"content":""},"done":true,"prompt_eval_count":8,"eval_count":4}`)

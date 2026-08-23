@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func collectToolCalls(t *testing.T, events <-chan provider.ChatEvent) []provider.ToolCall {
@@ -28,7 +28,7 @@ func collectToolCalls(t *testing.T, events <-chan provider.ChatEvent) []provider
 
 func TestChatRequestEncodesToolsAndToolMessages(t *testing.T) {
 	var got chatCompletionRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -85,7 +85,7 @@ func TestChatRequestEncodesToolsAndToolMessages(t *testing.T) {
 }
 
 func TestChatStreamingAccumulatesToolCallFragments(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		// The id and name arrive on the first fragment; the JSON arguments in
 		// pieces across chunks, keyed by index.
@@ -145,7 +145,7 @@ func TestToolCallAccumulatorRejectsUnboundedAndNamelessCalls(t *testing.T) {
 }
 
 func TestChatNonStreamingToolCalls(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"choices":[{"message":{"content":null,"tool_calls":[
 			{"id":"call_2","type":"function","function":{"name":"list_dir","arguments":"{}"}}
@@ -173,7 +173,7 @@ func TestChatNonStreamingToolCalls(t *testing.T) {
 // think-then-call-a-tool turn the reasoning was silently dropped — never
 // reaching the transcript, history, or the thoughts header.
 func TestChatNonStreamingPreservesReasoningAlongsideToolCalls(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"","reasoning_content":"I should list the directory first.","tool_calls":[
 			{"id":"call_3","type":"function","function":{"name":"list_dir","arguments":"{}"}}

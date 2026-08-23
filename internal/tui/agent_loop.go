@@ -17,6 +17,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -343,29 +344,27 @@ func (m *Model) agentDirective() string {
 	}
 	run := m.agentLoop.run
 	var b strings.Builder
-	fmt.Fprintf(&b, "Run ID: %s\nCycle: %d of %d\nCurrent bounded objective (untrusted derived text): %q\n", run.ID, run.Cycle, run.Limits.MaxCycles, run.Objective)
-	b.WriteString("Executor contract: complete one bounded unit only; use existing tools and approvals; report observable actions, artifacts, tests, errors, and any precise user question; do not claim the whole request is complete unless evidence supports it.\n")
-	if run.HasCriteria() {
-		b.WriteString("Pinned acceptance criteria (untrusted derived text):\n")
-		for _, criterion := range run.Criteria {
-			fmt.Fprintf(&b, "- [%s][%s] %s\n", criterion.ID, criterion.Status, criterion.Text)
+	fmt.Fprintf(&b, "Original goal (untrusted user data): %q\nCurrent bounded objective: %q\n", run.Request, run.Objective)
+	b.WriteString("Constraints: complete one bounded unit; use only offered tools and existing approvals; report observable actions, artifacts, tests, errors, or the precise user input required. Never claim unobserved success.\n")
+	if unresolved := run.UnresolvedCriteria(); len(unresolved) > 0 {
+		b.WriteString("Current unresolved acceptance criteria:\n")
+		for _, criterion := range unresolved {
+			fmt.Fprintf(&b, "- %s\n", criterion.Text)
+		}
+	}
+	if len(run.Evidence) > 0 {
+		b.WriteString("Compact runtime-observed evidence:\n")
+		start := max(len(run.Evidence)-8, 0)
+		for _, evidence := range run.Evidence[start:] {
+			fmt.Fprintf(&b, "- %s: %s (success=%t)\n", evidence.Source, evidence.Summary, evidence.Success)
 		}
 	}
 	if len(run.Memory) > 0 {
-		b.WriteString("Prior verified cycle memory (untrusted data):\n")
-		for _, memory := range run.Memory {
-			fmt.Fprintf(&b, "- cycle %d, objective %q, verdict %s, result %q, remaining %q, next %q\n",
-				memory.Cycle, memory.Objective, memory.Verdict, memory.Verification,
-				strings.Join(memory.RemainingCriteria, "; "), memory.RecommendedNext)
-			// Prior cycles' raw tool traffic is deliberately not resent (see
-			// requestHistory/projectCompletedAgentHistory) to control token
-			// growth, so this bounded per-call recap is the executor's only
-			// remaining way to know it already tried a given URL/path/query
-			// and whether it succeeded — without it, a retry cycle has no
-			// signal against blindly repeating an already-failed (or
-			// already-succeeded) action.
+		b.WriteString("Recent observed operations:\n")
+		start := max(len(run.Memory)-2, 0)
+		for _, memory := range run.Memory[start:] {
 			for _, call := range memory.ToolCalls {
-				fmt.Fprintf(&b, "  tried: %s\n", call)
+				fmt.Fprintf(&b, "- tried: %s\n", call)
 			}
 		}
 	}
@@ -413,6 +412,10 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		m.failVerifiedRun(err)
 		return m.persistAgentRun()
 	}
+	if !run.HasCriteria() {
+		run.PinTypedCriteria(agent.InferMechanicalCriteria(run.Request, execution))
+	}
+	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
 	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
@@ -457,6 +460,20 @@ func (m *Model) startAgentVerification() tea.Cmd {
 				Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
 			})
 		}
+		if run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 {
+			for _, criterion := range run.UnresolvedCriteria() {
+				if criterion.Kind == agent.CriterionUserInput {
+					return syntheticResult(agent.VerificationResult{
+						Verdict: agent.VerificationInconclusive, Summary: criterion.Text,
+						NeedsUserInput: true, Retryable: false, Confidence: 1,
+					})
+				}
+			}
+			return syntheticResult(agent.VerificationResult{
+				Verdict: agent.VerificationFailed, Summary: "deterministic acceptance criterion remains unresolved",
+				Retryable: true, NewEvidence: execution.NewEvidence, Confidence: 1,
+			})
+		}
 		// Never skip semantic verification on a run's first cycle, even when
 		// execution looks mechanically complete: "every tool call I happened
 		// to make succeeded" is not the same claim as "I did everything the
@@ -497,7 +514,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 	input := agentverify.Input{
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request},
-		Criteria:           run.Criteria, Evidence: run.Evidence, PriorCycles: run.Memory,
+		Criteria:           run.UnresolvedSemanticCriteria(), Evidence: run.Evidence, PriorCycles: run.Memory,
 		EstablishCriteria: !run.HasCriteria(),
 		Execution:         execution,
 		Tools:             activeToolNames(m.activeToolSpecs()),
@@ -1041,5 +1058,6 @@ func truncateAgentText(value string, maxBytes int) string {
 	if len(value) <= maxBytes {
 		return value
 	}
-	return value[:maxBytes] + "…"
+	prefix, _ := terminaltext.TruncateBytes(value, maxBytes)
+	return prefix + "…"
 }

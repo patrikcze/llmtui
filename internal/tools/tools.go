@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/procutil"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
 // ResultsPrefix marks the follow-up message that carries tool output back to
@@ -67,6 +68,11 @@ type Call struct {
 	InputErr string
 	// Max caps web_search results (native max_results argument).
 	Max int
+	// Freshness is an explicit caller-supplied observation epoch for volatile
+	// read tools. Reusing the same token remains the same operation; changing
+	// it deliberately requests a new poll without disguising it through
+	// incidental argument variation.
+	Freshness string
 
 	// MCPServer, when non-empty, marks this as a call to an MCP server's
 	// tool rather than a built-in one. MCPTool is the tool's name on that
@@ -329,15 +335,20 @@ func (r *Runner) listDir(rel string) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func (r *Runner) readFile(rel string) (string, error) {
+func (r *Runner) readFile(rel string) (output string, err error) {
 	if rel == "" {
 		return "", fmt.Errorf("read_file needs a path")
 	}
-	abs, err := r.resolve(rel)
-	if err != nil {
+	if _, err := r.resolve(rel); err != nil {
 		return "", err
 	}
-	info, err := os.Stat(abs)
+	root, err := os.OpenRoot(r.root)
+	if err != nil {
+		return "", fmt.Errorf("open workspace root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+	name := filepath.Clean(rel)
+	info, err := root.Stat(name)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
@@ -348,11 +359,11 @@ func (r *Runner) readFile(rel string) (string, error) {
 		return "", fmt.Errorf("%q is not a regular file", rel)
 	}
 	limit := int64(r.maxKB) * 1024
-	file, err := os.Open(abs)
+	file, err := root.Open(name)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	openedInfo, err := file.Stat()
 	if err != nil {
 		return "", fmt.Errorf("read file metadata: %w", err)
@@ -417,21 +428,25 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 	if len(content) > r.maxKB*1024 {
 		return "", "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
 	}
-	abs, err := r.resolve(rel)
-	if err != nil {
+	if _, err := r.resolve(rel); err != nil {
 		return "", "", err
 	}
+	root, err := os.OpenRoot(r.root)
+	if err != nil {
+		return "", "", fmt.Errorf("open workspace root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
 	// Capture the previous content so the TUI can show what changed.
 	existed := false
 	oldContent := ""
 	oldTooBig := false
-	if info, err := os.Stat(abs); err == nil {
+	if info, err := root.Stat(rel); err == nil {
 		if info.IsDir() {
 			return "", "", fmt.Errorf("%q is a directory", rel)
 		}
 		existed = true
 		if info.Size() <= int64(r.maxKB)*1024 {
-			if data, rerr := os.ReadFile(abs); rerr == nil {
+			if data, rerr := readRootFileLimited(root, rel, int64(r.maxKB)*1024); rerr == nil {
 				oldContent = string(data)
 			} else {
 				oldTooBig = true // unreadable: treat like undiffable
@@ -440,11 +455,19 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 			oldTooBig = true
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return "", "", fmt.Errorf("create parent directory: %w", err)
 	}
-	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+	file, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", "", fmt.Errorf("open file for writing: %w", err)
+	}
+	if _, err := io.WriteString(file, content); err != nil {
+		_ = file.Close()
 		return "", "", fmt.Errorf("write file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", "", fmt.Errorf("close written file: %w", err)
 	}
 	if oldTooBig {
 		diff = fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath)
@@ -452,6 +475,22 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 		diff = RenderWriteDiff(displayPath, oldContent, content, existed)
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(content), displayPath), diff, nil
+}
+
+func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, err error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file changed while reading and exceeds %d bytes", limit)
+	}
+	return data, nil
 }
 
 // runCommand executes one shell command in the workspace directory. The
@@ -510,7 +549,8 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	procutil.KillGroup(cmd)
 	output := strings.TrimRight(out.String(), "\n")
 	if limit := r.maxKB * 1024; len(output) > limit {
-		output = output[:limit] + "\n… output truncated"
+		output, _ = terminaltext.TruncateBytes(output, limit)
+		output += "\n… output truncated"
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return output, fmt.Errorf("command timed out after %s", timeout)
