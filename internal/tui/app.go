@@ -92,6 +92,7 @@ type clipboardImageMsg struct {
 
 type copyResultMsg struct {
 	chars int
+	label string // what was copied, for the confirmation notice (e.g. "last reply", "selection")
 	err   error
 }
 
@@ -135,6 +136,17 @@ type Model struct {
 	frame                int
 	renderWidth          int
 	mouseEnabled         bool
+	// Click-drag text selection over the chat transcript. Coordinates are
+	// relative to the chat viewport's on-screen position (see
+	// chatViewportZoneID), not absolute terminal coordinates, and not
+	// normalized (start may be after end — normalizeSelection sorts them).
+	// selecting is true only while the button is held; hasSelection stays
+	// true after release so the highlight and the copied text remain
+	// visible until the next click, a scroll, or Esc clears it.
+	selecting            bool
+	hasSelection         bool
+	selStartX, selStartY int
+	selEndX, selEndY     int
 	notice               string
 	overlayOpen          bool
 	pickerKind           pickerKind
@@ -613,6 +625,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 
+	case tea.MouseClickMsg:
+		return m.beginSelection(msg)
+
+	case tea.MouseMotionMsg:
+		return m.extendSelection(msg)
+
 	case tea.MouseReleaseMsg:
 		// Click-to-select on picker rows, additive to the existing
 		// arrow+enter path (see updatePickerClick). A miss (click outside
@@ -629,6 +647,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if model, cmd, handled := m.updateStopButtonClick(msg); handled {
 			return model, cmd
 		}
+		// A text-selection drag that started in the chat viewport (see
+		// beginSelection) finalizes here — copies to the clipboard if it
+		// covers more than a single cell. A release that never started a
+		// drag (m.selecting false) is a no-op.
+		return m.endSelection(msg)
 
 	case tea.KeyPressMsg:
 		if m.overlayOpen {
@@ -698,6 +721,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "text selection on — select & copy with your terminal, ctrl+o to switch back"
 			return m, nil
 		case "esc":
+			m.clearSelection()
 			var agentSave tea.Cmd
 			if m.agentVerifying() {
 				m.cancelVerifiedRun("verification cancelled by the user")
@@ -932,7 +956,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = "copy failed: " + msg.err.Error()
 			m.refreshViewport()
 		} else {
-			m.notice = fmt.Sprintf("✓ copied last reply (%d chars)", msg.chars)
+			m.notice = fmt.Sprintf("✓ copied %s (%d chars)", msg.label, msg.chars)
 		}
 		return m, nil
 
@@ -952,6 +976,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the input box.
 		switch key.Code {
 		case tea.KeyPgUp, tea.KeyPgDown:
+			// A selection's coordinates are relative to what's currently
+			// visible; scrolling makes them point at different content, so
+			// keeping the highlight around would be visibly wrong.
+			m.clearSelection()
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
@@ -960,12 +988,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 		return m, cmd
 	}
-	// Mouse events scroll the chat transcript only. The input's textarea
-	// embeds its own viewport that also scrolls on the wheel, so forwarding
-	// wheel events to both made the prompt and the chat scroll in lockstep.
-	// Route the mouse to the viewport alone; the input is navigated with the
+	// Mouse wheel events scroll the chat transcript only (click/motion/
+	// release are all handled above, for text selection and clicks — this
+	// is reached only by tea.MouseWheelMsg). The input's textarea embeds
+	// its own viewport that also scrolls on the wheel, so forwarding wheel
+	// events to both made the prompt and the chat scroll in lockstep. Route
+	// the mouse to the viewport alone; the input is navigated with the
 	// keyboard (arrows auto-scroll it to keep the cursor visible).
 	if _, isMouse := msg.(tea.MouseMsg); isMouse {
+		m.clearSelection()
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	}
@@ -1897,7 +1928,7 @@ func (m *Model) copyLastReply() tea.Cmd {
 	}
 	return func() tea.Msg {
 		err := clipboard.WriteText(context.Background(), text)
-		return copyResultMsg{chars: len(text), err: err}
+		return copyResultMsg{chars: len(text), label: "last reply", err: err}
 	}
 }
 
@@ -2790,7 +2821,8 @@ func (m *Model) render() string {
 			"  " + zone.Mark(stopButtonZoneID, components.StopButton(m.theme, m.frame))
 	}
 
-	sections := []string{m.viewport.View()}
+	chatView := m.applySelectionHighlight(m.viewport.View())
+	sections := []string{zone.Mark(chatViewportZoneID, chatView)}
 	if m.activity != nil {
 		sections = append(sections, m.renderActivity())
 	}
