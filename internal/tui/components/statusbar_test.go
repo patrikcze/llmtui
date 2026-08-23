@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
@@ -38,7 +39,10 @@ func TestStatusBarRendersCacheOnAsHealthy(t *testing.T) {
 	// Transform makes the semantic style observable even when the test
 	// environment has colors disabled.
 	theme.BadgeOK = lipgloss.NewStyle().Transform(strings.ToUpper)
-	out := StatusBar(theme, statusData(), 300)
+	// The key and the value are separate Render() calls; strip lipgloss
+	// v2's always-on color codes before checking they land next to each
+	// other as plain text.
+	out := ansi.Strip(StatusBar(theme, statusData(), 300))
 	if !strings.Contains(out, "cache ON") {
 		t.Errorf("cache on did not use the healthy status style:\n%s", out)
 	}

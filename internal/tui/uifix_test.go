@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -35,8 +36,8 @@ func TestInputGrowthNeverStarvesViewport(t *testing.T) {
 	// Far more input lines than could ever fit on screen.
 	m.input.SetValue(strings.Repeat("x\n", 100))
 	m.syncInputHeight()
-	if m.viewport.Height < 3 {
-		t.Errorf("viewport starved to %d rows by a huge input", m.viewport.Height)
+	if m.viewport.Height() < 3 {
+		t.Errorf("viewport starved to %d rows by a huge input", m.viewport.Height())
 	}
 	if m.inputLines > m.maxInputLines() {
 		t.Errorf("inputLines %d exceeds cap %d", m.inputLines, m.maxInputLines())
@@ -85,25 +86,71 @@ func TestTypingDoesNotScrollViewport(t *testing.T) {
 	}
 	m.refreshViewport()
 	m.viewport.GotoBottom()
-	before := m.viewport.YOffset
+	before := m.viewport.YOffset()
 
 	// Space, letters bound in the viewport keymap (j/k/u/d/b/f), arrows —
 	// none of them may move the chat while the user is typing.
 	for _, r := range "hello worldjkudbf" {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeySpace})
-	if m.viewport.YOffset != before {
-		t.Errorf("viewport scrolled from %d to %d while typing", before, m.viewport.YOffset)
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	if m.viewport.YOffset() != before {
+		t.Errorf("viewport scrolled from %d to %d while typing", before, m.viewport.YOffset())
 	}
 	if !strings.Contains(m.input.Value(), "hello world") {
 		t.Errorf("input lost keystrokes: %q", m.input.Value())
 	}
 
-	// The dedicated scroll keys still work.
-	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.viewport.YOffset >= before {
-		t.Error("PgUp did not scroll the viewport")
+	// PgUp/PgDown belong to the input's own paging now (see
+	// TestPgUpPgDownScrollsInputNotViewport) — they must not scroll the
+	// chat either.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.viewport.YOffset() != before {
+		t.Error("PgUp scrolled the chat viewport; it should page the input instead")
+	}
+}
+
+// A long pasted prompt outgrows the input box's max height (bounded so the
+// chat viewport never starves below its minimum rows — see
+// (*Model).maxInputLines); bubbles/v2's textarea already has PageUp/PageDown
+// in its default keymap for exactly this, but app.go used to intercept both
+// keys for the chat viewport before the textarea ever saw them. PgUp/PgDown
+// must now page the input's own overflow, and must leave the chat viewport
+// alone — it stays reachable via the mouse wheel.
+func TestPgUpPgDownScrollsInputNotViewport(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	for i := 0; i < 40; i++ {
+		m.session.AddAssistant("line")
+	}
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("pasted line %d", i)
+	}
+	m.input.SetValue(strings.Join(lines, "\n"))
+	m.syncInputHeight() // grows the input box, shrinking (and re-clamping) the chat viewport
+	m.input.MoveToBegin()
+	inputScrollBefore := m.input.ScrollYOffset()
+	// Captured after the layout settles: growing the input for the long
+	// paste reflows the chat viewport's height and re-clamps its offset,
+	// which must not be mistaken for movement caused by PgDown below.
+	vpBefore := m.viewport.YOffset()
+
+	// textarea's PageDown() snaps the cursor to the bottom of the current
+	// page on its first call and only scrolls on a second — send both to
+	// exercise real scrolling, matching how a user pages through content
+	// taller than the box.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+
+	if got := m.input.ScrollYOffset(); got <= inputScrollBefore {
+		t.Errorf("PgDown did not page the input: ScrollYOffset stayed at %d", got)
+	}
+	if got := m.viewport.YOffset(); got != vpBefore {
+		t.Errorf("PgDown moved the chat viewport (%d -> %d); it should only page the input", vpBefore, got)
 	}
 }
 
@@ -112,7 +159,7 @@ func TestInputGrowsWithWrappedText(t *testing.T) {
 	m.resize(40, 24)
 	// Type enough words to word-wrap well past two rows at width 32.
 	for _, r := range strings.Repeat("word medium words here ", 6) {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if m.inputLines < 3 {
 		t.Errorf("inputLines = %d, want >= 3 for long wrapped text", m.inputLines)
@@ -141,12 +188,12 @@ func TestApprovalMenuArrowSelection(t *testing.T) {
 	root := pendingWrite(t, m)
 
 	// Down twice lands on "No", Enter confirms it: batch denied, no file.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.approvalIdx != approvalNo {
 		t.Fatalf("approvalIdx = %d, want %d", m.approvalIdx, approvalNo)
 	}
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("denial must be dispatched back to the model")
 	}
@@ -166,7 +213,7 @@ func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
 	if m.approvalIdx != approvalYes {
 		t.Fatalf("menu must start on Yes, got row %d", m.approvalIdx)
 	}
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected execution after confirming Yes")
 	}
@@ -176,12 +223,30 @@ func TestApprovalMenuEnterDefaultsToYes(t *testing.T) {
 	}
 }
 
+func TestApprovalMenuClickSelectsYes(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	root := pendingWrite(t, m)
+
+	m.View() // triggers zone.Scan(), registering row bounds
+	z := waitForZone(t, approvalRowZoneID(approvalYes))
+
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("expected execution after clicking Yes")
+	}
+	finishToolBatch(t, m, cmd)
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {
+		t.Fatalf("file not written after clicking Yes: %v", err)
+	}
+}
+
 func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
 	m := newTestModel(t)
 	m.resize(80, 24)
 	pendingWrite(t, m)
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: '2', Text: string('2')})
 	if cmd == nil {
 		t.Fatal("expected execution after choosing 2")
 	}
@@ -199,7 +264,7 @@ func TestApprovalMenuEscDenies(t *testing.T) {
 	m.resize(80, 24)
 	root := pendingWrite(t, m)
 
-	_, cmd := m.updateToolApproval(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.updateToolApproval(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("esc must deny and report back to the model")
 	}

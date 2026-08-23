@@ -2,25 +2,37 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/tui/components"
+	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
 
 // modelDotColors cycles through the legend colors for the model breakdown.
-var modelDotColors = []lipgloss.AdaptiveColor{
-	{Light: "#B4551F", Dark: "#E58E54"}, // accent
-	{Light: "#3D7A45", Dark: "#7CBF85"}, // green
-	{Light: "#3B5FA0", Dark: "#8AB0E8"}, // blue
-	{Light: "#7A4A9E", Dark: "#C39FE0"}, // purple
-	{Light: "#A0713B", Dark: "#E0C08A"}, // gold
-	{Light: "#8A8580", Dark: "#9C9691"}, // gray
-}
+// Each pair is resolved once via styles.IsDark, the local stand-in for
+// lipgloss v1's removed AdaptiveColor.
+var modelDotColors = func() []color.Color {
+	pick := lipgloss.LightDark(styles.IsDark())
+	pairs := [][2]string{
+		{"#B4551F", "#E58E54"}, // accent
+		{"#3D7A45", "#7CBF85"}, // green
+		{"#3B5FA0", "#8AB0E8"}, // blue
+		{"#7A4A9E", "#C39FE0"}, // purple
+		{"#A0713B", "#E0C08A"}, // gold
+		{"#8A8580", "#9C9691"}, // gray
+	}
+	colors := make([]color.Color, len(pairs))
+	for i, p := range pairs {
+		colors[i] = pick(lipgloss.Color(p[0]), lipgloss.Color(p[1]))
+	}
+	return colors
+}()
 
 type modelTotal struct {
 	Model    string

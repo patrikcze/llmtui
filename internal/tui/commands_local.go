@@ -12,7 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"gopkg.in/yaml.v3"
 
 	"github.com/patrikcze/llmtui/internal/app"
@@ -174,12 +175,16 @@ func (m *Model) profileListOverlay() string {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			name = m.theme.BadgeOK.Render(fmt.Sprintf("%-10s", p.Name))
 		}
-		fmt.Fprintf(&b, "%s%s %s\n", marker, name,
+		row := fmt.Sprintf("%s%s %s", marker, name,
 			m.theme.StatusBar.Render(fmt.Sprintf("ctx %s · temp %.2f · %s · matches: %s",
 				components.FormatTokens(p.ContextWindow), p.PreferredTemperature, p.PromptStyle, strings.Join(p.Match, ", "))))
+		// zone.Mark must be the outermost wrap: everything inside `row` is
+		// already fully styled/sanitized, and nothing downstream may
+		// re-sanitize this string or the marker escape sequence is lost.
+		b.WriteString(zone.Mark(pickerRowZoneID(i), row) + "\n")
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("custom profiles come from model_profiles in the config") + "\n")
-	b.WriteString(m.theme.SystemNote.Render("↑/↓ select · enter pin · esc cancel · /profile auto restores matching"))
+	b.WriteString(m.theme.SystemNote.Render("↑/↓ select · enter pin · esc cancel · click a row to pin it"))
 	return b.String()
 }
 

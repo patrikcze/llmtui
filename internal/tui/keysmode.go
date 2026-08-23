@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const maxKeyLog = 12
@@ -44,22 +44,22 @@ func (m *Model) updateKeysMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
-	if key.Type == tea.KeyEsc {
+	if key.String() == "esc" {
 		m.keysMode = false
 		m.closeOverlay()
 		return m, nil
 	}
-	if key.Type == tea.KeyCtrlC {
+	if key.String() == "ctrl+c" {
 		return m.handleCtrlC()
 	}
 
 	entry := key.String()
-	if m.keysRaw && len(key.Runes) > 0 {
-		entry += fmt.Sprintf("  —  runes %v", key.Runes)
+	if m.keysRaw && key.Text != "" {
+		entry += fmt.Sprintf("  —  text %q", key.Text)
 	}
 	m.logKey(entry)
 	return m, nil

@@ -13,7 +13,7 @@ import (
 // lets answers read like ordinary terminal output.
 func (m *Model) renderPrompt(body string) string {
 	body = strings.Trim(body, "\n")
-	width := m.viewport.Width - m.theme.PromptRail.GetHorizontalFrameSize()
+	width := m.viewport.Width() - m.theme.PromptRail.GetHorizontalFrameSize()
 	if width < 1 {
 		width = 1
 	}
