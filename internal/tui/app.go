@@ -104,6 +104,7 @@ type Model struct {
 	model    string
 	session  *chat.Session
 	renderer *glamour.TermRenderer
+	turnRuntime
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -118,14 +119,8 @@ type Model struct {
 	reasoningBuf         strings.Builder
 	reasoningStart       time.Time // zero until the first reasoning byte of the current turn
 	reasoningEnd         time.Time // zero until the first visible-answer byte after reasoning
-	stream               <-chan provider.ChatEvent
-	streamStart          time.Time
 	lastTPS              float64
 	errText              string
-	cancelStream         context.CancelFunc
-	streamCtx            context.Context
-	idleWatchdog         *time.Timer
-	idleTimeout          time.Duration
 	reasoningLen         int // chars of "thinking" streamed before the visible answer
 	filteredReasoningLen int
 	progressText         string
@@ -189,28 +184,13 @@ type Model struct {
 	// nativeToolRejections is learned negative capability state keyed by
 	// provider+model. One incapable model must not disable native tools for a
 	// different model or provider for the rest of the session.
-	nativeToolRejections     map[string]bool
-	toolsShowOutput          bool // show full tool output instead of one-line summaries
-	toolRunner               *tools.Runner
-	toolDepth                int          // auto follow-up rounds for the current user turn
-	emptyContinuationRetried bool         // one retry already spent on this round's empty-completion-after-tools
-	malformedToolCallRetried bool         // one retry already spent on this round's leaked/unparsed tool-call attempt
-	pendingCalls             []tools.Call // parsed calls awaiting the user's approval
-	pendingToolPlan          *toolBatchPlan
-	pendingBudget            bool        // the pending prompt is "budget spent — continue?", not an approval
-	approvalIdx              int         // selected row in the approval menu (0 yes, 1 always, 2 no)
-	toolOK                   int         // executed tool calls (exit summary)
-	toolErr                  int         // failed or denied tool calls (exit summary)
-	webOn                    bool        // web tools (web_search/web_fetch) enabled
-	webClient                *web.Client // shared web client; nil if the runner is unavailable
-
-	// progress tracks tool-call fingerprints across the current run (both
-	// ordinary tool chat and /agent on share the same kernel — see
-	// docs/architecture/decisions/0001-single-orchestration-kernel.md — so
-	// they share this ledger too) to detect a batch that only repeats
-	// already-seen, evidence-unchanged calls. See internal/tui/progress.go
-	// and docs/architecture/v1-agent-runtime.md §3.
-	progress *progressLedger
+	nativeToolRejections map[string]bool
+	toolsShowOutput      bool // show full tool output instead of one-line summaries
+	toolRunner           *tools.Runner
+	toolOK               int         // executed tool calls (exit summary)
+	toolErr              int         // failed or denied tool calls (exit summary)
+	webOn                bool        // web tools (web_search/web_fetch) enabled
+	webClient            *web.Client // shared web client; nil if the runner is unavailable
 
 	// Optional local RAG (disabled by default).
 	ragOn      bool         // retrieval enabled for the current session
@@ -230,29 +210,11 @@ type Model struct {
 	workspaceSkillApprovals map[string]bool
 
 	// Optional MCP servers (config/interfaces only; no transport wired yet).
-	mcpRegistry    *mcp.Registry
-	mcpBatchCancel context.CancelFunc // cancels an in-flight async MCP tool batch, if any
-	// mcpBatchGen is a monotonic generation counter, incremented whenever a
-	// batch starts OR is cancelled. Each dispatched batch's eventual
-	// mcpToolResultsMsg is stamped with the generation active when it was
-	// launched, so a message from a batch that was later cancelled or
-	// superseded by a newer one can be recognized as stale and dropped
-	// instead of driving the loop (see the mcpToolResultsMsg handler).
-	mcpBatchGen int
-	// activity is the live view of the in-flight async tool batch, rendered
-	// (and animated) between the viewport and the usage panel. UI-only state:
-	// it never enters m.session, so saved history is unaffected.
-	activity    *toolActivity
+	mcpRegistry *mcp.Registry
 	workingVerb string // footer verb for the current request ("Ideating", …)
 
-	statusLines     int                 // status bar rows (1, or 2 when wrapped on narrow terminals)
-	bypassCache     bool                // skip the response cache for the next dispatch
-	streamToolCalls []provider.ToolCall // native calls from the finishing stream
-	// streamGen is a monotonic request counter; every firstStreamMsg and
-	// streamEventMsg is stamped with the generation of the request that
-	// produced it so events from an abandoned stream can never be attributed
-	// to the current one (same pattern as mcpBatchGen).
-	streamGen int
+	statusLines int  // status bar rows (1, or 2 when wrapped on narrow terminals)
+	bypassCache bool // skip the response cache for the next dispatch
 	// toolCallSeq feeds tools.EnsureToolCallIDs so generated tool-call IDs
 	// stay unique across every round of a session.
 	toolCallSeq int
@@ -337,6 +299,7 @@ func New(opts Options) *Model {
 		sessionName:  history.NewSessionName(time.Now()),
 		inputLines:   1,
 		startedAt:    time.Now(),
+		turnRuntime:  newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
 
 		memEnabled:    cfg.Memory.Enabled,
 		profileMode:   profileMode,
@@ -348,8 +311,6 @@ func New(opts Options) *Model {
 
 		toolsAutoApprove:     cfg.Tools.Approve == "auto",
 		nativeToolRejections: make(map[string]bool),
-
-		progress: newProgressLedger(cfg.Tools.NoProgress.Threshold),
 	}
 	m.resetNativeToolMode()
 	m.rebuildFromConfig()
@@ -731,18 +692,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewport()
 			} else if m.thinking && m.cancelStream != nil {
 				// Stop generation, keeping the partial reply.
-				m.cancelStream()
 				m.finishStream(nil, false)
+				m.turnRuntime.complete(turnOutcomeCancelled)
 				m.cancelVerifiedRun("execution cancelled by the user")
 				m.endAgentRun() // a cancelled run clears run-scoped skills
 				agentSave = m.persistAgentRun()
 				m.errText = "generation stopped"
 				m.refreshViewport()
 			} else if m.mcpBatchCancel != nil {
-				m.mcpBatchCancel()
-				m.mcpBatchCancel = nil
-				m.mcpBatchGen++
-				m.activity = nil
+				m.turnRuntime.cancelToolBatch()
 				m.relayout()
 				m.cancelVerifiedRun("tool batch cancelled by the user")
 				m.endAgentRun()
@@ -812,7 +770,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case firstStreamMsg:
-		if msg.gen != m.streamGen {
+		if !m.turnRuntime.adoptStream(msg.gen, msg.stream) {
 			// A request the user already cancelled (Esc before its first event)
 			// finally connected. Adopting its stream would splice a dead
 			// request into whatever is running now; drain it instead so the
@@ -820,7 +778,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			drainProviderStream(msg.stream)
 			return m, nil
 		}
-		m.stream = msg.stream
 		m.lastDebug.Retries = msg.retries
 		if msg.toolsFellBack && m.toolsNative {
 			// The backend rejected native tool calling; use the fenced-block
@@ -900,7 +857,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case mcpToolResultsMsg:
-		if msg.gen != m.mcpBatchGen {
+		if !m.turnRuntime.acceptToolResults(msg.gen) {
 			// A stale batch: it was cancelled (plain Esc/Ctrl+C, no resend)
 			// or superseded by a newer one (cancel-then-resend). Either way,
 			// its results must never tally, set notice/errText, or feed back
@@ -909,8 +866,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// already stopped).
 			return m, nil
 		}
-		m.mcpBatchCancel = nil
-		m.activity = nil
 		m.relayout()
 		for _, res := range msg.results {
 			if res.Err != nil {
@@ -1134,7 +1089,10 @@ func (m *Model) updateStopButtonClick(msg tea.MouseReleaseMsg) (tea.Model, tea.C
 // second, concurrent dispatch would corrupt session.Messages ordering and
 // the in-flight request's own state (m.stream, m.cancelStream, m.toolDepth).
 func (m *Model) busy() bool {
-	return m.thinking || m.mcpBatchCancel != nil || m.agentVerifying()
+	// thinking is a rendering mirror of turnModelStreaming. Include it as a
+	// fail-closed guard so an inconsistent adapter state can never permit a
+	// second dispatch or a mutating slash command.
+	return m.thinking || m.turnRuntime.busy() || m.agentVerifying()
 }
 
 func (m *Model) send() tea.Cmd {
@@ -1158,9 +1116,7 @@ func (m *Model) send() tea.Cmd {
 	m.syncInputHeight()
 	m.relayout()
 	m.sentCount++
-	m.toolDepth = 0                    // a fresh user turn gets a fresh tool budget
-	m.emptyContinuationRetried = false // a fresh user turn gets a fresh empty-completion retry
-	m.malformedToolCallRetried = false // a fresh user turn gets a fresh malformed-tool-call retry
+	m.turnRuntime.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
 			// Resuming an in-progress run: it never replays incomplete work
@@ -1169,10 +1125,8 @@ func (m *Model) send() tea.Cmd {
 			// still recognized after it (docs/architecture/v1-agent-runtime.md §3).
 			return m.resumeVerifiedRunWithInput(text, images)
 		}
-		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 		return m.startVerifiedRun(text, images)
 	}
-	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	return m.dispatch(text, images)
 }
 
@@ -1243,10 +1197,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
 		m.keysMode = false
-		m.pendingCalls = runnable
-		m.pendingToolPlan = &plan
-		m.pendingBudget = true
-		m.approvalIdx = 0
+		m.turnRuntime.waitForApproval(plan, true)
 		m.refreshViewport()
 		return nil
 	}
@@ -1254,9 +1205,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		if m.callNeedsApproval(c) {
 			m.overlayOpen = false
 			m.keysMode = false
-			m.pendingCalls = runnable
-			m.pendingToolPlan = &plan
-			m.approvalIdx = 0
+			m.turnRuntime.waitForApproval(plan, false)
 			m.refreshViewport()
 			return nil
 		}
@@ -1305,12 +1254,13 @@ func (m *Model) resetNativeToolMode() {
 // preserves ordering for mixed batches.
 func (m *Model) runToolPlan(plan toolBatchPlan) tea.Cmd {
 	calls := plan.runnableCalls()
-	m.toolDepth++
-	ctx, cancel := context.WithCancel(m.agentContext())
-	m.mcpBatchCancel = cancel
-	m.mcpBatchGen++
-	gen := m.mcpBatchGen
-	m.activity = newToolActivity(calls, gen)
+	ctx, gen, err := m.turnRuntime.beginToolBatch(m.agentContext(), calls)
+	if err != nil {
+		m.errText = err.Error()
+		m.turnRuntime.complete(turnOutcomeExecutionFailure)
+		m.refreshViewport()
+		return nil
+	}
 	m.relayout()
 	m.refreshViewport() // suppress the batch's static ⚒ lines while it runs live
 	m.notice = mcpBatchNotice(calls)
@@ -1365,26 +1315,14 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	return nil
 }
 
-func (m *Model) pendingPlan() toolBatchPlan {
-	if m.pendingToolPlan != nil {
-		return *m.pendingToolPlan
-	}
-	return newToolBatchPlan(m.pendingCalls)
-}
-
-func (m *Model) clearPendingTools() {
-	m.pendingCalls = nil
-	m.pendingToolPlan = nil
-	m.pendingBudget = false
-}
-
 // denyPendingTools rejects the pending batch and tells the model, so it can
 // finish the task without the denied actions instead of waiting forever.
 func (m *Model) denyPendingTools() tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
 	m.clearPendingTools()
-	m.toolDepth++
+	m.turnRuntime.advanceToolRound()
+	m.turnRuntime.complete(turnOutcomeToolContinuation)
 	denied := tools.DeniedResults(calls)
 	results, _ := plan.mergeResults(denied)
 	m.toolErr += len(results)
@@ -1580,7 +1518,7 @@ func (m *Model) resolveBudget(choice int) tea.Cmd {
 	calls := append([]tools.Call{}, m.pendingCalls...)
 	m.clearPendingTools()
 	if choice == 0 {
-		m.toolDepth = 0
+		m.turnRuntime.renewToolBudget()
 		m.notice = fmt.Sprintf("⚒ tool budget renewed — up to %d more rounds", m.toolMaxIter())
 		return m.startPlannedToolBatch(plan)
 	}
@@ -1611,9 +1549,7 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.Messages = m.session.Messages[:n-1]
 		}
 	}
-	m.toolDepth = 0                    // a retry is a fresh turn and gets a fresh tool budget
-	m.emptyContinuationRetried = false // a retry is a fresh turn and gets a fresh empty-completion retry
-	m.malformedToolCallRetried = false // a retry is a fresh turn and gets a fresh malformed-tool-call retry
+	m.turnRuntime.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	m.errText = ""
 	m.notice = "retrying last message"
 	m.sentCount++
@@ -1628,10 +1564,8 @@ func (m *Model) retryLast() tea.Cmd {
 		if m.agentNeedsUserInput() {
 			return m.resumeVerifiedRunWithInput(m.lastUserMsg, m.lastImages)
 		}
-		m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 		return m.startVerifiedRun(m.lastUserMsg, m.lastImages)
 	}
-	m.progress = newProgressLedger(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	return m.dispatch(m.lastUserMsg, m.lastImages)
 }
 
@@ -1737,8 +1671,8 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
 	case m.thinking && m.cancelStream != nil:
-		m.cancelStream()
 		m.finishStream(nil, false)
+		m.turnRuntime.complete(turnOutcomeCancelled)
 		m.cancelVerifiedRun("execution cancelled by the user")
 		m.endAgentRun()
 		agentSave = m.persistAgentRun()
@@ -1746,10 +1680,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
 	case m.mcpBatchCancel != nil:
-		m.mcpBatchCancel()
-		m.mcpBatchCancel = nil
-		m.mcpBatchGen++
-		m.activity = nil
+		m.turnRuntime.cancelToolBatch()
 		m.relayout()
 		m.cancelVerifiedRun("tool batch cancelled by the user")
 		m.endAgentRun()
@@ -1778,9 +1709,9 @@ func (m *Model) quit() tea.Cmd {
 		return nil
 	}
 	m.quitting = true
-	if m.cancelStream != nil {
-		m.cancelStream()
-	}
+	m.turnRuntime.stopStream()
+	m.turnRuntime.cancelToolBatch()
+	m.turnRuntime.complete(turnOutcomeCancelled)
 	m.cancelVerifiedRun("application shutdown")
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(); err == nil { // best effort on exit
@@ -1960,7 +1891,7 @@ func (m *Model) flushThinkFilter() {
 }
 
 func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
-	if msg.gen != m.streamGen {
+	if !m.turnRuntime.acceptStreamEvent(msg.gen) {
 		// An event from an abandoned request (Esc-cancelled, then a new one
 		// dispatched). It must not touch the stream that's running now.
 		return m, nil
@@ -1980,15 +1911,14 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			return m, m.persistAgentRun()
 		} else {
 			m.finishStream(nil, false)
+			m.turnRuntime.complete(turnOutcomeFinalAnswer)
 		}
 		return m, nil
 	}
 	switch msg.event.Type {
 	case provider.EventProgress:
 		m.progressText = terminaltext.Sanitize(msg.event.Delta)
-		if m.idleWatchdog != nil {
-			m.idleWatchdog.Reset(m.idleTimeout)
-		}
+		m.turnRuntime.touchStream()
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventReasoning:
@@ -2002,9 +1932,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		m.reasoningLen += len(reasoning)
 		m.reasoningBuf.WriteString(reasoning)
-		if m.idleWatchdog != nil {
-			m.idleWatchdog.Reset(m.idleTimeout)
-		}
+		m.turnRuntime.touchStream()
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDelta:
@@ -2028,9 +1956,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.streamBuf.WriteString(delta)
 		}
 		// A token arrived: the stream is healthy, so push the idle deadline out.
-		if m.idleWatchdog != nil {
-			m.idleWatchdog.Reset(m.idleTimeout)
-		}
+		m.turnRuntime.touchStream()
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
@@ -2079,8 +2005,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// exactly one fresh attempt at the same round — same
 			// accumulated history, nothing resent — before treating it as a
 			// real failure, mirroring the empty-completion retry below.
-			if !m.malformedToolCallRetried {
-				m.malformedToolCallRetried = true
+			if m.turnRuntime.claimMalformedToolRetry() {
 				m.notice = "model's tool call could not be parsed by the backend — retrying once"
 				m.refreshViewport()
 				return m, m.continueChat()
@@ -2088,11 +2013,12 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.errText = "Model's tool call could not be parsed by the backend, twice in a row (retry did not help). " +
 				"This is typically the backend (e.g. LM Studio) failing to convert the model's tool-call attempt into a structured call — check for a backend/runtime update for this model, or try again."
 			m.failVerifiedRun(errors.New(m.errText))
+			m.turnRuntime.complete(turnOutcomeExecutionFailure)
 			m.endAgentRun()
 			m.refreshViewport()
 			return m, m.persistAgentRun()
 		}
-		m.malformedToolCallRetried = false
+		m.turnRuntime.clearMalformedToolRetry()
 		if emptyToolContinuation {
 			// A model can occasionally sample straight to EOS right after a
 			// tool result lands, especially deep into a long tool-heavy
@@ -2100,8 +2026,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// one-off sampling event, so give it exactly one fresh attempt
 			// at the same round (same accumulated history, nothing resent)
 			// before treating it as a real failure.
-			if !m.emptyContinuationRetried {
-				m.emptyContinuationRetried = true
+			if m.turnRuntime.claimEmptyContinuationRetry() {
 				m.notice = "model returned an empty completion after tool execution — retrying once"
 				m.refreshViewport()
 				return m, m.continueChat()
@@ -2114,14 +2039,16 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t).",
 				completionTokens, roundReasoningChars, msg.event.Truncated)
 			m.failVerifiedRun(errors.New(m.errText))
+			m.turnRuntime.complete(turnOutcomeExecutionFailure)
 			m.endAgentRun()
 			m.refreshViewport()
 			return m, m.persistAgentRun()
 		}
-		m.emptyContinuationRetried = false
+		m.turnRuntime.clearEmptyContinuationRetry()
 		if truncatedToolCall {
 			m.errText = "Model's tool call was cut off by max_tokens before completing; it was not executed. Raise chat.max_tokens (and agent.verifier.max_tokens if applicable) or shorten the request."
 			m.failVerifiedRun(errors.New(m.errText))
+			m.turnRuntime.complete(turnOutcomeExecutionFailure)
 			m.endAgentRun()
 			m.refreshViewport()
 			return m, m.persistAgentRun()
@@ -2143,6 +2070,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// means the run is still in flight — cleanup happens on its own
 		// completion or denial path.)
 		if len(m.pendingCalls) == 0 {
+			m.turnRuntime.complete(turnOutcomeFinalAnswer)
 			if m.agentRunActive() {
 				return m, m.startAgentVerification()
 			}
@@ -2165,7 +2093,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 // streamCanceledByIdle reports whether the current stream's context was
 // canceled by the inactivity watchdog rather than by the user.
 func (m *Model) streamCanceledByIdle() bool {
-	return m.streamCtx != nil && errors.Is(context.Cause(m.streamCtx), errStreamIdle)
+	return m.turnRuntime.streamCanceledByIdle()
 }
 
 func (m *Model) idleError() error {
@@ -2195,12 +2123,8 @@ func (m *Model) streamFailed(err error) {
 	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
 	m.progressText = ""
-	if m.cancelStream != nil {
-		m.cancelStream()
-		m.cancelStream = nil
-	}
-	m.idleWatchdog = nil
-	m.drainStream()
+	stream, _ := m.turnRuntime.finishStream(turnOutcomeExecutionFailure)
+	drainProviderStream(stream)
 	if m.agentRunActive() && m.agentLoop.ctx != nil && errors.Is(m.agentLoop.ctx.Err(), context.DeadlineExceeded) {
 		_ = m.agentLoop.run.Terminate(agent.DecisionBudgetExhausted, "maximum elapsed time reached", time.Now())
 	} else {
@@ -2242,11 +2166,7 @@ func drainProviderStream(stream <-chan provider.ChatEvent) <-chan struct{} {
 // drainStream consumes remaining events of an abandoned stream without
 // waiting forever for a provider that violates the cancellation contract.
 func (m *Model) drainStream() {
-	if m.stream == nil {
-		return
-	}
-	drainProviderStream(m.stream)
-	m.stream = nil
+	drainProviderStream(m.turnRuntime.stopStream())
 }
 
 // truncatedResponseNotice is appended to a reply that the backend cut off by
@@ -2289,12 +2209,8 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	m.progressText = ""
 	toolCalls := m.streamToolCalls
 	m.streamToolCalls = nil
-	if m.cancelStream != nil {
-		m.cancelStream()
-		m.cancelStream = nil
-	}
-	m.idleWatchdog = nil
-	m.drainStream()
+	stream, _ := m.turnRuntime.finishStream(turnOutcomeToolContinuation)
+	drainProviderStream(stream)
 	if truncated && reply != "" {
 		reply += truncatedResponseNotice
 	}

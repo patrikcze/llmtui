@@ -1247,31 +1247,28 @@ func TestSendBlockedDuringAsyncMCPBatch(t *testing.T) {
 	}
 }
 
-// TestBusy directly covers the four states of the busy() guard used to gate
-// send() and retryLast() against a concurrent dispatch.
+// TestBusy covers the runtime states used to gate send() and retryLast()
+// against a concurrent dispatch.
 func TestBusy(t *testing.T) {
 	m := newTestModel(t)
-	cancel := func() {}
 
 	cases := []struct {
-		name           string
-		thinking       bool
-		mcpBatchCancel bool
-		want           bool
+		name  string
+		state turnState
+		want  bool
 	}{
-		{"neither", false, false, false},
-		{"thinking only", true, false, true},
-		{"mcpBatchCancel only", false, true, true},
-		{"both", true, true, true},
+		{"idle", turnIdle, false},
+		{"model streaming", turnModelStreaming, true},
+		{"executing tools", turnExecutingTools, true},
+		{"waiting approval", turnWaitingApproval, false},
+		{"processing results", turnProcessingResults, false},
+		{"completed", turnCompleted, false},
+		{"cancelled", turnCancelled, false},
+		{"failed", turnFailed, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m.thinking = c.thinking
-			if c.mcpBatchCancel {
-				m.mcpBatchCancel = cancel
-			} else {
-				m.mcpBatchCancel = nil
-			}
+			m.turnRuntime.state = c.state
 			if got := m.busy(); got != c.want {
 				t.Errorf("busy() = %v, want %v", got, c.want)
 			}

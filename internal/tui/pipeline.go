@@ -813,7 +813,6 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	m.resetThinkFilter()
-	m.streamStart = time.Now()
 	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
 	m.errText = ""
 	if cacheErr != nil {
@@ -973,7 +972,6 @@ func (m *Model) continueChat() tea.Cmd {
 	m.filteredReasoningLen = 0
 	m.progressText = ""
 	m.resetThinkFilter()
-	m.streamStart = time.Now()
 	m.workingVerb = workingVerbs[rand.IntN(len(workingVerbs))]
 	m.errText = ""
 	m.refreshViewport()
@@ -1013,17 +1011,16 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 	// the watchdog fires only when no token has arrived for that long, and
 	// handleStreamEvent resets it on every delta.
 	idle := app.RequestTimeout(m.cfg.Network)
-	ctx, cancel := context.WithCancelCause(m.agentContext())
-	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
-	m.streamCtx = ctx
-	m.idleWatchdog = watchdog
-	m.idleTimeout = idle
-	m.cancelStream = func() {
-		watchdog.Stop()
-		cancel(context.Canceled)
+	ctx, gen, err := m.turnRuntime.beginStream(m.agentContext(), idle)
+	if err != nil {
+		m.thinking = false
+		m.errText = err.Error()
+		m.turnRuntime.complete(turnOutcomeExecutionFailure)
+		m.failVerifiedRun(err)
+		m.endAgentRun()
+		m.refreshViewport()
+		return m.persistAgentRun()
 	}
-	m.streamGen++
-	gen := m.streamGen
 	prov := m.prov
 	netCfg := m.cfg.Network
 	baseURL := m.cfg.ActiveBaseURL()

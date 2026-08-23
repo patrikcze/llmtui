@@ -4,7 +4,7 @@ This is an implementation plan, not an authorization to change production code. 
 
 ## Implementation status — 2026-08-23
 
-Status is recorded against local Git history. The completed P0, P1, P2, and P3 work listed below is merged into local `master`. The separate P2 `TurnRuntime` extraction remains open.
+Status is recorded against local Git history plus the current working tree. The completed P0, P1, P2, and P3 work listed below is merged into local `master`, except for the final `TurnRuntime` extraction implemented and verified in the current working tree.
 
 ### Completed
 
@@ -18,19 +18,18 @@ Status is recorded against local Git history. The completed P0, P1, P2, and P3 w
 - [x] P2 — Strengthen no-progress operation identity (`3ad4c32`).
 - [x] P2 — Make tests hermetic and uncached in critical CI jobs (`23f36f2`).
 - [x] P2 — Simplify Agent prompts and deterministic acceptance (`6d4cb73`, `6fd3314`). The verifier now emits an eight-field required contract, accepts legacy 16-field responses, keeps `user_options` and criterion notes optional, preserves the establishing-cycle safety invariant, and has prompt-budget, deterministic-only, mixed-criteria, user-input, and weak-model regression coverage.
+- [x] P2 — Extract an explicit turn execution runtime (current working tree). `tui.turnRuntime` owns provider and tool lifecycle state, generations, cancellation, approval plans, retry state, activity, and progress for both Chat and Agent; Bubble Tea remains the adapter for rendering, transcript mutation, and mode policy.
 - [x] P3 — Defense-in-depth hardening (`519c82f`). This includes descriptor-relative file operations, archive extraction limits and duplicate rejection, UTF-8-safe truncation, continuously bounded/redacted MCP stderr, and security-sensitive cleanup/close error handling.
 
 ### Remaining
 
-- [ ] P2 — Extract an explicit turn execution runtime. No implementation has started. The complete goal, conceptual changes, and required state-machine tests remain as specified below.
-- [ ] Run final repository-wide verification after P2 is complete: fresh `go test -count=1 ./...`, `go vet ./...`, available `govulncheck`, and targeted race tests.
-- [ ] Review the final combined diff after `TurnRuntime` implementation and final verification.
+- None.
 
 ### Verification notes
 
 - The completed Agent prompt/verifier work passed fresh targeted tests for `internal/agent`, `internal/agentverify`, and `internal/tui`.
 - The hermetic-test, no-progress, and P3 groups passed their targeted package and race tests when implemented.
-- A final fresh repository-wide test/vet/vulnerability run has not yet been performed on the combined local `master`; completion of individual groups must not be interpreted as final acceptance.
+- Final combined verification passed on 2026-08-23: 1,085 repository tests through the test runner; fresh `go test -count=1 ./...`; `go vet ./...`; uncached race tests for TUI, Agent, verifier, tools, MCP, and providers; and `govulncheck ./...` with no vulnerabilities found. The sandboxed Go commands emitted a non-fatal telemetry-token permission warning; all package commands still exited successfully.
 
 ## P0 — Restore the tool approval boundary
 
