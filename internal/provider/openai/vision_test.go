@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func TestToWireMessagesTextOnly(t *testing.T) {
@@ -62,7 +62,7 @@ func TestToWireMessagesImageWithoutText(t *testing.T) {
 
 func TestChatSendsImagePayload(t *testing.T) {
 	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -101,7 +101,7 @@ func TestChatSendsImagePayload(t *testing.T) {
 }
 
 func TestReasoningOnlyStreamFallsBack(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking hard about MARCO\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" and POLO\"}}]}\n\n")
@@ -130,7 +130,7 @@ func TestReasoningOnlyStreamFallsBack(t *testing.T) {
 }
 
 func TestReasoningIgnoredWhenContentPresent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking…\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"MARCO\"}}]}\n\n")

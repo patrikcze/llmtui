@@ -3,10 +3,11 @@ package web
 import (
 	"context"
 	"net"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func TestBlockedIP(t *testing.T) {
@@ -34,7 +35,7 @@ func TestFetchRejectsSchemesAndPrivateHosts(t *testing.T) {
 }
 
 func TestFetchBlocksLoopbackServer(t *testing.T) {
-	srv := httptest.NewServer(nil)
+	srv := testutil.NewHTTPServer(t, nil)
 	defer srv.Close()
 	c := NewClient(2*time.Second, 64)
 	_, err := c.Fetch(context.Background(), srv.URL)

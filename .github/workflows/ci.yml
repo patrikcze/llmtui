@@ -33,8 +33,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test (race detector)
-        run: go test -race ./...
+      - name: Test (fresh, uncached)
+        run: go test -count=1 ./...
+
+      - name: Test critical concurrency paths (race detector, fresh)
+        run: go test -race -count=1 ./internal/agent/... ./internal/agentverify/... ./internal/mcp/... ./internal/provider/... ./internal/tools/... ./internal/tui/...
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0

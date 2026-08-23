@@ -6,11 +6,30 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
+
+func startTestServer(t *testing.T, opts Options) *Server {
+	t.Helper()
+	server, err := Start(opts)
+	if err != nil {
+		testutil.SkipIfListenerUnavailable(t, err)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown tool API: %v", err)
+		}
+	})
+	return server
+}
 
 func TestServerReturnsDynamicToolSnapshots(t *testing.T) {
 	calls := 0
-	server, err := Start(Options{
+	server := startTestServer(t, Options{
 		Listen: "127.0.0.1:0",
 		Source: func(context.Context) ([]Tool, error) {
 			calls++
@@ -20,14 +39,6 @@ func TestServerReturnsDynamicToolSnapshots(t *testing.T) {
 			}
 			return tools, nil
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
 	})
 
 	first := getSnapshot(t, server, "")
@@ -42,18 +53,10 @@ func TestServerReturnsDynamicToolSnapshots(t *testing.T) {
 
 func TestServerRequiresConfiguredBearerToken(t *testing.T) {
 	t.Setenv("LLMTUI_REGISTRY_TOKEN", "secret-token")
-	server, err := Start(Options{
+	server := startTestServer(t, Options{
 		Listen:   "127.0.0.1:0",
 		TokenEnv: "LLMTUI_REGISTRY_TOKEN",
 		Source:   func(context.Context) ([]Tool, error) { return nil, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
 	})
 
 	resp, err := http.Get("http://" + server.Addr() + ToolsPath)
@@ -82,17 +85,9 @@ func TestServerRejectsUnauthenticatedNonLoopbackListener(t *testing.T) {
 }
 
 func TestServerRejectsUnsupportedMethod(t *testing.T) {
-	server, err := Start(Options{
+	server := startTestServer(t, Options{
 		Listen: "127.0.0.1:0",
 		Source: func(context.Context) ([]Tool, error) { return nil, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
 	})
 
 	req, err := http.NewRequest(http.MethodPost, "http://"+server.Addr()+ToolsPath, nil)

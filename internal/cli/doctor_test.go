@@ -10,12 +10,23 @@ import (
 
 func writeDoctorConfig(t *testing.T, extra string) string {
 	t.Helper()
+	isolateDoctorEnvironment(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := "default_provider: mock\ndefault_model: demo-model\nproviders:\n  mock:\n    type: mock\n    default_model: demo-model\n" + extra
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
+}
+
+func isolateDoctorEnvironment(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	t.Setenv("APPDATA", filepath.Join(root, "appdata"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "localappdata"))
+	t.Chdir(root)
 }
 
 func runDoctor(t *testing.T, configPath string) string {

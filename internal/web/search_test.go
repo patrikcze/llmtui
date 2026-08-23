@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func searchClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
-	srv := httptest.NewServer(handler)
+	srv := testutil.NewHTTPServer(t, handler)
 	t.Cleanup(srv.Close)
 	c := NewClient(5*time.Second, 64)
 	c.allowPrivate = true

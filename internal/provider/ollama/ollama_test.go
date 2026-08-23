@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
 func collect(t *testing.T, events <-chan provider.ChatEvent) (string, *provider.Usage, error) {
@@ -34,7 +34,7 @@ func collect(t *testing.T, events <-chan provider.ChatEvent) (string, *provider.
 }
 
 func TestChatStreamingNDJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			t.Errorf("path = %s, want /api/chat", r.URL.Path)
 		}
@@ -84,7 +84,7 @@ func TestChatStreamingNDJSON(t *testing.T) {
 
 func TestChatSendsJSONSchemaFormat(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -123,7 +123,7 @@ func collectDoneEvent(t *testing.T, events <-chan provider.ChatEvent) provider.C
 }
 
 func TestChatStreamingSurfacesTruncation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		fmt.Fprintln(w, `{"message":{"content":"partial"},"done":false}`)
 		fmt.Fprintln(w, `{"message":{"content":""},"done":true,"done_reason":"length"}`)
@@ -142,7 +142,7 @@ func TestChatStreamingSurfacesTruncation(t *testing.T) {
 }
 
 func TestChatStreamingDoneReasonStopIsNotTruncated(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		fmt.Fprintln(w, `{"message":{"content":"done"},"done":true,"done_reason":"stop"}`)
 	}))
@@ -160,7 +160,7 @@ func TestChatStreamingDoneReasonStopIsNotTruncated(t *testing.T) {
 }
 
 func TestChatStreamError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"error":"model not loaded"}`)
 	}))
 	defer srv.Close()
@@ -178,7 +178,7 @@ func TestChatStreamError(t *testing.T) {
 
 func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
 	chunk := strings.Repeat("x", 600*1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for i := 0; i < 8; i++ {
 			fmt.Fprintf(w, `{"message":{"content":%q},"done":false}`+"\n", chunk)
 		}
@@ -196,7 +196,7 @@ func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
 }
 
 func TestChatHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"no such model"}`, http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -209,7 +209,7 @@ func TestChatHTTPError(t *testing.T) {
 }
 
 func TestListModels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {
 			t.Errorf("path = %s, want /api/tags", r.URL.Path)
 		}
@@ -235,7 +235,7 @@ func TestListModels(t *testing.T) {
 }
 
 func TestListModelsUsesCapabilities(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]any{
 				{"name": "qwythos-9b", "capabilities": []string{"completion", "vision"}},
@@ -263,7 +263,7 @@ func TestListModelsUsesCapabilities(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Ollama is running")
 	}))
 	defer srv.Close()
@@ -289,7 +289,7 @@ func TestDefaultBaseURL(t *testing.T) {
 func captureChatBody(t *testing.T, req provider.ChatRequest) string {
 	t.Helper()
 	var body string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read request body: %v", err)
