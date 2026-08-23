@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/procutil"
 )
@@ -342,15 +344,62 @@ func (r *Runner) readFile(rel string) (string, error) {
 	if info.IsDir() {
 		return "", fmt.Errorf("%q is a directory (use list_dir)", rel)
 	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%q is not a regular file", rel)
+	}
 	limit := int64(r.maxKB) * 1024
-	data, err := os.ReadFile(abs)
+	file, err := os.Open(abs)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
-	if int64(len(data)) > limit {
-		return string(data[:limit]) + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", limit, info.Size()), nil
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("read file metadata: %w", err)
 	}
-	return string(data), nil
+	if !openedInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("%q is not a regular file", rel)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+	}
+	text, consumed := boundedUTF8(data, int(limit))
+	outputTruncated := truncated || consumed < len(data)
+	if outputTruncated {
+		total := openedInfo.Size()
+		if truncated && total < int64(len(data))+1 {
+			total = int64(len(data)) + 1
+		}
+		return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), nil
+	}
+	return text, nil
+}
+
+// boundedUTF8 converts arbitrary file bytes into valid UTF-8 without letting
+// replacement runes or a split final rune expand the returned content beyond
+// maxBytes. consumed reports source bytes represented in the result.
+func boundedUTF8(data []byte, maxBytes int) (text string, consumed int) {
+	if maxBytes <= 0 || len(data) == 0 {
+		return "", 0
+	}
+	var b strings.Builder
+	b.Grow(min(len(data), maxBytes))
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		encoded := string(r)
+		if b.Len()+len(encoded) > maxBytes {
+			break
+		}
+		b.WriteString(encoded)
+		consumed += size
+		data = data[size:]
+	}
+	return b.String(), consumed
 }
 
 func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {

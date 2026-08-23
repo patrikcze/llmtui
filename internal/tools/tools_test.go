@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseSingleWrite(t *testing.T) {
@@ -343,6 +345,75 @@ func TestWriteFileBlocksGitInternals(t *testing.T) {
 	// A file merely named like git things is fine.
 	if res := r.Execute(Call{Tool: ToolWriteFile, Path: "gitnotes.md", Body: "ok"}); res.Err != nil {
 		t.Errorf("gitnotes.md rejected: %v", res.Err)
+	}
+}
+
+func TestReadFileIsBoundedAtIOAndUTF8Safe(t *testing.T) {
+	root := t.TempDir()
+	runner := NewRunner(root, 1)
+
+	tests := []struct {
+		name      string
+		content   []byte
+		truncated bool
+	}{
+		{name: "exact limit", content: []byte(strings.Repeat("a", 1024))},
+		{name: "limit plus one", content: []byte(strings.Repeat("b", 1025)), truncated: true},
+		{name: "split multibyte rune", content: []byte(strings.Repeat("c", 1023) + "€tail"), truncated: true},
+		{name: "invalid utf8", content: append([]byte("prefix"), 0xff, 0xfe)},
+		{name: "invalid utf8 expansion stays bounded", content: bytes.Repeat([]byte{0xff}, 1024), truncated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(root, tt.name)
+			if err := os.WriteFile(path, tt.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := runner.readFile(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("result is not valid UTF-8: %q", got)
+			}
+			if len(got) > 1200 {
+				t.Fatalf("result length = %d, want bounded output", len(got))
+			}
+			if has := strings.Contains(got, "… truncated"); has != tt.truncated {
+				t.Fatalf("truncation notice = %v, want %v", has, tt.truncated)
+			}
+		})
+	}
+}
+
+func TestReadFileSparseLargeFileReturnsOnlyBoundedPrefix(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "large.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("known-prefix"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Truncate(64 << 20); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewRunner(root, 1).readFile("large.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "known-prefix") || !strings.Contains(got, "… truncated") {
+		t.Fatalf("unexpected bounded result: %q", got)
+	}
+	if len(got) > 1200 {
+		t.Fatalf("result length = %d, expected a bounded prefix", len(got))
 	}
 }
 
