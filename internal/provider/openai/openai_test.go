@@ -566,10 +566,14 @@ func TestChatNonStreamingFlagsSpaceSeparatedHarmonyRecipient(t *testing.T) {
 	}
 }
 
-func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
+func TestChatNonStreamingFlagsStrippedHarmonyRecipient(t *testing.T) {
+	const leaked = "  to=...?\n"
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{"message": map[string]any{"content": "a normal, complete reply"}}},
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
+				"finish_reason": "stop",
+			}},
 		})
 	}))
 	defer srv.Close()
@@ -579,16 +583,54 @@ func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	text, _, err := collect(t, events)
-	if err != nil {
-		t.Fatalf("stream error: %v", err)
+	var sawDelta bool
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			sawDelta = true
+		}
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
 	}
-	if text != "a normal, complete reply" {
-		t.Errorf("text = %q, want the ordinary reply preserved", text)
+	if sawDelta {
+		t.Error("stripped leaked tool-call text must never be emitted as a delta")
 	}
-	done := collectDoneEvent(t, events)
-	if done.MalformedToolCall {
-		t.Error("MalformedToolCall = true, want false for an ordinary reply")
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a stripped Harmony recipient")
+	}
+}
+
+func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
+	for _, reply := range []string{
+		"a normal, complete reply",
+		"The placeholder is written as to=...? in this example.",
+	} {
+		t.Run(reply, func(t *testing.T) {
+			srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{
+					"choices": []map[string]any{{"message": map[string]any{"content": reply}}},
+				})
+			}))
+			defer srv.Close()
+
+			p := New("test", srv.URL, "")
+			events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			text, _, err := collect(t, events)
+			if err != nil {
+				t.Fatalf("stream error: %v", err)
+			}
+			if text != reply {
+				t.Errorf("text = %q, want the ordinary reply preserved", text)
+			}
+			done := collectDoneEvent(t, events)
+			if done.MalformedToolCall {
+				t.Error("MalformedToolCall = true, want false for an ordinary reply")
+			}
+		})
 	}
 }
 
@@ -633,6 +675,25 @@ func TestChatStreamingFlagsSpaceSeparatedHarmonyRecipient(t *testing.T) {
 	done := collectDoneEvent(t, events)
 	if !done.MalformedToolCall {
 		t.Error("MalformedToolCall = false, want true for a space-separated Harmony recipient")
+	}
+}
+
+func TestChatStreamingFlagsStrippedHarmonyRecipient(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"to=...?\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a stripped Harmony recipient")
 	}
 }
 

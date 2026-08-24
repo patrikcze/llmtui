@@ -478,10 +478,12 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 // attempt rather than a real answer. Harmony's function recipient is the
 // reliable signal, whether the backend preserves its normal dot separator or
 // degrades it to whitespace (observed from LM Studio as `to=functions grep`).
-// Optional whitespace around '=' covers the same token-stripping failure
-// without matching ordinary prose that merely mentions functions.
+// Optional whitespace around '=' covers the same token-stripping failure. LM
+// Studio can also strip the recipient and tool name entirely, leaving only
+// `to=...?`; that ambiguous remnant is rejected only as the whole completion
+// so ordinary prose containing the notation remains valid.
 func looksLikeUnparsedToolCall(content string) bool {
-	return harmonyFunctionRecipientRE.MatchString(content)
+	return harmonyFunctionRecipientRE.MatchString(content) || strings.TrimSpace(content) == "to=...?"
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {
