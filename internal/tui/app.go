@@ -782,12 +782,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.toolsFellBack && m.toolsNative {
 			// The backend rejected native tool calling; use the fenced-block
 			// prompt protocol for this provider/model from the next request on.
-			if m.nativeToolRejections == nil {
-				m.nativeToolRejections = make(map[string]bool)
-			}
-			m.nativeToolRejections[m.nativeToolCapabilityKey()] = true
-			m.toolsNative = false
-			m.lastDebug.CacheStatus = "bypass"
+			m.rejectNativeToolCapability()
 			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
 		}
 		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok, gen: msg.gen})
@@ -1246,6 +1241,15 @@ func (m *Model) resetNativeToolMode() {
 		return
 	}
 	m.toolsNative = !m.nativeToolRejections[m.nativeToolCapabilityKey()]
+}
+
+func (m *Model) rejectNativeToolCapability() {
+	if m.nativeToolRejections == nil {
+		m.nativeToolRejections = make(map[string]bool)
+	}
+	m.nativeToolRejections[m.nativeToolCapabilityKey()] = true
+	m.toolsNative = false
+	m.lastDebug.CacheStatus = "bypass"
 }
 
 // runToolPlan executes an approved batch asynchronously and feeds the results
@@ -2001,12 +2005,17 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if malformedToolCall {
 			// This is usually a one-off backend parsing hiccup (observed:
 			// LM Studio's Harmony parser losing track partway through a
-			// gpt-oss tool call deep in a long conversation), so give it
-			// exactly one fresh attempt at the same round — same
-			// accumulated history, nothing resent — before treating it as a
-			// real failure, mirroring the empty-completion retry below.
+			// gpt-oss tool call deep in a long conversation). If it happened
+			// while using native tools, retry through the fenced protocol so
+			// the attempt does not repeat the same failing backend conversion.
+			// Otherwise give it exactly one fresh attempt at the same round.
 			if m.turnRuntime.claimMalformedToolRetry() {
-				m.notice = "model's tool call could not be parsed by the backend — retrying once"
+				if m.toolsNative {
+					m.rejectNativeToolCapability()
+					m.notice = "model's native tool call could not be parsed by the backend — retrying with the prompt-based protocol"
+				} else {
+					m.notice = "model's tool call could not be parsed by the backend — retrying once"
+				}
 				m.refreshViewport()
 				return m, m.continueChat()
 			}

@@ -438,6 +438,9 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 func TestMalformedToolCallRetriesOnceThenReportsError(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	messagesBefore := len(m.session.Messages)
 
 	_, cmd := m.handleStreamEvent(streamEventMsg{
@@ -453,6 +456,12 @@ func TestMalformedToolCallRetriesOnceThenReportsError(t *testing.T) {
 	}
 	if !m.malformedToolCallRetried {
 		t.Error("malformedToolCallRetried must be set after spending the one retry")
+	}
+	if m.toolsNative {
+		t.Error("malformed native tool call must switch the retry to the fenced protocol")
+	}
+	if !m.nativeToolRejections[m.nativeToolCapabilityKey()] {
+		t.Error("malformed native tool call must be remembered for this provider/model")
 	}
 	if !m.thinking {
 		t.Fatal("continueChat's retry must leave a request in flight")
