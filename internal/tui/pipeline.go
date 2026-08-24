@@ -483,12 +483,83 @@ func projectCompletedAgentHistory(messages []provider.Message) []provider.Messag
 	return projected
 }
 
+// projectNativeToolHistoryForFencedProtocol removes native function-calling
+// objects from history after a provider/model falls back to the prompt-based
+// protocol. Keeping assistant.tool_calls and role:"tool" messages can leave
+// the backend's chat template in native tool mode even when the new request
+// offers no tool schemas. The textual projection preserves the evidence the
+// model gathered while making the protocol transition unambiguous.
+func projectNativeToolHistoryForFencedProtocol(messages []provider.Message) []provider.Message {
+	projected := make([]provider.Message, 0, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		if message.Role != provider.RoleAssistant || len(message.ToolCalls) == 0 {
+			if message.Role == provider.RoleTool {
+				projected = append(projected, textualNativeToolResults(nil, []provider.Message{message}))
+			} else {
+				projected = append(projected, message)
+			}
+			continue
+		}
+
+		calls := message.ToolCalls
+		if strings.TrimSpace(message.Content) != "" {
+			message.ToolCalls = nil
+			projected = append(projected, message)
+		}
+		end := index + 1
+		for end < len(messages) && messages[end].Role == provider.RoleTool {
+			end++
+		}
+		projected = append(projected, textualNativeToolResults(calls, messages[index+1:end]))
+		index = end - 1
+	}
+	return projected
+}
+
+func textualNativeToolResults(calls []provider.ToolCall, results []provider.Message) provider.Message {
+	var content strings.Builder
+	content.WriteString(tools.ResultsPrefix)
+	content.WriteString("\n\nPrevious native tool exchange, projected into text after protocol fallback:")
+	resultsByID := make(map[string]provider.Message, len(results))
+	for _, result := range results {
+		resultsByID[result.ToolCallID] = result
+	}
+	for _, call := range calls {
+		fmt.Fprintf(&content, "\n\n### %s", call.Name)
+		if call.Arguments != "" {
+			content.WriteString("\narguments: ")
+			content.WriteString(call.Arguments)
+		}
+		if result, ok := resultsByID[call.ID]; ok {
+			content.WriteByte('\n')
+			content.WriteString(result.Content)
+			delete(resultsByID, call.ID)
+		}
+	}
+	for _, result := range results {
+		if _, ok := resultsByID[result.ToolCallID]; !ok {
+			continue
+		}
+		name := result.ToolName
+		if name == "" {
+			name = "tool"
+		}
+		fmt.Fprintf(&content, "\n\n### %s\n%s", name, result.Content)
+		delete(resultsByID, result.ToolCallID)
+	}
+	return provider.Message{Role: provider.RoleUser, Content: content.String()}
+}
+
 func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool) (preparedRequest, error) {
 	base := m.compositionBase(raw, images, omitRaw)
 	specs := m.activeToolSpecs()
 	window, _ := m.contextWindow()
 	reserve := m.cfg.Context.ReserveResponseTokens
 	historyMessages, existingSummary, agentScoped := m.requestHistory()
+	if !m.toolsNative {
+		historyMessages = projectNativeToolHistoryForFencedProtocol(historyMessages)
+	}
 
 	// The no-history/no-summary composition is the irreducible request. Tool
 	// schemas are included because OpenAI-compatible servers count them in the

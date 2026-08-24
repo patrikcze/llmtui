@@ -9,6 +9,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/tools"
 )
 
 func seedSummarizableConversation(m *Model) {
@@ -16,6 +17,96 @@ func seedSummarizableConversation(m *Model) {
 		m.session.AddUser("user request " + strings.Repeat("detail ", 20))
 		m.session.AddAssistant("assistant response " + strings.Repeat("result ", 20))
 	}
+}
+
+func TestProjectNativeToolHistoryForFencedProtocol(t *testing.T) {
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "inspect the workspace"},
+		{Role: provider.RoleAssistant, Content: "I will inspect it.", ToolCalls: []provider.ToolCall{
+			{ID: "call-1", Name: "read_file", Arguments: `{"path":"input.txt"}`},
+			{ID: "call-2", Name: "read_file", Arguments: `{"path":"missing.txt"}`},
+		}},
+		{Role: provider.RoleTool, ToolCallID: "call-1", ToolName: "read_file", Content: "alpha=17"},
+		{Role: provider.RoleTool, ToolCallID: "call-2", ToolName: "read_file", Content: "error: no such file"},
+	}
+
+	projected := projectNativeToolHistoryForFencedProtocol(messages)
+	if len(projected) != 3 {
+		t.Fatalf("projected messages = %+v, want user, assistant text, and textual tool results", projected)
+	}
+	if projected[1].Role != provider.RoleAssistant || projected[1].Content != "I will inspect it." {
+		t.Errorf("assistant text = %+v, want preserved without native calls", projected[1])
+	}
+	for _, message := range projected {
+		if message.Role == provider.RoleTool || len(message.ToolCalls) > 0 || message.ToolCallID != "" {
+			t.Errorf("native protocol artifact survived projection: %+v", message)
+		}
+	}
+	results := projected[2]
+	if results.Role != provider.RoleUser || !strings.HasPrefix(results.Content, "[tool results]") {
+		t.Errorf("textual results = %+v, want fenced-protocol user message", results)
+	}
+	for _, want := range []string{"read_file", `{"path":"input.txt"}`, "alpha=17", "error: no such file"} {
+		if !strings.Contains(results.Content, want) {
+			t.Errorf("textual results missing %q: %s", want, results.Content)
+		}
+	}
+}
+
+func TestPrepareRequestProjectsNativeHistoryOnlyAfterFallback(t *testing.T) {
+	newModel := func(t *testing.T, native bool) *Model {
+		t.Helper()
+		model := newTestModel(t)
+		model.toolsOn = true
+		model.toolsNative = native
+		model.toolRunner = tools.NewRunner(t.TempDir(), 64)
+		model.session.AddUser("inspect input.txt")
+		model.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{
+			{ID: "call-1", Name: "read_file", Arguments: `{"path":"input.txt"}`},
+		}})
+		model.session.AddMessage(provider.Message{
+			Role: provider.RoleTool, ToolCallID: "call-1", ToolName: "read_file", Content: "alpha=17",
+		})
+		return model
+	}
+
+	t.Run("native mode remains unchanged", func(t *testing.T) {
+		prepared, err := newModel(t, true).prepareRequest("", nil, true)
+		if err != nil {
+			t.Fatalf("prepareRequest: %v", err)
+		}
+		if len(prepared.tools) == 0 {
+			t.Fatal("native mode lost tool schemas")
+		}
+		var sawCall, sawResult bool
+		for _, message := range prepared.composed.Messages {
+			sawCall = sawCall || len(message.ToolCalls) > 0
+			sawResult = sawResult || message.Role == provider.RoleTool
+		}
+		if !sawCall || !sawResult {
+			t.Fatalf("native history was projected unexpectedly: %+v", prepared.composed.Messages)
+		}
+	})
+
+	t.Run("fenced fallback projects native history", func(t *testing.T) {
+		prepared, err := newModel(t, false).prepareRequest("", nil, true)
+		if err != nil {
+			t.Fatalf("prepareRequest: %v", err)
+		}
+		if len(prepared.tools) != 0 {
+			t.Fatalf("fenced fallback still offered native schemas: %+v", prepared.tools)
+		}
+		var textualEvidence bool
+		for _, message := range prepared.composed.Messages {
+			if message.Role == provider.RoleTool || len(message.ToolCalls) > 0 || message.ToolCallID != "" {
+				t.Fatalf("native protocol artifact survived fallback request: %+v", message)
+			}
+			textualEvidence = textualEvidence || strings.Contains(message.Content, "alpha=17")
+		}
+		if !textualEvidence {
+			t.Fatalf("fallback request lost tool evidence: %+v", prepared.composed.Messages)
+		}
+	})
 }
 
 func TestComposeSummaryIsIdempotentForUnchangedHistory(t *testing.T) {
