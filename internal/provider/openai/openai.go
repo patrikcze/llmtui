@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 )
+
+var harmonyFunctionRecipientRE = regexp.MustCompile(`to\s*=\s*functions(?:\.|\s+[A-Za-z_])`)
 
 // Provider speaks the OpenAI chat completions API.
 type Provider struct {
@@ -472,17 +475,13 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 }
 
 // looksLikeUnparsedToolCall reports whether content is a failed tool-call
-// attempt rather than a real answer. The "to=functions." recipient prefix is
-// itself the reliable signal — it is Harmony's function-call addressing
-// syntax and never appears in ordinary prose — so its presence alone is
-// enough to flag the turn, whether or not any Harmony control token survived
-// alongside it. The same backend has been observed leaking both the fully
-// tokenized form above and a degraded, token-stripped form with no control
-// tokens at all (e.g. `to=functions.grep...commentary?`, seen verbatim from
-// LM Studio serving openai/gpt-oss-20b); requiring a control token missed
-// the latter and let the garbled text stand in as a real, verified answer.
+// attempt rather than a real answer. Harmony's function recipient is the
+// reliable signal, whether the backend preserves its normal dot separator or
+// degrades it to whitespace (observed from LM Studio as `to=functions grep`).
+// Optional whitespace around '=' covers the same token-stripping failure
+// without matching ordinary prose that merely mentions functions.
 func looksLikeUnparsedToolCall(content string) bool {
-	return strings.Contains(content, "to=functions.")
+	return harmonyFunctionRecipientRE.MatchString(content)
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {

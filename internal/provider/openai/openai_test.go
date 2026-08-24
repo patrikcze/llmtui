@@ -527,6 +527,45 @@ func TestChatNonStreamingFlagsLeakedToolCallWithoutHarmonyTokens(t *testing.T) {
 	}
 }
 
+// TestChatNonStreamingFlagsSpaceSeparatedHarmonyRecipient guards the
+// degraded recipient form observed from LM Studio serving gpt-oss. The
+// backend replaced Harmony's function-name separator with whitespace and
+// returned the attempted call as ordinary assistant content.
+func TestChatNonStreamingFlagsSpaceSeparatedHarmonyRecipient(t *testing.T) {
+	const leaked = "to=functions grep..."
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"content": leaked, "tool_calls": []any{}},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: false})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var sawDelta bool
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			sawDelta = true
+		}
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	if sawDelta {
+		t.Error("space-separated leaked tool-call text must never be emitted as a delta")
+	}
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a space-separated Harmony recipient")
+	}
+}
+
 func TestChatNonStreamingOrdinaryReplyIsNotFlaggedMalformed(t *testing.T) {
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -575,6 +614,25 @@ func TestChatStreamingFlagsLeakedHarmonyToolCall(t *testing.T) {
 	done := collectDoneEvent(t, events)
 	if !done.MalformedToolCall {
 		t.Error("MalformedToolCall = false, want true for a leaked Harmony tool-call attempt")
+	}
+}
+
+func TestChatStreamingFlagsSpaceSeparatedHarmonyRecipient(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"to=functions grep...\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	done := collectDoneEvent(t, events)
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true for a space-separated Harmony recipient")
 	}
 }
 
