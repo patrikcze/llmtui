@@ -3,12 +3,14 @@
 Local memory is user-curated and **disabled by default**
 (`memory.enabled: false`). Nothing is extracted or saved automatically.
 
-Two durable tiers are available:
+Four memory tiers are available:
 
 | Tier | Kinds | Storage |
 | --- | --- | --- |
 | User | `user_preference` | YAML at `memory.path` |
 | Project | `project_architecture`, `project_convention`, `project_decision` | Versioned JSON under `memory/projects/<workspace-id>.json`, next to `memory.path` |
+| Episode | `episode` | Compact summary embedded in an explicitly saved session under `chat.history_dir` |
+| Agent run | objective, criteria, failures, evidence | Bounded live/persisted `AgentRun`; never automatically promoted |
 
 The project workspace ID is a SHA-256 hash of the canonical,
 symlink-resolved launch directory. Project records therefore stay isolated:
@@ -33,19 +35,57 @@ files are replaced atomically and use owner-only directory/file permissions
 ```
 
 `/memory clear` remains available for backward compatibility and clears user
-preferences only. Episode capture and durable agent-run promotion are not
-implemented yet; listing those tiers reports their current status.
+preferences only. `/memory list episode` shows project-scoped summaries from
+saved sessions; `/memory list run` shows bounded state from the current/latest
+run.
 
-When memory is enabled, lexical retrieval adds at most three relevant records
-per implemented tier. User preferences keep the existing `Relevant Memory`
-section. Typed project records include kind, scope, source, trust, and freshness
-metadata, and every record body is structurally framed as reference data that
-cannot override the current request or grant permissions. `/prompt preview`
-shows exactly what is included.
+Explicit `/save` or Ctrl+S creates or refreshes a compact episode. Automatic
+quit saves refresh it only when `memory.episodic.capture: true`; otherwise a
+previously loaded episode is preserved. Episodes include bounded visible goal
+and outcome text plus status/provider/model metadata. They never include full
+transcripts, reasoning, images, or tool-call arguments.
+
+When unified retrieval is enabled, each source is normalized independently,
+then ranked with bounded scope/trust/recency metadata boosts. Exact content is
+deduplicated, overlapping source chunks are collapsed, kinds are capped for
+diversity, and selected records are packed under per-tier soft caps plus one
+hard total token budget. Unused tier budget may be reassigned without exceeding
+the total. Retrieval is deterministic, local, and lexical; no embedding model,
+vector database, or external retrieval API is used.
+
+Selected records appear in one versioned `Active Context` prompt section. Every
+record carries kind, scope, source, trust, and freshness metadata and has its
+own collision-resistant untrusted frame. Context cannot override the current
+request, prove success, or grant permissions. `/prompt composed` shows the
+exact block, `/memory explain` shows score components/budget rejections, and
+`/debug last` shows content-free timing/count/token diagnostics.
 
 Project records created by commands are user-authored and approved. The store
 can hold model proposals in a pending-review state, but pending records are not
 searchable or injected into prompts.
+
+After a verifier-passed agent run completes, llmtui offers a picker that
+defaults to `skip`. Choosing architecture, convention, or decision explicitly
+promotes one bounded outcome. The durable record remains `model_proposed` trust
+with approved review state and preserves source run/cycle provenance. Failed,
+parked, cancelled, or unverified runs are never promoted automatically.
+
+Default retrieval settings:
+
+```yaml
+memory:
+	episodic:
+		capture: false
+	retrieval:
+		enabled: true
+		max_context_tokens: 1800
+		top_k: 10
+		user_tokens: 256
+		project_tokens: 512
+		episodic_tokens: 384
+		agent_tokens: 512
+		source_tokens: 768
+```
 
 Likely credentials are redacted before a project record is returned or written,
 but memory is not a secret manager. **Do not store secrets or sensitive personal

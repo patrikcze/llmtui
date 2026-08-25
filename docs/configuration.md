@@ -154,6 +154,33 @@ could make otherwise compatible servers reject requests.
 `save_history` value, since they only read existing files rather than write
 new ones.
 
+### `memory`
+
+Local memory is disabled by default. Retrieval is local and lexical; enabling
+it does not install an embedding model or make a network request.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Include eligible local memory in prompts (`/memory on|off` overrides per session) |
+| `path` | `~/.local/share/llmtui/memory.yaml` | User-memory file; typed project records live in `memory/projects/` beside it |
+| `max_snippets` | `100` | Maximum user preference records |
+| `auto_extract` | `false` | Reserved; no automatic durable model-written memory |
+| `episodic.capture` | `false` | Refresh compact episodes during automatic quit save; explicit `/save` and Ctrl+S always capture |
+| `retrieval.enabled` | `true` | Use unified deterministic ranking and one Active Context block when memory/RAG/run sources are eligible |
+| `retrieval.max_context_tokens` | `1800` | Hard total Active Context budget, independent of response reserve |
+| `retrieval.top_k` | `10` | Maximum selected records across all sources |
+| `retrieval.user_tokens` | `256` | Soft user-memory tier cap |
+| `retrieval.project_tokens` | `512` | Soft typed-project tier cap |
+| `retrieval.episodic_tokens` | `384` | Soft saved-episode tier cap |
+| `retrieval.agent_tokens` | `512` | Soft active-run tier cap |
+| `retrieval.source_tokens` | `768` | Soft workspace-source/RAG tier cap |
+
+Dots map to underscores for environment variables, for example
+`LLMTUI_MEMORY_EPISODIC_CAPTURE=true` and
+`LLMTUI_MEMORY_RETRIEVAL_MAX_CONTEXT_TOKENS=900`.
+
+See [memory.md](memory.md) for storage, ranking, promotion, and trust behavior.
+
 ### `agent`
 
 Optional bounded multi-cycle execution with independent verification. Disabled

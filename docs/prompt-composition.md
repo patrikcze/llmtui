@@ -20,12 +20,11 @@ are separate sections you can always inspect with `/prompt preview`.
 6. **Coding Guidance** — only in `coding` mode
 7. **Model Helper Hints** — derived from the model profile
 8. **Session Summary** — condensed older conversation, clearly marked
-9. **Relevant Memory** — up to 3 keyword-matched snippets (opt-in), labeled
-   as user-authored reference that cannot override the current request
-10. **Retrieved Workspace Context** — opt-in RAG snippets, clearly labeled
-    and enclosed in collision-checked untrusted-content boundaries
-11. **Recent Messages** — recent conversation, verbatim
-12. **Raw User Message** — your text, untouched
+9. **Active Context** — one versioned, ranked, token-budgeted block containing
+   eligible user/project/episode/active-run/RAG records; each body has its own
+   collision-checked untrusted-content boundary
+10. **Recent Messages** — recent conversation, verbatim
+11. **Raw User Message** — your text, untouched
 
 ## Modes
 
@@ -39,7 +38,7 @@ are separate sections you can always inspect with `/prompt preview`.
 Active skills are included in **every** mode — you activated them
 explicitly, so `minimal` and `strict` never drop them silently.
 
-Retrieved RAG snippets, web results, and MCP results are wrapped in matching,
+Active Context records, web results, and MCP results are wrapped in matching,
 content-derived begin/end markers before they re-enter model context. This
 structural framing supplements the prose warning and prevents content from
 closing its own wrapper by copying a fixed delimiter. It is defense in depth,
@@ -49,3 +48,7 @@ authority for every action.
 Set per session with `/prompt mode <m>`, per template via `prompt_mode`,
 or globally via `prompt.mode` in the config. Individual helpers toggle with
 `prompt.include_*` config keys.
+
+Set `memory.retrieval.enabled: false` to use the legacy separate memory and RAG
+sections. The raw-user-message and response-cache completeness invariants are
+the same in both modes.

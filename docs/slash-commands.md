@@ -84,8 +84,8 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/memory add project convention <text>` | Remember a workspace convention |
 | `/memory add project decision <text>` | Remember a workspace decision |
 | `/memory inspect <id>` | Show one record's kind, scope, trust, review state, and timestamps |
-| `/memory search <query>` | Search user and current-workspace project memory |
-| `/memory explain <query>` | Show ranked hits, scores, and match reasons |
+| `/memory search <query>` | Search eligible user/project/episode/run/RAG sources under the configured budget |
+| `/memory explain <query>` | Show score components, token costs, selected hits, and content-free rejection reasons |
 | `/memory remove <id>` · `/memory clear` | Remove one record; `clear` clears user preferences only |
 | `/memory on` / `/memory off` | Toggle for this session |
 

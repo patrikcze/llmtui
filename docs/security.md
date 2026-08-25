@@ -38,11 +38,20 @@ untrusted-content framing and RAG content-secret scanning.
 | Response cache | `cache.path` (dir `0700`, files `0600`) | `cache.enabled: false` or `/cache off` |
 | User memory preferences | `memory.path` (file `0600`) | disabled by default; `/memory off` |
 | Typed project memory | `memory/projects/<workspace-id>.json` beside `memory.path` (dir `0700`, file `0600`) | disabled by default; `/memory off`; remove records individually |
+| Episodic summaries | Saved session JSON under `chat.history_dir` (dir `0700`, files `0600`) | explicit save only by default; `chat.save_history: false` disables persistence |
 
 Image attachments are never persisted anywhere. Memory is strictly opt-in and
-never auto-extracts anything. Project records are workspace-isolated, written
-atomically, and redact likely credential forms before persistence, but memory
-must not be used for secrets (`/memory add` reminds you).
+never auto-extracts durable model-written facts. Project records are
+workspace-isolated and atomic. Episode generation ignores reasoning, images,
+tool arguments, and full transcripts. Both project records and episodes redact
+likely credential forms before persistence, but memory must not be used for
+secrets (`/memory add` reminds you).
+
+Retrieved memory is reference data, not authorization. The unified Active
+Context marks source/scope/trust/freshness and frames every record separately;
+it cannot grant tools, network access, or prove that an agent action succeeded.
+Agent outcomes become project records only after a verifier-passed completion
+and an explicit category selection; the picker defaults to skip.
 
 ## Hardening details
 
