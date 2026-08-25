@@ -91,6 +91,82 @@ Concretely:
 5. Results go back to the model as either a synthetic user message wrapped in `[tool results]` (fenced mode, `FormatResults`) or as proper `role:"tool"` messages carrying `ToolCallID`/`ToolName` (native mode, `NativeResults`, `native.go:276`).
 6. The model gets another turn with those results in context and can call more tools or answer normally. This repeats up to `tools.max_iterations` (default 10, `toolMaxIter`, `app.go:1155`) — after that the *user* decides whether to grant more rounds, so a long task never silently dies.
 
+### The same round trip as a conversation
+
+The flowchart above shows the plumbing; here is what actually happens between
+you, the model, and your disk when the model needs to do real work. Nothing on
+your machine is touched until a Go function runs, and every write or command
+pauses for your approval first.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as You
+    participant C as llmtui controller
+    participant M as Local model
+    participant R as Runner (sandbox)
+
+    U->>C: "write a backup script to scripts/backup.sh"
+    C->>M: chat request + tool schemas
+    M-->>C: tool_call write_file(path, content)
+    Note over C: write_file is a side effect
+    C-->>U: approval prompt (shows file + diff)
+    U-->>C: Yes
+    C->>R: ExecuteContext(write_file)
+    R-->>C: wrote 214 bytes (path confined, journaled)
+    C->>M: tool result (role:"tool", tool_call_id)
+    M-->>C: final text: "Saved. Run it with sh scripts/backup.sh"
+    C-->>U: rendered answer
+```
+
+A read-only call (`read_file`, `list_dir`, `glob`, `grep`, or a provably
+read-only `run_command`) skips the approval step entirely and runs straight
+through the Runner. The model can chain several of these rounds before it
+answers — that is the normal shape of a multi-step task.
+
+### Standards: OpenAI-compatible and Anthropic
+
+llmtui's native tool path targets the **OpenAI Chat Completions tool-calling
+contract**, which Ollama, LM Studio, vLLM, and llama.cpp all speak:
+
+- **Tool definition** — each tool is sent as
+  `{"type": "function", "function": {"name", "description", "parameters"}}`,
+  where `parameters` is a JSON Schema object. Object schemas with no properties
+  are normalized to an explicit empty object (`NormalizeToolParameters`,
+  `internal/provider/tools.go`) so strict backends accept them.
+- **Tool call** — the assistant message carries a `tool_calls` array of
+  `{"id", "type": "function", "function": {"name", "arguments"}}`, where
+  `arguments` is a JSON *string*. Streaming deltas are reassembled into whole
+  calls before execution.
+- **Tool result** — each result goes back as a `role:"tool"` message with the
+  matching `tool_call_id`. Because Ollama omits IDs and some backends repeat
+  them, `EnsureToolCallIDs` synthesizes/repairs them so the assistant's calls
+  and the tool results always correlate — otherwise the next request is a
+  protocol error.
+- **Usage** — streaming requests set `stream_options.include_usage` so token
+  counts arrive on the terminal event.
+
+**Anthropic (Messages API).** llmtui does not ship a dedicated Anthropic
+adapter; Claude models are reached through an OpenAI-compatible gateway. The
+*concepts* map one to one — a named tool with a JSON-Schema input, a
+model-issued tool-use request, and a correlated tool result — but Anthropic's
+native wire shape differs and is intentionally **not** emitted directly:
+
+| Concept | OpenAI-compatible (what llmtui sends) | Anthropic native (not emitted) |
+| --- | --- | --- |
+| Tool schema | `tools[].function.parameters` (JSON Schema) | `tools[].input_schema` (JSON Schema) |
+| Model asks for a tool | assistant `tool_calls[]` | assistant content block `type:"tool_use"` |
+| Result correlation | `role:"tool"` + `tool_call_id` | user content block `type:"tool_result"` + `tool_use_id` |
+
+If a first-class Anthropic backend is ever added, only this wire mapping needs
+implementing; the registry, guardrails, approval flow, and Runner are
+transport-agnostic and would not change.
+
+**Fenced fallback** (section 2 above) is llmtui's own plain-text protocol for
+models with no function-calling at all. It is not part of either vendor
+standard; `Parse()` normalizes it into the same internal `tools.Call` so the
+downstream pipeline is identical.
+
 ## 4. The registry is metadata, not execution
 
 `internal/tools/registry.go` is a separate catalog (`CapabilityInfo{Name, Description, Source, Safety, Approval, Parameters}`) used by `/tools`, debug views, and future MCP/RAG capability listing. It reuses `Specs()` as source of truth so the docs never drift from the actual schema, but it does **not** execute anything — execution always goes through `Runner`. This is a nice separation: "what tools exist and what can they touch" (`Registry`) is decoupled from "how do I actually run one" (`Runner`).

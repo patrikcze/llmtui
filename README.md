@@ -44,9 +44,46 @@ or remote agent hosts discover a read-only mirror of the exact native tool
 schemas llmtui sends directly with each model request, including tools learned
 from connected MCP servers. Model providers do not need to query the endpoint.
 
+## How it works
+
+At heart, llmtui is a loop between **you**, a **local LLM**, and — when you turn
+them on — **tools** that can touch your workspace. The model never touches your
+disk or network directly: it only ever emits text (and, optionally, structured
+*tool calls*). Go code decides whether and how to actually carry those out.
+
+```mermaid
+flowchart LR
+    You([You]) -->|prompt| TUI[llmtui controller]
+    TUI -->|compose system prompt<br/>+ history + optional tool schemas| Req[Chat request]
+    Req --> Prov{Provider}
+    Prov -->|Ollama · LM Studio<br/>OpenAI-compatible · embedded GGUF| LLM[(Local LLM)]
+    LLM -->|streamed tokens<br/>and/or tool_calls| TUI
+    TUI -->|approved tool calls| Tools[Workspace tools<br/>read · write · run · web · MCP]
+    Tools -->|results fed back| TUI
+    TUI -->|rendered answer + usage| You
+```
+
+1. You type a prompt. llmtui composes the outgoing request — your base system
+   prompt, recent history, and (if enabled) tool schemas, memory, RAG context,
+   and skills. Your raw message is always appended verbatim, never rewritten.
+2. The active **provider** streams the request to a local model over its native
+   API (Ollama) or the OpenAI-compatible `POST /v1/chat/completions` protocol
+   (LM Studio, vLLM, llama.cpp, …), or runs a GGUF in-process (embedded).
+3. Tokens stream back and render live. If the model asks for a **tool call**,
+   llmtui gates it through the approval/guardrail layer, runs it inside your
+   workspace sandbox, feeds the result back, and lets the model continue — up
+   to `tools.max_iterations` rounds per message.
+
+**Two ways to run.** Ordinary chat is a single request/answer turn (with an
+inline tool loop when tools are on). Optional **`/agent on`** mode wraps that
+into bounded, self-verifying *cycles* — execute, check the evidence with a
+fresh-context verifier, then decide whether to continue, retry, or stop. See
+[docs/agent-loop.md](docs/agent-loop.md) for how the two compare, and
+[docs/tools-architecture.md](docs/tools-architecture.md) for the tool round trip.
+
 ## Install
 
-Requires Go 1.26+.
+Requires Go 1.27+.
 
 ```bash
 git clone https://github.com/patrikcze/llmtui.git

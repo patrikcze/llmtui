@@ -13,6 +13,61 @@ not enable tools or grant permission. Use `/tools on` separately when the task
 needs workspace tools. Every existing tool guardrail, confirmation, timeout,
 workspace confinement rule, and durable side-effect journal remains in force.
 
+## Ordinary chat vs. agent mode
+
+The two modes share the *same* provider client, prompt composer, tool protocol,
+guardrails, and streaming path. The difference is only what wraps around a
+model turn.
+
+**Ordinary chat (`/agent off`, the default)** is one request/answer turn. When
+tools are enabled the model may call them, and llmtui runs an inline tool loop
+— execute, feed results back, let the model continue — up to
+`tools.max_iterations` rounds *within that single turn*. The turn ends when the
+model stops calling tools and produces a final answer (or the round budget is
+reached and you decide whether to grant more). There is no verification of the
+answer, no acceptance criteria, and nothing is persisted as a resumable run.
+
+**Agent mode (`/agent on`)** wraps that same executor turn into a bounded,
+self-checking **cycle**, and can run several cycles until a task is actually
+done:
+
+```mermaid
+flowchart LR
+    subgraph chat[Ordinary chat turn]
+        direction LR
+        c1[Send request] --> c2[Model streams<br/>text + tool_calls]
+        c2 --> c3{tool calls?}
+        c3 -->|yes, &lt; max_iterations| c4[Run tools→feed back]
+        c4 --> c2
+        c3 -->|no| c5[Final answer]
+    end
+    subgraph agent[Agent cycle wraps the same turn]
+        direction LR
+        a1[Execute one bounded<br/>objective = a chat turn] --> a2[Verify evidence<br/>fresh context, no tools]
+        a2 --> a3[Write cycle memory]
+        a3 --> a4{Decide}
+        a4 -->|continue / retry| a1
+        a4 -->|done / failed / blocked| a5[Stop]
+    end
+```
+
+What agent mode adds on top of ordinary chat:
+
+| Capability | Ordinary chat | Agent mode (`/agent on`) |
+| --- | --- | --- |
+| Turns per user message | One executor turn (with inline tool loop) | Many bounded cycles, each an executor turn |
+| When does it stop? | Model stops calling tools | Deterministic stop policy over a verifier verdict |
+| Verification | None | Fresh-context verifier sees only bounded evidence |
+| Acceptance criteria | None | Decomposed once, pinned with stable IDs, tracked |
+| No-progress / repeat guard | Shared tool-call ledger | Shared ledger **plus** repeated-failure fingerprint |
+| Run memory | Conversation history only | Concise, secret-redacted per-cycle recap |
+| Resumable after a stop | No | Yes (`/agent resume`) |
+| Response cache | Used | Bypassed (completion must reflect live evidence) |
+
+Both modes obey identical safety rules: agent mode never changes
+`tools.approve`, never activates tools, never connects MCP servers, and never
+grants network access on its own.
+
 ## Lifecycle
 
 Each run follows six explicit stages:
@@ -33,6 +88,67 @@ Each run follows six explicit stages:
 6. **Stop check** — deterministic policy chooses `done`, `continue`, `retry`,
    `needs_user_input`, `parked`, `escalated`, `cancelled`, `failed`, or
    `budget_exhausted`.
+
+The controller walks these stages as an explicit state machine. `continue` and
+`retry` return to the trigger boundary and begin a fresh cycle; every other
+stop decision is terminal for the run.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Trigger: start run or resume
+    Trigger --> RulesLoad: NewRun / Resume
+    RulesLoad --> Executor: BeginCycle (compose prompt + directive)
+    Executor --> Verifier: CompleteExecution (stream + run tools)
+    Verifier --> MemoryWrite: CompleteVerification (fresh-context verdict)
+    MemoryWrite --> StopCheck: WriteMemory
+    StopCheck --> Trigger: continue / retry (next objective)
+    StopCheck --> Done: done
+    StopCheck --> Failed: failed / no_progress
+    StopCheck --> NeedsInput: needs_user_input
+    StopCheck --> Parked: parked / escalated
+    StopCheck --> Budget: budget_exhausted / verification_unavailable
+    Done --> [*]
+    Failed --> [*]
+    NeedsInput --> [*]
+    Parked --> [*]
+    Budget --> [*]
+```
+
+Seen as a conversation between the controller and the model(s), one cycle looks
+like this — note that the executor and the verifier are *separate* provider
+requests, and the verifier never sees the executor's transcript or its tools:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as You
+    participant C as llmtui controller
+    participant E as Local model (executor)
+    participant T as Tools (sandbox)
+    participant V as Local model (verifier)
+
+    U->>C: task ("/agent on" already set)
+    Note over C: Cycle N — Rules load
+    C->>C: compose system prompt +<br/>objective + criteria + cycle memory
+    C->>E: chat request (with tool schemas)
+    E-->>C: stream tokens + tool_calls
+    loop up to tools.max_iterations, within run budgets
+        C->>C: approval gate + guardrails
+        C->>T: execute approved tool calls
+        T-->>C: results (role:"tool")
+        C->>E: send results, ask for next step
+        E-->>C: more tool_calls or final text
+    end
+    Note over C,V: Fresh context — no transcript, no tools
+    C->>V: bounded evidence only (task, objective, criteria, ledger)
+    V-->>C: JSON verdict + criteria updates
+    C->>C: write cycle memory, then Decide()
+    alt more work and within budget
+        C->>C: next objective → Cycle N+1
+    else done / failed / needs input / budget
+        C-->>U: final result + status
+    end
+```
 
 This is a state machine driven by Bubble Tea messages, not blind recursion.
 Every provider request and tool batch returns control to the event loop, which
