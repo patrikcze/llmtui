@@ -98,6 +98,8 @@ type ProjectRecord struct {
 	UpdatedAt   time.Time   `json:"updated_at"`
 	Trust       TrustClass  `json:"trust"`
 	Review      ReviewState `json:"review"`
+	SourceRunID string      `json:"source_run_id,omitempty"`
+	SourceCycle int         `json:"source_cycle,omitempty"`
 	ContentHash string      `json:"content_hash"`
 }
 
@@ -166,13 +168,29 @@ func (s *ProjectStore) Find(id string) (ProjectRecord, error) {
 
 // Add stores an approved, user-authored project record.
 func (s *ProjectStore) Add(kind Kind, text string, tags ...string) (ProjectRecord, error) {
-	return s.add(kind, text, TrustUserAuthored, ReviewApproved, tags)
+	return s.add(kind, text, TrustUserAuthored, ReviewApproved, "", 0, tags)
 }
 
 // Propose stores an inactive model-proposed record. It remains excluded from
 // normal retrieval until Approve records explicit user review.
 func (s *ProjectStore) Propose(kind Kind, text string, tags ...string) (ProjectRecord, error) {
-	return s.add(kind, text, TrustModelProposed, ReviewProposed, tags)
+	return s.add(kind, text, TrustModelProposed, ReviewProposed, "", 0, tags)
+}
+
+// Promote atomically stores a user-approved outcome from a verifier-passed
+// agent run. Model-proposed trust is preserved even after explicit approval.
+func (s *ProjectStore) Promote(
+	kind Kind,
+	text string,
+	runID string,
+	cycle int,
+	tags ...string,
+) (ProjectRecord, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || cycle <= 0 {
+		return ProjectRecord{}, fmt.Errorf("promote project record: run id and positive cycle are required")
+	}
+	return s.add(kind, text, TrustModelProposed, ReviewApproved, runID, cycle, tags)
 }
 
 func (s *ProjectStore) add(
@@ -180,6 +198,8 @@ func (s *ProjectStore) add(
 	text string,
 	trust TrustClass,
 	review ReviewState,
+	sourceRunID string,
+	sourceCycle int,
 	tags []string,
 ) (ProjectRecord, error) {
 	text = redactProjectSecrets(strings.TrimSpace(text))
@@ -219,6 +239,8 @@ func (s *ProjectStore) add(
 		UpdatedAt:   now,
 		Trust:       trust,
 		Review:      review,
+		SourceRunID: sourceRunID,
+		SourceCycle: sourceCycle,
 		ContentHash: contentHash(text),
 	}
 	records = append(records, record)

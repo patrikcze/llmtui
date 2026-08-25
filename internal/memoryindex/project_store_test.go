@@ -1,6 +1,7 @@
 package memoryindex
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -238,6 +239,54 @@ func TestProjectStoreProposalRequiresApproval(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].Trust != TrustModelProposed || records[0].Review != ReviewApproved {
 		t.Fatalf("approved records = %+v", records)
+	}
+}
+
+func TestProjectStorePromotionIsApprovedAndPreservesRunProvenance(t *testing.T) {
+	store := newTestProjectStore(t, t.TempDir())
+	record, err := store.Promote(
+		KindProjectDecision,
+		"Verified outcome: use atomic replacement for project memory.",
+		"run-abc123",
+		3,
+		"verifier:passed",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Trust != TrustModelProposed || record.Review != ReviewApproved {
+		t.Fatalf("promotion trust/review = %+v", record)
+	}
+	if record.SourceRunID != "run-abc123" || record.SourceCycle != 3 {
+		t.Fatalf("promotion provenance = %+v", record)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].SourceRunID != "run-abc123" || loaded[0].SourceCycle != 3 {
+		t.Fatalf("loaded promotion = %+v", loaded)
+	}
+	source := ProjectSource{Store: store}
+	hits, err := source.Search(context.Background(), Query{
+		Text: "atomic replacement", ProjectID: store.ProjectID(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Item.ID != record.ID {
+		t.Fatalf("approved promotion was not retrievable: %+v", hits)
+	}
+}
+
+func TestProjectStorePromotionRequiresSource(t *testing.T) {
+	store := newTestProjectStore(t, t.TempDir())
+	if _, err := store.Promote(KindProjectDecision, "outcome", "", 1); err == nil {
+		t.Fatal("promotion without run ID should fail")
+	}
+	if _, err := store.Promote(KindProjectDecision, "outcome", "run-1", 0); err == nil {
+		t.Fatal("promotion without a positive cycle should fail")
 	}
 }
 
