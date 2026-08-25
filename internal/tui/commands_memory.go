@@ -388,14 +388,17 @@ func (m *Model) memorySearchOverlay(query string, explain bool) (string, error) 
 	if _, ok := m.agentRunSnapshot(); ok {
 		sources = append(sources, m.agentRunMemorySource())
 	}
+	if m.ragOn && m.ragIndex != nil {
+		sources = append(sources, m.compositionRAGSource())
+	}
 	retriever := memoryindex.NewRetriever(sources...)
-	hits, err := retriever.Search(context.Background(), memoryindex.Query{
-		Text:      query,
+	result, err := retriever.SearchDetailed(context.Background(), memoryindex.Query{
+		Text:      m.memoryQueryText(query),
 		ProjectID: m.projectID,
 		SessionID: m.sessionName,
 		RunID:     m.agentRunID(),
-		TopK:      10,
-	})
+		Now:       time.Now().UTC(),
+	}, m.memoryRetrievalPolicy())
 	if err != nil {
 		return "", err
 	}
@@ -407,18 +410,23 @@ func (m *Model) memorySearchOverlay(query string, explain bool) (string, error) 
 	}
 	b.WriteString(m.theme.Badge.Render(title) + "\n\n")
 	m.kv(&b, "query", memoryDisplayText(query))
-	if len(hits) == 0 {
+	m.kv(&b, "selected", fmt.Sprintf("%d hit(s)", len(result.Hits)))
+	m.kv(&b, "context budget", fmt.Sprintf("%d / %d tokens", result.TotalTokens, m.memoryRetrievalPolicy().MaxTokens))
+	if len(result.Hits) == 0 {
 		b.WriteString("\n" + m.theme.SystemNote.Render("no relevant memory records") + "\n")
+		if explain {
+			writeRejectedMemoryHits(m, &b, result.Rejected)
+		}
 		return m.overlayFooter(&b), nil
 	}
 	b.WriteString("\n")
-	for _, hit := range hits {
+	for _, hit := range result.Hits {
 		fmt.Fprintf(
 			&b,
 			"  %s %s %s\n",
 			m.theme.BadgeOK.Render(hit.Item.ID),
 			m.theme.StatusBar.Render(string(hit.Item.Kind)),
-			m.theme.StatusValue.Render(fmt.Sprintf("score %.3f", hit.Score)),
+			m.theme.StatusValue.Render(fmt.Sprintf("score %.3f · %d tokens", hit.Score, hit.Tokens)),
 		)
 		b.WriteString("    " + m.theme.StatusValue.Render(memoryDisplayText(hit.Item.Text)) + "\n")
 		if explain {
@@ -429,7 +437,26 @@ func (m *Model) memorySearchOverlay(query string, explain bool) (string, error) 
 			b.WriteString("    " + m.theme.SystemNote.Render(memoryDisplayText(why)) + "\n")
 		}
 	}
+	if explain {
+		writeRejectedMemoryHits(m, &b, result.Rejected)
+	}
 	return m.overlayFooter(&b), nil
+}
+
+func writeRejectedMemoryHits(m *Model, b *strings.Builder, rejected []memoryindex.RejectedHit) {
+	if len(rejected) == 0 {
+		return
+	}
+	b.WriteString("\n" + m.theme.UserLabel.Render("rejected candidates") + "\n")
+	for _, candidate := range rejected {
+		fmt.Fprintf(
+			b,
+			"  %s %s %s\n",
+			m.theme.StatusBar.Render(candidate.Hit.Item.ID),
+			m.theme.StatusBar.Render(string(candidate.Hit.Item.Kind)),
+			m.theme.SystemNote.Render(candidate.Reason),
+		)
+	}
 }
 
 func memoryDisplayText(text string) string {

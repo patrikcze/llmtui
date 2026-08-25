@@ -438,6 +438,48 @@ func TestMemorySearchAndExplainCommands(t *testing.T) {
 	}
 }
 
+func TestMemoryExplainShowsBudgetRejectionsWithoutRejectedText(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Memory.Retrieval.MaxContextTokens = 24
+	rejectedText := strings.Repeat("oversized private context ", 40)
+	if _, err := m.memStore.Add(rejectedText); err != nil {
+		t.Fatal(err)
+	}
+
+	explain, err := m.memorySearchOverlay("oversized private context", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(explain, "rejected candidates") || !strings.Contains(explain, "total_budget") {
+		t.Fatalf("explain omitted budget rejection:\n%s", explain)
+	}
+	if strings.Contains(explain, rejectedText) {
+		t.Fatalf("explain printed full rejected content:\n%s", explain)
+	}
+}
+
+func TestDebugLastShowsContentFreeRetrievalDiagnostics(t *testing.T) {
+	m := newTestModel(t)
+	m.lastDebug = debugInfo{
+		When: time.Now(),
+		MemoryRetrieval: memoryRetrievalDiagnostics{
+			Enabled: true, Duration: 2 * time.Millisecond, Selected: 2,
+			TotalTokens: 120, MaxTokens: 1800,
+			TierTokens:      map[string]int{"project": 70, "source": 50},
+			RejectedReasons: map[string]int{"content_hash_dedup": 1, "total_budget": 2},
+		},
+	}
+	overlay := m.debugOverlay()
+	for _, want := range []string{"memory retrieval diagnostics", "120 / 1800", "project=70", "source=50", "content_hash_dedup=1", "total_budget=2"} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("debug overlay missing %q:\n%s", want, overlay)
+		}
+	}
+	if strings.Contains(overlay, "rejected secret text") {
+		t.Fatalf("debug overlay included raw rejected content:\n%s", overlay)
+	}
+}
+
 func TestMemoryOverlaysSanitizeStoredTerminalContent(t *testing.T) {
 	m := newTestModel(t)
 	if _, err := m.memStore.Add("safe\x1b]52;c;Y2xpcA==\x07 preference"); err != nil {

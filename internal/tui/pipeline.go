@@ -69,7 +69,19 @@ type debugInfo struct {
 	// it, nothing else consumes it — and is independent of MemorySnippets/
 	// RetrievedContext, which are still sourced for byte-identical legacy
 	// output per Global Constraint 2.
-	MemoryHits []memoryindex.Hit
+	MemoryHits      []memoryindex.Hit
+	MemoryRetrieval memoryRetrievalDiagnostics
+}
+
+type memoryRetrievalDiagnostics struct {
+	Enabled         bool
+	Duration        time.Duration
+	Selected        int
+	TotalTokens     int
+	MaxTokens       int
+	TierTokens      map[string]int
+	KindCounts      map[string]int
+	RejectedReasons map[string]int
 }
 
 type toolCallDiagnostic struct {
@@ -199,6 +211,7 @@ type preparedRequest struct {
 	tools       []provider.ToolSpec
 	ragResults  []rag.Result
 	memoryHits  []memoryindex.Hit
+	memoryDiag  memoryRetrievalDiagnostics
 	estimate    requestTokenEstimate
 }
 
@@ -212,6 +225,7 @@ type compositionBase struct {
 	// threaded through preparedRequest into debugInfo. Direct legacy fields
 	// remain independently populated for diagnostics and configured fallback.
 	memoryHits []memoryindex.Hit
+	memoryDiag memoryRetrievalDiagnostics
 }
 
 // compositionRAGSource builds the memoryindex.RAGSource wrapper used both to
@@ -258,11 +272,16 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	}
 
 	var memoryHits []memoryindex.Hit
+	memoryDiag := memoryRetrievalDiagnostics{
+		Enabled:   m.cfg.Memory.Retrieval.Enabled,
+		MaxTokens: m.memoryRetrievalPolicy().MaxTokens,
+	}
 	if len(sources) > 0 && m.cfg.Memory.Retrieval.Enabled {
 		// compositionBase has no request-scoped context available today (its
 		// callers — prepareRequest, dispatch, continueChat — don't carry one
 		// either), so this in-process, non-blocking lookup uses Background.
 		retriever := memoryindex.NewRetriever(sources...)
+		started := time.Now()
 		if result, err := retriever.SearchDetailed(context.Background(), memoryindex.Query{
 			Text:      m.memoryQueryText(raw),
 			ProjectID: m.projectID,
@@ -271,6 +290,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			Now:       time.Now().UTC(),
 		}, m.memoryRetrievalPolicy()); err == nil {
 			memoryHits = result.Hits
+			memoryDiag = buildMemoryRetrievalDiagnostics(result, time.Since(started), m.memoryRetrievalPolicy().MaxTokens)
 		}
 	}
 	activeContext := activeContextRecords(memoryHits)
@@ -405,6 +425,44 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		},
 		ragResults: results,
 		memoryHits: memoryHits,
+		memoryDiag: memoryDiag,
+	}
+}
+
+func buildMemoryRetrievalDiagnostics(
+	result memoryindex.RetrievalResult,
+	duration time.Duration,
+	maxTokens int,
+) memoryRetrievalDiagnostics {
+	diagnostic := memoryRetrievalDiagnostics{
+		Enabled: true, Duration: duration, Selected: len(result.Hits),
+		TotalTokens: result.TotalTokens, MaxTokens: maxTokens,
+		TierTokens: map[string]int{}, KindCounts: map[string]int{}, RejectedReasons: map[string]int{},
+	}
+	for _, hit := range result.Hits {
+		diagnostic.TierTokens[memoryTierName(hit.Item.Kind)] += hit.Tokens
+		diagnostic.KindCounts[string(hit.Item.Kind)]++
+	}
+	for _, rejected := range result.Rejected {
+		diagnostic.RejectedReasons[rejected.Reason]++
+	}
+	return diagnostic
+}
+
+func memoryTierName(kind memoryindex.Kind) string {
+	switch kind {
+	case memoryindex.KindUserPreference:
+		return "user"
+	case memoryindex.KindProjectArchitecture, memoryindex.KindProjectConvention, memoryindex.KindProjectDecision:
+		return "project"
+	case memoryindex.KindEpisode:
+		return "episode"
+	case memoryindex.KindAgentObjective, memoryindex.KindAgentCriterion, memoryindex.KindAgentFailure, memoryindex.KindAgentEvidence:
+		return "agent"
+	case memoryindex.KindSourceChunk:
+		return "source"
+	default:
+		return "other"
 	}
 }
 
@@ -797,7 +855,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		FixedTokens:            fixed.Total,
 	})
 	if fixed.Total+reserve > window {
-		return preparedRequest{composed: probe, decision: decision, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: fixed}, fmt.Errorf(
+		return preparedRequest{composed: probe, decision: decision, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, memoryDiag: base.memoryDiag, estimate: fixed}, fmt.Errorf(
 			"request overhead is too large for the %d-token context window: system/user prompt %d + tool schemas %d + response reserve %d; disable tools/skills/RAG, shorten the prompt, lower the reserve, or select a larger context window",
 			window, fixed.System+fixed.Messages, fixed.Tools, reserve)
 	}
@@ -874,14 +932,14 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		}
 	}
 	if est.Total > budget {
-		return preparedRequest{composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: est}, fmt.Errorf(
+		return preparedRequest{composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, memoryDiag: base.memoryDiag, estimate: est}, fmt.Errorf(
 			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
 			est.Total, budget)
 	}
 	if toolContinuation && !hasUserMessage(out.Messages) {
 		return preparedRequest{
 				composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs,
-				ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: est,
+				ragResults: base.ragResults, memoryHits: base.memoryHits, memoryDiag: base.memoryDiag, estimate: est,
 			},
 			errors.New("tool continuation has no user anchor after context selection")
 	}
@@ -899,6 +957,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		tools:       specs,
 		ragResults:  base.ragResults,
 		memoryHits:  base.memoryHits,
+		memoryDiag:  base.memoryDiag,
 		estimate:    est,
 	}, nil
 }
@@ -1047,7 +1106,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
 			SummaryActive: prepared.estimate.SummaryToken > 0,
 			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
-			MemoryHits: prepared.memoryHits,
+			MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
 		}
 		m.failVerifiedRun(prepareErr)
 		m.endAgentRun()
@@ -1085,7 +1144,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 				ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
 				SummaryActive: prepared.estimate.SummaryToken > 0,
 				NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
-				MemoryHits: prepared.memoryHits,
+				MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
 			}
 			// The cached answer completed this run; run-scoped skills (which
 			// were part of the key) deactivate like on a live final answer.
@@ -1150,7 +1209,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		ToolsHash:     toolSpecsFingerprint(prepared.tools),
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
-		MemoryHits: prepared.memoryHits,
+		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
 	}
 
 	return m.startRequest(req)
@@ -1296,7 +1355,7 @@ func (m *Model) continueChat() tea.Cmd {
 		ToolsHash:     toolSpecsFingerprint(prepared.tools),
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
-		MemoryHits: prepared.memoryHits,
+		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
 	}
 	return m.startRequest(req)
 }

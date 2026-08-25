@@ -753,6 +753,36 @@ func (m *Model) debugOverlay() string {
 				fmt.Sprintf("%s · %s · score %.2f", h.Item.Kind, h.Item.ID, h.Score)))
 		}
 	}
+	if d.MemoryRetrieval.Enabled {
+		b.WriteString("\n" + m.theme.UserLabel.Render("memory retrieval diagnostics") + "\n")
+		m.kv(&b, "selected", fmt.Sprintf("%d hit(s)", d.MemoryRetrieval.Selected))
+		m.kv(&b, "context budget", fmt.Sprintf("%d / %d tokens", d.MemoryRetrieval.TotalTokens, d.MemoryRetrieval.MaxTokens))
+		m.kv(&b, "duration", d.MemoryRetrieval.Duration.Round(time.Microsecond).String())
+		if len(d.MemoryRetrieval.TierTokens) > 0 {
+			keys := make([]string, 0, len(d.MemoryRetrieval.TierTokens))
+			for key := range d.MemoryRetrieval.TierTokens {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, key := range keys {
+				parts = append(parts, fmt.Sprintf("%s=%d", key, d.MemoryRetrieval.TierTokens[key]))
+			}
+			m.kv(&b, "tier tokens", strings.Join(parts, " · "))
+		}
+		if len(d.MemoryRetrieval.RejectedReasons) > 0 {
+			keys := make([]string, 0, len(d.MemoryRetrieval.RejectedReasons))
+			for key := range d.MemoryRetrieval.RejectedReasons {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, key := range keys {
+				parts = append(parts, fmt.Sprintf("%s=%d", key, d.MemoryRetrieval.RejectedReasons[key]))
+			}
+			m.kv(&b, "rejected", strings.Join(parts, " · "))
+		}
+	}
 
 	if len(d.Sections) > 0 {
 		b.WriteString("\n" + m.theme.UserLabel.Render("composed sections") + "\n")
