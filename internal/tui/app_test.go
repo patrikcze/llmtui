@@ -28,6 +28,11 @@ func newTestModel(t *testing.T) *Model {
 		Memory: config.MemoryConfig{
 			Path:        filepath.Join(t.TempDir(), "memory.yaml"),
 			MaxSnippets: 10,
+			Retrieval: config.MemoryRetrievalConfig{
+				Enabled: true, MaxContextTokens: 1800, TopK: 10,
+				UserTokens: 256, ProjectTokens: 512, EpisodicTokens: 384,
+				AgentTokens: 512, SourceTokens: 768,
+			},
 		},
 		Prompt: config.PromptConfig{
 			Mode:                   "balanced",

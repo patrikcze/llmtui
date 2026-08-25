@@ -125,12 +125,12 @@ func TestCompositionBase_EpisodeParticipatesWithoutTranscriptLeakage(t *testing.
 		t.Fatalf("episode missing from unified hits: %+v", base.memoryHits)
 	}
 	out := composeFromBase(base, nil, "")
-	if !strings.Contains(out.Messages[0].Content, "prior saved sessions") {
+	if !strings.Contains(out.Messages[0].Content, `kind="episode"`) || !strings.Contains(out.Messages[0].Content, "Episodic retrieval tests pass") {
 		t.Fatalf("episode missing from composed system prompt: %q", out.Messages[0].Content)
 	}
 	foundSection := false
 	for _, section := range out.Sections {
-		if section.Title == "Relevant Session Episodes" {
+		if section.Title == "Active Context" {
 			foundSection = true
 		}
 	}
@@ -175,6 +175,33 @@ func TestCompositionBase_ActiveAgentRunAppearsOnlyInUnifiedHits(t *testing.T) {
 	for _, hit := range base.memoryHits {
 		if hit.Item.Scope == memoryindex.ScopeRun {
 			t.Fatalf("terminal previous run leaked into ordinary composition: %+v", hit)
+		}
+	}
+}
+
+func TestCompositionBase_ActiveContextNeverExceedsRetrievalBudget(t *testing.T) {
+	m := newTestModel(t)
+	m.memEnabled = true
+	m.cfg.Memory.Retrieval.MaxContextTokens = 24
+	if _, err := m.memStore.Add(strings.Repeat("budget relevant memory ", 40)); err != nil {
+		t.Fatal(err)
+	}
+
+	base := m.compositionBase("budget relevant memory", nil, false)
+	total := 0
+	for _, hit := range base.memoryHits {
+		total += hit.Tokens
+	}
+	if total > m.cfg.Memory.Retrieval.MaxContextTokens {
+		t.Fatalf("selected tokens = %d, budget = %d", total, m.cfg.Memory.Retrieval.MaxContextTokens)
+	}
+	if len(base.input.ActiveContext) != 0 {
+		t.Fatalf("oversized record entered Active Context: %+v", base.input.ActiveContext)
+	}
+	out := composeFromBase(base, nil, "")
+	for _, section := range out.Sections {
+		if section.Title == "Active Context" {
+			t.Fatalf("empty budget selection rendered an Active Context section: %+v", section)
 		}
 	}
 }

@@ -153,11 +153,9 @@ func TestCharacterization_RawUserMessageVerbatimAndLast(t *testing.T) {
 
 	var sawMemory, sawRAG bool
 	for _, section := range prepared.composed.Sections {
-		if section.Title == "Relevant Memory" && strings.TrimSpace(section.Content) != "" {
-			sawMemory = true
-		}
-		if section.Title == "Retrieved Workspace Context" && strings.TrimSpace(section.Content) != "" {
-			sawRAG = true
+		if section.Title == "Active Context" {
+			sawMemory = strings.Contains(section.Content, `kind="user_preference"`)
+			sawRAG = strings.Contains(section.Content, `kind="source_chunk"`)
 		}
 	}
 	if !sawMemory {

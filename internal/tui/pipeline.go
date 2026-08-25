@@ -208,10 +208,9 @@ const compactedContinuationAnchor = "[Compacted continuation] Continue the origi
 type compositionBase struct {
 	input      prompt.Input
 	ragResults []rag.Result
-	// memoryHits is the merged, ranked hit list from the unified
-	// memoryindex.Retriever, threaded through preparedRequest into debugInfo
-	// for /debug last. It does not feed MemorySnippets/RetrievedContext —
-	// those stay sourced independently for byte-identical legacy output.
+	// memoryHits is the selected ranked result used by ActiveContext and
+	// threaded through preparedRequest into debugInfo. Direct legacy fields
+	// remain independently populated for diagnostics and configured fallback.
 	memoryHits []memoryindex.Hit
 }
 
@@ -239,15 +238,16 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	episodeSource := memoryindex.EpisodeSource{Dir: m.historyDir, TopK: 3}
 
 	var sources []memoryindex.Source
-	if m.memEnabled && m.memStore != nil {
+	localMemoryActive := m.memEnabled && m.cfg.Prompt.IncludeLocalMemory
+	if localMemoryActive && m.memStore != nil {
 		// Mirror today's exact guard: only register the user-memory source
 		// when memory is enabled and a store exists.
 		sources = append(sources, memoryindex.UserSource{Snippets: m.memStore.Load})
 	}
-	if m.memEnabled && m.projectStore != nil {
+	if localMemoryActive && m.projectStore != nil {
 		sources = append(sources, projectSource)
 	}
-	if m.memEnabled && m.historyDir != "" {
+	if localMemoryActive && m.historyDir != "" {
 		sources = append(sources, episodeSource)
 	}
 	if m.agentRunActive() {
@@ -258,20 +258,22 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	}
 
 	var memoryHits []memoryindex.Hit
-	if len(sources) > 0 {
+	if len(sources) > 0 && m.cfg.Memory.Retrieval.Enabled {
 		// compositionBase has no request-scoped context available today (its
 		// callers — prepareRequest, dispatch, continueChat — don't carry one
 		// either), so this in-process, non-blocking lookup uses Background.
 		retriever := memoryindex.NewRetriever(sources...)
-		if hits, err := retriever.Search(context.Background(), memoryindex.Query{
-			Text:      raw,
+		if result, err := retriever.SearchDetailed(context.Background(), memoryindex.Query{
+			Text:      m.memoryQueryText(raw),
 			ProjectID: m.projectID,
 			SessionID: m.sessionName,
 			RunID:     m.agentRunID(),
-		}); err == nil {
-			memoryHits = hits
+			Now:       time.Now().UTC(),
+		}, m.memoryRetrievalPolicy()); err == nil {
+			memoryHits = result.Hits
 		}
 	}
+	activeContext := activeContextRecords(memoryHits)
 
 	episodeMemory := []prompt.MemoryRecord{}
 	if m.memEnabled && m.historyDir != "" {
@@ -388,6 +390,8 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			MemorySnippets:   memSnippets,
 			ProjectMemory:    projectMemory,
 			EpisodeMemory:    episodeMemory,
+			ActiveContext:    activeContext,
+			UseActiveContext: m.cfg.Memory.Retrieval.Enabled,
 			RetrievedContext: retrieved,
 			Skills:           m.promptSkills(),
 			SkillCatalog:     m.promptSkillCatalog(),
@@ -402,6 +406,80 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		ragResults: results,
 		memoryHits: memoryHits,
 	}
+}
+
+func (m *Model) memoryQueryText(raw string) string {
+	parts := []string{raw}
+	if m.agentRunActive() && m.agentLoop != nil && m.agentLoop.run != nil {
+		parts = append(parts, m.agentLoop.run.Objective)
+		for _, criterion := range m.agentLoop.run.UnresolvedCriteria() {
+			parts = append(parts, criterion.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) memoryRetrievalPolicy() memoryindex.RetrievalPolicy {
+	cfg := m.cfg.Memory.Retrieval
+	policy := memoryindex.RetrievalPolicy{
+		TopK: cfg.TopK, MaxTokens: cfg.MaxContextTokens,
+		UserTokens: cfg.UserTokens, ProjectTokens: cfg.ProjectTokens,
+		EpisodeTokens: cfg.EpisodicTokens, AgentTokens: cfg.AgentTokens,
+		SourceTokens: cfg.SourceTokens,
+	}
+	if policy.TopK <= 0 {
+		policy.TopK = 10
+	}
+	if policy.MaxTokens <= 0 {
+		policy.MaxTokens = 1800
+	}
+	if policy.UserTokens <= 0 {
+		policy.UserTokens = 256
+	}
+	if policy.ProjectTokens <= 0 {
+		policy.ProjectTokens = 512
+	}
+	if policy.EpisodeTokens <= 0 {
+		policy.EpisodeTokens = 384
+	}
+	if policy.AgentTokens <= 0 {
+		policy.AgentTokens = 512
+	}
+	if policy.SourceTokens <= 0 {
+		policy.SourceTokens = 768
+	}
+	return policy
+}
+
+func activeContextRecords(hits []memoryindex.Hit) []prompt.MemoryRecord {
+	records := make([]prompt.MemoryRecord, 0, len(hits))
+	for _, hit := range hits {
+		text := hit.Item.Text
+		if hit.Item.Summary != "" {
+			text = hit.Item.Summary
+		}
+		source := "unknown"
+		switch hit.Item.Kind {
+		case memoryindex.KindUserPreference:
+			source = "user"
+		case memoryindex.KindProjectArchitecture, memoryindex.KindProjectConvention, memoryindex.KindProjectDecision:
+			source = "project:" + shortMemoryID(hit.Item.ProjectID)
+		case memoryindex.KindEpisode:
+			source = "session:" + hit.Item.SessionID
+		case memoryindex.KindAgentObjective, memoryindex.KindAgentCriterion, memoryindex.KindAgentFailure, memoryindex.KindAgentEvidence:
+			source = "run:" + hit.Item.RunID
+			if hit.Item.Source.Cycle > 0 {
+				source += fmt.Sprintf("/cycle:%d", hit.Item.Source.Cycle)
+			}
+		case memoryindex.KindSourceChunk:
+			source = fmt.Sprintf("%s:%d-%d", hit.Item.Source.Path, hit.Item.Source.StartLine, hit.Item.Source.EndLine)
+		}
+		records = append(records, prompt.MemoryRecord{
+			ID: hit.Item.ID, Kind: string(hit.Item.Kind), Scope: string(hit.Item.Scope),
+			Source: source, Trust: string(hit.Item.Trust), Text: text, UpdatedAt: hit.Item.UpdatedAt,
+		})
+	}
+	return records
 }
 
 func shortMemoryID(id string) string {

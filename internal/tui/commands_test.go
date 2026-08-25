@@ -334,7 +334,7 @@ func TestMemoryCommands(t *testing.T) {
 	out, _ := m.compose("give me a Go example", nil, true)
 	found := false
 	for _, s := range out.Sections {
-		if s.Title == "Relevant Memory" && strings.Contains(s.Content, "concise Go examples") {
+		if s.Title == "Active Context" && strings.Contains(s.Content, "concise Go examples") {
 			found = true
 		}
 	}
@@ -345,7 +345,7 @@ func TestMemoryCommands(t *testing.T) {
 	runCommand(m, "/memory off")
 	out, _ = m.compose("give me a Go example", nil, true)
 	for _, s := range out.Sections {
-		if s.Title == "Relevant Memory" {
+		if s.Title == "Active Context" && strings.Contains(s.Content, "concise Go examples") {
 			t.Error("disabled memory must not appear in composition")
 		}
 	}
@@ -428,7 +428,7 @@ func TestMemorySearchAndExplainCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(explain, "matched") || !strings.Contains(explain, "score") {
+	if !strings.Contains(explain, "lexical") || !strings.Contains(explain, "score") {
 		t.Fatalf("explain lacks ranking details:\n%s", explain)
 	}
 
