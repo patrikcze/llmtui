@@ -46,6 +46,9 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 	if _, ok := cfg.Providers["mock"]; !ok {
 		t.Error("built-in mock provider missing")
 	}
+	if cfg.Memory.Episodic.Capture {
+		t.Error("episodic auto-capture must default to false")
+	}
 }
 
 func TestConfigFileOverridesDefaults(t *testing.T) {
@@ -136,6 +139,7 @@ func TestNestedEnvOverrides(t *testing.T) {
 	t.Setenv("LLMTUI_NETWORK_TIMEOUT", "600s")
 	t.Setenv("LLMTUI_CHAT_MAX_TOKENS", "8192")
 	t.Setenv("LLMTUI_AGENT_MAX_CYCLES", "5")
+	t.Setenv("LLMTUI_MEMORY_EPISODIC_CAPTURE", "true")
 
 	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -153,6 +157,9 @@ func TestNestedEnvOverrides(t *testing.T) {
 	}
 	if cfg.Agent.MaxCycles != 5 {
 		t.Errorf("Agent.MaxCycles = %d, want 5 from env", cfg.Agent.MaxCycles)
+	}
+	if !cfg.Memory.Episodic.Capture {
+		t.Error("Memory.Episodic.Capture should be true from env")
 	}
 }
 

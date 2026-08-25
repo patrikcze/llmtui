@@ -180,10 +180,17 @@ type CacheConfig struct {
 
 // MemoryConfig configures local user and project memory (disabled by default).
 type MemoryConfig struct {
-	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
-	Path        string `mapstructure:"path" yaml:"path"`
-	MaxSnippets int    `mapstructure:"max_snippets" yaml:"max_snippets"`
-	AutoExtract bool   `mapstructure:"auto_extract" yaml:"auto_extract"`
+	Enabled     bool                 `mapstructure:"enabled" yaml:"enabled"`
+	Path        string               `mapstructure:"path" yaml:"path"`
+	MaxSnippets int                  `mapstructure:"max_snippets" yaml:"max_snippets"`
+	AutoExtract bool                 `mapstructure:"auto_extract" yaml:"auto_extract"`
+	Episodic    EpisodicMemoryConfig `mapstructure:"episodic" yaml:"episodic"`
+}
+
+// EpisodicMemoryConfig controls automatic episode refresh during session
+// auto-save. Explicit /save and Ctrl+S always capture an episode.
+type EpisodicMemoryConfig struct {
+	Capture bool `mapstructure:"capture" yaml:"capture"`
 }
 
 // PromptConfig configures prompt composition.
@@ -754,6 +761,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.path", "~/.local/share/llmtui/memory.yaml")
 	v.SetDefault("memory.max_snippets", 100)
 	v.SetDefault("memory.auto_extract", false)
+	v.SetDefault("memory.episodic.capture", false)
 
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.show_debug", false)

@@ -47,6 +47,7 @@ type Episode struct {
 	Unresolved []string  `json:"unresolved,omitempty"`
 	Provider   string    `json:"provider,omitempty"`
 	Model      string    `json:"model,omitempty"`
+	ProjectID  string    `json:"project_id,omitempty"`
 	SavedAt    time.Time `json:"saved_at"`
 }
 
@@ -60,6 +61,7 @@ type Session struct {
 	Template   string             `json:"template,omitempty"`
 	PromptMode string             `json:"prompt_mode,omitempty"`
 	Profile    string             `json:"profile,omitempty"`
+	ProjectID  string             `json:"project_id,omitempty"`
 	Messages   []provider.Message `json:"messages"`
 	Prompt     int                `json:"prompt_tokens"`
 	Reply      int                `json:"completion_tokens"`
@@ -101,12 +103,13 @@ func BuildEpisode(s Session) *Episode {
 		status = "response_recorded"
 	}
 	return &Episode{
-		Version:  episodeVersion,
-		Goal:     goal,
-		Outcome:  outcome,
-		Status:   status,
-		Provider: episodeText(s.Provider, 256),
-		Model:    episodeText(s.Model, 256),
+		Version:   episodeVersion,
+		Goal:      goal,
+		Outcome:   outcome,
+		Status:    status,
+		Provider:  episodeText(s.Provider, 256),
+		Model:     episodeText(s.Model, 256),
+		ProjectID: s.ProjectID,
 	}
 }
 
@@ -182,6 +185,7 @@ func Save(dir, name string, s Session) (string, error) {
 		episode.SavedAt = s.SavedAt
 		episode.Provider = episodeText(s.Provider, 256)
 		episode.Model = episodeText(s.Model, 256)
+		episode.ProjectID = s.ProjectID
 		s.Episode = &episode
 	}
 	data, err := json.MarshalIndent(s, "", "  ")

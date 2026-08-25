@@ -104,6 +104,7 @@ type Model struct {
 	prov     provider.Provider
 	model    string
 	session  *chat.Session
+	episode  *history.Episode
 	renderer *glamour.TermRenderer
 	turnRuntime
 
@@ -338,6 +339,7 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.TotalCompletionTokens = s.Reply
 	m.session.AnyEstimated = s.Estimated
 	m.sessionName = name
+	m.episode = cloneEpisode(s.Episode)
 	m.configureOperationLog()
 	m.summary = ""
 	m.workspaceSkillApprovals = nil
@@ -515,12 +517,25 @@ func (m *Model) sessionRecord() history.Session {
 		Template:   m.template,
 		PromptMode: m.effectivePromptMode(),
 		Profile:    prof.Name,
+		ProjectID:  m.projectID,
 		Messages:   m.session.Messages,
 		Prompt:     m.session.TotalPromptTokens,
 		Reply:      m.session.TotalCompletionTokens,
 		Estimated:  m.session.AnyEstimated,
+		Episode:    cloneEpisode(m.episode),
 		Skills:     skills,
 	}
+}
+
+func cloneEpisode(episode *history.Episode) *history.Episode {
+	if episode == nil {
+		return nil
+	}
+	clone := *episode
+	clone.Artifacts = append([]string(nil), episode.Artifacts...)
+	clone.Checks = append([]string(nil), episode.Checks...)
+	clone.Unresolved = append([]string(nil), episode.Unresolved...)
+	return &clone
 }
 
 // Init starts the spinner (unless animations are disabled — then nothing
@@ -1657,15 +1672,20 @@ func (m *Model) hasUserContent() bool {
 // saveSession writes the conversation to the history directory. The same
 // session name is reused for the whole chat, so repeated saves update
 // one file instead of scattering copies.
-func (m *Model) saveSession() (string, error) {
+func (m *Model) saveSession(captureEpisode bool) (string, error) {
 	if m.historyDir == "" {
 		return "", fmt.Errorf("history saving is disabled (chat.save_history)")
 	}
-	return history.Save(m.historyDir, m.sessionName, m.sessionRecord())
+	record := m.sessionRecord()
+	if captureEpisode {
+		record.Episode = history.BuildEpisode(record)
+		m.episode = cloneEpisode(record.Episode)
+	}
+	return history.Save(m.historyDir, m.sessionName, record)
 }
 
 func (m *Model) saveWithNotice() {
-	path, err := m.saveSession()
+	path, err := m.saveSession(true)
 	if err != nil {
 		m.errText = "save failed: " + err.Error()
 		m.refreshViewport()
@@ -1738,7 +1758,7 @@ func (m *Model) quit() tea.Cmd {
 	m.turnRuntime.complete(turnOutcomeCancelled)
 	m.cancelVerifiedRun("application shutdown")
 	if m.historyDir != "" && m.hasUserContent() {
-		if path, err := m.saveSession(); err == nil { // best effort on exit
+		if path, err := m.saveSession(m.cfg.Memory.Episodic.Capture); err == nil { // best effort on exit
 			m.savedPath = path
 		}
 	}

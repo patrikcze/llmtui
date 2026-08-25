@@ -681,6 +681,13 @@ func TestCtrlSSavesSession(t *testing.T) {
 	if metas[0].Messages != 3 {
 		t.Errorf("saved messages = %d, want system + user + assistant", metas[0].Messages)
 	}
+	saved, err := history.Load(m.historyDir, m.sessionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Episode == nil || saved.Episode.Goal != "hi" || saved.Episode.Outcome != "hello" {
+		t.Fatalf("explicit save episode = %+v", saved.Episode)
+	}
 }
 
 func TestSaveDisabledShowsError(t *testing.T) {
@@ -705,6 +712,27 @@ func TestQuitAutoSaves(t *testing.T) {
 	metas, _ := history.List(m.historyDir)
 	if len(metas) != 1 {
 		t.Errorf("quit should auto-save, found %d sessions", len(metas))
+	}
+	saved, err := history.Load(m.historyDir, m.sessionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Episode != nil {
+		t.Fatalf("default auto-save captured episode = %+v", saved.Episode)
+	}
+
+	// Explicit episodic capture refreshes the summary during auto-save.
+	m3 := newTestModel(t)
+	m3.historyDir = t.TempDir()
+	m3.cfg.Memory.Episodic.Capture = true
+	m3.session.AddUser("captured on quit")
+	m3.quit()
+	saved, err = history.Load(m3.historyDir, m3.sessionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Episode == nil || saved.Episode.Goal != "captured on quit" {
+		t.Fatalf("opt-in auto-save episode = %+v", saved.Episode)
 	}
 
 	// Empty sessions are not saved.
