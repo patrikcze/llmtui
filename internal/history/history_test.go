@@ -1,6 +1,7 @@
 package history
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,87 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "ephemeral thought") || strings.Contains(string(raw), "reasoning") {
 		t.Fatalf("saved session leaked reasoning: %s", raw)
+	}
+}
+
+func TestEpisodeRoundTripAndLegacyCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	session := Session{
+		Provider: "lmstudio",
+		Model:    "test-model",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "ship episodic memory"}},
+	}
+	session.Episode = BuildEpisode(session)
+	if _, err := Save(dir, "episode", session); err != nil {
+		t.Fatalf("Save episode: %v", err)
+	}
+	got, err := Load(dir, "episode")
+	if err != nil {
+		t.Fatalf("Load episode: %v", err)
+	}
+	if got.Episode == nil || got.Episode.Goal != "ship episodic memory" || got.Episode.Version != 1 {
+		t.Fatalf("loaded episode = %+v", got.Episode)
+	}
+	if got.Episode.SavedAt.IsZero() || got.Episode.Provider != "lmstudio" || got.Episode.Model != "test-model" {
+		t.Fatalf("episode metadata = %+v", got.Episode)
+	}
+
+	legacy := Session{Version: 1, Provider: "ollama", Model: "legacy"}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loadedLegacy, err := Load(dir, "legacy")
+	if err != nil {
+		t.Fatalf("Load legacy session: %v", err)
+	}
+	if loadedLegacy.Episode != nil {
+		t.Fatalf("legacy episode = %+v, want nil", loadedLegacy.Episode)
+	}
+}
+
+func TestBuildEpisodeIsBoundedAndExcludesPrivateFields(t *testing.T) {
+	secret := "ghp-abcdefghijklmnopqrstuvwxyz"
+	session := Session{
+		Provider: "mock",
+		Model:    "model",
+		Messages: []provider.Message{
+			{
+				Role:      provider.RoleUser,
+				Content:   "Investigate auth token=" + secret,
+				Images:    []provider.Image{{Data: []byte("image-secret"), MIME: "image/png"}},
+				Reasoning: "user-hidden-reasoning",
+			},
+			{
+				Role:      provider.RoleAssistant,
+				Content:   strings.Repeat("final visible result ", 300) + "Bearer abcdefghijklmnop",
+				Reasoning: "assistant-hidden-reasoning",
+				ToolCalls: []provider.ToolCall{{Name: "run_command", Arguments: `{"secret":"tool-secret"}`}},
+			},
+		},
+	}
+
+	episode := BuildEpisode(session)
+	if episode == nil {
+		t.Fatal("BuildEpisode returned nil")
+	}
+	raw, err := json.Marshal(episode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(raw)
+	for _, forbidden := range []string{
+		secret, "image-secret", "user-hidden-reasoning", "assistant-hidden-reasoning", "tool-secret", "abcdefghijklmnop",
+	} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("episode leaked %q: %s", forbidden, serialized)
+		}
+	}
+	if len(episode.Goal) > maxEpisodeGoalBytes || len(episode.Outcome) > maxEpisodeOutcomeBytes {
+		t.Fatalf("episode exceeded bounds: goal=%d outcome=%d", len(episode.Goal), len(episode.Outcome))
 	}
 }
 

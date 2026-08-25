@@ -7,13 +7,48 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/skill"
 )
+
+const (
+	episodeVersion         = 1
+	maxEpisodeGoalBytes    = 1024
+	maxEpisodeOutcomeBytes = 2048
+)
+
+var (
+	episodeSecretAssignmentPattern = regexp.MustCompile(
+		`(?i)((?:token|secret|password|passwd|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;}]+`,
+	)
+	episodeBearerPattern     = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
+	episodeKeyPattern        = regexp.MustCompile(`\b(?:sk|ghp|github_pat)-[A-Za-z0-9_-]{8,}\b`)
+	episodePrivateKeyPattern = regexp.MustCompile(
+		`(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----`,
+	)
+)
+
+// Episode is a compact, retrieval-safe record derived from visible session
+// content. It never contains message history, images, reasoning, or tool-call
+// arguments.
+type Episode struct {
+	Version    int       `json:"version"`
+	Goal       string    `json:"goal,omitempty"`
+	Outcome    string    `json:"outcome,omitempty"`
+	Status     string    `json:"status"`
+	Artifacts  []string  `json:"artifacts,omitempty"`
+	Checks     []string  `json:"checks,omitempty"`
+	Unresolved []string  `json:"unresolved,omitempty"`
+	Provider   string    `json:"provider,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	SavedAt    time.Time `json:"saved_at"`
+}
 
 // Session is the on-disk representation of one saved conversation.
 // Image attachments are intentionally not persisted.
@@ -29,11 +64,69 @@ type Session struct {
 	Prompt     int                `json:"prompt_tokens"`
 	Reply      int                `json:"completion_tokens"`
 	Estimated  bool               `json:"estimated"`
+	Episode    *Episode           `json:"episode,omitempty"`
 	// Skills are the session-scoped skill activations at save time (run-scoped
 	// activations are never persisted). On load they are re-resolved against
 	// the current registry; a missing or changed skill produces a warning
 	// instead of a silent substitution.
 	Skills []skill.Ref `json:"skills,omitempty"`
+}
+
+// BuildEpisode deterministically summarizes the visible boundary of a saved
+// session. It intentionally ignores tool calls, tool results, images, display
+// annotations, and reasoning. Empty sessions do not produce an episode.
+func BuildEpisode(s Session) *Episode {
+	var goal string
+	for _, message := range s.Messages {
+		if message.Role == provider.RoleUser && strings.TrimSpace(message.Content) != "" {
+			goal = episodeText(message.Content, maxEpisodeGoalBytes)
+			break
+		}
+	}
+
+	var outcome string
+	for index := len(s.Messages) - 1; index >= 0; index-- {
+		message := s.Messages[index]
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) != "" {
+			outcome = episodeText(message.Content, maxEpisodeOutcomeBytes)
+			break
+		}
+	}
+	if goal == "" && outcome == "" {
+		return nil
+	}
+
+	status := "in_progress"
+	if outcome != "" {
+		status = "response_recorded"
+	}
+	return &Episode{
+		Version:  episodeVersion,
+		Goal:     goal,
+		Outcome:  outcome,
+		Status:   status,
+		Provider: episodeText(s.Provider, 256),
+		Model:    episodeText(s.Model, 256),
+	}
+}
+
+func episodeText(value string, maxBytes int) string {
+	value = strings.Join(strings.Fields(redactEpisodeSecrets(value)), " ")
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return strings.TrimSpace(value)
+}
+
+func redactEpisodeSecrets(value string) string {
+	value = episodePrivateKeyPattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
+	value = episodeBearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
+	value = episodeSecretAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	return episodeKeyPattern.ReplaceAllString(value, "[REDACTED KEY]")
 }
 
 // Meta summarizes a saved session for listings.
@@ -82,7 +175,15 @@ func Save(dir, name string, s Session) (string, error) {
 		return "", fmt.Errorf("create history directory: %w", err)
 	}
 	s.Version = 1
-	s.SavedAt = time.Now()
+	s.SavedAt = time.Now().UTC()
+	if s.Episode != nil {
+		episode := *s.Episode
+		episode.Version = episodeVersion
+		episode.SavedAt = s.SavedAt
+		episode.Provider = episodeText(s.Provider, 256)
+		episode.Model = episodeText(s.Model, 256)
+		s.Episode = &episode
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode session: %w", err)
