@@ -49,6 +49,14 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 	if cfg.Memory.Episodic.Capture {
 		t.Error("episodic auto-capture must default to false")
 	}
+	if !cfg.Memory.Retrieval.Enabled || cfg.Memory.Retrieval.MaxContextTokens != 1800 || cfg.Memory.Retrieval.TopK != 10 {
+		t.Fatalf("memory retrieval defaults = %+v", cfg.Memory.Retrieval)
+	}
+	if cfg.Memory.Retrieval.UserTokens != 256 || cfg.Memory.Retrieval.ProjectTokens != 512 ||
+		cfg.Memory.Retrieval.EpisodicTokens != 384 || cfg.Memory.Retrieval.AgentTokens != 512 ||
+		cfg.Memory.Retrieval.SourceTokens != 768 {
+		t.Fatalf("memory retrieval tier defaults = %+v", cfg.Memory.Retrieval)
+	}
 }
 
 func TestConfigFileOverridesDefaults(t *testing.T) {
@@ -140,6 +148,7 @@ func TestNestedEnvOverrides(t *testing.T) {
 	t.Setenv("LLMTUI_CHAT_MAX_TOKENS", "8192")
 	t.Setenv("LLMTUI_AGENT_MAX_CYCLES", "5")
 	t.Setenv("LLMTUI_MEMORY_EPISODIC_CAPTURE", "true")
+	t.Setenv("LLMTUI_MEMORY_RETRIEVAL_MAX_CONTEXT_TOKENS", "900")
 
 	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -160,6 +169,9 @@ func TestNestedEnvOverrides(t *testing.T) {
 	}
 	if !cfg.Memory.Episodic.Capture {
 		t.Error("Memory.Episodic.Capture should be true from env")
+	}
+	if cfg.Memory.Retrieval.MaxContextTokens != 900 {
+		t.Errorf("Memory.Retrieval.MaxContextTokens = %d, want 900 from env", cfg.Memory.Retrieval.MaxContextTokens)
 	}
 }
 

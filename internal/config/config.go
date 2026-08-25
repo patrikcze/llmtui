@@ -180,17 +180,31 @@ type CacheConfig struct {
 
 // MemoryConfig configures local user and project memory (disabled by default).
 type MemoryConfig struct {
-	Enabled     bool                 `mapstructure:"enabled" yaml:"enabled"`
-	Path        string               `mapstructure:"path" yaml:"path"`
-	MaxSnippets int                  `mapstructure:"max_snippets" yaml:"max_snippets"`
-	AutoExtract bool                 `mapstructure:"auto_extract" yaml:"auto_extract"`
-	Episodic    EpisodicMemoryConfig `mapstructure:"episodic" yaml:"episodic"`
+	Enabled     bool                  `mapstructure:"enabled" yaml:"enabled"`
+	Path        string                `mapstructure:"path" yaml:"path"`
+	MaxSnippets int                   `mapstructure:"max_snippets" yaml:"max_snippets"`
+	AutoExtract bool                  `mapstructure:"auto_extract" yaml:"auto_extract"`
+	Episodic    EpisodicMemoryConfig  `mapstructure:"episodic" yaml:"episodic"`
+	Retrieval   MemoryRetrievalConfig `mapstructure:"retrieval" yaml:"retrieval"`
 }
 
 // EpisodicMemoryConfig controls automatic episode refresh during session
 // auto-save. Explicit /save and Ctrl+S always capture an episode.
 type EpisodicMemoryConfig struct {
 	Capture bool `mapstructure:"capture" yaml:"capture"`
+}
+
+// MemoryRetrievalConfig controls deterministic local ranking and active
+// context packing. These limits are independent of response-token reserves.
+type MemoryRetrievalConfig struct {
+	Enabled          bool `mapstructure:"enabled" yaml:"enabled"`
+	MaxContextTokens int  `mapstructure:"max_context_tokens" yaml:"max_context_tokens"`
+	TopK             int  `mapstructure:"top_k" yaml:"top_k"`
+	UserTokens       int  `mapstructure:"user_tokens" yaml:"user_tokens"`
+	ProjectTokens    int  `mapstructure:"project_tokens" yaml:"project_tokens"`
+	EpisodicTokens   int  `mapstructure:"episodic_tokens" yaml:"episodic_tokens"`
+	AgentTokens      int  `mapstructure:"agent_tokens" yaml:"agent_tokens"`
+	SourceTokens     int  `mapstructure:"source_tokens" yaml:"source_tokens"`
 }
 
 // PromptConfig configures prompt composition.
@@ -762,6 +776,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.max_snippets", 100)
 	v.SetDefault("memory.auto_extract", false)
 	v.SetDefault("memory.episodic.capture", false)
+	v.SetDefault("memory.retrieval.enabled", true)
+	v.SetDefault("memory.retrieval.max_context_tokens", 1800)
+	v.SetDefault("memory.retrieval.top_k", 10)
+	v.SetDefault("memory.retrieval.user_tokens", 256)
+	v.SetDefault("memory.retrieval.project_tokens", 512)
+	v.SetDefault("memory.retrieval.episodic_tokens", 384)
+	v.SetDefault("memory.retrieval.agent_tokens", 512)
+	v.SetDefault("memory.retrieval.source_tokens", 768)
 
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.show_debug", false)
