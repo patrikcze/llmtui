@@ -18,7 +18,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
-	"github.com/patrikcze/llmtui/internal/memory"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -62,6 +62,13 @@ type debugInfo struct {
 	AgentStage    string
 	AgentStatus   string
 	AgentVerdict  string
+	// MemoryHits is the merged, ranked hit list from the unified
+	// memoryindex.Retriever built in compositionBase (both KindUserPreference
+	// and KindSourceChunk hits). It is observability only — /debug last shows
+	// it, nothing else consumes it — and is independent of MemorySnippets/
+	// RetrievedContext, which are still sourced for byte-identical legacy
+	// output per Global Constraint 2.
+	MemoryHits []memoryindex.Hit
 }
 
 type toolCallDiagnostic struct {
@@ -190,6 +197,7 @@ type preparedRequest struct {
 	agentScoped bool
 	tools       []provider.ToolSpec
 	ragResults  []rag.Result
+	memoryHits  []memoryindex.Hit
 	estimate    requestTokenEstimate
 }
 
@@ -199,16 +207,57 @@ const compactedContinuationAnchor = "[Compacted continuation] Continue the origi
 type compositionBase struct {
 	input      prompt.Input
 	ragResults []rag.Result
+	// memoryHits is the merged, ranked hit list from the unified
+	// memoryindex.Retriever, threaded through preparedRequest into debugInfo
+	// for /debug last. It does not feed MemorySnippets/RetrievedContext —
+	// those stay sourced independently for byte-identical legacy output.
+	memoryHits []memoryindex.Hit
+}
+
+// compositionRAGSource builds the memoryindex.RAGSource wrapper used both to
+// register RAG into the unified Retriever (for the debug hit list) and to
+// call SearchRaw directly (for the legacy-identical RetrievedContext/
+// ragResults output) — see Global Constraint 2 in the plan: normalized Hit
+// scores must never be the source of the legacy RAG output.
+func (m *Model) compositionRAGSource() memoryindex.RAGSource {
+	return memoryindex.RAGSource{
+		Index: func() *rag.Index { return m.ragIndex },
+		TopK:  m.ragTopK,
+	}
 }
 
 func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw bool) compositionBase {
 	prof, _ := m.activeProfile()
 
-	var memSnippets []string
+	// ragActive mirrors today's exact RAG guard. It gates both registering
+	// RAGSource into the unified Retriever below and the direct SearchRaw
+	// call further down that produces the legacy-identical RAG output.
+	ragActive := m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != ""
+	ragSource := m.compositionRAGSource()
+
+	var sources []memoryindex.Source
 	if m.memEnabled && m.memStore != nil {
-		if snippets, err := m.memStore.Load(); err == nil {
-			for _, sn := range memory.Relevant(snippets, raw, 3) {
-				memSnippets = append(memSnippets, sn.Text)
+		// Mirror today's exact guard: only register the user-memory source
+		// when memory is enabled and a store exists.
+		sources = append(sources, memoryindex.UserSource{Snippets: m.memStore.Load})
+	}
+	if ragActive {
+		sources = append(sources, ragSource)
+	}
+
+	var memSnippets []string
+	var memoryHits []memoryindex.Hit
+	if len(sources) > 0 {
+		// compositionBase has no request-scoped context available today (its
+		// callers — prepareRequest, dispatch, continueChat — don't carry one
+		// either), so this in-process, non-blocking lookup uses Background.
+		retriever := memoryindex.NewRetriever(sources...)
+		if hits, err := retriever.Search(context.Background(), memoryindex.Query{Text: raw}); err == nil {
+			memoryHits = hits
+			for _, h := range hits {
+				if h.Item.Kind == memoryindex.KindUserPreference {
+					memSnippets = append(memSnippets, h.Item.Text)
+				}
 			}
 		}
 	}
@@ -230,10 +279,16 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		}
 	}
 
+	// Deliberately a second Index.Search call, not derived from the
+	// normalized Hits above: SearchRaw returns the unmodified []rag.Result
+	// the legacy path relied on, which is what Global Constraint 2 requires
+	// for RetrievedContext/base.ragResults/m.ragLast/"retrieved snippets
+	// (RAG)" byte-identical output. The normalized Hits feed only the new
+	// debug ranked-hit list.
 	var results []rag.Result
 	retrieved := ""
-	if m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != "" {
-		results = m.ragIndex.Search(raw, m.ragTopK())
+	if ragActive {
+		results = ragSource.SearchRaw(raw)
 		if len(results) > 0 {
 			retrieved = rag.FormatContext(results, m.ragMaxContextChars())
 		}
@@ -263,6 +318,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			OmitRaw: omitRaw,
 		},
 		ragResults: results,
+		memoryHits: memoryHits,
 	}
 }
 
@@ -574,7 +630,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		FixedTokens:            fixed.Total,
 	})
 	if fixed.Total+reserve > window {
-		return preparedRequest{composed: probe, decision: decision, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, estimate: fixed}, fmt.Errorf(
+		return preparedRequest{composed: probe, decision: decision, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: fixed}, fmt.Errorf(
 			"request overhead is too large for the %d-token context window: system/user prompt %d + tool schemas %d + response reserve %d; disable tools/skills/RAG, shorten the prompt, lower the reserve, or select a larger context window",
 			window, fixed.System+fixed.Messages, fixed.Tools, reserve)
 	}
@@ -651,14 +707,14 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		}
 	}
 	if est.Total > budget {
-		return preparedRequest{composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, estimate: est}, fmt.Errorf(
+		return preparedRequest{composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs, ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: est}, fmt.Errorf(
 			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
 			est.Total, budget)
 	}
 	if toolContinuation && !hasUserMessage(out.Messages) {
 		return preparedRequest{
 				composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs,
-				ragResults: base.ragResults, estimate: est,
+				ragResults: base.ragResults, memoryHits: base.memoryHits, estimate: est,
 			},
 			errors.New("tool continuation has no user anchor after context selection")
 	}
@@ -675,6 +731,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		agentScoped: agentScoped,
 		tools:       specs,
 		ragResults:  base.ragResults,
+		memoryHits:  base.memoryHits,
 		estimate:    est,
 	}, nil
 }
@@ -823,6 +880,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
 			SummaryActive: prepared.estimate.SummaryToken > 0,
 			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
+			MemoryHits: prepared.memoryHits,
 		}
 		m.failVerifiedRun(prepareErr)
 		m.endAgentRun()
@@ -860,6 +918,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 				ToolCount: len(prepared.tools), ToolsHash: toolSpecsFingerprint(prepared.tools),
 				SummaryActive: prepared.estimate.SummaryToken > 0,
 				NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
+				MemoryHits: prepared.memoryHits,
 			}
 			// The cached answer completed this run; run-scoped skills (which
 			// were part of the key) deactivate like on a live final answer.
@@ -924,6 +983,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		ToolsHash:     toolSpecsFingerprint(prepared.tools),
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
+		MemoryHits: prepared.memoryHits,
 	}
 
 	return m.startRequest(req)
@@ -1069,6 +1129,7 @@ func (m *Model) continueChat() tea.Cmd {
 		ToolsHash:     toolSpecsFingerprint(prepared.tools),
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
+		MemoryHits: prepared.memoryHits,
 	}
 	return m.startRequest(req)
 }

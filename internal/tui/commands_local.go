@@ -808,6 +808,14 @@ func (m *Model) debugOverlay() string {
 		}
 	}
 
+	if len(d.MemoryHits) > 0 {
+		b.WriteString("\n" + m.theme.UserLabel.Render("memory retrieval (unified)") + "\n")
+		for _, h := range d.MemoryHits {
+			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(
+				fmt.Sprintf("%s · %s · score %.2f", h.Item.Kind, h.Item.ID, h.Score)))
+		}
+	}
+
 	if len(d.Sections) > 0 {
 		b.WriteString("\n" + m.theme.UserLabel.Render("composed sections") + "\n")
 		for _, s := range d.Sections {
