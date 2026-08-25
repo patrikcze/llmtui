@@ -7,12 +7,11 @@
 // neither internal/memory nor internal/rag may ever import memoryindex.
 // internal/tui wires those adapters into the live app's prompt pipeline.
 //
-// This is Phase 0-1 of a larger tiered-memory plan. It deliberately does
-// not implement token-budget packing, kind-priority ordering, cross-source
-// score boosts, or diversity/dedup-by-file: Retriever's dedup is
-// ContentHash-equality only, and its sort is a simple deterministic
-// tie-break (score, then kind, then recency, then ID). Those are explicitly
-// deferred to a later phase, not oversights in this one.
+// The package deliberately does not yet implement token-budget packing,
+// kind-priority ordering, cross-source score boosts, or diversity/dedup-by-file:
+// Retriever's dedup is ContentHash-equality only, and its sort is a simple
+// deterministic tie-break (score, then kind, then recency, then ID). Those are
+// explicitly deferred to later phases, not oversights in the current design.
 package memoryindex
 
 import (

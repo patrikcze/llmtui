@@ -30,6 +30,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/memory"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
@@ -222,6 +223,8 @@ type Model struct {
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
 	memStore      *memory.Store
+	projectStore  *memoryindex.ProjectStore
+	projectID     string
 	memEnabled    bool
 	promptMode    string // "" = follow template/config
 	profileMode   string // "auto" or a profile name
@@ -373,8 +376,25 @@ func (m *Model) rebuildFromConfig() {
 	}
 
 	m.memStore = nil
+	m.projectStore = nil
+	m.projectID = ""
 	if path, err := history.ExpandHome(cfg.Memory.Path); err == nil && path != "" {
 		m.memStore = memory.NewStore(path, cfg.Memory.MaxSnippets)
+		if wd, wdErr := os.Getwd(); wdErr == nil {
+			project, projectErr := memoryindex.ResolveProject(wd)
+			if projectErr != nil {
+				m.errText = projectErr.Error()
+			} else {
+				projectDir := filepath.Join(filepath.Dir(path), "memory", "projects")
+				store, storeErr := memoryindex.NewProjectStore(projectDir, project.ID)
+				if storeErr != nil {
+					m.errText = storeErr.Error()
+				} else {
+					m.projectStore = store
+					m.projectID = project.ID
+				}
+			}
+		}
 	}
 
 	m.toolRunner = nil

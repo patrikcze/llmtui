@@ -8,9 +8,11 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
 )
@@ -344,6 +346,115 @@ func TestMemoryCommands(t *testing.T) {
 		if s.Title == "Relevant Memory" {
 			t.Error("disabled memory must not appear in composition")
 		}
+	}
+}
+
+func TestTypedProjectMemoryCommands(t *testing.T) {
+	m := newTestModel(t)
+	if m.projectStore == nil {
+		t.Fatal("project memory store is not configured")
+	}
+
+	cmdMemory(m, "add user Prefer concise Go examples.")
+	cmdMemory(m, "add project architecture Use hexagonal architecture for Go services.")
+	cmdMemory(m, "add project convention Run gofmt before committing.")
+	cmdMemory(m, "add project decision Use PostgreSQL for durable storage.")
+	if m.errText != "" {
+		t.Fatalf("memory add error = %q", m.errText)
+	}
+
+	userRecords, err := m.memStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(userRecords) != 1 || userRecords[0].Text != "Prefer concise Go examples." {
+		t.Fatalf("user records = %+v", userRecords)
+	}
+	projectRecords, err := m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projectRecords) != 3 {
+		t.Fatalf("project records = %+v", projectRecords)
+	}
+
+	projectList := m.memoryListOverlay("project")
+	for _, want := range []string{"project_architecture", "project_convention", "project_decision", "PostgreSQL"} {
+		if !strings.Contains(projectList, want) {
+			t.Errorf("project list missing %q:\n%s", want, projectList)
+		}
+	}
+	if strings.Contains(projectList, "Prefer concise") {
+		t.Fatalf("project-only list included user memory:\n%s", projectList)
+	}
+
+	cmdMemory(m, "inspect "+projectRecords[2].ID)
+	inspect := m.viewport.View()
+	for _, want := range []string{"project_decision", "user_authored", "PostgreSQL"} {
+		if !strings.Contains(inspect, want) {
+			t.Errorf("inspect overlay missing %q:\n%s", want, inspect)
+		}
+	}
+
+	cmdMemory(m, "remove "+projectRecords[2].ID)
+	remaining, err := m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("remaining project records = %d, want 2", len(remaining))
+	}
+}
+
+func TestMemorySearchAndExplainCommands(t *testing.T) {
+	m := newTestModel(t)
+	if _, err := m.memStore.Add("Prefer PostgreSQL examples in Go."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.projectStore.Add(memoryindex.KindProjectDecision, "Use PostgreSQL for durable storage."); err != nil {
+		t.Fatal(err)
+	}
+
+	search, err := m.memorySearchOverlay("PostgreSQL storage", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(search, "user_preference") || !strings.Contains(search, "project_decision") {
+		t.Fatalf("search did not include both memory tiers:\n%s", search)
+	}
+	explain, err := m.memorySearchOverlay("PostgreSQL storage", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(explain, "matched") || !strings.Contains(explain, "score") {
+		t.Fatalf("explain lacks ranking details:\n%s", explain)
+	}
+
+	cmdMemory(m, "search PostgreSQL storage")
+	if !m.overlayOpen || !strings.Contains(m.viewport.View(), "memory search") {
+		t.Fatal("/memory search did not open its results overlay")
+	}
+}
+
+func TestMemoryOverlaysSanitizeStoredTerminalContent(t *testing.T) {
+	m := newTestModel(t)
+	if _, err := m.memStore.Add("safe\x1b]52;c;Y2xpcA==\x07 preference"); err != nil {
+		t.Fatal(err)
+	}
+	overlay := m.memoryListOverlay("user")
+	plain := ansi.Strip(overlay)
+	if strings.ContainsRune(plain, '\x1b') || strings.ContainsRune(plain, '\x07') || strings.Contains(plain, "Y2xpcA") {
+		t.Fatalf("memory overlay retained terminal control bytes: %q", overlay)
+	}
+}
+
+func TestMemoryListFutureTiersAreExplicit(t *testing.T) {
+	m := newTestModel(t)
+	if got := m.memoryListOverlay("episode"); !strings.Contains(got, "Phase 3") {
+		t.Fatalf("episode list did not explain its current state:\n%s", got)
+	}
+	if got := m.memoryListOverlay("run"); !strings.Contains(got, "Phase 4") {
+		t.Fatalf("run list did not explain its current state:\n%s", got)
 	}
 }
 

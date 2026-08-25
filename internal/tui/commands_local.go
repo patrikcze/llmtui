@@ -489,68 +489,6 @@ func (m *Model) contextOverlay() string {
 	return m.overlayFooter(&b)
 }
 
-// --- /memory -----------------------------------------------------------------
-
-func cmdMemory(m *Model, args string) tea.Cmd {
-	sub, rest := splitArgs(args)
-	if m.memStore == nil {
-		return m.fail("memory is not configured (memory.path)")
-	}
-	switch sub {
-	case "", "list":
-		m.openOverlay(m.memoryOverlay())
-	case "on":
-		m.memEnabled = true
-		m.notice = "local memory enabled for this session"
-	case "off":
-		m.memEnabled = false
-		m.notice = "local memory disabled for this session"
-	case "add":
-		if rest == "" {
-			return m.fail("usage: /memory add <text> — do not store secrets")
-		}
-		sn, err := m.memStore.Add(rest)
-		if err != nil {
-			return m.fail("memory add: " + err.Error())
-		}
-		m.notice = "remembered (" + sn.ID + ")"
-	case "remove":
-		if err := m.memStore.Remove(rest); err != nil {
-			return m.fail(err.Error())
-		}
-		m.notice = "memory snippet removed"
-	case "clear":
-		if err := m.memStore.Clear(); err != nil {
-			return m.fail(err.Error())
-		}
-		m.notice = "all memory snippets removed"
-	default:
-		return m.fail("usage: /memory [on|off|add <text>|list|remove <id>|clear]")
-	}
-	return nil
-}
-
-func (m *Model) memoryOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("local memory") + "\n\n")
-	m.kv(&b, "state", onOff(m.memEnabled))
-	snippets, err := m.memStore.Load()
-	switch {
-	case err != nil:
-		b.WriteString("\n" + m.theme.ErrorText.Render(err.Error()) + "\n")
-	case len(snippets) == 0:
-		b.WriteString("\n" + m.theme.SystemNote.Render("no snippets — /memory add <text> (never store secrets)") + "\n")
-	default:
-		b.WriteString("\n")
-		for _, sn := range snippets {
-			fmt.Fprintf(&b, "  %s %s\n", m.theme.BadgeOK.Render(sn.ID), m.theme.StatusValue.Render(sn.Text))
-		}
-	}
-	b.WriteString("\n" + m.theme.StatusBar.Render(fmt.Sprintf("  only snippets relevant to your message are added to prompts (max 3);\n  %d snippet limit · stored in %s", m.cfg.Memory.MaxSnippets, m.cfg.Memory.Path)) + "\n")
-	b.WriteString("\n" + m.theme.SystemNote.Render("/memory add · /memory remove <id> · /memory on|off"))
-	return m.overlayFooter(&b)
-}
-
 // --- /doctor -----------------------------------------------------------------
 
 type doctorResultMsg struct{ report string }

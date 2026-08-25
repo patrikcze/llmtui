@@ -2,10 +2,12 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/rag"
 )
 
@@ -40,6 +42,49 @@ func TestCompositionBase_DebugHitsIncludeUserAndRAGKinds(t *testing.T) {
 	}
 	if !sawSourceChunk {
 		t.Error("memoryHits has no KindSourceChunk entry with both memory and RAG populated")
+	}
+}
+
+func TestCompositionBase_ProjectMemoryParticipatesInComposition(t *testing.T) {
+	m := newTestModel(t)
+	m.memEnabled = true
+	record, err := m.projectStore.Add(
+		memoryindex.KindProjectDecision,
+		"Use PostgreSQL for durable transaction storage.",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := m.compositionBase("How should transaction storage work?", nil, false)
+	foundPromptRecord := false
+	for _, projectRecord := range base.input.ProjectMemory {
+		if projectRecord.ID == record.ID && strings.Contains(projectRecord.Text, "PostgreSQL") {
+			foundPromptRecord = true
+		}
+	}
+	if !foundPromptRecord {
+		t.Fatalf("project record missing from prompt input: %+v", base.input.ProjectMemory)
+	}
+	foundHit := false
+	for _, hit := range base.memoryHits {
+		if hit.Item.ID == record.ID && hit.Item.Kind == memoryindex.KindProjectDecision {
+			foundHit = true
+		}
+	}
+	if !foundHit {
+		t.Fatalf("project record missing from unified hits: %+v", base.memoryHits)
+	}
+	out := composeFromBase(base, nil, "")
+	last := out.Messages[len(out.Messages)-1]
+	if last.Role != provider.RoleUser || last.Content != "How should transaction storage work?" {
+		t.Fatalf("raw user message changed: %+v", last)
+	}
+
+	m.memEnabled = false
+	base = m.compositionBase("How should transaction storage work?", nil, false)
+	if len(base.input.ProjectMemory) != 0 {
+		t.Fatalf("disabled project memory reached prompt: %+v", base.input.ProjectMemory)
 	}
 }
 

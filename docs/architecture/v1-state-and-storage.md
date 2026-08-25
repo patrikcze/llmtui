@@ -12,7 +12,8 @@
 | Cache | `internal/cache/cache.go` | Final-response cache only — see §2. |
 | Persistence (sessions) | `internal/history` | |
 | Persistence (agent runs) | `internal/agent/store.go` (`agent.NewFileStore`) | |
-| Memory (user preference) | `internal/memory` | |
+| Memory (user preference) | `internal/memory` | Global user-authored YAML snippets. |
+| Memory (typed project records) | `internal/memoryindex.ProjectStore` | Versioned, workspace-hashed, owner-only JSON; current workspace is the isolation boundary. |
 | Stale-event identity | `tui.Model.streamGen` (app.go:1601), `mcpBatchGen` (app.go:796), `agentLoop.verifyGen` (agent_loop.go:325-327) | Confirmed correct, see `v1-audit.md` §6. |
 | **New in v1**: progress ledger | proposed: `internal/agent` or a new small `internal/progress` package, referenced by the shared kernel | See `v1-agent-runtime.md` §3. Must not become a duplicate of `internal/cache`. |
 
