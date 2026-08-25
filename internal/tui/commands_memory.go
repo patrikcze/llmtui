@@ -180,8 +180,8 @@ func (m *Model) memoryListOverlay(scope string) string {
 		m.writeEpisodeMemoryList(&b)
 	}
 	if scope == "run" {
-		message := "agent-run memory remains run-local; durable promotion arrives in Phase 4"
-		b.WriteString("\n" + m.theme.SystemNote.Render(message) + "\n")
+		b.WriteString("\n" + m.theme.UserLabel.Render("current agent-run memory") + "\n")
+		m.writeAgentRunMemoryList(&b)
 	}
 
 	b.WriteString("\n" + m.theme.StatusBar.Render(
@@ -191,6 +191,28 @@ func (m *Model) memoryListOverlay(scope string) string {
 		"/memory add · /memory inspect <id> · /memory search <query> · /memory remove <id> · /memory on|off",
 	))
 	return m.overlayFooter(&b)
+}
+
+func (m *Model) writeAgentRunMemoryList(b *strings.Builder) {
+	source := m.agentRunMemorySource()
+	hits, err := source.Search(context.Background(), memoryindex.Query{RunID: m.agentRunID()})
+	if err != nil {
+		b.WriteString("  " + m.theme.ErrorText.Render(terminaltext.Sanitize(err.Error())) + "\n")
+		return
+	}
+	if len(hits) == 0 {
+		b.WriteString("  " + m.theme.SystemNote.Render("none") + "\n")
+		return
+	}
+	for _, hit := range hits {
+		fmt.Fprintf(
+			b,
+			"  %s %s %s\n",
+			m.theme.BadgeOK.Render(hit.Item.ID),
+			m.theme.StatusBar.Render(string(hit.Item.Kind)),
+			m.theme.StatusValue.Render(memoryDisplayText(hit.Item.Text)),
+		)
+	}
 }
 
 func (m *Model) writeEpisodeMemoryList(b *strings.Builder) {
@@ -363,11 +385,15 @@ func (m *Model) memorySearchOverlay(query string, explain bool) (string, error) 
 	if m.historyDir != "" {
 		sources = append(sources, memoryindex.EpisodeSource{Dir: m.historyDir, TopK: 10})
 	}
+	if _, ok := m.agentRunSnapshot(); ok {
+		sources = append(sources, m.agentRunMemorySource())
+	}
 	retriever := memoryindex.NewRetriever(sources...)
 	hits, err := retriever.Search(context.Background(), memoryindex.Query{
 		Text:      query,
 		ProjectID: m.projectID,
 		SessionID: m.sessionName,
+		RunID:     m.agentRunID(),
 		TopK:      10,
 	})
 	if err != nil {

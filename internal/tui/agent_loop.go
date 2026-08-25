@@ -16,6 +16,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/agentverify"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -143,6 +144,35 @@ func (m *Model) agentRunID() string {
 		return ""
 	}
 	return m.agentLoop.run.ID
+}
+
+func (m *Model) agentRunSnapshot() (memoryindex.AgentRunSnapshot, bool) {
+	if m.agentLoop == nil || m.agentLoop.run == nil {
+		return memoryindex.AgentRunSnapshot{}, false
+	}
+	run := m.agentLoop.run
+	snapshot := memoryindex.AgentRunSnapshot{
+		RunID:     run.ID,
+		Objective: run.Objective,
+		Criteria:  make([]memoryindex.AgentCriterionSnapshot, 0, len(run.Criteria)),
+		Evidence:  make([]memoryindex.AgentEvidenceSnapshot, 0, len(run.Evidence)),
+	}
+	for _, criterion := range run.Criteria {
+		snapshot.Criteria = append(snapshot.Criteria, memoryindex.AgentCriterionSnapshot{
+			ID: criterion.ID, Text: criterion.Text, Status: string(criterion.Status),
+		})
+	}
+	for _, evidence := range run.Evidence {
+		snapshot.Evidence = append(snapshot.Evidence, memoryindex.AgentEvidenceSnapshot{
+			Cycle: evidence.Cycle, Kind: string(evidence.Kind), Source: evidence.Source,
+			Summary: evidence.Summary, Success: evidence.Success,
+		})
+	}
+	return snapshot, true
+}
+
+func (m *Model) agentRunMemorySource() memoryindex.AgentRunSource {
+	return memoryindex.AgentRunSource{Snapshot: m.agentRunSnapshot}
 }
 
 func (m *Model) syncAgentDebug() {

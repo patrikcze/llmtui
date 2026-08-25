@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
@@ -449,7 +450,7 @@ func TestMemoryOverlaysSanitizeStoredTerminalContent(t *testing.T) {
 	}
 }
 
-func TestMemoryListEpisodeAndFutureRunTier(t *testing.T) {
+func TestMemoryListEpisodeAndRunTiers(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()
 	session := history.Session{
@@ -465,8 +466,12 @@ func TestMemoryListEpisodeAndFutureRunTier(t *testing.T) {
 	if got := m.memoryListOverlay("episode"); !strings.Contains(got, "saved-episode") || !strings.Contains(got, "remember this episode") {
 		t.Fatalf("episode list omitted saved summary:\n%s", got)
 	}
-	if got := m.memoryListOverlay("run"); !strings.Contains(got, "Phase 4") {
-		t.Fatalf("run list did not explain its current state:\n%s", got)
+	m.agentLoop.run = &agent.AgentRun{
+		ID: "run-memory", Status: agent.DecisionDone, Objective: "ship run memory",
+		Evidence: []agent.EvidenceItem{{Cycle: 1, Kind: agent.EvidenceTest, Source: "go test", Summary: "passed", Success: true}},
+	}
+	if got := m.memoryListOverlay("run"); !strings.Contains(got, "ship run memory") || !strings.Contains(got, "agent_evidence") {
+		t.Fatalf("run list omitted bounded current-run state:\n%s", got)
 	}
 }
 

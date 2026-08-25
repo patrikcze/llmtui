@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
@@ -139,6 +140,42 @@ func TestCompositionBase_EpisodeParticipatesWithoutTranscriptLeakage(t *testing.
 	last := out.Messages[len(out.Messages)-1]
 	if last.Role != provider.RoleUser || last.Content != "How did episodic retrieval tests go?" {
 		t.Fatalf("raw user message changed: %+v", last)
+	}
+}
+
+func TestCompositionBase_ActiveAgentRunAppearsOnlyInUnifiedHits(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop.run = &agent.AgentRun{
+		ID: "run-active", Status: agent.DecisionRunning, Objective: "Finish active context",
+		Criteria: []agent.Criterion{{ID: "c1", Text: "Tests pass", Status: agent.CriterionPending}},
+		Evidence: []agent.EvidenceItem{{Cycle: 1, Kind: agent.EvidenceTest, Source: "go test", Summary: "package passed", Success: true}},
+	}
+	base := m.compositionBase("continue the active context work", nil, false)
+	wantKinds := map[memoryindex.Kind]bool{
+		memoryindex.KindAgentObjective: false,
+		memoryindex.KindAgentCriterion: false,
+		memoryindex.KindAgentEvidence:  false,
+	}
+	for _, hit := range base.memoryHits {
+		if _, exists := wantKinds[hit.Item.Kind]; exists {
+			wantKinds[hit.Item.Kind] = true
+		}
+	}
+	for kind, found := range wantKinds {
+		if !found {
+			t.Errorf("active run hit %q missing: %+v", kind, base.memoryHits)
+		}
+	}
+	if len(base.input.EpisodeMemory) != 0 || len(base.input.ProjectMemory) != 0 || len(base.input.MemorySnippets) != 0 {
+		t.Fatalf("agent run was mixed into generic prompt memory: %+v", base.input)
+	}
+
+	m.agentLoop.run.Status = agent.DecisionDone
+	base = m.compositionBase("ordinary follow-up", nil, false)
+	for _, hit := range base.memoryHits {
+		if hit.Item.Scope == memoryindex.ScopeRun {
+			t.Fatalf("terminal previous run leaked into ordinary composition: %+v", hit)
+		}
 	}
 }
 

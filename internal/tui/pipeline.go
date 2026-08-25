@@ -250,6 +250,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	if m.memEnabled && m.historyDir != "" {
 		sources = append(sources, episodeSource)
 	}
+	if m.agentRunActive() {
+		sources = append(sources, m.agentRunMemorySource())
+	}
 	if ragActive {
 		sources = append(sources, ragSource)
 	}
@@ -264,6 +267,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			Text:      raw,
 			ProjectID: m.projectID,
 			SessionID: m.sessionName,
+			RunID:     m.agentRunID(),
 		}); err == nil {
 			memoryHits = hits
 		}
