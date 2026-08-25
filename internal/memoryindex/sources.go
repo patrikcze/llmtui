@@ -84,6 +84,12 @@ func (s AgentRunSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 	}
 
 	for _, e := range snap.Evidence {
+		// AgentEvidenceSnapshot.Kind, .Source, and .Success are intentionally
+		// not projected onto the Hit/Item yet — AgentRunSource is unwired in
+		// this phase (see the type doc above), so there is no real caller to
+		// validate a projection shape against. A later phase that wires this
+		// in should decide where they belong (e.g. Success as a tag,
+		// Kind/Source into Item.Tags or Item.Source) against real usage.
 		hits = append(hits, Hit{
 			Item: Item{
 				Text:  e.Summary,

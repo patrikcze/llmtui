@@ -18,6 +18,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
+	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/modelprofile"
 	"github.com/patrikcze/llmtui/internal/prompt"
@@ -245,7 +246,6 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		sources = append(sources, ragSource)
 	}
 
-	var memSnippets []string
 	var memoryHits []memoryindex.Hit
 	if len(sources) > 0 {
 		// compositionBase has no request-scoped context available today (its
@@ -254,10 +254,23 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		retriever := memoryindex.NewRetriever(sources...)
 		if hits, err := retriever.Search(context.Background(), memoryindex.Query{Text: raw}); err == nil {
 			memoryHits = hits
-			for _, h := range hits {
-				if h.Item.Kind == memoryindex.KindUserPreference {
-					memSnippets = append(memSnippets, h.Item.Text)
-				}
+		}
+	}
+
+	// Deliberately a second, independent lookup, not derived from the merged/
+	// deduped Retriever hits above: Retriever.Search dedupes hits sharing a
+	// ContentHash, and memory.Store.Add does not dedupe by text — two
+	// snippets with identical text get distinct IDs, and memory.Relevant can
+	// rank both into its top-3. Routing MemorySnippets through the merged
+	// Retriever output would let that dedup silently drop one of them. This
+	// mirrors the RAG path's SearchRaw call below (see Global Constraint 2):
+	// memSnippets must always equal memory.Relevant's own output, in order,
+	// independent of Retriever's merge/dedup/sort semantics.
+	var memSnippets []string
+	if m.memEnabled && m.memStore != nil {
+		if snippets, err := m.memStore.Load(); err == nil {
+			for _, sn := range memory.Relevant(snippets, raw, 3) {
+				memSnippets = append(memSnippets, sn.Text)
 			}
 		}
 	}
