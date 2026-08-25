@@ -231,6 +231,93 @@ func (m *Model) agentQuestionPickerOverlay() string {
 	return b.String()
 }
 
+func (m *Model) openAgentPromotionPicker() {
+	if m.projectStore == nil || m.agentLoop == nil || m.agentLoop.run == nil || m.agentLoop.run.Status != agent.DecisionDone {
+		return
+	}
+	m.pickerKind = pickerAgentPromotion
+	m.pickerHeader = "Promote this verified outcome to project memory?"
+	m.pickerItems = []string{"architecture", "convention", "decision", "skip"}
+	m.pickerIdx = len(m.pickerItems) - 1
+	m.overlayOpen = true
+	m.renderPicker()
+}
+
+func (m *Model) agentPromotionPickerOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("verified outcome") + "\n\n")
+	b.WriteString(m.theme.UserLabel.Render(m.pickerHeader) + "\n\n")
+	for index, option := range m.pickerItems {
+		marker := "  "
+		label := m.theme.SystemNote.Render(option)
+		if index == m.pickerIdx {
+			marker = m.theme.BadgeOK.Render("▸ ")
+			label = m.theme.BadgeOK.Render(option)
+		}
+		b.WriteString(zone.Mark(pickerRowZoneID(index), marker+label) + "\n")
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ choose · enter confirm · esc keep run-local only"))
+	return b.String()
+}
+
+func (m *Model) promoteAgentOutcome(category string) error {
+	if m.projectStore == nil || m.agentLoop == nil || m.agentLoop.run == nil {
+		return errors.New("project memory or agent run is unavailable")
+	}
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone {
+		return fmt.Errorf("run status %s is not eligible", run.Status)
+	}
+	cycle := run.LatestCycle()
+	if cycle == nil || cycle.Execution == nil || cycle.Verification == nil || cycle.Verification.Verdict != agent.VerificationPassed {
+		return errors.New("run has no verifier-passed completed cycle")
+	}
+	kind, ok := projectMemoryKind(category)
+	if !ok {
+		return fmt.Errorf("unsupported project memory category %q", category)
+	}
+
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Verified agent outcome for objective: %s", cycle.Objective)
+	if text := strings.TrimSpace(cycle.Execution.Summary); text != "" {
+		fmt.Fprintf(&summary, "\nExecution: %s", text)
+	}
+	if text := strings.TrimSpace(cycle.Verification.Summary); text != "" {
+		fmt.Fprintf(&summary, "\nVerification: %s", text)
+	}
+	if len(cycle.Execution.ChangedFiles) > 0 {
+		fmt.Fprintf(&summary, "\nChanged files: %s", strings.Join(cycle.Execution.ChangedFiles, ", "))
+	}
+	if len(cycle.Execution.Artifacts) > 0 {
+		fmt.Fprintf(&summary, "\nArtifacts: %s", strings.Join(cycle.Execution.Artifacts, ", "))
+	}
+	if len(cycle.Execution.TestsRun) > 0 {
+		checks := make([]string, 0, len(cycle.Execution.TestsRun))
+		for _, test := range cycle.Execution.TestsRun {
+			status := "failed"
+			if test.Passed {
+				status = "passed"
+			}
+			checks = append(checks, test.Name+" ("+status+")")
+		}
+		fmt.Fprintf(&summary, "\nChecks: %s", strings.Join(checks, ", "))
+	}
+	record, err := m.projectStore.Promote(
+		kind,
+		summary.String(),
+		run.ID,
+		run.Cycle,
+		"agent_run:"+run.ID,
+		fmt.Sprintf("cycle:%d", run.Cycle),
+		"verifier:passed",
+	)
+	if err != nil {
+		return err
+	}
+	m.notice = "promoted verified outcome as project " + category + " (" + record.ID + ")"
+	return nil
+}
+
 func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cmd {
 	if m.agentLoop == nil {
 		m.configureAgentLoop()
@@ -697,6 +784,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, tea.Batch(persist, m.startNextAgentCycle(stop.NextObjective))
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
+		m.openAgentPromotionPicker()
 	case agent.DecisionNeedsUserInput:
 		if len(result.UserOptions) > 0 {
 			m.openAgentQuestionPicker(stop.Reason, result.UserOptions)

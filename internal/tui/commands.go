@@ -77,6 +77,7 @@ const (
 	pickerSkill
 	pickerPlugin
 	pickerAgentQuestion
+	pickerAgentPromotion
 )
 
 func slashCommands() []slashCommand {
@@ -407,6 +408,8 @@ func (m *Model) renderPicker() {
 		content = m.pluginsPickerOverlay()
 	case pickerAgentQuestion:
 		content = m.agentQuestionPickerOverlay()
+	case pickerAgentPromotion:
+		content = m.agentPromotionPickerOverlay()
 	}
 	m.viewport.SetContent(content)
 	m.viewport.GotoTop()

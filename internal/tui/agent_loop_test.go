@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
 	providermock "github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -202,6 +203,69 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 		if m.agentLoop.run.Events[i].Kind != kind {
 			t.Fatalf("event %d = %q, want %q", i, m.agentLoop.run.Events[i].Kind, kind)
 		}
+	}
+	if m.pickerKind != pickerAgentPromotion || m.pickerItems[m.pickerIdx] != "skip" {
+		t.Fatalf("completion promotion picker = kind %v item %q", m.pickerKind, m.pickerItems[m.pickerIdx])
+	}
+}
+
+func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{text: "Implemented the bounded change."},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
+
+	records, err := m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("completion auto-promoted records: %+v", records)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	records, err = m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("promoted records = %+v", records)
+	}
+	record := records[0]
+	if record.Kind != memoryindex.KindProjectDecision || record.Review != memoryindex.ReviewApproved || record.Trust != memoryindex.TrustModelProposed {
+		t.Fatalf("promoted record = %+v", record)
+	}
+	if record.SourceRunID != m.agentLoop.run.ID || record.SourceCycle != m.agentLoop.run.Cycle {
+		t.Fatalf("promotion provenance = %+v", record)
+	}
+	if !strings.Contains(record.Text, "observable criteria passed") {
+		t.Fatalf("promotion omitted passed verification: %q", record.Text)
+	}
+}
+
+func TestAgentPromotionSkipAndEscapeWriteNothing(t *testing.T) {
+	for _, action := range []string{"skip", "escape"} {
+		t.Run(action, func(t *testing.T) {
+			m, _ := configureAgentTestModel(t,
+				agentScriptStep{text: "done"},
+				agentScriptStep{text: verifierJSON("passed", "passed", "", false, false)},
+			)
+			driveAgentCommands(t, m, m.startVerifiedRun("task", nil))
+			key := tea.KeyPressMsg{Code: tea.KeyEnter}
+			if action == "escape" {
+				key = tea.KeyPressMsg{Code: tea.KeyEsc}
+			}
+			m.Update(key)
+			records, err := m.projectStore.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(records) != 0 {
+				t.Fatalf("%s wrote records: %+v", action, records)
+			}
+		})
 	}
 }
 
@@ -1008,8 +1072,8 @@ func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 	_, enterCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	driveAgentCommands(t, m, enterCmd)
 
-	if m.pickerKind != pickerNone {
-		t.Fatalf("pickerKind = %v, want pickerNone after selection", m.pickerKind)
+	if m.pickerKind != pickerAgentPromotion {
+		t.Fatalf("pickerKind = %v, want pickerAgentPromotion after completed resume", m.pickerKind)
 	}
 	if m.agentLoop.run.ID != runID || m.agentLoop.run.Cycle != 2 || m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("selecting an option did not resume the same run: %+v", m.agentLoop.run)
