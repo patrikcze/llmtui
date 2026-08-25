@@ -11,6 +11,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/memory"
+	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/rag"
 )
@@ -211,6 +212,27 @@ func TestCharacterization_CacheKeyVariesWithMemoryAndRAG(t *testing.T) {
 	}
 	if withMem == withoutMem {
 		t.Error("cache key unchanged when memory snippet availability changed")
+	}
+
+	// Typed project-memory variance follows the same fully composed prompt
+	// rule without changing legacy user-memory selection.
+	withProjectMemory := keyFor(func(m *Model) {
+		m.memEnabled = true
+		if _, err := m.projectStore.Add(
+			memoryindex.KindProjectConvention,
+			"Go examples must pass gofmt.",
+		); err != nil {
+			t.Fatalf("seed project memory: %v", err)
+		}
+	})
+	withoutProjectMemory := keyFor(func(m *Model) {
+		m.memEnabled = true
+	})
+	if withProjectMemory.SystemPrompt == withoutProjectMemory.SystemPrompt {
+		t.Error("cache key SystemPrompt unchanged when project memory availability changed")
+	}
+	if withProjectMemory == withoutProjectMemory {
+		t.Error("cache key unchanged when project memory availability changed")
 	}
 
 	// RAG variance: one model's index has a matching chunk, the other's does not.

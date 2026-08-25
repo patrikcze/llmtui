@@ -235,12 +235,16 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	// call further down that produces the legacy-identical RAG output.
 	ragActive := m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != ""
 	ragSource := m.compositionRAGSource()
+	projectSource := memoryindex.ProjectSource{Store: m.projectStore, TopK: 3}
 
 	var sources []memoryindex.Source
 	if m.memEnabled && m.memStore != nil {
 		// Mirror today's exact guard: only register the user-memory source
 		// when memory is enabled and a store exists.
 		sources = append(sources, memoryindex.UserSource{Snippets: m.memStore.Load})
+	}
+	if m.memEnabled && m.projectStore != nil {
+		sources = append(sources, projectSource)
 	}
 	if ragActive {
 		sources = append(sources, ragSource)
@@ -252,7 +256,10 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		// callers — prepareRequest, dispatch, continueChat — don't carry one
 		// either), so this in-process, non-blocking lookup uses Background.
 		retriever := memoryindex.NewRetriever(sources...)
-		if hits, err := retriever.Search(context.Background(), memoryindex.Query{Text: raw}); err == nil {
+		if hits, err := retriever.Search(context.Background(), memoryindex.Query{
+			Text:      raw,
+			ProjectID: m.projectID,
+		}); err == nil {
 			memoryHits = hits
 		}
 	}
@@ -271,6 +278,32 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		if snippets, err := m.memStore.Load(); err == nil {
 			for _, sn := range memory.Relevant(snippets, raw, 3) {
 				memSnippets = append(memSnippets, sn.Text)
+			}
+		}
+	}
+
+	// Project memory has no legacy output contract, but it still uses a direct
+	// ProjectSource lookup so cross-source ContentHash deduplication cannot
+	// silently decide which typed project records reach the prompt.
+	projectMemory := []prompt.MemoryRecord{}
+	if m.memEnabled && m.projectStore != nil {
+		query := memoryindex.Query{
+			Text:      raw,
+			ProjectID: m.projectID,
+			TopK:      3,
+		}
+		if hits, err := projectSource.Search(context.Background(), query); err == nil {
+			projectMemory = make([]prompt.MemoryRecord, 0, len(hits))
+			for _, hit := range hits {
+				projectMemory = append(projectMemory, prompt.MemoryRecord{
+					ID:        hit.Item.ID,
+					Kind:      string(hit.Item.Kind),
+					Scope:     string(hit.Item.Scope),
+					Source:    "project:" + shortMemoryID(hit.Item.ProjectID),
+					Trust:     string(hit.Item.Trust),
+					Text:      hit.Item.Text,
+					UpdatedAt: hit.Item.UpdatedAt,
+				})
 			}
 		}
 	}
@@ -319,6 +352,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			HelperText:       m.cfg.Prompt.HelperText,
 			ModelHints:       prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
 			MemorySnippets:   memSnippets,
+			ProjectMemory:    projectMemory,
 			RetrievedContext: retrieved,
 			Skills:           m.promptSkills(),
 			SkillCatalog:     m.promptSkillCatalog(),
@@ -333,6 +367,13 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		ragResults: results,
 		memoryHits: memoryHits,
 	}
+}
+
+func shortMemoryID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }
 
 func composeFromBase(base compositionBase, recent []provider.Message, summary string) prompt.Output {
