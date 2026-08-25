@@ -281,6 +281,12 @@ func TestProjectStorePromotionIsApprovedAndPreservesRunProvenance(t *testing.T) 
 	if hits[0].Item.Source.RunID != "run-abc123" || hits[0].Item.Source.Cycle != 3 {
 		t.Fatalf("retrieved promotion provenance = %+v", hits[0].Item.Source)
 	}
+	hits, err = source.Search(context.Background(), Query{
+		Text: "atomic replacement", ProjectID: store.ProjectID(), RunID: "different-active-run",
+	})
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("durable promotion was incorrectly scoped to its source run: hits=%+v err=%v", hits, err)
+	}
 }
 
 func TestProjectStorePromotionRequiresSource(t *testing.T) {

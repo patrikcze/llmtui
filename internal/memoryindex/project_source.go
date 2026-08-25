@@ -54,7 +54,6 @@ func (s ProjectSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 				Kind:      record.Kind,
 				Scope:     ScopeProject,
 				ProjectID: record.ProjectID,
-				RunID:     record.SourceRunID,
 				Source: SourceRef{
 					RunID: record.SourceRunID,
 					Cycle: record.SourceCycle,
