@@ -3,6 +3,7 @@ package memoryindex
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,6 +43,8 @@ type AgentRunSource struct {
 	Snapshot func() (AgentRunSnapshot, bool) // false = no active run
 }
 
+const maxAgentRunEvidenceHits = 16
+
 // Search returns hits projecting the active AgentRun's objective, criteria,
 // and evidence. It returns nil, nil when there is no active run, or when
 // q.RunID is set and does not match the active run's RunID.
@@ -57,8 +60,10 @@ func (s AgentRunSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 	var hits []Hit
 
 	if snap.Objective != "" {
+		id := snap.RunID + ":objective"
 		hits = append(hits, Hit{
 			Item: Item{
+				ID:    id,
 				Text:  snap.Objective,
 				Kind:  KindAgentObjective,
 				Scope: ScopeRun,
@@ -66,16 +71,18 @@ func (s AgentRunSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 				Source: SourceRef{
 					RunID: snap.RunID,
 				},
-				Trust: TrustControllerObserved,
+				Trust:       TrustControllerObserved,
+				ContentHash: contentHash(snap.Objective),
 			},
 			Score: 1.0,
+			Why:   "current controller-owned agent objective",
 		})
 	}
 
 	for _, c := range snap.Criteria {
 		hits = append(hits, Hit{
 			Item: Item{
-				ID:    c.ID,
+				ID:    snap.RunID + ":criterion:" + c.ID,
 				Text:  c.Text,
 				Kind:  KindAgentCriterion,
 				Scope: ScopeRun,
@@ -83,33 +90,46 @@ func (s AgentRunSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 				Source: SourceRef{
 					RunID: snap.RunID,
 				},
-				Tags:  []string{c.Status},
-				Trust: TrustControllerObserved,
+				Tags:        []string{"status:" + c.Status},
+				Trust:       TrustControllerObserved,
+				ContentHash: contentHash(c.Text),
 			},
 			Score: 1.0,
+			Why:   "pinned agent criterion with controller-owned status",
 		})
 	}
 
-	for _, e := range snap.Evidence {
-		// AgentEvidenceSnapshot.Kind, .Source, and .Success are intentionally
-		// not projected onto the Hit/Item yet — AgentRunSource is unwired in
-		// this phase (see the type doc above), so there is no real caller to
-		// validate a projection shape against. A later phase that wires this
-		// in should decide where they belong (e.g. Success as a tag,
-		// Kind/Source into Item.Tags or Item.Source) against real usage.
+	evidence := slices.Clone(snap.Evidence)
+	if len(evidence) > maxAgentRunEvidenceHits {
+		evidence = evidence[len(evidence)-maxAgentRunEvidenceHits:]
+	}
+	for index, e := range evidence {
+		kind := KindAgentEvidence
+		if !e.Success {
+			kind = KindAgentFailure
+		}
+		id := fmt.Sprintf("%s:evidence:%d:%d", snap.RunID, e.Cycle, index)
 		hits = append(hits, Hit{
 			Item: Item{
+				ID:    id,
 				Text:  e.Summary,
-				Kind:  KindAgentEvidence,
+				Kind:  kind,
 				Scope: ScopeRun,
 				RunID: snap.RunID,
 				Source: SourceRef{
 					RunID: snap.RunID,
 					Cycle: e.Cycle,
 				},
-				Trust: TrustControllerObserved,
+				Tags: []string{
+					"kind:" + e.Kind,
+					"source:" + e.Source,
+					fmt.Sprintf("success:%t", e.Success),
+				},
+				Trust:       TrustControllerObserved,
+				ContentHash: contentHash(e.Summary),
 			},
 			Score: 1.0,
+			Why:   "bounded controller-observed agent evidence",
 		})
 	}
 

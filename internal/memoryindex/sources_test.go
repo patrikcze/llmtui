@@ -2,6 +2,7 @@ package memoryindex
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,6 +36,7 @@ func TestAgentRunSource_ProjectsObjectiveCriteriaEvidence(t *testing.T) {
 		},
 		Evidence: []AgentEvidenceSnapshot{
 			{Cycle: 1, Kind: "test_run", Source: "go test", Summary: "all green", Success: true},
+			{Cycle: 1, Kind: "tool_failure", Source: "run_command", Summary: "exit status 1", Success: false},
 		},
 	}
 	s := AgentRunSource{
@@ -47,14 +49,15 @@ func TestAgentRunSource_ProjectsObjectiveCriteriaEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("got %d hits, want 4: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("got %d hits, want 5: %+v", len(got), got)
 	}
 
 	wantKinds := map[Kind]int{
 		KindAgentObjective: 1,
 		KindAgentCriterion: 2,
 		KindAgentEvidence:  1,
+		KindAgentFailure:   1,
 	}
 	gotKinds := map[Kind]int{}
 	for _, h := range got {
@@ -62,11 +65,37 @@ func TestAgentRunSource_ProjectsObjectiveCriteriaEvidence(t *testing.T) {
 		if h.Item.Trust != TrustControllerObserved {
 			t.Errorf("hit %+v has Trust %q, want %q", h, h.Item.Trust, TrustControllerObserved)
 		}
+		if h.Item.ID == "" || h.Item.ContentHash == "" || h.Why == "" {
+			t.Errorf("hit lacks deterministic identity/explanation: %+v", h)
+		}
 	}
 	for k, want := range wantKinds {
 		if gotKinds[k] != want {
 			t.Errorf("got %d hits of kind %q, want %d", gotKinds[k], k, want)
 		}
+	}
+}
+
+func TestAgentRunSourceBoundsEvidenceToMostRecent(t *testing.T) {
+	evidence := make([]AgentEvidenceSnapshot, maxAgentRunEvidenceHits+4)
+	for index := range evidence {
+		evidence[index] = AgentEvidenceSnapshot{
+			Cycle: index + 1, Kind: "test", Source: "suite",
+			Summary: fmt.Sprintf("result-%d", index+1), Success: true,
+		}
+	}
+	s := AgentRunSource{Snapshot: func() (AgentRunSnapshot, bool) {
+		return AgentRunSnapshot{RunID: "run-1", Evidence: evidence}, true
+	}}
+	hits, err := s.Search(context.Background(), Query{RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != maxAgentRunEvidenceHits {
+		t.Fatalf("evidence hits = %d, want %d", len(hits), maxAgentRunEvidenceHits)
+	}
+	if hits[0].Item.Text != "result-5" || hits[len(hits)-1].Item.Text != "result-20" {
+		t.Fatalf("bounded evidence = %+v", hits)
 	}
 }
 
