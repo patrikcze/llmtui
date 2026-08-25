@@ -10,6 +10,14 @@ import (
 	"github.com/patrikcze/llmtui/internal/testutil"
 )
 
+// testClient disables keep-alives so each request opens and closes its own
+// connection deterministically. Reusing http.DefaultClient here let the
+// Transport race a fresh dial against reusing the idle keep-alive
+// connection; the losing connection could still be sitting in the server's
+// non-idle "new" state when t.Cleanup called Shutdown, blocking it until
+// the context deadline (see server_test.go history for the flake).
+var testClient = &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+
 func startTestServer(t *testing.T, opts Options) *Server {
 	t.Helper()
 	server, err := Start(opts)
@@ -59,7 +67,7 @@ func TestServerRequiresConfiguredBearerToken(t *testing.T) {
 		Source:   func(context.Context) ([]Tool, error) { return nil, nil },
 	})
 
-	resp, err := http.Get("http://" + server.Addr() + ToolsPath)
+	resp, err := testClient.Get("http://" + server.Addr() + ToolsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +102,7 @@ func TestServerRejectsUnsupportedMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +121,7 @@ func getSnapshot(t *testing.T, server *Server, token string) Snapshot {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
