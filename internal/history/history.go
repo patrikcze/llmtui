@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	episodeVersion         = 1
-	maxEpisodeGoalBytes    = 1024
-	maxEpisodeOutcomeBytes = 2048
+	episodeVersion          = 1
+	maxEpisodeGoalBytes     = 1024
+	maxEpisodeOutcomeBytes  = 2048
+	maxEpisodeListItems     = 16
+	maxEpisodeListItemBytes = 512
 )
 
 var (
@@ -49,6 +51,29 @@ type Episode struct {
 	Model      string    `json:"model,omitempty"`
 	ProjectID  string    `json:"project_id,omitempty"`
 	SavedAt    time.Time `json:"saved_at"`
+}
+
+// RetrievalText returns the bounded, redacted summary eligible for memory
+// retrieval. It contains no transcript or tool payload fields.
+func (e Episode) RetrievalText() string {
+	var parts []string
+	appendField := func(label, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			parts = append(parts, label+": "+value)
+		}
+	}
+	appendList := func(label string, values []string) {
+		if len(values) > 0 {
+			parts = append(parts, label+": "+strings.Join(values, "; "))
+		}
+	}
+	appendField("Goal", episodeText(e.Goal, maxEpisodeGoalBytes))
+	appendField("Outcome", episodeText(e.Outcome, maxEpisodeOutcomeBytes))
+	appendField("Status", episodeText(e.Status, 128))
+	appendList("Artifacts", episodeList(e.Artifacts))
+	appendList("Checks", episodeList(e.Checks))
+	appendList("Unresolved", episodeList(e.Unresolved))
+	return strings.Join(parts, "\n")
 }
 
 // Session is the on-disk representation of one saved conversation.
@@ -132,6 +157,19 @@ func redactEpisodeSecrets(value string) string {
 	return episodeKeyPattern.ReplaceAllString(value, "[REDACTED KEY]")
 }
 
+func episodeList(values []string) []string {
+	if len(values) > maxEpisodeListItems {
+		values = values[:maxEpisodeListItems]
+	}
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = episodeText(value, maxEpisodeListItemBytes); value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
 // Meta summarizes a saved session for listings.
 type Meta struct {
 	Name     string
@@ -182,6 +220,12 @@ func Save(dir, name string, s Session) (string, error) {
 	if s.Episode != nil {
 		episode := *s.Episode
 		episode.Version = episodeVersion
+		episode.Goal = episodeText(episode.Goal, maxEpisodeGoalBytes)
+		episode.Outcome = episodeText(episode.Outcome, maxEpisodeOutcomeBytes)
+		episode.Status = episodeText(episode.Status, 128)
+		episode.Artifacts = episodeList(episode.Artifacts)
+		episode.Checks = episodeList(episode.Checks)
+		episode.Unresolved = episodeList(episode.Unresolved)
 		episode.SavedAt = s.SavedAt
 		episode.Provider = episodeText(s.Provider, 256)
 		episode.Model = episodeText(s.Model, 256)

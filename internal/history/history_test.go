@@ -138,6 +138,40 @@ func TestBuildEpisodeIsBoundedAndExcludesPrivateFields(t *testing.T) {
 	}
 }
 
+func TestSaveSanitizesCallerSuppliedEpisodeFields(t *testing.T) {
+	dir := t.TempDir()
+	secret := "sk-abcdefghijklmnopqrstuvwxyz"
+	session := Session{
+		Provider:  "mock",
+		Model:     "model",
+		ProjectID: "project-a",
+		Episode: &Episode{
+			Goal:       "token=" + secret,
+			Outcome:    "Bearer abcdefghijklmnop",
+			Artifacts:  []string{"config with password=" + secret},
+			Checks:     []string{strings.Repeat("x", maxEpisodeListItemBytes+100)},
+			Unresolved: []string{"authorization=" + secret},
+		},
+	}
+	if _, err := Save(dir, "sanitized", session); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir, "sanitized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(got.Episode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), secret) || strings.Contains(string(raw), "abcdefghijklmnop") {
+		t.Fatalf("saved episode leaked a credential: %s", raw)
+	}
+	if len(got.Episode.Checks) != 1 || len(got.Episode.Checks[0]) > maxEpisodeListItemBytes {
+		t.Fatalf("saved episode checks were not bounded: %+v", got.Episode.Checks)
+	}
+}
+
 func TestSaveOverwritesSameName(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Save(dir, "s1", Session{Model: "a"}); err != nil {

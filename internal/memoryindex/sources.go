@@ -1,6 +1,13 @@
 package memoryindex
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/patrikcze/llmtui/internal/history"
+)
 
 // AgentRunSnapshot is a point-in-time view of one live AgentRun, projected
 // into memoryindex hits by AgentRunSource.
@@ -109,12 +116,85 @@ func (s AgentRunSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 	return hits, nil
 }
 
-// EpisodeSource always returns no hits in this phase — episodic memory
-// (Phase 3 in the spec) does not exist yet. It exists now purely so the
-// Retriever's adapter shape is stable for later phases.
-type EpisodeSource struct{}
+// EpisodeSource exposes compact summaries from saved sessions. Full
+// transcripts are never projected into memoryindex items.
+type EpisodeSource struct {
+	Dir  string
+	TopK int
+}
 
-// Search always returns nil, nil.
-func (EpisodeSource) Search(ctx context.Context, q Query) ([]Hit, error) {
-	return nil, nil
+// Search returns lexical matches from prior sessions in the exact current
+// project. The current session and sessions without project-scoped episodes
+// are excluded.
+func (s EpisodeSource) Search(ctx context.Context, q Query) ([]Hit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(s.Dir) == "" || q.ProjectID == "" || !queryAllowsKind(q.Kinds, KindEpisode) {
+		return nil, nil
+	}
+	queryTerms := lexicalTerms(q.Text)
+	if len(queryTerms) == 0 {
+		return nil, nil
+	}
+	metas, err := history.List(s.Dir)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]Hit, 0, len(metas))
+	for _, meta := range metas {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if meta.Name == q.SessionID {
+			continue
+		}
+		session, err := history.Load(s.Dir, meta.Name)
+		if err != nil || session.Episode == nil || session.Episode.ProjectID != q.ProjectID {
+			continue
+		}
+		text := session.Episode.RetrievalText()
+		matched := matchingTerms(queryTerms, lexicalTerms(text))
+		if len(matched) == 0 {
+			continue
+		}
+		hits = append(hits, Hit{
+			Item: Item{
+				ID:          meta.Name,
+				Text:        text,
+				Summary:     text,
+				Kind:        KindEpisode,
+				Scope:       ScopeSession,
+				ProjectID:   session.Episode.ProjectID,
+				SessionID:   meta.Name,
+				Source:      SourceRef{SessionID: meta.Name},
+				Tags:        []string{session.Episode.Status, session.Episode.Provider, session.Episode.Model},
+				CreatedAt:   session.Episode.SavedAt,
+				UpdatedAt:   session.Episode.SavedAt,
+				Trust:       TrustModelProposed,
+				ContentHash: contentHash(text),
+			},
+			Score:        float64(len(matched)) / float64(len(queryTerms)),
+			MatchedTerms: matched,
+			Why: fmt.Sprintf(
+				"matched %d query term(s) in saved episode: %s",
+				len(matched),
+				strings.Join(matched, ", "),
+			),
+		})
+	}
+
+	sort.SliceStable(hits, func(i, j int) bool { return hitLess(hits[i], hits[j]) })
+	limit := s.TopK
+	if limit <= 0 {
+		limit = 10
+	}
+	if q.TopK > 0 && q.TopK < limit {
+		limit = q.TopK
+	}
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
 }

@@ -2,7 +2,11 @@ package memoryindex
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/provider"
 )
 
 func TestAgentRunSource_NoActiveRun(t *testing.T) {
@@ -82,14 +86,65 @@ func TestAgentRunSource_RunIDMismatchReturnsNoHits(t *testing.T) {
 	}
 }
 
-func TestEpisodeSource_AlwaysEmpty(t *testing.T) {
-	var s EpisodeSource
+func TestEpisodeSourceReturnsOnlyPriorProjectScopedSummaries(t *testing.T) {
+	dir := t.TempDir()
+	saveEpisode := func(name, projectID, goal, outcome string) {
+		t.Helper()
+		session := history.Session{
+			Provider:  "mock",
+			Model:     "model",
+			ProjectID: projectID,
+			Messages: []provider.Message{
+				{Role: provider.RoleUser, Content: goal},
+				{Role: provider.RoleAssistant, Content: outcome, Reasoning: "private reasoning"},
+			},
+		}
+		session.Episode = history.BuildEpisode(session)
+		if _, err := history.Save(dir, name, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveEpisode("prior", "project-a", "Add session memory", "Session memory tests pass")
+	saveEpisode("current", "project-a", "Current session memory", "Still working")
+	saveEpisode("other-project", "project-b", "Add session memory", "Must stay isolated")
+	if _, err := history.Save(dir, "legacy", history.Session{ProjectID: "project-a"}); err != nil {
+		t.Fatal(err)
+	}
 
-	got, err := s.Search(context.Background(), Query{Text: "anything"})
+	s := EpisodeSource{Dir: dir, TopK: 5}
+	got, err := s.Search(context.Background(), Query{
+		Text:      "session memory tests",
+		ProjectID: "project-a",
+		SessionID: "current",
+	})
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-	if got != nil {
-		t.Errorf("got %+v hits, want nil", got)
+	if len(got) != 1 {
+		t.Fatalf("got %+v, want one prior project episode", got)
+	}
+	hit := got[0]
+	if hit.Item.ID != "prior" || hit.Item.Kind != KindEpisode || hit.Item.Scope != ScopeSession {
+		t.Fatalf("episode hit = %+v", hit)
+	}
+	if hit.Item.Source.SessionID != "prior" || hit.Item.ProjectID != "project-a" {
+		t.Fatalf("episode provenance = %+v", hit.Item)
+	}
+	if strings.Contains(hit.Item.Text, "private reasoning") || strings.Contains(hit.Item.Text, "other-project") {
+		t.Fatalf("episode hit leaked excluded content: %q", hit.Item.Text)
+	}
+	if !strings.Contains(hit.Item.Text, "Goal: Add session memory") || !strings.Contains(hit.Item.Text, "Outcome: Session memory tests pass") {
+		t.Fatalf("episode summary missing visible boundaries: %q", hit.Item.Text)
+	}
+	if hit.Item.Trust != TrustModelProposed {
+		t.Fatalf("episode trust = %q", hit.Item.Trust)
+	}
+}
+
+func TestEpisodeSourceRequiresExactProjectScope(t *testing.T) {
+	s := EpisodeSource{Dir: t.TempDir()}
+	got, err := s.Search(context.Background(), Query{Text: "anything"})
+	if err != nil || got != nil {
+		t.Fatalf("unscoped episode search = (%+v, %v), want nil", got, err)
 	}
 }
