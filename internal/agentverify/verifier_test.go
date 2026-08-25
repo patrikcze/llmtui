@@ -234,6 +234,60 @@ func TestVerifierRepairsMalformedCriteriaShapeWithoutExecutorCycle(t *testing.T)
 	}
 }
 
+func TestVerifierRepairsEstablishingPassMissingCriteria(t *testing.T) {
+	invalid := `{"verdict":"passed","summary":"all checks passed","recommended_next":"","retryable":false,` +
+		`"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"},{"id":"c2","status":"satisfied"}],` +
+		`"proposed_criteria":[],"atomic_task":false}`
+	repaired := `{"verdict":"passed","summary":"all checks passed","recommended_next":"","retryable":false,` +
+		`"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"},{"id":"c2","status":"satisfied"}],` +
+		`"proposed_criteria":["workspace root inspected","workspace file read"],"atomic_task":false}`
+	client := &recordingClient{replies: []string{invalid, repaired}}
+
+	out, err := Verify(context.Background(), client, Config{Model: "local", Timeout: time.Second}, Input{
+		Task: "inspect the workspace and read a file", EstablishCriteria: true,
+		Execution: agent.ExecutionResult{Summary: "completed both checks"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want initial verifier request plus one repair", len(client.requests))
+	}
+	repairSystem := client.requests[1].Messages[0].Content
+	for _, want := range []string{"ESTABLISHING REPAIR", "no pinned criterion IDs", "passed + proposed_criteria:[] + atomic_task:false is invalid"} {
+		if !strings.Contains(repairSystem, want) {
+			t.Fatalf("repair prompt missing %q: %q", want, repairSystem)
+		}
+	}
+	if len(out.Result.ProposedCriteria) != 2 || len(out.Result.CriteriaUpdates) != 2 {
+		t.Fatalf("result = %+v, want two proposed criteria and matching updates", out.Result)
+	}
+	if out.Usage == nil || out.Usage.TotalTokens != 20 {
+		t.Fatalf("usage = %+v, want both verifier calls accounted", out.Usage)
+	}
+}
+
+func TestVerifierExamplesMatchEstablishingMode(t *testing.T) {
+	const laterCycleExample = `"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":[],"atomic_task":false`
+	const establishingExample = `"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":["first independently checkable requirement"],"atomic_task":false`
+
+	later := verifierMessages(`{"EstablishCriteria":false}`, false)[0].Content
+	if !strings.Contains(later, laterCycleExample) || strings.Contains(later, "ESTABLISHING REPAIR") {
+		t.Fatalf("non-establishing prompt changed its example or gained repair guidance: %q", later)
+	}
+	if strings.Contains(later, establishingExample) {
+		t.Fatalf("non-establishing prompt contains establishing example: %q", later)
+	}
+
+	establishing := verifierMessages(`{"EstablishCriteria":true}`, true)[0].Content
+	if !strings.Contains(establishing, establishingExample) {
+		t.Fatalf("establishing prompt lacks valid criteria proposal example: %q", establishing)
+	}
+	if strings.Contains(establishing, laterCycleExample) {
+		t.Fatalf("establishing prompt still contains passed + empty proposals + non-atomic example: %q", establishing)
+	}
+}
+
 // TestVerifierEvidenceCarriesAvailableToolsAndPromptUsesThem guards a real
 // observed failure: a run asking for live weather/events data (no such tool
 // exists, only web_search/web_fetch) got marked retryable forever because
@@ -709,7 +763,7 @@ func TestWeakModelMinimalJSONCorpus(t *testing.T) {
 }
 
 func TestVerifierPromptTokenSnapshot(t *testing.T) {
-	messages := verifierMessages(`{"Task":"bounded task","EstablishCriteria":true}`)
+	messages := verifierMessages(`{"Task":"bounded task","EstablishCriteria":true}`, true)
 	if tokens := provider.EstimateMessagesTokens(messages); tokens > 1300 {
 		t.Fatalf("minimal verifier prompt snapshot = %d tokens, want <= 1300", tokens)
 	}

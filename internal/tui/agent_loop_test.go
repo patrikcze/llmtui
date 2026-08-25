@@ -205,6 +205,49 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 	}
 }
 
+func TestVerifiedAgentVerifierModelSelectionCompatibility(t *testing.T) {
+	tests := []struct {
+		name          string
+		verifierModel string
+		wantModel     string
+	}{
+		{name: "empty reuses executor", verifierModel: "", wantModel: "openai/gpt-oss-20b"},
+		{name: "explicit same model", verifierModel: "openai/gpt-oss-20b", wantModel: "openai/gpt-oss-20b"},
+		{name: "separate model", verifierModel: "google/gemma-4-e4b", wantModel: "google/gemma-4-e4b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, prov := configureAgentTestModel(t,
+				agentScriptStep{text: "Completed the bounded task with observable evidence."},
+				agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+			)
+			m.model = "openai/gpt-oss-20b"
+			m.cfg.Agent.Verifier.Model = tt.verifierModel
+
+			driveAgentCommands(t, m, m.startVerifiedRun("perform one bounded check", nil))
+
+			if m.agentLoop.run.Status != agent.DecisionDone {
+				t.Fatalf("run status = %s, want done", m.agentLoop.run.Status)
+			}
+			if len(prov.requests) != 2 {
+				t.Fatalf("requests = %d, want executor + verifier", len(prov.requests))
+			}
+			if got := prov.requests[0].Model; got != "openai/gpt-oss-20b" {
+				t.Fatalf("executor model = %q, want openai/gpt-oss-20b", got)
+			}
+			verifyReq := prov.requests[1]
+			if verifyReq.Model != tt.wantModel {
+				t.Fatalf("verifier model = %q, want %q", verifyReq.Model, tt.wantModel)
+			}
+			if len(verifyReq.Messages) != 2 || len(verifyReq.Tools) != 0 || verifyReq.Stream ||
+				verifyReq.Reasoning != "off" || verifyReq.Temperature != 0 || verifyReq.TopP != 1 {
+				t.Fatalf("verifier request lost isolated settings: %+v", verifyReq)
+			}
+		})
+	}
+}
+
 // A retry belongs to the current verified run, not to an older completed run
 // that happens to remain visible in the transcript. This guards the LM Studio
 // failure where a weather retry received an earlier benchmark's controller
