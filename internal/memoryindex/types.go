@@ -102,14 +102,50 @@ type Query struct {
 	Now time.Time
 }
 
+// ScoreComponent is one deterministic contribution to a Hit's final score.
+type ScoreComponent struct {
+	Name  string
+	Value float64
+}
+
 // Hit is one scored Item returned by a Source.
 type Hit struct {
 	Item         Item
 	Score        float64 // each Source must return scores normalized to [0,1]
+	BaseScore    float64
+	Components   []ScoreComponent
+	Tokens       int
 	MatchedTerms []string
 	// Why is reserved for a future phase (e.g. a human-readable explanation
 	// of why this Hit matched). No Source populates it today.
 	Why string
+}
+
+// RetrievalPolicy controls diversity and context packing after source-local
+// score normalization and metadata ranking.
+type RetrievalPolicy struct {
+	TopK          int
+	MaxTokens     int
+	UserTokens    int
+	ProjectTokens int
+	EpisodeTokens int
+	AgentTokens   int
+	SourceTokens  int
+	KindCaps      map[Kind]int
+}
+
+// RejectedHit records why a candidate did not enter the final context.
+type RejectedHit struct {
+	Hit    Hit
+	Reason string
+}
+
+// RetrievalResult is the inspectable output of deterministic retrieval.
+type RetrievalResult struct {
+	Hits        []Hit
+	Rejected    []RejectedHit
+	TotalTokens int
+	TierTokens  map[Scope]int
 }
 
 // Source is one pluggable memory backend. Implementations should honor ctx

@@ -39,8 +39,8 @@ func TestProjectSourceRanksApprovedRecords(t *testing.T) {
 	if len(hits) != 2 {
 		t.Fatalf("hits = %+v, want architecture and decision", hits)
 	}
-	if hits[0].Item.ID != architecture.ID || hits[1].Item.ID != decision.ID {
-		t.Fatalf("hit order = [%s %s], want [%s %s]", hits[0].Item.ID, hits[1].Item.ID, architecture.ID, decision.ID)
+	if hits[0].Item.ID != decision.ID || hits[1].Item.ID != architecture.ID {
+		t.Fatalf("hit order = [%s %s], want decision before architecture [%s %s]", hits[0].Item.ID, hits[1].Item.ID, decision.ID, architecture.ID)
 	}
 	for _, hit := range hits {
 		if hit.Score <= 0 || hit.Score > 1 {

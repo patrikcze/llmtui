@@ -34,8 +34,8 @@ func TestRetriever_MergesAcrossSources(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d hits, want 2: %+v", len(got), got)
 	}
-	if got[0].Item.ID != "b1" || got[1].Item.ID != "a1" {
-		t.Errorf("got order %q, %q; want b1, a1 (sorted by score desc)", got[0].Item.ID, got[1].Item.ID)
+	if got[0].Item.ID != "a1" || got[1].Item.ID != "b1" {
+		t.Errorf("got order %q, %q; want a1, b1 (source-local scores tie, then ID asc)", got[0].Item.ID, got[1].Item.ID)
 	}
 }
 
@@ -55,11 +55,11 @@ func TestRetriever_DeduplicatesByContentHash(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d hits, want 1: %+v", len(got), got)
 	}
-	if got[0].Item.ID != "b1" {
-		t.Errorf("got survivor %q, want b1 (higher score)", got[0].Item.ID)
+	if got[0].Item.ID != "a1" {
+		t.Errorf("got survivor %q, want a1 (source-local scores tie, then ID asc)", got[0].Item.ID)
 	}
-	if got[0].Score != 0.8 {
-		t.Errorf("got score %v, want 0.8", got[0].Score)
+	if got[0].Score != 1 {
+		t.Errorf("got score %v, want normalized score 1", got[0].Score)
 	}
 }
 
