@@ -295,7 +295,7 @@ Local-LLM experience helpers:
 | `/profile` | Model profiles tune temperature, context window, prompt style per model family |
 | `/prompt preview` | See exactly what will be sent — the raw message is never rewritten ([docs](docs/prompt-composition.md)) |
 | `/context` | Context-window management with heuristic summaries ([docs](docs/context-management.md)) |
-| `/memory` | Opt-in local preference snippets ([docs](docs/memory.md)) |
+| `/memory` | Opt-in typed user and workspace memory ([docs](docs/memory.md)) |
 | `/tools` | Opt-in workspace tools — the model can create/read files and run commands in your current directory, with y/n approval |
 | `/web` | Opt-in web tools — the model can search the web (DuckDuckGo, no API key) and fetch pages as Markdown; fetches ask per URL |
 | `/skills` | Declarative task-instruction packages (SKILL.md) — activate per run or session; tool-capable models can load them via `skill_load` ([docs](docs/skills.md)) |
@@ -533,7 +533,8 @@ internal/cache/           local response cache (/cache)
 internal/contextmgr/      context-window budgeting + heuristic summaries
 internal/agent/           provider-neutral verified-run state, policy, memory
 internal/agentverify/     fresh-context provider verifier adapter
-internal/memory/          opt-in local memory snippets (/memory)
+internal/memory/          opt-in user preference snippets (/memory)
+internal/memoryindex/     unified retrieval + typed project memory (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
 internal/tools/           opt-in workspace file/command tools (/tools)
 internal/web/             opt-in web search + page fetch tools (/web)

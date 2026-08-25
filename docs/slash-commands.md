@@ -78,9 +78,15 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 ## Memory
 | Command | Description |
 | --- | --- |
-| `/memory` · `/memory list` | List snippets |
-| `/memory add <text>` | Remember a preference (never secrets) |
-| `/memory remove <id>` / `/memory clear` | Forget |
+| `/memory` · `/memory list [user\|project\|episode\|run]` | List typed memory records |
+| `/memory add <text>` · `/memory add user <text>` | Remember a user preference (never secrets) |
+| `/memory add project architecture <text>` | Remember a workspace architecture fact |
+| `/memory add project convention <text>` | Remember a workspace convention |
+| `/memory add project decision <text>` | Remember a workspace decision |
+| `/memory inspect <id>` | Show one record's kind, scope, trust, review state, and timestamps |
+| `/memory search <query>` | Search user and current-workspace project memory |
+| `/memory explain <query>` | Show ranked hits, scores, and match reasons |
+| `/memory remove <id>` · `/memory clear` | Remove one record; `clear` clears user preferences only |
 | `/memory on` / `/memory off` | Toggle for this session |
 
 ## Tools

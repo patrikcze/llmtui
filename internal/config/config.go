@@ -178,7 +178,7 @@ type CacheConfig struct {
 	CacheStreamedResponses bool   `mapstructure:"cache_streamed_responses" yaml:"cache_streamed_responses"`
 }
 
-// MemoryConfig configures local memory snippets (disabled by default).
+// MemoryConfig configures local user and project memory (disabled by default).
 type MemoryConfig struct {
 	Enabled     bool   `mapstructure:"enabled" yaml:"enabled"`
 	Path        string `mapstructure:"path" yaml:"path"`
@@ -944,7 +944,8 @@ cache:
   max_size_mb: 256
   cache_streamed_responses: true
 
-# Local memory snippets (opt-in; never store secrets here).
+# Local user and project memory (opt-in; never store secrets here).
+# Project records use memory/projects/<workspace-id>.json beside this path.
 memory:
   enabled: false
   path: "~/.local/share/llmtui/memory.yaml"

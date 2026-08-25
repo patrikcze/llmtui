@@ -36,11 +36,13 @@ untrusted-content framing and RAG content-secret scanning.
 | Usage log (timestamps, provider, model, token counts — no message content) | `usage.jsonl` in the history dir | `chat.save_history: false` |
 | Tool operation journal (hashed idempotency keys, tool name, start/completion status; no paths, commands, arguments, or output) | `.operations/<session>.jsonl` under `chat.history_dir`, or the platform config directory when no history path is configured (dir `0700`, files `0600`) | Required while side-effecting tools are enabled; independent of transcript saving |
 | Response cache | `cache.path` (dir `0700`, files `0600`) | `cache.enabled: false` or `/cache off` |
-| Memory snippets | `memory.path` (file `0600`) | disabled by default; `/memory off` |
+| User memory preferences | `memory.path` (file `0600`) | disabled by default; `/memory off` |
+| Typed project memory | `memory/projects/<workspace-id>.json` beside `memory.path` (dir `0700`, file `0600`) | disabled by default; `/memory off`; remove records individually |
 
-Image attachments are never persisted anywhere. Memory is strictly opt-in,
-never auto-extracts anything, and must not be used for secrets (`/memory
-add` reminds you).
+Image attachments are never persisted anywhere. Memory is strictly opt-in and
+never auto-extracts anything. Project records are workspace-isolated, written
+atomically, and redact likely credential forms before persistence, but memory
+must not be used for secrets (`/memory add` reminds you).
 
 ## Hardening details
 
