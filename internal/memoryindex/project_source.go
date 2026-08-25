@@ -49,11 +49,16 @@ func (s ProjectSource) Search(ctx context.Context, q Query) ([]Hit, error) {
 		}
 		hits = append(hits, Hit{
 			Item: Item{
-				ID:          record.ID,
-				Text:        record.Text,
-				Kind:        record.Kind,
-				Scope:       ScopeProject,
-				ProjectID:   record.ProjectID,
+				ID:        record.ID,
+				Text:      record.Text,
+				Kind:      record.Kind,
+				Scope:     ScopeProject,
+				ProjectID: record.ProjectID,
+				RunID:     record.SourceRunID,
+				Source: SourceRef{
+					RunID: record.SourceRunID,
+					Cycle: record.SourceCycle,
+				},
 				Tags:        slices.Clone(record.Tags),
 				CreatedAt:   record.CreatedAt,
 				UpdatedAt:   record.UpdatedAt,

@@ -367,6 +367,10 @@ func (m *Model) memoryInspectOverlay(id string) (string, error) {
 		m.kv(&b, "trust", string(stored.project.Trust))
 		m.kv(&b, "review", string(stored.project.Review))
 		m.kv(&b, "project", shortMemoryID(stored.project.ProjectID))
+		if stored.project.SourceRunID != "" {
+			m.kv(&b, "source run", stored.project.SourceRunID)
+			m.kv(&b, "source cycle", fmt.Sprintf("%d", stored.project.SourceCycle))
+		}
 		m.kv(&b, "created", formatMemoryTime(stored.project.CreatedAt))
 		m.kv(&b, "updated", formatMemoryTime(stored.project.UpdatedAt))
 		b.WriteString("\n" + m.theme.StatusValue.Render(memoryInspectText(stored.project.Text)) + "\n")

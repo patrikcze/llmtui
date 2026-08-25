@@ -243,6 +243,13 @@ func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
 	if !strings.Contains(record.Text, "observable criteria passed") {
 		t.Fatalf("promotion omitted passed verification: %q", record.Text)
 	}
+	inspect, err := m.memoryInspectOverlay(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(inspect, record.SourceRunID) || !strings.Contains(inspect, "source cycle") {
+		t.Fatalf("promotion inspect omitted provenance:\n%s", inspect)
+	}
 }
 
 func TestAgentPromotionSkipAndEscapeWriteNothing(t *testing.T) {

@@ -522,6 +522,12 @@ func activeContextRecords(hits []memoryindex.Hit) []prompt.MemoryRecord {
 			source = "user"
 		case memoryindex.KindProjectArchitecture, memoryindex.KindProjectConvention, memoryindex.KindProjectDecision:
 			source = "project:" + shortMemoryID(hit.Item.ProjectID)
+			if hit.Item.Source.RunID != "" {
+				source += "/run:" + hit.Item.Source.RunID
+				if hit.Item.Source.Cycle > 0 {
+					source += fmt.Sprintf("/cycle:%d", hit.Item.Source.Cycle)
+				}
+			}
 		case memoryindex.KindEpisode:
 			source = "session:" + hit.Item.SessionID
 		case memoryindex.KindAgentObjective, memoryindex.KindAgentCriterion, memoryindex.KindAgentFailure, memoryindex.KindAgentEvidence:

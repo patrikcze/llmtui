@@ -278,6 +278,9 @@ func TestProjectStorePromotionIsApprovedAndPreservesRunProvenance(t *testing.T) 
 	if len(hits) != 1 || hits[0].Item.ID != record.ID {
 		t.Fatalf("approved promotion was not retrievable: %+v", hits)
 	}
+	if hits[0].Item.Source.RunID != "run-abc123" || hits[0].Item.Source.Cycle != 3 {
+		t.Fatalf("retrieved promotion provenance = %+v", hits[0].Item.Source)
+	}
 }
 
 func TestProjectStorePromotionRequiresSource(t *testing.T) {
