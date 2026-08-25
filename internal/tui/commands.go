@@ -147,7 +147,10 @@ func slashCommands() []slashCommand {
 		{name: "cache", usage: "/cache [stats|clear|on|off]", desc: "local response cache", category: "Cache", run: cmdCache},
 
 		// --- Memory ---
-		{name: "memory", usage: "/memory [on|off|add <text>|list|remove <id>|clear]", desc: "local memory snippets (opt-in)", category: "Memory", run: cmdMemory},
+		{
+			name: "memory", usage: "/memory [on|off|add|list|inspect|remove|search|explain]",
+			desc: "typed local memory (opt-in)", category: "Memory", run: cmdMemory,
+		},
 
 		// --- Tools ---
 		{name: "tools", usage: "/tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]", desc: "workspace tools: enable/disable, list capabilities, inspect one tool, or classify a command", category: "Tools", blockWhileThinking: true, run: cmdTools},
