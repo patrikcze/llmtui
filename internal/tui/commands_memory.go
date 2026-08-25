@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
@@ -175,7 +176,8 @@ func (m *Model) memoryListOverlay(scope string) string {
 		m.writeProjectMemoryList(&b)
 	}
 	if scope == "episode" {
-		b.WriteString("\n" + m.theme.SystemNote.Render("no episodic records — episodic capture arrives in Phase 3") + "\n")
+		b.WriteString("\n" + m.theme.UserLabel.Render("saved session episodes") + "\n")
+		m.writeEpisodeMemoryList(&b)
 	}
 	if scope == "run" {
 		message := "agent-run memory remains run-local; durable promotion arrives in Phase 4"
@@ -189,6 +191,36 @@ func (m *Model) memoryListOverlay(scope string) string {
 		"/memory add · /memory inspect <id> · /memory search <query> · /memory remove <id> · /memory on|off",
 	))
 	return m.overlayFooter(&b)
+}
+
+func (m *Model) writeEpisodeMemoryList(b *strings.Builder) {
+	if m.historyDir == "" {
+		b.WriteString("  " + m.theme.SystemNote.Render("history saving is disabled") + "\n")
+		return
+	}
+	metas, err := history.List(m.historyDir)
+	if err != nil {
+		b.WriteString("  " + m.theme.ErrorText.Render(terminaltext.Sanitize(err.Error())) + "\n")
+		return
+	}
+	count := 0
+	for _, meta := range metas {
+		session, err := history.Load(m.historyDir, meta.Name)
+		if err != nil || session.Episode == nil || session.Episode.ProjectID != m.projectID {
+			continue
+		}
+		count++
+		fmt.Fprintf(
+			b,
+			"  %s %s %s\n",
+			m.theme.BadgeOK.Render(meta.Name),
+			m.theme.StatusBar.Render(string(memoryindex.KindEpisode)),
+			m.theme.StatusValue.Render(memoryDisplayText(session.Episode.Goal)),
+		)
+	}
+	if count == 0 {
+		b.WriteString("  " + m.theme.SystemNote.Render("none") + "\n")
+	}
 }
 
 func (m *Model) writeUserMemoryList(b *strings.Builder) {
@@ -328,10 +360,14 @@ func (m *Model) memorySearchOverlay(query string, explain bool) (string, error) 
 	if m.projectStore != nil {
 		sources = append(sources, memoryindex.ProjectSource{Store: m.projectStore, TopK: 10})
 	}
+	if m.historyDir != "" {
+		sources = append(sources, memoryindex.EpisodeSource{Dir: m.historyDir, TopK: 10})
+	}
 	retriever := memoryindex.NewRetriever(sources...)
 	hits, err := retriever.Search(context.Background(), memoryindex.Query{
 		Text:      query,
 		ProjectID: m.projectID,
+		SessionID: m.sessionName,
 		TopK:      10,
 	})
 	if err != nil {

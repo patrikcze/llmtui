@@ -236,6 +236,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	ragActive := m.ragOn && m.ragIndex != nil && !omitRaw && strings.TrimSpace(raw) != ""
 	ragSource := m.compositionRAGSource()
 	projectSource := memoryindex.ProjectSource{Store: m.projectStore, TopK: 3}
+	episodeSource := memoryindex.EpisodeSource{Dir: m.historyDir, TopK: 3}
 
 	var sources []memoryindex.Source
 	if m.memEnabled && m.memStore != nil {
@@ -245,6 +246,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	}
 	if m.memEnabled && m.projectStore != nil {
 		sources = append(sources, projectSource)
+	}
+	if m.memEnabled && m.historyDir != "" {
+		sources = append(sources, episodeSource)
 	}
 	if ragActive {
 		sources = append(sources, ragSource)
@@ -259,8 +263,34 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		if hits, err := retriever.Search(context.Background(), memoryindex.Query{
 			Text:      raw,
 			ProjectID: m.projectID,
+			SessionID: m.sessionName,
 		}); err == nil {
 			memoryHits = hits
+		}
+	}
+
+	episodeMemory := []prompt.MemoryRecord{}
+	if m.memEnabled && m.historyDir != "" {
+		query := memoryindex.Query{
+			Text:      raw,
+			ProjectID: m.projectID,
+			SessionID: m.sessionName,
+			Kinds:     []memoryindex.Kind{memoryindex.KindEpisode},
+			TopK:      3,
+		}
+		if hits, err := episodeSource.Search(context.Background(), query); err == nil {
+			episodeMemory = make([]prompt.MemoryRecord, 0, len(hits))
+			for _, hit := range hits {
+				episodeMemory = append(episodeMemory, prompt.MemoryRecord{
+					ID:        hit.Item.ID,
+					Kind:      string(hit.Item.Kind),
+					Scope:     string(hit.Item.Scope),
+					Source:    "session:" + hit.Item.SessionID,
+					Trust:     string(hit.Item.Trust),
+					Text:      hit.Item.Text,
+					UpdatedAt: hit.Item.UpdatedAt,
+				})
+			}
 		}
 	}
 
@@ -353,6 +383,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			ModelHints:       prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
 			MemorySnippets:   memSnippets,
 			ProjectMemory:    projectMemory,
+			EpisodeMemory:    episodeMemory,
 			RetrievedContext: retrieved,
 			Skills:           m.promptSkills(),
 			SkillCatalog:     m.promptSkillCatalog(),

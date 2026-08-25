@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -85,6 +86,59 @@ func TestCompositionBase_ProjectMemoryParticipatesInComposition(t *testing.T) {
 	base = m.compositionBase("How should transaction storage work?", nil, false)
 	if len(base.input.ProjectMemory) != 0 {
 		t.Fatalf("disabled project memory reached prompt: %+v", base.input.ProjectMemory)
+	}
+}
+
+func TestCompositionBase_EpisodeParticipatesWithoutTranscriptLeakage(t *testing.T) {
+	m := newTestModel(t)
+	m.memEnabled = true
+	m.historyDir = t.TempDir()
+	prior := history.Session{
+		Provider:  "mock",
+		Model:     "model",
+		ProjectID: m.projectID,
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "Implement episodic memory retrieval"},
+			{Role: provider.RoleAssistant, Content: "Episodic retrieval tests pass", Reasoning: "private chain"},
+		},
+	}
+	prior.Episode = history.BuildEpisode(prior)
+	if _, err := history.Save(m.historyDir, "prior-session", prior); err != nil {
+		t.Fatal(err)
+	}
+
+	base := m.compositionBase("How did episodic retrieval tests go?", nil, false)
+	if len(base.input.EpisodeMemory) != 1 {
+		t.Fatalf("episode prompt records = %+v", base.input.EpisodeMemory)
+	}
+	if strings.Contains(base.input.EpisodeMemory[0].Text, "private chain") {
+		t.Fatalf("episode prompt leaked reasoning: %q", base.input.EpisodeMemory[0].Text)
+	}
+	foundHit := false
+	for _, hit := range base.memoryHits {
+		if hit.Item.Kind == memoryindex.KindEpisode && hit.Item.ID == "prior-session" {
+			foundHit = true
+		}
+	}
+	if !foundHit {
+		t.Fatalf("episode missing from unified hits: %+v", base.memoryHits)
+	}
+	out := composeFromBase(base, nil, "")
+	if !strings.Contains(out.Messages[0].Content, "prior saved sessions") {
+		t.Fatalf("episode missing from composed system prompt: %q", out.Messages[0].Content)
+	}
+	foundSection := false
+	for _, section := range out.Sections {
+		if section.Title == "Relevant Session Episodes" {
+			foundSection = true
+		}
+	}
+	if !foundSection {
+		t.Fatalf("episode preview section missing: %+v", out.Sections)
+	}
+	last := out.Messages[len(out.Messages)-1]
+	if last.Role != provider.RoleUser || last.Content != "How did episodic retrieval tests go?" {
+		t.Fatalf("raw user message changed: %+v", last)
 	}
 }
 

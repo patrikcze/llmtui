@@ -12,6 +12,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -448,10 +449,21 @@ func TestMemoryOverlaysSanitizeStoredTerminalContent(t *testing.T) {
 	}
 }
 
-func TestMemoryListFutureTiersAreExplicit(t *testing.T) {
+func TestMemoryListEpisodeAndFutureRunTier(t *testing.T) {
 	m := newTestModel(t)
-	if got := m.memoryListOverlay("episode"); !strings.Contains(got, "Phase 3") {
-		t.Fatalf("episode list did not explain its current state:\n%s", got)
+	m.historyDir = t.TempDir()
+	session := history.Session{
+		Provider:  "mock",
+		Model:     "model",
+		ProjectID: m.projectID,
+		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "remember this episode"}},
+	}
+	session.Episode = history.BuildEpisode(session)
+	if _, err := history.Save(m.historyDir, "saved-episode", session); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.memoryListOverlay("episode"); !strings.Contains(got, "saved-episode") || !strings.Contains(got, "remember this episode") {
+		t.Fatalf("episode list omitted saved summary:\n%s", got)
 	}
 	if got := m.memoryListOverlay("run"); !strings.Contains(got, "Phase 4") {
 		t.Fatalf("run list did not explain its current state:\n%s", got)
