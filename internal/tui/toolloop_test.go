@@ -938,7 +938,9 @@ func TestMixedBatchRunsAsyncAndDeliversResults(t *testing.T) {
 	m.toolsAutoApprove = true
 	m.toolRunner = tools.NewRunner(root, 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
-		return &mcp.MockClient{ServerName: c.Name, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
+		return &mcp.MockClient{ServerName: c.Name, CannedTools: []mcp.Tool{{
+			Server: c.Name, Name: "session_start", Schema: json.RawMessage(`{"type":"object"}`),
+		}}, CallFunc: func(name string, input json.RawMessage) (mcp.Result, error) {
 			return mcp.Result{Content: "session started"}, nil
 		}}, nil
 	}

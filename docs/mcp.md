@@ -72,18 +72,21 @@ the YAML configuration loader normalizes map keys internally.
 
 ## Tool calling
 
-Once a server is connected (`/mcp connect <server>`), its tools are offered
-to the model automatically whenever `/tools on` — the same switch native
-workspace tools use. There is no separate toggle: `/mcp connect` plus
-`/tools on` is enough.
+Once a server is connected (`/mcp connect <server>`), its advertised tools
+become eligible whenever `/tools on` — the same switch native workspace tools
+use. There is no separate toggle. Small catalogs are offered directly. When the
+total eligible catalog exceeds `tools.discovery.threshold`, core tools remain
+visible and `tool_search` discloses bounded matching MCP schemas for the current
+human task.
 
 Each tool is exposed to the model as `mcp__<server>__<tool>` (e.g.
 `mcp__jiraWorklog__session_start`), so tools from different servers can
 never collide by name. Because `__` is the server/tool separator, a server
 name must not itself contain `__` — `/mcp connect` refuses such a name so a
-call can never be routed to the wrong server. This is **native
-function-calling only** — a model without native tool-calling support won't
-see MCP tools, the same as today.
+call can never be routed to the wrong server. Native providers receive selected
+schemas in their standard `tools` array. Fenced fallback models receive the
+same visible MCP names, descriptions, and full JSON input schemas in bounded
+prompt guidance and call them with a JSON tool-block body.
 
 **Approval.** The second approval choice grants only that exact MCP
 server/tool pair for 15 minutes. It never covers a workspace tool, another
@@ -112,16 +115,21 @@ advisory only: llmtui never aliases, rewrites, or fuzzily executes a mangled
 name. If a model keeps mangling names, that is a model limitation — try a
 stronger tool-calling model.
 
-Connected MCP tools are sent in the same native `tools` array as workspace
-tools. Request composition snapshots that exact array once; the provider
-request, cache fingerprint, context estimate, and `/debug last` tool hash all
-refer to that same snapshot.
+Visible MCP tools are sent in the same native `tools` array as workspace tools.
+Request composition snapshots that exact array once; the provider request,
+cache fingerprint, context estimate, and `/debug last` tool hash all refer to
+that same snapshot. `tool_search` searches only currently connected, enabled,
+undisclosed tools. A returned name receives its complete schema on the next
+inference, but invoking it still follows the server's normal approval policy.
+Guessing a hidden or unregistered name never executes it.
 
 When the optional [HTTP tool registry](tool-registry.md) is enabled, its next
-snapshot reads this same active array. A successful `/mcp connect` therefore
-adds the server's `tools/list` results to both the registry endpoint and the
-next LLM request. Disconnecting or disabling the server removes them from
-both. Configured but unconnected servers never advertise tools.
+snapshot reads this same model-visible array. A successful `/mcp connect`
+makes tools eligible, but a large catalog may remain compact until
+`tool_search` discloses matches. Disclosure adds those schemas to both the next
+native LLM request and registry snapshot. Disconnecting or disabling the server
+removes them from both. Configured but unconnected servers are neither exposed
+nor searchable.
 
 A timeout means *llmtui* gave up waiting — it does not mean the server
 rolled anything back. A slow `session_start` may still have created a

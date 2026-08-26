@@ -223,6 +223,11 @@ section and [security.md](security.md)):
 | `max_file_kb` | `512` | Per-file read/write, command output, and MCP tool result size cap |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 
+The core set also includes `ask_user`, bounded `local_context`, and local
+`tool_search`. `local_context(kind="clipboard")` always enters the sensitive
+read approval flow under the default policy; its other kinds are bounded local
+reads. None of these tools enables another tool or grants permission.
+
 ### `tools.guardrails`
 
 Hardens the workspace tools. Every protection defaults **on**; set one
@@ -252,6 +257,27 @@ since any change in the result resets the count. See
 | --- | --- | --- |
 | `enabled` | `true` | Master switch. Set `false` to revert to pre-v1 pass-through behavior if this produces a false positive in practice |
 | `threshold` | `3` | Consecutive no-new-evidence repeats of the same call allowed before the next one is blocked |
+
+`local_context` reads are volatile and are not permanently blocked by this
+ledger; normal tool-round and agent-run budgets still bound polling.
+
+### `tools.discovery`
+
+Progressively discloses large connected MCP catalogs to reduce schema overhead
+for small local models. The full eligible catalog remains controller state;
+only the visible snapshot is sent to the provider and mirrored by the HTTP tool
+registry. Discovery is capability lookup, not authorization.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Enable progressive disclosure for large catalogs |
+| `threshold` | `16` | Keep all eligible tools visible while the total catalog is at or below this size; above it, hide undisclosed MCP tools first |
+| `max_results` | `5` | Maximum matches one `tool_search` call can disclose; the hard safety cap is 8 |
+
+Disclosures are bounded to the current human task. Agent retries within that
+task may retain them; a new human request clears them. Disabled, disconnected,
+or unregistered tools are never searchable, and disconnecting an already
+disclosed server removes its schemas immediately.
 
 ### `tools.web`
 
@@ -323,9 +349,10 @@ tools or bypass approvals. See [tool-registry.md](tool-registry.md).
 
 The snapshot changes with session state. `/tools off`, `/web off`, loss of
 native-tool support, and MCP disconnect/disable remove affected schemas. After
-`/mcp connect <server>` completes its MCP `tools/list`, those prefixed
-`mcp__<server>__<tool>` schemas appear in both the registry response and every
-subsequent native LLM request.
+`/mcp connect <server>` completes its MCP `tools/list`, a small catalog's
+prefixed `mcp__<server>__<tool>` schemas appear immediately. In a large catalog,
+only task-locally disclosed matches appear. In both cases the registry response
+and each subsequent native LLM request use the same visible snapshot.
 
 ### `cache`, `memory`, `prompt`, `context`, `network`
 

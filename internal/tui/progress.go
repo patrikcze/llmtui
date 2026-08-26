@@ -180,6 +180,8 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness)
 	case tools.ToolReadFile, tools.ToolListDir:
 		resource = normalizeWorkspacePath(root, resource)
+	case tools.ToolSearch:
+		resource = normalizeText(c.SearchQuery) + "\x1e" + strconv.Itoa(c.Max)
 	default:
 		if resource == "" {
 			resource = normalizeText(c.Body)
@@ -330,6 +332,9 @@ func (l *progressLedger) planBatch(calls []tools.Call) (toolBatchPlan, bool) {
 	}
 	const reason = "repeated tool call blocked: no new evidence since the last identical call"
 	for i, call := range calls {
+		if call.Tool == tools.ToolLocalContext {
+			continue
+		}
 		if l.wouldBlock(progressFingerprintAtRoot(l.root, call)) {
 			plan.block(i, reason)
 		}

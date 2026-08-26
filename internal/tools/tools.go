@@ -38,14 +38,19 @@ const ResultsPrefix = "[tool results]"
 
 // Known tool names.
 const (
-	ToolListDir    = "list_dir"
-	ToolReadFile   = "read_file"
-	ToolGlob       = "glob"
-	ToolGrep       = "grep"
-	ToolWriteFile  = "write_file"
-	ToolRunCommand = "run_command"
-	ToolWebSearch  = "web_search"
-	ToolWebFetch   = "web_fetch"
+	ToolListDir      = "list_dir"
+	ToolReadFile     = "read_file"
+	ToolGlob         = "glob"
+	ToolGrep         = "grep"
+	ToolWriteFile    = "write_file"
+	ToolRunCommand   = "run_command"
+	ToolWebSearch    = "web_search"
+	ToolWebFetch     = "web_fetch"
+	ToolLocalContext = "local_context"
+	ToolSearch       = "tool_search"
+	// ToolAskUser pauses the current tool loop until the human supplies one
+	// answer. The TUI controller handles the pause; Runner never executes it.
+	ToolAskUser = "ask_user"
 	// ToolSkillLoad activates a skill (declarative task instructions) for the
 	// current agent run. It executes no code and grants no permissions: the
 	// skill body is included by the prompt composer on the next inference.
@@ -73,6 +78,16 @@ type Call struct {
 	// it deliberately requests a new poll without disguising it through
 	// incidental argument variation.
 	Freshness string
+	// ContextKind selects local_context's bounded read-only collector.
+	ContextKind string
+	// SearchQuery carries tool_search's deterministic local capability query.
+	SearchQuery string
+	// Question, Choices, and AllowText carry ask_user's bounded interaction
+	// request. They are controller state, not approval or execution authority.
+	Question    string
+	Choices     [MaxAskUserChoices]string
+	ChoiceCount int
+	AllowText   bool
 
 	// MCPServer, when non-empty, marks this as a call to an MCP server's
 	// tool rather than a built-in one. MCPTool is the tool's name on that
@@ -95,7 +110,7 @@ type Result struct {
 }
 
 // fenceOpen matches a tool block opener: 3+ backticks, "tool", name, optional path.
-var fenceOpen = regexp.MustCompile("^(`{3,})tool[ \t]+([a-z_]+)(?:[ \t]+(.+?))?[ \t]*$")
+var fenceOpen = regexp.MustCompile("^(`{3,})tool[ \t]+([A-Za-z0-9_.-]+)(?:[ \t]+(.+?))?[ \t]*$")
 
 // Parse extracts tool calls from an assistant reply. A block opens with a
 // fence whose info string is "tool <name> [path]" and closes at a line of at
@@ -114,7 +129,23 @@ func Parse(reply string) []Call {
 		closed := false
 		for j := i + 1; j < len(lines); j++ {
 			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
-				calls = append(calls, Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)})
+				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
+				switch call.Tool {
+				case ToolAskUser:
+					decodeAskUserBody(&call)
+				case ToolLocalContext:
+					decodeLocalContextBody(&call)
+				case ToolSearch:
+					decodeToolSearchBody(&call)
+				}
+				if server, tool, ok := SplitMCPToolName(call.Tool); ok {
+					call.MCPServer, call.MCPTool = server, tool
+					call.MCPArgs = strings.TrimSpace(call.Body)
+					if call.MCPArgs == "" {
+						call.MCPArgs = "{}"
+					}
+				}
+				calls = append(calls, call)
 				i = j
 				closed = true
 				break
@@ -162,6 +193,9 @@ type Runner struct {
 	// implementation validates the ID and marks the skill active for the
 	// current run; it must not execute anything.
 	Skills SkillLoader
+	// LocalContext collects bounded machine/workspace facts without network
+	// access. Tests replace it with a fixture collector.
+	LocalContext LocalContextCollector
 }
 
 // SkillLoader activates one skill for the current agent run. Implemented by
@@ -184,6 +218,7 @@ func NewRunner(root string, maxKB int) *Runner {
 		execution:      make(chan struct{}, 1),
 		CommandTimeout: 30 * time.Second,
 		Guardrails:     DefaultGuardrails(),
+		LocalContext:   NewLocalContextCollector(root),
 	}
 }
 
@@ -290,6 +325,12 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, res.Err = r.skillLoad(c)
+	case ToolAskUser:
+		res.Err = errors.New("ask_user is a controller pause and cannot be executed by the tool runner")
+	case ToolLocalContext:
+		res.Output, res.Err = r.localContext(ctx, c)
+	case ToolSearch:
+		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
 	default:
 		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s)",
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
@@ -620,7 +661,11 @@ func sanitizedEnv(environ []string) []string {
 // approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad:
+	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad, ToolAskUser:
+		return false
+	case ToolLocalContext:
+		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
+	case ToolSearch:
 		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
@@ -673,7 +718,11 @@ func webSearchNeedsApproval(query string) bool {
 // id_rsa, …) asks first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolSkillLoad:
+	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:
+		return false
+	case ToolLocalContext:
+		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
+	case ToolSearch:
 		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
@@ -851,6 +900,12 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("%s: %s(%s)", c.MCPServer, c.MCPTool, truncateLine(c.MCPArgs, 80))
 	}
 	switch c.Tool {
+	case ToolAskUser:
+		return "ask_user: " + c.Question
+	case ToolLocalContext:
+		return "local_context: " + c.ContextKind
+	case ToolSearch:
+		return fmt.Sprintf("tool_search: %q", c.SearchQuery)
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:
@@ -895,6 +950,9 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
+- ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
+- local_context — read bounded local system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind and optional limit
+- tool_search — search currently available but hidden tools; the block body is one JSON object with query and optional max_results
 %s
 Example — save a script, then a read-only command:
 
@@ -912,6 +970,8 @@ Rules:
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
+- ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
+- tool_search discovers capabilities but grants no permission. Use it when visible tools cannot perform the action.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".
 - Use one block per action. If a body contains triple backticks, open the tool block with four.
 - When the task is complete, reply normally without any tool blocks.%s`, root, webTools, ResultsPrefix, webRules))

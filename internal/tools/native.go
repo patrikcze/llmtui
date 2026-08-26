@@ -83,6 +83,46 @@ func Specs() []provider.ToolSpec {
 				"required": ["command"]
 			}`),
 		},
+		{
+			Name:        ToolAskUser,
+			Description: "Ask the human only when a decision or missing information is required before continuing. Do not use this for tool approval. Call it alone, without other tools in the same batch.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"question": {"type": "string", "description": "One concise question for the human."},
+					"choices": {"type": "array", "maxItems": 4, "items": {"type": "string"}, "description": "Optional short choices."},
+					"allow_text": {"type": "boolean", "description": "Allow a free-text answer in addition to choices."}
+				},
+				"required": ["question"],
+				"additionalProperties": false
+			}`),
+		},
+		{
+			Name:        ToolLocalContext,
+			Description: "Read bounded information about the local computer or workspace. Use it instead of inventing shell commands for system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"kind": {"type": "string", "enum": ["system", "workspace", "processes", "clipboard", "recent_files"]},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Optional result limit for processes or recent_files; defaults to 10."}
+				},
+				"required": ["kind"],
+				"additionalProperties": false
+			}`),
+		},
+		{
+			Name:        ToolSearch,
+			Description: "Search currently available but not yet exposed tools by capability. Use this when none of the visible tools can perform the required action. Discovery grants no permission. Call it alone.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Short capability description, for example create Jira issue."},
+					"max_results": {"type": "integer", "minimum": 1, "maximum": 8}
+				},
+				"required": ["query"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 }
 
@@ -174,6 +214,60 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		if tc.ArgumentsError != "" {
 			c.InputErr = tc.ArgumentsError
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolAskUser && len(tc.Arguments) > MaxAskUserPayloadBytes {
+			c.InputErr = fmt.Sprintf("ask_user arguments exceed the %d byte limit", MaxAskUserPayloadBytes)
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolAskUser {
+			var args askUserArgs
+			if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+				c.InputErr = err.Error()
+			} else {
+				c.Question = args.Question
+				c.setAskUserChoices(args.Choices)
+				c.AllowText = args.AllowText
+				if err := ValidateAskUserCall(&c); err != nil {
+					c.InputErr = err.Error()
+				}
+			}
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolLocalContext {
+			if len(tc.Arguments) > maxLocalContextPayload {
+				c.InputErr = fmt.Sprintf("local_context arguments exceed the %d byte limit", maxLocalContextPayload)
+			} else {
+				var args localContextArgs
+				if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+					c.InputErr = err.Error()
+				} else {
+					c.ContextKind, c.Max = args.Kind, args.Limit
+					if err := ValidateLocalContextCall(&c); err != nil {
+						c.InputErr = err.Error()
+					}
+				}
+			}
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolSearch {
+			if len(tc.Arguments) > MaxToolSearchPayloadBytes {
+				c.InputErr = fmt.Sprintf("tool_search arguments exceed the %d byte limit", MaxToolSearchPayloadBytes)
+			} else {
+				var args toolSearchArgs
+				if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+					c.InputErr = err.Error()
+				} else {
+					c.SearchQuery, c.Max = args.Query, args.MaxResults
+					if err := ValidateToolSearchCall(&c); err != nil {
+						c.InputErr = err.Error()
+					}
+				}
+			}
 			out = append(out, c)
 			continue
 		}
@@ -325,5 +419,7 @@ Rules:
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
+- ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
+- tool_search discovers capabilities but grants no permission. Use it when visible tools cannot perform the action.
 - Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
 }

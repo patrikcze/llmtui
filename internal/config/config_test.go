@@ -199,6 +199,9 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
 		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
 	}
+	if !cfg.Tools.Discovery.Enabled || cfg.Tools.Discovery.Threshold != 16 || cfg.Tools.Discovery.MaxResults != 5 {
+		t.Fatalf("tools.discovery defaults = %+v", cfg.Tools.Discovery)
+	}
 	if cfg.ToolRegistry.Enabled || cfg.ToolRegistry.Listen != "127.0.0.1:7834" || cfg.ToolRegistry.TokenEnv != "" || cfg.ToolRegistry.ShutdownTimeout != "5s" {
 		t.Fatalf("tool registry defaults = %+v", cfg.ToolRegistry)
 	}
