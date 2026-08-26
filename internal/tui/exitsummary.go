@@ -94,7 +94,8 @@ const (
 // interaction counts, performance timings, and a per-model usage table,
 // followed by a history hint when the session was saved.
 func renderExitSummary(t styles.Theme, d exitSummaryData) string {
-	inner := d.Width - 4 // rounded border + horizontal padding
+	frameWidth := t.Panel.GetHorizontalFrameSize()
+	inner := d.Width - frameWidth
 	if inner > 74 {
 		inner = 74
 	}
@@ -169,7 +170,7 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 		b.WriteString(faint.Render("~ provider returned no usage; token counts are estimated") + "\n")
 	}
 
-	panel := t.Panel.Width(inner + 2).Render(strings.TrimRight(b.String(), "\n"))
+	panel := t.Panel.Width(inner + frameWidth).Render(strings.TrimRight(b.String(), "\n"))
 
 	out := panel
 	if d.Saved {

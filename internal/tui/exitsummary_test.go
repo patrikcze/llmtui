@@ -173,6 +173,28 @@ func TestRenderExitSummaryWrapsLongModelNames(t *testing.T) {
 	}
 }
 
+func TestRenderExitSummaryKeepsTokenCountsOnOneLine(t *testing.T) {
+	out := renderExitSummary(styles.ClaudeInspired(), exitSummaryData{
+		SessionID: "session-x",
+		Models: []modelUsageStat{
+			{Provider: "lmstudio", Model: "openai/gpt-oss-20b", Requests: 66, Prompt: 432020, Reply: 16186},
+			{Provider: "embedded", Model: "gemma-4-e4b-it-GGUF/gemma-4-e4b-it-Q4_K_M.gguf", Requests: 5, Prompt: 28652, Reply: 2285},
+		},
+		Width: 80,
+	})
+
+	for _, want := range []string{"Output Tokens", "432 020", "16 186", "28 652", "2 285"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary split token count %q across lines:\n%s", want, out)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if width := lipgloss.Width(line); width > 80 {
+			t.Errorf("line exceeds width 80 (%d): %q", width, line)
+		}
+	}
+}
+
 func TestExitSummarySnapshot(t *testing.T) {
 	m := newTestModel(t)
 	m.sentCount = 4
