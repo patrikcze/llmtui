@@ -94,6 +94,9 @@ func TestRunnerCommandApprovalUsesClassifier(t *testing.T) {
 	if !r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "rm -rf ."}) {
 		t.Error("rm -rf should require approval")
 	}
+	if !r.NeedsApproval(Call{Tool: ToolRunCommand, Body: "rg --pre=sh needle payload.sh"}) {
+		t.Error("rg --pre should require approval (spawns a helper program)")
+	}
 }
 
 func TestRunnerSymlinkEscapeTogglable(t *testing.T) {

@@ -321,6 +321,7 @@ func TestSanitizedEnv(t *testing.T) {
 		"DB_PASSWORD=x", "AUTH_TOKEN=x", "AWS_CREDENTIALS=x", "LLMTUI_MODEL=qwen3",
 		"DATABASE_URL=postgres://user:pass@db", "DB_PASS=x", "APP_DSN=x",
 		"CONNECTION_STRING=x", "SSH_AUTH_SOCK=/tmp/agent", "KUBECONFIG=/tmp/kube", "VAULT_ADDR=https://vault",
+		"RIPGREP_CONFIG_PATH=/tmp/ripgreprc",
 	}
 	out := strings.Join(sanitizedEnv(in), "\n")
 	for _, keep := range []string{"PATH=", "HOME=", "LANG="} {
@@ -328,7 +329,7 @@ func TestSanitizedEnv(t *testing.T) {
 			t.Errorf("sanitizedEnv dropped %s", keep)
 		}
 	}
-	for _, drop := range []string{"KEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIALS", "LLMTUI_", "DATABASE_URL", "DB_PASS", "APP_DSN", "CONNECTION_STRING", "SSH_AUTH_SOCK", "KUBECONFIG", "VAULT_ADDR"} {
+	for _, drop := range []string{"KEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIALS", "LLMTUI_", "DATABASE_URL", "DB_PASS", "APP_DSN", "CONNECTION_STRING", "SSH_AUTH_SOCK", "KUBECONFIG", "VAULT_ADDR", "RIPGREP_CONFIG_PATH"} {
 		if strings.Contains(out, drop) {
 			t.Errorf("sanitizedEnv leaked a var containing %s:\n%s", drop, out)
 		}

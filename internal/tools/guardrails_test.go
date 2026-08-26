@@ -81,6 +81,10 @@ func TestShellMetacharactersAlwaysAsk(t *testing.T) {
 		"curl http://x.com > /tmp/f",
 		"ls `pwd`",
 		"echo $HOME",
+		"rg --pr%COMSPEC:~0,0%e=calc needle .",
+		"rg --pr^e=calc needle .",
+		"echo !HOME!",
+		"(dir)",
 		"cat *.txt",
 		"cat n[otes].txt",
 	}
@@ -105,6 +109,59 @@ func TestFindEscalatingArgsAsk(t *testing.T) {
 		if cl.Verdict != VerdictAsk {
 			t.Errorf("ClassifyCommand(%q) = %v, want ask", cmd, cl.Verdict)
 		}
+	}
+}
+
+func TestClassifyCommandRipgrepHelperOptionsAsk(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+	}{
+		{name: "pre equals", cmd: "rg --pre=sh needle payload.sh"},
+		{name: "pre separate", cmd: "rg --pre sh needle payload.sh"},
+		{name: "pre after operands", cmd: "rg needle payload.sh --pre=sh"},
+		{name: "pre reenabled", cmd: "rg --no-pre --pre=sh needle payload.sh"},
+		{name: "workspace preprocessor", cmd: "rg --pre=./scripts/filter needle docs"},
+		{name: "hostname helper equals", cmd: "rg --hostname-bin=sh --hyperlink-format=default needle ."},
+		{name: "hostname helper separate", cmd: "rg --hostname-bin sh --hyperlink-format=default needle ."},
+		{name: "search zip long", cmd: "rg --search-zip needle archive.gz"},
+		{name: "search zip short", cmd: "rg -z needle archive.gz"},
+		{name: "search zip clustered", cmd: "rg -nz needle archive.gz"},
+	}
+	p := DefaultGuardrails()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := p.ClassifyCommand(tt.cmd, ".")
+			if cl.Verdict != VerdictAsk {
+				t.Errorf("ClassifyCommand(%q) = %v (%s), want ask", tt.cmd, cl.Verdict, cl.Reason)
+			}
+		})
+	}
+}
+
+func TestClassifyCommandRipgrepObservationalOptionsRemainAuto(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+	}{
+		{name: "simple search", cmd: "rg pattern src/"},
+		{name: "line numbers", cmd: "rg -n pattern ."},
+		{name: "list files", cmd: "rg --files src/"},
+		{name: "explicit pattern", cmd: "rg -e TODO internal"},
+		{name: "attached pattern", cmd: "rg -ez docs/security.md"},
+		{name: "cluster before attached pattern", cmd: "rg -nez docs/security.md"},
+		{name: "pattern file", cmd: "rg -f patterns.txt src/"},
+		{name: "pre disabled", cmd: "rg --no-pre pattern src/"},
+		{name: "literal pre token", cmd: "rg -- --pre=sh"},
+	}
+	p := DefaultGuardrails()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := p.ClassifyCommand(tt.cmd, ".")
+			if cl.Verdict != VerdictAuto {
+				t.Errorf("ClassifyCommand(%q) = %v (%s), want auto", tt.cmd, cl.Verdict, cl.Reason)
+			}
+		})
 	}
 }
 

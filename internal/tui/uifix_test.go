@@ -259,6 +259,16 @@ func TestApprovalMenuNumberTwoSetsAutoApprove(t *testing.T) {
 	}
 }
 
+func TestRipgrepPreprocessorRequiresApproval(t *testing.T) {
+	m := newTestModel(t)
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.toolsAutoApprove = false
+	call := tools.Call{Tool: tools.ToolRunCommand, Body: "rg --pre=sh needle payload.sh"}
+	if !m.callNeedsApproval(call) {
+		t.Fatal("rg --pre bypassed the TUI approval gate")
+	}
+}
+
 func TestApprovalMenuEscDenies(t *testing.T) {
 	m := newTestModel(t)
 	m.resize(80, 24)

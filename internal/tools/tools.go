@@ -589,10 +589,13 @@ func (r *Runner) skillLoad(c Call) (string, error) {
 // credentials; those never reach commands the model runs.
 var secretEnvPattern = regexp.MustCompile(`(?i)(key|token|secret|password|passwd|credential|passphrase|(^|_)pass(_|$)|(^|_)(url|dsn)(_|$)|conn(ection)?_?string)`)
 
-var sensitiveEnvNames = map[string]bool{
-	"SSH_AUTH_SOCK": true,
-	"KUBECONFIG":    true,
-	"VAULT_ADDR":    true,
+// blockedCommandEnvNames contains variables that expose credentials or can
+// inject extra executable behavior into an otherwise auto-approved command.
+var blockedCommandEnvNames = map[string]bool{
+	"SSH_AUTH_SOCK":       true,
+	"KUBECONFIG":          true,
+	"VAULT_ADDR":          true,
+	"RIPGREP_CONFIG_PATH": true,
 }
 
 func sanitizedEnv(environ []string) []string {
@@ -602,7 +605,7 @@ func sanitizedEnv(environ []string) []string {
 		if !ok {
 			continue
 		}
-		if strings.HasPrefix(name, "LLMTUI_") || sensitiveEnvNames[strings.ToUpper(name)] || secretEnvPattern.MatchString(name) {
+		if strings.HasPrefix(name, "LLMTUI_") || blockedCommandEnvNames[strings.ToUpper(name)] || secretEnvPattern.MatchString(name) {
 			continue
 		}
 		out = append(out, kv)

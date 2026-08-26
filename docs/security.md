@@ -147,7 +147,9 @@ and an explicit category selection; the picker defaults to skip.
     `-u` or any other flag, since those mutate persistent go env config.
     Known-dangerous programs (`rm`, `mv`, `chmod`, `sudo`, `curl`, package
     managers, cloud/container CLIs) always ask, as does anything
-    unrecognized.
+    unrecognized. Ripgrep options that launch helper processes (`--pre`,
+    `--hostname-bin`, and `-z`/`--search-zip`) also always ask; ordinary
+    searches remain automatic.
   - **Confinement** — file tools reject absolute paths, `..`, and symlinks
     resolving outside the launch directory. Commands run with the workspace
     as their working directory; path-like arguments are symlink-resolved
@@ -169,6 +171,8 @@ and an explicit category selection; the picker defaults to skip.
   - **Secret hygiene** — the environment passed to `run_command` is
     stripped of `LLMTUI_*` and anything matching key/token/secret/password
     patterns, so credentials cannot round-trip into model context via `env`.
+    `RIPGREP_CONFIG_PATH` is also removed so ambient ripgrep configuration
+    cannot inject helper-execution options after command approval.
   - **Bounded execution** — commands are time-limited
     (`tools.command_timeout`), reads/writes/outputs are size-capped, the
     tool loop stops after `tools.max_iterations` rounds per message, and

@@ -112,6 +112,54 @@ func goEnvArgsAreObservational(args []string) bool {
 	return true
 }
 
+// rgArgsAreObservational rejects ripgrep options that can spawn helper
+// processes. Those helpers inherit llmtui's user privileges, so commands that
+// request them must go through the normal approval flow even though rg itself
+// is otherwise a read-only search tool.
+func rgArgsAreObservational(args []string) bool {
+	parseOptions := true
+	for _, arg := range args {
+		if !parseOptions {
+			continue
+		}
+		if arg == "--" {
+			parseOptions = false
+			continue
+		}
+		switch {
+		case arg == "--pre", strings.HasPrefix(arg, "--pre="):
+			return false
+		case arg == "--hostname-bin", strings.HasPrefix(arg, "--hostname-bin="):
+			return false
+		case arg == "--search-zip", strings.HasPrefix(arg, "--search-zip="):
+			return false
+		case rgShortOptionsSpawnHelper(arg):
+			return false
+		}
+	}
+	return true
+}
+
+// rgShortOptionsSpawnHelper recognizes -z inside a short-option cluster while
+// respecting options whose attached remainder is a value. For example, -nz
+// includes -z, but -ez is the safe pattern form of "-e z".
+func rgShortOptionsSpawnHelper(arg string) bool {
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'z':
+			return true
+		case 'e', 'f', 'E', 'm', 'j', 'g', 'd', 't', 'T', 'A', 'B', 'C', 'M', 'r':
+			// These short options consume the remainder as their value, so
+			// any later z is data rather than the search-zip option.
+			return false
+		}
+	}
+	return false
+}
+
 // ClassifyCommand classifies one run_command line conservatively: only an
 // allowlisted read-only program with no shell metacharacters, no escalating
 // arguments, and no path argument outside root earns VerdictAuto. Everything
@@ -126,7 +174,7 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 	if strings.ContainsAny(cmdline, "\n\r") {
 		return CommandClass{VerdictAsk, "multiple lines"}
 	}
-	if strings.ContainsAny(cmdline, "|;&<>`$\\") {
+	if strings.ContainsAny(cmdline, "|;&<>`$\\%^!()") {
 		return CommandClass{VerdictAsk, "shell metacharacters (pipes, redirects, chaining, or substitution)"}
 	}
 	if strings.ContainsAny(cmdline, "*?[]{}") {
@@ -164,6 +212,11 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 			}
 		}
 		classReason = "read-only git subcommand"
+	case "rg":
+		if !rgArgsAreObservational(fields[1:]) {
+			return CommandClass{VerdictAsk, "rg option can execute a helper program"}
+		}
+		classReason = "read-only ripgrep query"
 	case "go":
 		if len(fields) <= 1 {
 			return CommandClass{VerdictAsk, "go subcommand can modify files or fetch modules"}
