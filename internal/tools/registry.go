@@ -96,6 +96,7 @@ var safetyForBuiltin = map[string]SafetyClass{
 	ToolRunCommand:   SafetyCommand,
 	ToolAskUser:      SafetyReadOnly,
 	ToolLocalContext: SafetyReadOnly,
+	ToolSearch:       SafetyReadOnly,
 	// skill_load only changes prompt state inside the app: no file, command,
 	// or network effect, and no permission grant.
 	ToolSkillLoad: SafetyReadOnly,
@@ -114,6 +115,7 @@ var approvalForTool = map[string]string{
 	ToolSkillLoad:    "no",
 	ToolAskUser:      "no (never authorizes another tool)",
 	ToolLocalContext: "ask for clipboard; otherwise no",
+	ToolSearch:       "no (discovery only)",
 }
 
 // DefaultRegistry catalogs the built-in workspace tools and the web tools,

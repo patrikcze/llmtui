@@ -898,6 +898,8 @@ func toolCallDetail(call tools.Call) string {
 		return call.Body
 	case tools.ToolLocalContext:
 		return call.ContextKind
+	case tools.ToolSearch:
+		return call.SearchQuery
 	case tools.ToolRunCommand:
 		program, _, _ := strings.Cut(strings.TrimSpace(call.Body), " ")
 		return program

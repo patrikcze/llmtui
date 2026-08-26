@@ -369,8 +369,11 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		instructions := tools.Instructions(m.toolRunner.Root(), m.webOn)
 		if m.toolsNative {
 			instructions = tools.NativeInstructions(m.toolRunner.Root(), m.webOn)
-		} else if m.skillLoadAvailable() {
-			instructions += "\n" + tools.SkillInstructions
+		} else {
+			if m.skillLoadAvailable() {
+				instructions += "\n" + tools.SkillInstructions
+			}
+			instructions += m.fencedDynamicToolInstructions()
 		}
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
@@ -1221,13 +1224,19 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	return m.startRequest(req)
 }
 
-// activeToolSpecs assembles every tool spec offered to the model under
-// current settings: native workspace tools, web tools, and connected MCP
-// servers' tools. buildRequest and cacheKey (Task 5) both call this so a
-// request and its cache key can never disagree about which tools were
-// actually offered.
+// activeToolSpecs returns the exact native snapshot offered to the next
+// provider request. The HTTP registry mirrors this same visible set.
 func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	if !m.useNativeTools() {
+		return nil
+	}
+	return m.modelVisibleToolSpecs()
+}
+
+// eligibleToolSpecs is the authoritative full catalog the current session
+// may use. Visibility can narrow this set but can never add to it.
+func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
+	if !m.toolsOn || m.toolRunner == nil {
 		return nil
 	}
 	specs := tools.Specs()
@@ -1239,6 +1248,20 @@ func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	}
 	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
 	return specs
+}
+
+func (m *Model) modelVisibleToolSpecs() []provider.ToolSpec {
+	eligible := m.eligibleToolSpecs()
+	if !m.toolDiscoveryActive(eligible) {
+		return eligible
+	}
+	visible := make([]provider.ToolSpec, 0, len(eligible))
+	for _, spec := range eligible {
+		if _, _, dynamic := tools.SplitMCPToolName(spec.Name); !dynamic || m.disclosedTools[spec.Name] {
+			visible = append(visible, spec)
+		}
+	}
+	return visible
 }
 
 // activeToolNames extracts just the names from a tool spec list, for callers

@@ -332,6 +332,17 @@ type ToolsConfig struct {
 	// tool-enabled chat and /agent on, since both share the same
 	// tool-execution kernel.
 	NoProgress NoProgressConfig `mapstructure:"no_progress" yaml:"no_progress"`
+	// Discovery progressively exposes large dynamic MCP catalogs while core
+	// tools remain visible. Discovery changes visibility, never permission.
+	Discovery ToolsDiscoveryConfig `mapstructure:"discovery" yaml:"discovery"`
+}
+
+// ToolsDiscoveryConfig controls deterministic task-local progressive tool
+// disclosure. Small catalogs remain fully visible.
+type ToolsDiscoveryConfig struct {
+	Enabled    bool `mapstructure:"enabled" yaml:"enabled"`
+	Threshold  int  `mapstructure:"threshold" yaml:"threshold"`
+	MaxResults int  `mapstructure:"max_results" yaml:"max_results"`
 }
 
 // NoProgressConfig toggles and tunes the progress ledger that blocks an
@@ -834,6 +845,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.guardrails.require_approval_for_secret_reads", true)
 	v.SetDefault("tools.no_progress.enabled", true)
 	v.SetDefault("tools.no_progress.threshold", 3)
+	v.SetDefault("tools.discovery.enabled", true)
+	v.SetDefault("tools.discovery.threshold", 16)
+	v.SetDefault("tools.discovery.max_results", 5)
 
 	v.SetDefault("skills.enabled", true)
 	v.SetDefault("skills.expose_catalog_to_model", true)
@@ -1064,6 +1078,13 @@ tools:
   no_progress:
     enabled: true
     threshold: 3 # consecutive no-new-evidence repeats allowed before blocking
+  # Keep small catalogs unchanged. Above this total-tool threshold, connected
+  # MCP schemas stay hidden until tool_search discloses bounded matches for
+  # the current human task. Discovery never grants execution permission.
+  discovery:
+    enabled: true
+    threshold: 16
+    max_results: 5
 
 # Skills: declarative task-instruction packages (SKILL.md files with YAML
 # front matter) discovered from <user-config>/llmtui/skills/<id>/ and

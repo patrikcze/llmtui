@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,9 @@ func newActivityTestModel(t *testing.T, delay time.Duration) *Model {
 	m.toolsOn = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	factory := func(c mcp.ServerConfig) (mcp.Client, error) {
-		return &mcp.MockClient{ServerName: c.Name, Delay: delay}, nil
+		return &mcp.MockClient{ServerName: c.Name, Delay: delay, CannedTools: []mcp.Tool{{
+			Server: c.Name, Name: "session_start", Schema: json.RawMessage(`{"type":"object"}`),
+		}}}, nil
 	}
 	m.mcpRegistry = mcp.NewRegistry([]mcp.ServerConfig{{
 		Name: "jiraWorklog", Transport: mcp.TransportStdio, Command: "x", Enabled: true, Approve: "auto", Timeout: 5 * time.Second,

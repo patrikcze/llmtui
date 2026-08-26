@@ -180,6 +180,8 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness)
 	case tools.ToolReadFile, tools.ToolListDir:
 		resource = normalizeWorkspacePath(root, resource)
+	case tools.ToolSearch:
+		resource = normalizeText(c.SearchQuery) + "\x1e" + strconv.Itoa(c.Max)
 	default:
 		if resource == "" {
 			resource = normalizeText(c.Body)

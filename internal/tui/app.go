@@ -224,6 +224,10 @@ type Model struct {
 	// toolCallSeq feeds tools.EnsureToolCallIDs so generated tool-call IDs
 	// stay unique across every round of a session.
 	toolCallSeq int
+	// disclosedTools is the bounded task-local set selected by tool_search.
+	// Names are revalidated against the live eligible catalog on every use.
+	disclosedTools     map[string]bool
+	disclosedToolOrder []string
 	// pendingAsk is a controller-owned pause requested by ask_user. It is
 	// deliberately separate from pendingCalls, which is authorization UI.
 	pendingAsk *pendingAskUser
@@ -1181,6 +1185,7 @@ func (m *Model) send() tea.Cmd {
 		m.sentCount--
 		return m.answerAskUser(text)
 	}
+	m.resetToolDisclosure()
 	m.turnRuntime.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
@@ -1240,6 +1245,12 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		return nil
 	}
 	if cmd, handled := m.handleAskUserBatch(calls); handled {
+		return cmd
+	}
+	if cmd, handled := m.handleToolSearchBatch(calls); handled {
+		return cmd
+	}
+	if cmd, handled := m.rejectUnavailableMCPBatch(calls); handled {
 		return cmd
 	}
 	plan := newToolBatchPlan(calls)

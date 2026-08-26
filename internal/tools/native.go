@@ -110,6 +110,19 @@ func Specs() []provider.ToolSpec {
 				"additionalProperties": false
 			}`),
 		},
+		{
+			Name:        ToolSearch,
+			Description: "Search currently available but not yet exposed tools by capability. Use this when none of the visible tools can perform the required action. Discovery grants no permission. Call it alone.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Short capability description, for example create Jira issue."},
+					"max_results": {"type": "integer", "minimum": 1, "maximum": 8}
+				},
+				"required": ["query"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 }
 
@@ -234,6 +247,23 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 				} else {
 					c.ContextKind, c.Max = args.Kind, args.Limit
 					if err := ValidateLocalContextCall(&c); err != nil {
+						c.InputErr = err.Error()
+					}
+				}
+			}
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolSearch {
+			if len(tc.Arguments) > MaxToolSearchPayloadBytes {
+				c.InputErr = fmt.Sprintf("tool_search arguments exceed the %d byte limit", MaxToolSearchPayloadBytes)
+			} else {
+				var args toolSearchArgs
+				if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+					c.InputErr = err.Error()
+				} else {
+					c.SearchQuery, c.Max = args.Query, args.MaxResults
+					if err := ValidateToolSearchCall(&c); err != nil {
 						c.InputErr = err.Error()
 					}
 				}
@@ -390,5 +420,6 @@ Rules:
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
+- tool_search discovers capabilities but grants no permission. Use it when visible tools cannot perform the action.
 - Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
 }
