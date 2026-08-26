@@ -775,6 +775,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 				return m, nil
 			}
+			if m.pendingAsk != nil && strings.TrimSpace(m.input.Value()) == "/agent cancel" {
+				return m, m.runSlashCommand()
+			}
 			if m.pendingAsk != nil && !m.busy() {
 				return m, m.send()
 			}
@@ -1250,9 +1253,6 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if cmd, handled := m.handleToolSearchBatch(calls); handled {
 		return cmd
 	}
-	if cmd, handled := m.rejectUnavailableMCPBatch(calls); handled {
-		return cmd
-	}
 	plan := newToolBatchPlan(calls)
 	if m.cfg.Tools.NoProgress.Enabled {
 		var terminal bool
@@ -1263,6 +1263,12 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	}
 	if exceeded, reason := m.agentHardBudgetExceeded(len(plan.runnableCalls())); exceeded {
 		return m.terminateAgentBudget(calls, reason)
+	}
+	if m.toolDepth >= m.toolMaxIter() {
+		return m.startPlannedToolBatch(plan)
+	}
+	if cmd, handled := m.rejectUnavailableMCPBatch(calls); handled {
+		return cmd
 	}
 	return m.startPlannedToolBatch(plan)
 }

@@ -137,6 +137,9 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
+	if matches == nil {
+		matches = []tools.ToolSearchMatch{}
+	}
 	names := make([]string, len(matches))
 	for index, match := range matches {
 		names[index] = match.Name

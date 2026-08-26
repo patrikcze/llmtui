@@ -220,7 +220,8 @@ func TestAskUserAgentCancelWhileWaiting(t *testing.T) {
 	call := nativeAskCall(t, "ask-agent-cancel-1", `{"question":"Which environment?"}`)
 	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
 	m.startToolBatch([]tools.Call{call})
-	_ = cmdAgent(m, "cancel")
+	m.input.SetValue("/agent cancel")
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if run.Status != agent.DecisionCancelled || m.pendingAsk != nil {
 		t.Fatalf("cancelled ask state: run=%+v pending=%+v", run, m.pendingAsk)
 	}

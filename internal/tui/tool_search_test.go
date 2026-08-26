@@ -243,3 +243,16 @@ func TestToolSearchHonorsAndRenewsToolRoundBudget(t *testing.T) {
 		t.Fatalf("renewed search state: cmd=%v pending=%v disclosed=%v depth=%d", cmd, m.pendingBudget, m.disclosedToolOrder, m.toolDepth)
 	}
 }
+
+func TestHiddenMCPRejectionCannotBypassToolRoundBudget(t *testing.T) {
+	m := configureDiscoveryModel(t, 10, nil)
+	m.cfg.Tools.MaxIterations = 1
+	m.toolDepth = 1
+	call := tools.CallsFromNative([]provider.ToolCall{{
+		ID: "hidden-budget", Name: "mcp__jira__create_issue", Arguments: `{}`,
+	}})[0]
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
+	if cmd := m.startToolBatch([]tools.Call{call}); cmd != nil || !m.pendingBudget {
+		t.Fatalf("hidden call bypassed spent budget: cmd=%v pending=%v", cmd, m.pendingBudget)
+	}
+}
