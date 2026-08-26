@@ -330,6 +330,9 @@ func (l *progressLedger) planBatch(calls []tools.Call) (toolBatchPlan, bool) {
 	}
 	const reason = "repeated tool call blocked: no new evidence since the last identical call"
 	for i, call := range calls {
+		if call.Tool == tools.ToolLocalContext {
+			continue
+		}
 		if l.wouldBlock(progressFingerprintAtRoot(l.root, call)) {
 			plan.block(i, reason)
 		}

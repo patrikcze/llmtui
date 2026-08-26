@@ -97,24 +97,34 @@ func Specs() []provider.ToolSpec {
 				"additionalProperties": false
 			}`),
 		},
+		{
+			Name:        ToolLocalContext,
+			Description: "Read bounded information about the local computer or workspace. Use it instead of inventing shell commands for system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"kind": {"type": "string", "enum": ["system", "workspace", "processes", "clipboard", "recent_files"]},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Optional result limit for processes or recent_files; defaults to 10."}
+				},
+				"required": ["kind"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 }
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path       string   `json:"path"`
-	Content    string   `json:"content"`
-	Command    string   `json:"command"`
-	Query      string   `json:"query"`
-	URL        string   `json:"url"`
-	MaxResults int      `json:"max_results"`
-	Skill      string   `json:"skill"`
-	Pattern    string   `json:"pattern"`
-	Glob       string   `json:"glob"`
-	Freshness  string   `json:"freshness_token"`
-	Question   string   `json:"question"`
-	Choices    []string `json:"choices"`
-	AllowText  bool     `json:"allow_text"`
+	Path       string `json:"path"`
+	Content    string `json:"content"`
+	Command    string `json:"command"`
+	Query      string `json:"query"`
+	URL        string `json:"url"`
+	MaxResults int    `json:"max_results"`
+	Skill      string `json:"skill"`
+	Pattern    string `json:"pattern"`
+	Glob       string `json:"glob"`
+	Freshness  string `json:"freshness_token"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -199,6 +209,38 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			out = append(out, c)
 			continue
 		}
+		if tc.Name == ToolAskUser {
+			var args askUserArgs
+			if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+				c.InputErr = err.Error()
+			} else {
+				c.Question = args.Question
+				c.setAskUserChoices(args.Choices)
+				c.AllowText = args.AllowText
+				if err := ValidateAskUserCall(&c); err != nil {
+					c.InputErr = err.Error()
+				}
+			}
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolLocalContext {
+			if len(tc.Arguments) > maxLocalContextPayload {
+				c.InputErr = fmt.Sprintf("local_context arguments exceed the %d byte limit", maxLocalContextPayload)
+			} else {
+				var args localContextArgs
+				if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+					c.InputErr = err.Error()
+				} else {
+					c.ContextKind, c.Max = args.Kind, args.Limit
+					if err := ValidateLocalContextCall(&c); err != nil {
+						c.InputErr = err.Error()
+					}
+				}
+			}
+			out = append(out, c)
+			continue
+		}
 		if server, tool, ok := SplitMCPToolName(tc.Name); ok {
 			c.MCPServer, c.MCPTool = server, tool
 			c.MCPArgs = tc.Arguments
@@ -236,13 +278,6 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			c.Freshness = strings.TrimSpace(args.Freshness)
 		case ToolSkillLoad:
 			c.Path = args.Skill
-		case ToolAskUser:
-			c.Question = args.Question
-			c.setAskUserChoices(args.Choices)
-			c.AllowText = args.AllowText
-			if err := ValidateAskUserCall(&c); err != nil {
-				c.InputErr = err.Error()
-			}
 		}
 		out = append(out, c)
 	}

@@ -38,14 +38,15 @@ const ResultsPrefix = "[tool results]"
 
 // Known tool names.
 const (
-	ToolListDir    = "list_dir"
-	ToolReadFile   = "read_file"
-	ToolGlob       = "glob"
-	ToolGrep       = "grep"
-	ToolWriteFile  = "write_file"
-	ToolRunCommand = "run_command"
-	ToolWebSearch  = "web_search"
-	ToolWebFetch   = "web_fetch"
+	ToolListDir      = "list_dir"
+	ToolReadFile     = "read_file"
+	ToolGlob         = "glob"
+	ToolGrep         = "grep"
+	ToolWriteFile    = "write_file"
+	ToolRunCommand   = "run_command"
+	ToolWebSearch    = "web_search"
+	ToolWebFetch     = "web_fetch"
+	ToolLocalContext = "local_context"
 	// ToolAskUser pauses the current tool loop until the human supplies one
 	// answer. The TUI controller handles the pause; Runner never executes it.
 	ToolAskUser = "ask_user"
@@ -76,6 +77,8 @@ type Call struct {
 	// it deliberately requests a new poll without disguising it through
 	// incidental argument variation.
 	Freshness string
+	// ContextKind selects local_context's bounded read-only collector.
+	ContextKind string
 	// Question, Choices, and AllowText carry ask_user's bounded interaction
 	// request. They are controller state, not approval or execution authority.
 	Question    string
@@ -126,6 +129,8 @@ func Parse(reply string) []Call {
 				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
 				if call.Tool == ToolAskUser {
 					decodeAskUserBody(&call)
+				} else if call.Tool == ToolLocalContext {
+					decodeLocalContextBody(&call)
 				}
 				calls = append(calls, call)
 				i = j
@@ -175,6 +180,9 @@ type Runner struct {
 	// implementation validates the ID and marks the skill active for the
 	// current run; it must not execute anything.
 	Skills SkillLoader
+	// LocalContext collects bounded machine/workspace facts without network
+	// access. Tests replace it with a fixture collector.
+	LocalContext LocalContextCollector
 }
 
 // SkillLoader activates one skill for the current agent run. Implemented by
@@ -197,6 +205,7 @@ func NewRunner(root string, maxKB int) *Runner {
 		execution:      make(chan struct{}, 1),
 		CommandTimeout: 30 * time.Second,
 		Guardrails:     DefaultGuardrails(),
+		LocalContext:   NewLocalContextCollector(root),
 	}
 }
 
@@ -305,6 +314,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.skillLoad(c)
 	case ToolAskUser:
 		res.Err = errors.New("ask_user is a controller pause and cannot be executed by the tool runner")
+	case ToolLocalContext:
+		res.Output, res.Err = r.localContext(ctx, c)
 	default:
 		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s)",
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
@@ -637,6 +648,8 @@ func NeedsApproval(c Call) bool {
 	switch c.Tool {
 	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad, ToolAskUser:
 		return false
+	case ToolLocalContext:
+		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
 	case ToolRunCommand:
@@ -690,6 +703,8 @@ func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
 	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:
 		return false
+	case ToolLocalContext:
+		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
 	case ToolReadFile, ToolGrep:
@@ -868,6 +883,8 @@ func (c Call) Describe() string {
 	switch c.Tool {
 	case ToolAskUser:
 		return "ask_user: " + c.Question
+	case ToolLocalContext:
+		return "local_context: " + c.ContextKind
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:
@@ -913,6 +930,7 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
+- local_context — read bounded local system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind and optional limit
 %s
 Example — save a script, then a read-only command:
 

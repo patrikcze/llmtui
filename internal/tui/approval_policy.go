@@ -119,6 +119,8 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		return c.Tool, strings.TrimSpace(c.Path), ""
 	case tools.ToolWebSearch:
 		return c.Tool, strings.TrimSpace(c.Body), ""
+	case tools.ToolLocalContext:
+		return c.Tool, strings.TrimSpace(c.ContextKind), ""
 	case tools.ToolSkillLoad:
 		return "", "", ""
 	default:

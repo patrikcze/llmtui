@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 )
@@ -26,9 +27,7 @@ func decodeAskUserBody(call *Call) {
 		return
 	}
 	var args askUserArgs
-	decoder := json.NewDecoder(strings.NewReader(call.Body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&args); err != nil {
+	if err := decodeOneJSONObject(call.Body, &args); err != nil {
 		call.InputErr = "ask_user needs one JSON object in the tool block body: " + err.Error()
 		return
 	}
@@ -38,6 +37,22 @@ func decodeAskUserBody(call *Call) {
 	if err := ValidateAskUserCall(call); err != nil {
 		call.InputErr = err.Error()
 	}
+}
+
+func decodeOneJSONObject(raw string, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected data after the JSON object")
+		}
+		return err
+	}
+	return nil
 }
 
 // ValidateAskUserCall normalizes and bounds one model-authored question.
