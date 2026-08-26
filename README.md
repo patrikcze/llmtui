@@ -333,7 +333,7 @@ stay local and are not persisted in history or the response cache.
 Clipboard backends: macOS `pngpaste` (optional, faster) or built-in
 AppleScript; Linux `wl-paste` or `xclip`; Windows PowerShell.
 
-## Workspace tools (agent mode)
+## Workspace and assistant tools
 
 With tools enabled, the model can act on files in the directory you started
 `llmtui` from — ask for a script and it lands on disk, not just in the chat:
@@ -355,11 +355,30 @@ tools:
   max_iterations: 10 # tool rounds per user message
   max_file_kb: 512   # per-file read/write, command output, and MCP result cap
   command_timeout: "30s"
+  discovery:
+    enabled: true
+    threshold: 16
+    max_results: 5
 ```
 
-Six tools are available: `list_dir`, `read_file`, `glob`, `grep`,
+The six workspace tools are `list_dir`, `read_file`, `glob`, `grep`,
 `write_file`, and `run_command` (one shell command in the workspace — `sh` on
-macOS/Linux, `cmd` on Windows, detected automatically). With `native: auto` (the default)
+macOS/Linux, `cmd` on Windows, detected automatically). Three controller and
+local-assistant tools are also available:
+
+- `ask_user` pauses the current tool loop for one bounded question, up to four
+  choices, or a free-text answer. The answer continues the original tool call;
+  it is never approval for another operation.
+- `local_context` returns compact JSON for `system`, `workspace`, `processes`,
+  `clipboard`, or workspace-confined `recent_files`. It makes no network
+  requests, omits process arguments and identity/environment data, filters
+  secret files, and asks before reading text from the clipboard.
+- `tool_search` performs deterministic local matching over currently eligible
+  hidden tools. It uses no model, embeddings, or network request and grants no
+  permission.
+
+These tools work in ordinary `/agent off` chat and in `/agent on`. With
+`native: auto` (the default)
 they are offered through **standard function calling**: the tool schemas ride
 in the request, the model answers with structured `tool_calls`, and results
 go back as `role:"tool"` messages — the protocol tool-capable models
@@ -406,6 +425,13 @@ environments are stripped of secrets (`*_API_KEY`, tokens, passwords, all
 capped; side effects are crash-journaled; and there is no delete tool. Works with any local model — models
 with native tool support interact most reliably; for the rest the fenced
 fallback needs an instruction-tuned model (≥7B recommended).
+
+When the connected catalog stays at or below `tools.discovery.threshold`, all
+eligible tools remain visible as before. Above the threshold, core tools stay
+visible while MCP schemas are disclosed by `tool_search` for the current human
+task, up to a bounded result count. The next inference receives each selected
+full schema. A new human task clears disclosures; disconnecting a server removes
+its disclosed tools immediately. Hidden or guessed MCP names cannot execute.
 
 ## Web tools
 

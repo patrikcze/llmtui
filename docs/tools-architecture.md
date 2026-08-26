@@ -179,6 +179,29 @@ downstream pipeline is identical.
 
 So a "skill" isn't a capability at all — it's a labeled block of instructions that `internal/prompt` splices into the system prompt once activated. The `skill_load` tool is just the mechanism by which the *model itself* can request that a particular instruction block be added to its own context on the next turn.
 
+## 6. Assistant interaction and progressive disclosure
+
+Three built-ins are controlled before ordinary Runner execution:
+
+- `ask_user` is a control-flow barrier. The TUI pauses, reuses the existing
+    question picker or free-text input, and returns the answer under the original
+    `tool_call_id`. It is never an approval. Side-effecting siblings in the same
+    batch do not run.
+- `local_context` uses an injectable local collector behind `Runner`. It returns
+    bounded structured facts for system, workspace, processes, clipboard, and
+    recent files. Clipboard is the only kind that enters approval.
+- `tool_search` searches the authoritative eligible catalog deterministically.
+    It adds selected full schemas to a bounded task-local disclosure set, so the
+    next inference can invoke them through the normal execution and approval
+    path.
+
+`eligibleToolSpecs` owns the complete current catalog. `modelVisibleToolSpecs`
+applies the threshold and disclosure set. `activeToolSpecs` exposes that exact
+visible snapshot only for native providers, which keeps provider requests,
+cache keys, context estimates, debug hashes, and the HTTP registry aligned.
+Fenced fallback receives the same visible dynamic MCP metadata in prompt form.
+Neither protocol can execute a guessed hidden MCP name.
+
 ---
 
 ## Worked example: a `brush_teeth` tool

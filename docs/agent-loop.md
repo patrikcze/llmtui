@@ -422,6 +422,16 @@ When a live run stops as `needs_user_input`, the next normal user message
 resumes that same run in a fresh cycle and is included as the new input; it does
 not silently grant a previously denied permission.
 
+An explicit `ask_user` tool call takes a narrower live path: the executor cycle
+pauses before verification, and the selected or typed answer returns as the
+correlated tool result so the same provider/tool exchange can continue without
+repeating the task. Waiting consumes no model cycle and does not count as
+no-progress. The answer still grants no tool approval. If the process exits
+while this tool call is pending, llmtui completes the saved transcript with an
+interruption result; the persisted agent run remains `needs_user_input` and
+`/agent resume` starts a fresh cycle instead of synthesizing or replaying the
+incomplete protocol exchange.
+
 If the verifier also extracted discrete choices from the executor's question
 (a numbered or lettered list, copied into the run's evidence rather than
 invented), the TUI presents them as a pickable overlay instead of requiring a
@@ -429,6 +439,8 @@ free-typed reply: arrow keys navigate, Enter resumes the run with the chosen
 option exactly as if it had been typed, and Esc always falls back to the
 normal input box for a free-text answer — the extraction is a model output,
 not guaranteed exhaustive or correct, so it is never a hard constraint.
+Explicit `ask_user` choices reuse this same picker; `allow_text:false` keeps the
+interaction choice-only.
 
 ## Cancellation and safety
 

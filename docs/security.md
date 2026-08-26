@@ -143,6 +143,24 @@ and an explicit category selection; the picker defaults to skip.
     exactly those bytes — not a licence to rewrite that path with anything.
     `/tools ask` revokes all such grants. Global auto mode is an explicit
     high-trust override, not the recommended default.
+  - **Clarification is not authorization** — `ask_user` pauses for one
+    bounded decision or missing fact and returns the answer through the
+    original tool call. It cannot approve a write, command, web request, or
+    MCP call; all normal approval gates still run afterward. Mixed batches
+    containing `ask_user` execute nothing and tell the model to issue it alone.
+  - **Bounded local context** — `local_context` makes no network requests and
+    exposes no environment-variable dump, hostname, username, precise
+    location, process command lines, or browser data. Process and recent-file
+    results are capped. Recent files stay under the workspace, skip symlinks
+    and likely secrets, and return metadata rather than contents. Clipboard
+    text is capped, labeled untrusted, and always asks before it enters model
+    context; it is not promoted to memory automatically.
+  - **Discovery is not permission** — `tool_search` performs deterministic
+    local name/description/source matching only. It uses no LLM, embeddings,
+    network, or telemetry. It searches only enabled tools from connected
+    servers, discloses a bounded task-local set, and never bypasses the
+    selected tool's approval policy. Hidden, disconnected, disabled, guessed,
+    and unregistered tool names cannot execute.
   - **Command classifier** — a command is auto-approved only when it is an
     allowlisted read-only program (`ls`, `cat`, `grep`, `rg`, `find`,
     `git status/log/diff/show`, `go list/version/env` in its observational

@@ -108,15 +108,21 @@ cannot race session toggles. The snapshot is assembled by the same
 - A configured MCP server contributes no tools until `/mcp connect` completes
   its MCP `tools/list` request successfully.
 - Connected MCP tools use `mcp__<server>__<tool>` names and their server-provided
-  JSON Schemas.
+  JSON Schemas. Small catalogs expose all of them.
+- Above `tools.discovery.threshold`, undisclosed MCP tools stay internal to the
+  eligible catalog. `tool_search` adds bounded matches to the model-visible
+  snapshot for the current human task; the endpoint reflects that change on
+  its next request.
 - `/mcp disconnect` or `/mcp disable` removes those tools immediately.
 - If the active provider/model falls back from native tool calling to the
   fenced prompt protocol, the native registry becomes empty.
 
-Consequently, a connected MCP tool is either present in both the HTTP snapshot
-and subsequent native LLM requests, or absent from both. The provider request
-remains authoritative for a particular inference because it snapshots its tool
-array when that request is composed.
+Consequently, a model-visible MCP tool is either present in both the HTTP
+snapshot and subsequent native LLM requests, or absent from both. Connected but
+undisclosed tools in a large catalog are intentionally absent from this endpoint
+because it remains an exact model-visible mirror, not an endpoint for every
+potential capability. The provider request remains authoritative for a
+particular inference because it snapshots its tool array when composed.
 
 ### Verify MCP synchronization
 
@@ -128,9 +134,10 @@ curl -s http://127.0.0.1:7834/api/v1/tools |
 ```
 
 Then connect a configured server with `/mcp connect <server>` and repeat the
-request. Its successfully discovered tools should appear as
-`mcp__<server>__<tool>`. Send another chat message and inspect the provider's
-next request: the same names should be present in its `tools` array.
+request. With a small catalog, its tools should appear immediately. With a
+large catalog, invoke `tool_search` through the model and repeat after the next
+inference; the disclosed `mcp__<server>__<tool>` names should then appear. The
+provider request must contain the same names.
 
 Run `/mcp disconnect <server>` or `/mcp disable <server>`, then repeat both
 checks. Those MCP names should be absent from the endpoint and the next
