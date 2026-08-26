@@ -234,7 +234,7 @@ func (m *Model) agentQuestionPickerOverlay() string {
 }
 
 func (m *Model) openAgentPromotionPicker() {
-	if m.projectStore == nil || m.agentLoop == nil || m.agentLoop.run == nil || m.agentLoop.run.Status != agent.DecisionDone {
+	if !m.agentPromotionAvailable() {
 		return
 	}
 	m.pickerKind = pickerAgentPromotion
@@ -243,6 +243,11 @@ func (m *Model) openAgentPromotionPicker() {
 	m.pickerIdx = len(m.pickerItems) - 1
 	m.overlayOpen = true
 	m.renderPicker()
+}
+
+func (m *Model) agentPromotionAvailable() bool {
+	return m.memEnabled && m.projectStore != nil && m.agentLoop != nil && m.agentLoop.run != nil &&
+		m.agentLoop.run.Status == agent.DecisionDone
 }
 
 func (m *Model) agentPromotionPickerOverlay() string {
@@ -263,6 +268,9 @@ func (m *Model) agentPromotionPickerOverlay() string {
 }
 
 func (m *Model) promoteAgentOutcome(category string) error {
+	if !m.memEnabled {
+		return errors.New("project memory is disabled (/memory on to enable)")
+	}
 	if m.projectStore == nil || m.agentLoop == nil || m.agentLoop.run == nil {
 		return errors.New("project memory or agent run is unavailable")
 	}

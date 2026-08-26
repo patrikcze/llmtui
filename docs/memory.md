@@ -39,6 +39,13 @@ preferences only. `/memory list episode` shows project-scoped summaries from
 saved sessions; `/memory list run` shows bounded state from the current/latest
 run.
 
+`/memory off` disables user/project/episode retrieval and verified-outcome
+promotion prompts for the current session. It does not delete stored records,
+disable agent verification, or remove the agent's bounded cycle memory and run
+persistence; those are controller state used to execute and resume `/agent on`.
+Explicit list, inspect, search, remove, and add commands remain available while
+automatic prompt injection is off.
+
 Explicit `/save` or Ctrl+S creates or refreshes a compact episode. Automatic
 quit saves refresh it only when `memory.episodic.capture: true`; otherwise a
 previously loaded episode is preserved. Episodes include bounded visible goal
@@ -64,27 +71,27 @@ Project records created by commands are user-authored and approved. The store
 can hold model proposals in a pending-review state, but pending records are not
 searchable or injected into prompts.
 
-After a verifier-passed agent run completes, llmtui offers a picker that
-defaults to `skip`. Choosing architecture, convention, or decision explicitly
-promotes one bounded outcome. The durable record remains `model_proposed` trust
-with approved review state and preserves source run/cycle provenance. Failed,
-parked, cancelled, or unverified runs are never promoted automatically.
+When memory is enabled, a verifier-passed agent run offers a picker that defaults
+to `skip`. Choosing architecture, convention, or decision explicitly promotes
+one bounded outcome. The durable record remains `model_proposed` trust with
+approved review state and preserves source run/cycle provenance. Memory-off,
+failed, parked, cancelled, or unverified runs are never promoted automatically.
 
 Default retrieval settings:
 
 ```yaml
 memory:
-	episodic:
-		capture: false
-	retrieval:
-		enabled: true
-		max_context_tokens: 1800
-		top_k: 10
-		user_tokens: 256
-		project_tokens: 512
-		episodic_tokens: 384
-		agent_tokens: 512
-		source_tokens: 768
+  episodic:
+    capture: false
+  retrieval:
+    enabled: true
+    max_context_tokens: 1800
+    top_k: 10
+    user_tokens: 256
+    project_tokens: 512
+    episodic_tokens: 384
+    agent_tokens: 512
+    source_tokens: 768
 ```
 
 Likely credentials are redacted before a project record is returned or written,

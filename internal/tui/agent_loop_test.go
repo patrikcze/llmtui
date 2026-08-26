@@ -204,8 +204,32 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 			t.Fatalf("event %d = %q, want %q", i, m.agentLoop.run.Events[i].Kind, kind)
 		}
 	}
-	if m.pickerKind != pickerAgentPromotion || m.pickerItems[m.pickerIdx] != "skip" {
-		t.Fatalf("completion promotion picker = kind %v item %q", m.pickerKind, m.pickerItems[m.pickerIdx])
+	if m.pickerKind != pickerNone || m.overlayOpen {
+		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.pickerKind, m.overlayOpen)
+	}
+}
+
+func TestVerifiedAgentMemoryOffSuppressesPromotion(t *testing.T) {
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{text: "Implemented the bounded change."},
+		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
+	)
+	cmdMemory(m, "on")
+	cmdMemory(m, "off")
+	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
+
+	if m.pickerKind != pickerNone || m.overlayOpen {
+		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.pickerKind, m.overlayOpen)
+	}
+	if err := m.promoteAgentOutcome("decision"); err == nil || !strings.Contains(err.Error(), "memory is disabled") {
+		t.Fatalf("promotion while memory is off returned %v", err)
+	}
+	records, err := m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("memory-off promotion wrote records: %+v", records)
 	}
 }
 
@@ -214,6 +238,7 @@ func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
 		agentScriptStep{text: "Implemented the bounded change."},
 		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
 	)
+	m.memEnabled = true
 	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
 
 	records, err := m.projectStore.Load()
@@ -259,6 +284,7 @@ func TestAgentPromotionSkipAndEscapeWriteNothing(t *testing.T) {
 				agentScriptStep{text: "done"},
 				agentScriptStep{text: verifierJSON("passed", "passed", "", false, false)},
 			)
+			m.memEnabled = true
 			driveAgentCommands(t, m, m.startVerifiedRun("task", nil))
 			key := tea.KeyPressMsg{Code: tea.KeyEnter}
 			if action == "escape" {
@@ -1049,6 +1075,7 @@ func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 		agentScriptStep{text: "Checked Humpolec's weather."},
 		agentScriptStep{text: verifierJSON("passed", "weather reported", "", false, false)},
 	)
+	m.memEnabled = true
 	driveAgentCommands(t, m, m.startVerifiedRun("check the weather", nil))
 
 	if m.agentLoop.run.Status != agent.DecisionNeedsUserInput {
