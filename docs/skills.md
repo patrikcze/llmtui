@@ -269,6 +269,18 @@ silent substitution.
   is read-only: it discovers and reports, the same as `/skills status` and
   `/plugins status`, but activates nothing.
 
-Example skill and plugin: [`examples/skills/`](../examples/skills/) and
-[`examples/plugins/`](../examples/plugins/) — copy them into a search path
-to try them; they are never installed automatically.
+Starter skills and plugins live in [`examples/skills/`](../examples/skills/)
+and [`examples/plugins/`](../examples/plugins/). Source checkouts and release
+archives include both directories. To try them, either copy individual
+packages into a standard search path or reference the bundled directories:
+
+```yaml
+skills:
+  paths: ["./examples/skills"]
+plugins:
+  paths: ["./examples/plugins"]
+```
+
+Relative paths resolve from the directory where llmtui is launched. Bundling
+does not auto-activate skills or enable plugins; normal validation, activation,
+tool permissions, and approval controls still apply.

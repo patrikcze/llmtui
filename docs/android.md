@@ -60,7 +60,8 @@ API 24 by default — override with `ANDROID_API=<level>`), sets
 `CGO_ENABLED=1`, and links with `-buildmode=pie`. Because there's no
 upstream llama.cpp Android release, this path packages the binary with
 `LICENSE`, `THIRD_PARTY_NOTICES.md`, and this document — no `lib/llmtui/runtime`
-bundle, unlike the desktop archives. If `ANDROID_NDK_HOME` isn't set or the
+runtime bundle, unlike the desktop archives. It still includes the starter
+skills and plugins under `examples/`. If `ANDROID_NDK_HOME` isn't set or the
 expected clang binary isn't found, the build fails immediately with the
 missing path rather than producing a broken binary.
 

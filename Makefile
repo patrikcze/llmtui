@@ -22,6 +22,7 @@ ARCHIVE_BASE  := $(BINARY)-$(VERSION)-$(TARGET_GOOS)-$(TARGET_GOARCH)
 ARCHIVE_EXT   := $(if $(filter windows,$(TARGET_GOOS)),zip,tar.gz)
 ARCHIVE_OUT   := $(DIST)/$(ARCHIVE_BASE).$(ARCHIVE_EXT)
 ARCHIVE_STAGE := $(DIST)/$(ARCHIVE_BASE)
+EXAMPLES_STAGE := $(ARCHIVE_STAGE)/examples
 
 # Android cross-compilation via the NDK's standalone clang wrappers. Only
 # consulted when TARGET_GOOS=android — every other platform build ignores
@@ -195,6 +196,7 @@ dist-archive-native: dist-platform
 	@$(INSTALL_CMD) -m 0644 $(YZMA_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/yzma-APACHE-2.0.txt
 	@$(INSTALL_CMD) -m 0644 $(PUREGO_DIR)/LICENSE $(ARCHIVE_STAGE)/licenses/purego-APACHE-2.0.txt
 	@$(INSTALL_CMD) -m 0644 third_party/ffi/LICENSE $(ARCHIVE_STAGE)/licenses/ffi-MIT.txt
+	@$(MAKE) --no-print-directory dist-stage-examples
 	@go run $(MAIN) runtime install --dest $(ARCHIVE_STAGE)/lib/llmtui/runtime
 	@if [ "$(TARGET_GOOS)" = "windows" ]; then \
 		cd $(DIST) && 7z a -tzip $(notdir $(ARCHIVE_OUT)) $(ARCHIVE_BASE) >/dev/null; \
@@ -205,7 +207,7 @@ dist-archive-native: dist-platform
 	@rm -f $(TARGET_OUT)
 	@echo "  packaged $(ARCHIVE_OUT)"
 
-## dist-archive-android: binary-only archive, no embedded llama.cpp runtime —
+## dist-archive-android: archive without an embedded llama.cpp runtime —
 ## llama.cpp publishes no official Android release, so the embedded provider
 ## is unavailable on this platform; network providers (Ollama, LM Studio,
 ## any OpenAI-compatible endpoint) work normally. See docs/android.md.
@@ -217,10 +219,21 @@ dist-archive-android: dist-platform
 	@$(INSTALL_CMD) -m 0644 LICENSE $(ARCHIVE_STAGE)/LICENSE
 	@$(INSTALL_CMD) -m 0644 THIRD_PARTY_NOTICES.md $(ARCHIVE_STAGE)/THIRD_PARTY_NOTICES.md
 	@$(INSTALL_CMD) -m 0644 docs/android.md $(ARCHIVE_STAGE)/ANDROID.md
+	@$(MAKE) --no-print-directory dist-stage-examples
 	@tar -C $(DIST) -czf $(ARCHIVE_OUT) $(ARCHIVE_BASE)
 	@rm -rf $(ARCHIVE_STAGE)
 	@rm -f $(TARGET_OUT)
 	@echo "  packaged $(ARCHIVE_OUT) (no embedded runtime — see ANDROID.md)"
+
+# Shared release payload: examples are shipped for convenient opt-in use but
+# remain inert until selected through skills.paths/plugins.paths and activation.
+.PHONY: dist-stage-examples
+dist-stage-examples:
+	@mkdir -p $(EXAMPLES_STAGE)/skills $(EXAMPLES_STAGE)/plugins
+	@$(INSTALL_CMD) -m 0644 examples/README.md $(EXAMPLES_STAGE)/README.md
+	@cp -R examples/skills/. $(EXAMPLES_STAGE)/skills/
+	@cp -R examples/plugins/. $(EXAMPLES_STAGE)/plugins/
+	@find $(EXAMPLES_STAGE) -name '.DS_Store' -delete
 
 ## dist-checksums: write checksums for existing dist artifacts
 .PHONY: dist-checksums

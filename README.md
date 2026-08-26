@@ -134,6 +134,12 @@ or remove that managed installation. Linux amd64/arm64 and Windows amd64 can
 install the pinned Vulkan variant with `llmtui runtime install --backend
 vulkan`.
 
+Release archives also include starter skills and plugins under
+`examples/skills` and `examples/plugins`. They remain inert by default: add
+those directories to `skills.paths` / `plugins.paths`, or copy individual
+packages into your normal llmtui config directories, then activate a skill or
+enable a plugin explicitly. See [Skills and plugins](docs/skills.md).
+
 Inference stays inside the llmtui process. Linux requires the system
 `libffi.so.8` (`libffi8` package); if it is absent, embedded inference reports
 an error while Ollama, LM Studio, and OpenAI-compatible providers keep working.
