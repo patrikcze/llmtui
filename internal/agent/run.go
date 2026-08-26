@@ -202,6 +202,34 @@ func (r *AgentRun) Cancel(reason string, now time.Time) {
 	r.addEvent(now, "run_cancelled", r.StopReason)
 }
 
+// WaitForUserInput pauses an active executor cycle without completing or
+// verifying it. The incomplete provider/tool exchange is intentionally not
+// serialized in AgentRun; a persisted resume starts a fresh cycle instead.
+func (r *AgentRun) WaitForUserInput(reason string, now time.Time) error {
+	if r == nil || r.Status != DecisionRunning || r.Stage != StageExecutor {
+		return r.transitionError(StageExecutor)
+	}
+	r.Status = DecisionNeedsUserInput
+	r.StopReason = truncate(strings.TrimSpace(reason), 1024)
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "run_needs_user_input", r.StopReason)
+	return nil
+}
+
+// ContinueExecutorWithUserInput resumes only a live, process-local executor
+// pause. Persisted runs must use Resume, which begins a fresh cycle and never
+// reconstructs an incomplete tool protocol exchange.
+func (r *AgentRun) ContinueExecutorWithUserInput(now time.Time) error {
+	if r == nil || r.Status != DecisionNeedsUserInput || r.Stage != StageExecutor {
+		return r.transitionError(StageExecutor)
+	}
+	r.Status = DecisionRunning
+	r.StopReason = ""
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "user_input_received", "live executor continuation resumed")
+	return nil
+}
+
 // Terminate records an exceptional terminal outcome from any active stage.
 // Normal cycle completion must still use Decide and ApplyStop.
 func (r *AgentRun) Terminate(decision Decision, reason string, now time.Time) error {

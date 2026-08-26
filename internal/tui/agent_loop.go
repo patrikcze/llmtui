@@ -197,14 +197,8 @@ func (m *Model) agentNeedsUserInput() bool {
 	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
 }
 
-// openAgentQuestionPicker presents the executor's own discrete choices (as
-// extracted by the verifier into VerificationResult.UserOptions) as a
-// pickable overlay, instead of leaving the question as plain errText that
-// only a free-typed reply can answer. question is the executor's actual
-// question (stop.Reason, which already carries the verifier's summary
-// verbatim). Extraction is a small-model output and not guaranteed
-// exhaustive or correct, so Esc always falls back to the normal free-text
-// input box — this overlay is a convenience, never a hard constraint.
+// openAgentQuestionPicker is the shared human-choice overlay used by both
+// verifier-detected questions and explicit ask_user calls.
 func (m *Model) openAgentQuestionPicker(question string, options []string) {
 	m.pickerKind = pickerAgentQuestion
 	m.pickerHeader = question
@@ -216,7 +210,15 @@ func (m *Model) openAgentQuestionPicker(question string, options []string) {
 
 func (m *Model) agentQuestionPickerOverlay() string {
 	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("agent needs your input") + "\n\n")
+	label := "agent needs your input"
+	footer := "↑/↓ pick · enter confirm · esc type a custom answer instead"
+	if m.pendingAsk != nil {
+		label = "assistant needs your input"
+		if !m.pendingAsk.call.AllowText {
+			footer = "↑/↓ pick · enter confirm"
+		}
+	}
+	b.WriteString(m.theme.Badge.Render(label) + "\n\n")
 	b.WriteString(m.theme.UserLabel.Render(m.pickerHeader) + "\n\n")
 	for i, option := range m.pickerItems {
 		marker := "  "
@@ -227,7 +229,7 @@ func (m *Model) agentQuestionPickerOverlay() string {
 		}
 		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
 	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ pick · enter confirm · esc type a custom answer instead"))
+	b.WriteString("\n" + m.theme.SystemNote.Render(footer))
 	return b.String()
 }
 

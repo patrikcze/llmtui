@@ -18,6 +18,7 @@ const (
 	turnIdle              turnState = "idle"
 	turnModelStreaming    turnState = "model_streaming"
 	turnWaitingApproval   turnState = "waiting_approval"
+	turnWaitingUserInput  turnState = "waiting_user_input"
 	turnExecutingTools    turnState = "executing_tools"
 	turnProcessingResults turnState = "processing_results"
 	turnCompleted         turnState = "completed"
@@ -33,6 +34,7 @@ const (
 	turnOutcomeNone             turnOutcome = ""
 	turnOutcomeFinalAnswer      turnOutcome = "final_answer"
 	turnOutcomeNeedsApproval    turnOutcome = "needs_approval"
+	turnOutcomeNeedsUserInput   turnOutcome = "needs_user_input"
 	turnOutcomeToolContinuation turnOutcome = "tool_continuation"
 	turnOutcomeExecutionFailure turnOutcome = "execution_failure"
 	turnOutcomeCancelled        turnOutcome = "cancelled"
@@ -144,7 +146,7 @@ func (r *turnRuntime) busy() bool {
 }
 
 func (r *turnRuntime) beginStream(parent context.Context, idle time.Duration) (context.Context, int, error) {
-	if r.state == turnModelStreaming || r.state == turnExecutingTools || r.state == turnWaitingApproval {
+	if r.state == turnModelStreaming || r.state == turnExecutingTools || r.state == turnWaitingApproval || r.state == turnWaitingUserInput {
 		return nil, r.streamGen, fmt.Errorf("cannot start provider request while turn is %s", r.state)
 	}
 	ctx, cancel := context.WithCancelCause(parent)
@@ -162,6 +164,14 @@ func (r *turnRuntime) beginStream(parent context.Context, idle time.Duration) (c
 	r.streamGen++
 	r.transition(turnModelStreaming, turnOutcomeNone)
 	return ctx, r.streamGen, nil
+}
+
+func (r *turnRuntime) waitForUserInput() turnTransition {
+	return r.transition(turnWaitingUserInput, turnOutcomeNeedsUserInput)
+}
+
+func (r *turnRuntime) continueAfterUserInput() turnTransition {
+	return r.transition(turnProcessingResults, turnOutcomeToolContinuation)
 }
 
 func (r *turnRuntime) adoptStream(gen int, stream <-chan provider.ChatEvent) bool {

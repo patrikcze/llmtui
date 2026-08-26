@@ -83,21 +83,38 @@ func Specs() []provider.ToolSpec {
 				"required": ["command"]
 			}`),
 		},
+		{
+			Name:        ToolAskUser,
+			Description: "Ask the human only when a decision or missing information is required before continuing. Do not use this for tool approval. Call it alone, without other tools in the same batch.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"question": {"type": "string", "description": "One concise question for the human."},
+					"choices": {"type": "array", "maxItems": 4, "items": {"type": "string"}, "description": "Optional short choices."},
+					"allow_text": {"type": "boolean", "description": "Allow a free-text answer in addition to choices."}
+				},
+				"required": ["question"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 }
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path       string `json:"path"`
-	Content    string `json:"content"`
-	Command    string `json:"command"`
-	Query      string `json:"query"`
-	URL        string `json:"url"`
-	MaxResults int    `json:"max_results"`
-	Skill      string `json:"skill"`
-	Pattern    string `json:"pattern"`
-	Glob       string `json:"glob"`
-	Freshness  string `json:"freshness_token"`
+	Path       string   `json:"path"`
+	Content    string   `json:"content"`
+	Command    string   `json:"command"`
+	Query      string   `json:"query"`
+	URL        string   `json:"url"`
+	MaxResults int      `json:"max_results"`
+	Skill      string   `json:"skill"`
+	Pattern    string   `json:"pattern"`
+	Glob       string   `json:"glob"`
+	Freshness  string   `json:"freshness_token"`
+	Question   string   `json:"question"`
+	Choices    []string `json:"choices"`
+	AllowText  bool     `json:"allow_text"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -177,6 +194,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			out = append(out, c)
 			continue
 		}
+		if tc.Name == ToolAskUser && len(tc.Arguments) > MaxAskUserPayloadBytes {
+			c.InputErr = fmt.Sprintf("ask_user arguments exceed the %d byte limit", MaxAskUserPayloadBytes)
+			out = append(out, c)
+			continue
+		}
 		if server, tool, ok := SplitMCPToolName(tc.Name); ok {
 			c.MCPServer, c.MCPTool = server, tool
 			c.MCPArgs = tc.Arguments
@@ -214,6 +236,13 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			c.Freshness = strings.TrimSpace(args.Freshness)
 		case ToolSkillLoad:
 			c.Path = args.Skill
+		case ToolAskUser:
+			c.Question = args.Question
+			c.setAskUserChoices(args.Choices)
+			c.AllowText = args.AllowText
+			if err := ValidateAskUserCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		}
 		out = append(out, c)
 	}
@@ -325,5 +354,6 @@ Rules:
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
+- ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
 - Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
 }

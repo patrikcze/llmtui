@@ -97,6 +97,10 @@ type copyResultMsg struct {
 	err   error
 }
 
+type pendingAskUser struct {
+	call tools.Call
+}
+
 // Model is the root Bubble Tea model for the chat screen.
 type Model struct {
 	cfg      *config.Config
@@ -220,6 +224,9 @@ type Model struct {
 	// toolCallSeq feeds tools.EnsureToolCallIDs so generated tool-call IDs
 	// stay unique across every round of a session.
 	toolCallSeq int
+	// pendingAsk is a controller-owned pause requested by ask_user. It is
+	// deliberately separate from pendingCalls, which is authorization UI.
+	pendingAsk *pendingAskUser
 
 	// Local-LLM experience helpers.
 	responseCache *cache.Cache
@@ -764,6 +771,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 				return m, nil
 			}
+			if m.pendingAsk != nil && !m.busy() {
+				return m, m.send()
+			}
 			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
 				return m, m.runSlashCommand()
 			}
@@ -1012,7 +1022,14 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "esc":
+		if m.pickerKind == pickerAgentQuestion && m.pendingAsk != nil && !m.pendingAsk.call.AllowText {
+			m.notice = "choose one of the available answers"
+			return m, nil
+		}
 		m.closeOverlay()
+		if m.pendingAsk != nil {
+			m.notice = "type an answer and press enter"
+		}
 		return m, nil
 	case "up":
 		if len(m.pickerItems) > 0 {
@@ -1040,6 +1057,9 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if kind == pickerAgentQuestion {
+			if m.pendingAsk != nil {
+				return m, m.answerAskUser(selection)
+			}
 			return m, m.resumeVerifiedRunWithInput(selection, nil)
 		}
 		if kind == pickerAgentPromotion {
@@ -1157,6 +1177,10 @@ func (m *Model) send() tea.Cmd {
 	m.syncInputHeight()
 	m.relayout()
 	m.sentCount++
+	if m.pendingAsk != nil {
+		m.sentCount--
+		return m.answerAskUser(text)
+	}
 	m.turnRuntime.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
@@ -1214,6 +1238,9 @@ func (m *Model) callNeedsApproval(c tools.Call) bool {
 func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
+	}
+	if cmd, handled := m.handleAskUserBatch(calls); handled {
+		return cmd
 	}
 	plan := newToolBatchPlan(calls)
 	if m.cfg.Tools.NoProgress.Enabled {
@@ -1768,6 +1795,7 @@ func (m *Model) quit() tea.Cmd {
 	m.turnRuntime.cancelToolBatch()
 	m.turnRuntime.complete(turnOutcomeCancelled)
 	m.cancelVerifiedRun("application shutdown")
+	m.completePendingAskForShutdown()
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(m.cfg.Memory.Episodic.Capture); err == nil { // best effort on exit
 			m.savedPath = path
@@ -2582,6 +2610,12 @@ func (m *Model) refreshViewport() {
 	if m.errText != "" {
 		b.WriteString(m.theme.ErrorText.Render(terminaltext.Sanitize("✗ " + m.errText)))
 		b.WriteString("\n")
+	}
+	if m.pendingAsk != nil && !m.overlayOpen {
+		b.WriteString(m.theme.Badge.Render("? assistant needs your input"))
+		b.WriteString("\n")
+		b.WriteString(m.theme.UserLabel.Render(terminaltext.Sanitize(m.pendingAsk.call.Question)))
+		b.WriteString("\n\n")
 	}
 
 	// Approval prompt: list exactly what the model wants to do before any

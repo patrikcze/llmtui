@@ -46,6 +46,9 @@ const (
 	ToolRunCommand = "run_command"
 	ToolWebSearch  = "web_search"
 	ToolWebFetch   = "web_fetch"
+	// ToolAskUser pauses the current tool loop until the human supplies one
+	// answer. The TUI controller handles the pause; Runner never executes it.
+	ToolAskUser = "ask_user"
 	// ToolSkillLoad activates a skill (declarative task instructions) for the
 	// current agent run. It executes no code and grants no permissions: the
 	// skill body is included by the prompt composer on the next inference.
@@ -73,6 +76,12 @@ type Call struct {
 	// it deliberately requests a new poll without disguising it through
 	// incidental argument variation.
 	Freshness string
+	// Question, Choices, and AllowText carry ask_user's bounded interaction
+	// request. They are controller state, not approval or execution authority.
+	Question    string
+	Choices     [MaxAskUserChoices]string
+	ChoiceCount int
+	AllowText   bool
 
 	// MCPServer, when non-empty, marks this as a call to an MCP server's
 	// tool rather than a built-in one. MCPTool is the tool's name on that
@@ -114,7 +123,11 @@ func Parse(reply string) []Call {
 		closed := false
 		for j := i + 1; j < len(lines); j++ {
 			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
-				calls = append(calls, Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)})
+				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
+				if call.Tool == ToolAskUser {
+					decodeAskUserBody(&call)
+				}
+				calls = append(calls, call)
 				i = j
 				closed = true
 				break
@@ -290,6 +303,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, res.Err = r.skillLoad(c)
+	case ToolAskUser:
+		res.Err = errors.New("ask_user is a controller pause and cannot be executed by the tool runner")
 	default:
 		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s)",
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
@@ -620,7 +635,7 @@ func sanitizedEnv(environ []string) []string {
 // approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad:
+	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad, ToolAskUser:
 		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
@@ -673,7 +688,7 @@ func webSearchNeedsApproval(query string) bool {
 // id_rsa, …) asks first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolSkillLoad:
+	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:
 		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
@@ -851,6 +866,8 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("%s: %s(%s)", c.MCPServer, c.MCPTool, truncateLine(c.MCPArgs, 80))
 	}
 	switch c.Tool {
+	case ToolAskUser:
+		return "ask_user: " + c.Question
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:
@@ -895,6 +912,7 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
+- ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 %s
 Example — save a script, then a read-only command:
 
@@ -912,6 +930,7 @@ Rules:
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
+- ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".
 - Use one block per action. If a body contains triple backticks, open the tool block with four.
 - When the task is complete, reply normally without any tool blocks.%s`, root, webTools, ResultsPrefix, webRules))

@@ -282,6 +282,55 @@ func TestResumeStartsFreshCycleWithoutReplayingWork(t *testing.T) {
 	}
 }
 
+func TestLiveUserInputPauseResumesSameExecutorCycle(t *testing.T) {
+	now := time.Now()
+	run, err := NewRun("run-ask", "configure deployment", DefaultLimits(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("configure deployment", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WaitForUserInput("Which environment?", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != DecisionNeedsUserInput || run.Stage != StageExecutor || run.Cycle != 1 {
+		t.Fatalf("paused run = %+v", run)
+	}
+	if err := run.ContinueExecutorWithUserInput(now.Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != DecisionRunning || run.Stage != StageExecutor || run.Cycle != 1 {
+		t.Fatalf("continued run = %+v", run)
+	}
+}
+
+func TestPersistedUserInputPauseUsesFreshCycleResume(t *testing.T) {
+	now := time.Now()
+	run, err := NewRun("run-persisted-ask", "configure deployment", DefaultLimits(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("configure deployment", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WaitForUserInput("Which environment?", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Resume("use staging", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Stage != StageStopCheck || run.Status != DecisionRunning || run.Cycle != 1 {
+		t.Fatalf("resumed persisted run = %+v", run)
+	}
+	if err := run.BeginCycle("use staging", []string{"new_user_input"}, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Cycle != 2 || run.Stage != StageExecutor {
+		t.Fatalf("fresh resumed cycle = %+v", run)
+	}
+}
+
 // TestTerminateVerificationUnavailablePreservesExecution guards REL-001's
 // fix: when the verifier itself fails (provider error, timeout, or repeated
 // malformed JSON) after a successful CompleteExecution, the caller must be
