@@ -268,6 +268,21 @@ func TestLocalContextCollectorErrorIsStructuredToolError(t *testing.T) {
 	}
 }
 
+func TestLocalContextRunnerRejectsInvalidOrOversizedCollectorOutput(t *testing.T) {
+	runner := NewRunner(t.TempDir(), 1)
+	collector := &fixtureLocalContextCollector{data: []byte(`not-json`)}
+	runner.LocalContext = collector
+	result := runner.Execute(Call{Tool: ToolLocalContext, ContextKind: LocalContextSystem})
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "invalid JSON") {
+		t.Fatalf("invalid JSON result = %+v", result)
+	}
+	collector.data = []byte(`{"value":"` + strings.Repeat("x", 2048) + `"}`)
+	result = runner.Execute(Call{Tool: ToolLocalContext, ContextKind: LocalContextSystem})
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "exceeds the 1024 byte limit") {
+		t.Fatalf("oversized result = %+v", result)
+	}
+}
+
 func TestParseDarwinSystemMetrics(t *testing.T) {
 	vm := "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 10.\nPages inactive: 20.\nPages speculative: 2.\nPages active: 100.\n"
 	if got, want := parseDarwinAvailableMemory(vm), uint64(32*16384); got != want {

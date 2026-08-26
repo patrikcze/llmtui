@@ -226,3 +226,20 @@ func TestInternalMCPCallWithoutJoinedNameRemainsExecutable(t *testing.T) {
 		t.Fatalf("internal MCP call did not start; visible=%v pending=%v err=%q", names, m.pendingCalls, m.errText)
 	}
 }
+
+func TestToolSearchHonorsAndRenewsToolRoundBudget(t *testing.T) {
+	m := configureDiscoveryModel(t, 10, nil)
+	m.cfg.Tools.MaxIterations = 1
+	m.toolDepth = 1
+	call := tools.CallsFromNative([]provider.ToolCall{{
+		ID: "search-budget", Name: tools.ToolSearch, Arguments: `{"query":"create Jira issue","max_results":1}`,
+	}})[0]
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
+	if cmd := m.startToolBatch([]tools.Call{call}); cmd != nil || !m.pendingBudget {
+		t.Fatalf("spent budget did not pause: cmd=%v pending=%v", cmd, m.pendingBudget)
+	}
+	cmd := m.resolveBudget(0)
+	if cmd == nil || m.pendingBudget || len(m.disclosedToolOrder) != 1 || m.toolDepth != 1 {
+		t.Fatalf("renewed search state: cmd=%v pending=%v disclosed=%v depth=%d", cmd, m.pendingBudget, m.disclosedToolOrder, m.toolDepth)
+	}
+}

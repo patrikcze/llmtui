@@ -94,6 +94,13 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 	if searchCount == 0 {
 		return nil, false
 	}
+	if m.toolDepth >= m.toolMaxIter() {
+		m.overlayOpen = false
+		m.keysMode = false
+		m.waitForApproval(newToolBatchPlan(calls), true)
+		m.refreshViewport()
+		return nil, true
+	}
 	if len(calls) != 1 || searchCount != 1 {
 		return m.rejectWholeBatch(calls, errors.New("tool_search must be the only call in its batch; no calls in this batch were executed")), true
 	}
@@ -175,6 +182,7 @@ func (m *Model) rejectWholeBatch(calls []tools.Call, err error) tea.Cmd {
 	}
 	m.toolErr += len(results)
 	m.recordAgentToolResultsCount(results, false, 0)
+	m.advanceToolRound()
 	return m.sendToolResults(results)
 }
 

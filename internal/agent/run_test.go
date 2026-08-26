@@ -331,6 +331,24 @@ func TestPersistedUserInputPauseUsesFreshCycleResume(t *testing.T) {
 	}
 }
 
+func TestNeedsUserInputRunCanBeCancelled(t *testing.T) {
+	now := time.Now()
+	run, err := NewRun("run-cancel-ask", "configure deployment", DefaultLimits(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("configure deployment", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WaitForUserInput("Which environment?", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	run.Cancel("cancelled by user", now.Add(2*time.Second))
+	if run.Status != DecisionCancelled || run.StopReason != "cancelled by user" {
+		t.Fatalf("cancelled run = %+v", run)
+	}
+}
+
 // TestTerminateVerificationUnavailablePreservesExecution guards REL-001's
 // fix: when the verifier itself fails (provider error, timeout, or repeated
 // malformed JSON) after a successful CompleteExecution, the caller must be

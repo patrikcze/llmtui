@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -28,13 +29,7 @@ func (m *Model) handleAskUserBatch(calls []tools.Call) (tea.Cmd, bool) {
 	}
 	if len(calls) != 1 || askCount != 1 {
 		err := errors.New("ask_user is a control-flow barrier and must be the only call in its batch; no calls in this batch were executed")
-		results := make([]tools.Result, len(calls))
-		for index, call := range calls {
-			results[index] = tools.Result{Call: call, Err: err}
-		}
-		m.toolErr += len(results)
-		m.recordAgentToolResultsCount(results, false, 0)
-		return m.sendToolResults(results), true
+		return m.rejectWholeBatch(calls, err), true
 	}
 
 	call := calls[0]
@@ -44,10 +39,7 @@ func (m *Model) handleAskUserBatch(calls []tools.Call) (tea.Cmd, bool) {
 		}
 	}
 	if call.InputErr != "" {
-		result := tools.Result{Call: call, Err: fmt.Errorf("invalid arguments for ask_user: %s", call.InputErr)}
-		m.toolErr++
-		m.recordAgentToolResultsCount([]tools.Result{result}, false, 0)
-		return m.sendToolResults([]tools.Result{result}), true
+		return m.rejectWholeBatch([]tools.Call{call}, fmt.Errorf("invalid arguments for ask_user: %s", call.InputErr)), true
 	}
 	return m.pauseForAskUser(call), true
 }
@@ -131,11 +123,30 @@ func containsExact(values []string, target string) bool {
 }
 
 func (m *Model) completePendingAskForShutdown() {
+	m.completePendingAsk("application closed before the human answered; this incomplete interaction must not be replayed")
+}
+
+func (m *Model) completePendingAsk(reason string) {
 	if m.pendingAsk == nil {
 		return
 	}
-	result := tools.Result{Call: m.pendingAsk.call, Err: errors.New("application closed before the human answered; this incomplete interaction must not be replayed")}
+	result := tools.Result{Call: m.pendingAsk.call, Err: errors.New(reason)}
 	m.pendingAsk = nil
 	m.continueAfterUserInput()
 	m.appendTerminalToolResults([]tools.Result{result})
+}
+
+func (m *Model) persistableMessages() []provider.Message {
+	messages := append([]provider.Message(nil), m.session.Messages...)
+	if m.pendingAsk == nil {
+		return messages
+	}
+	result := tools.Result{
+		Call: m.pendingAsk.call,
+		Err:  errors.New("session snapshot saved while waiting for the human answer; resume the task with fresh input instead of replaying this call"),
+	}
+	if result.Call.ID != "" {
+		return append(messages, tools.NativeResults([]tools.Result{result})...)
+	}
+	return append(messages, provider.Message{Role: provider.RoleUser, Content: tools.FormatResults([]tools.Result{result})})
 }

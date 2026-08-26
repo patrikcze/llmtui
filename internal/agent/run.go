@@ -193,7 +193,7 @@ func (r *AgentRun) ApplyStop(stop StopResult, now time.Time) error {
 
 // Cancel marks a non-terminal run cancelled at any stage.
 func (r *AgentRun) Cancel(reason string, now time.Time) {
-	if r == nil || r.Status != DecisionRunning {
+	if r == nil || (r.Status != DecisionRunning && r.Status != DecisionNeedsUserInput) {
 		return
 	}
 	r.Status = DecisionCancelled

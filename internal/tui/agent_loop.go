@@ -1102,7 +1102,7 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 		m.notice = "agent mode off — ordinary chat behavior restored"
 		return nil
 	case "cancel":
-		if !m.agentRunActive() && !m.agentVerifying() {
+		if !m.agentRunActive() && !m.agentVerifying() && !m.agentNeedsUserInput() {
 			return m.fail("no active agent run")
 		}
 		if m.thinking && m.cancelStream != nil {
@@ -1112,6 +1112,10 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 		if m.mcpBatchCancel != nil {
 			m.turnRuntime.cancelToolBatch()
 			m.relayout()
+		}
+		m.completePendingAsk("agent run cancelled by the user")
+		if m.agentNeedsUserInput() {
+			m.agentLoop.run.Cancel("cancelled by /agent cancel", time.Now())
 		}
 		m.cancelVerifiedRun("cancelled by /agent cancel")
 		m.endAgentRun()

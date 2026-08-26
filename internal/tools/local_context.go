@@ -100,6 +100,12 @@ func (r *Runner) localContext(ctx context.Context, call Call) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(data) > r.MaxResultBytes() {
+		return "", fmt.Errorf("local context result exceeds the %d byte limit", r.MaxResultBytes())
+	}
+	if !json.Valid(data) {
+		return "", errors.New("local context collector returned invalid JSON")
+	}
 	return string(data), nil
 }
 
@@ -276,7 +282,7 @@ func (c *defaultLocalContextCollector) processes(ctx context.Context, limit int)
 
 func collectProcesses(ctx context.Context) ([]processSummary, error) {
 	if runtime.GOOS == "windows" {
-		command := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", `Get-Process | Select-Object Id,ProcessName,CPU,WorkingSet64 | ConvertTo-Csv -NoTypeInformation`)
+		command := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", `Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Select-Object IDProcess,Name,PercentProcessorTime,WorkingSet | ConvertTo-Csv -NoTypeInformation`)
 		output, err := boundedCommandOutput(command, 1024*1024)
 		if err != nil {
 			return nil, fmt.Errorf("collect processes: %w", err)

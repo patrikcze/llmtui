@@ -529,7 +529,7 @@ func (m *Model) sessionRecord() history.Session {
 		PromptMode: m.effectivePromptMode(),
 		Profile:    prof.Name,
 		ProjectID:  m.projectID,
-		Messages:   m.session.Messages,
+		Messages:   m.persistableMessages(),
 		Prompt:     m.session.TotalPromptTokens,
 		Reply:      m.session.TotalCompletionTokens,
 		Estimated:  m.session.AnyEstimated,
@@ -1608,6 +1608,9 @@ func (m *Model) resolveBudget(choice int) tea.Cmd {
 	if choice == 0 {
 		m.turnRuntime.renewToolBudget()
 		m.notice = fmt.Sprintf("⚒ tool budget renewed — up to %d more rounds", m.toolMaxIter())
+		if len(calls) == 1 && calls[0].Tool == tools.ToolSearch {
+			return m.startToolBatch(calls)
+		}
 		return m.startPlannedToolBatch(plan)
 	}
 	limited := tools.LimitResults(calls, m.toolMaxIter())

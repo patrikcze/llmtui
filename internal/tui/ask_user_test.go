@@ -116,6 +116,9 @@ func TestAskUserMixedBatchExecutesNothing(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "unsafe.txt")); !os.IsNotExist(err) {
 		t.Fatalf("side-effecting sibling executed: %v", err)
 	}
+	if m.toolDepth != 1 {
+		t.Fatalf("rejected batch tool depth = %d, want 1", m.toolDepth)
+	}
 	results := m.session.Messages[len(m.session.Messages)-2:]
 	for _, result := range results {
 		if result.Role != provider.RoleTool || !strings.Contains(result.Content, "must be the only call") {
@@ -174,5 +177,55 @@ func TestAskUserShutdownCompletesProtocolWithoutResuming(t *testing.T) {
 	}
 	if m.pendingAsk != nil {
 		t.Fatal("pending ask survived shutdown completion")
+	}
+}
+
+func TestAskUserSessionSnapshotCompletesProtocolWithoutChangingLiveTurn(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	call := nativeAskCall(t, "ask-save", `{"question":"Which environment?"}`)
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
+	m.startToolBatch([]tools.Call{call})
+	liveCount := len(m.session.Messages)
+	record := m.sessionRecord()
+	if len(record.Messages) != liveCount+1 {
+		t.Fatalf("snapshot messages = %d, want %d", len(record.Messages), liveCount+1)
+	}
+	last := record.Messages[len(record.Messages)-1]
+	if last.Role != provider.RoleTool || last.ToolCallID != call.ID || !strings.Contains(last.Content, "saved while waiting") {
+		t.Fatalf("snapshot completion = %+v", last)
+	}
+	if len(m.session.Messages) != liveCount || m.pendingAsk == nil {
+		t.Fatal("saving the snapshot mutated the live ask_user continuation")
+	}
+}
+
+func TestAskUserAgentCancelWhileWaiting(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.configureAgentLoop()
+	run, err := agent.NewRun("ask-agent-cancel", "configure deployment", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("configure deployment", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	call := nativeAskCall(t, "ask-agent-cancel-1", `{"question":"Which environment?"}`)
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
+	m.startToolBatch([]tools.Call{call})
+	_ = cmdAgent(m, "cancel")
+	if run.Status != agent.DecisionCancelled || m.pendingAsk != nil {
+		t.Fatalf("cancelled ask state: run=%+v pending=%+v", run, m.pendingAsk)
+	}
+	last := m.session.Messages[len(m.session.Messages)-1]
+	if last.Role != provider.RoleTool || !strings.Contains(last.Content, "cancelled by the user") {
+		t.Fatalf("cancel result = %+v", last)
 	}
 }
