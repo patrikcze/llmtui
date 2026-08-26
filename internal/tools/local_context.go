@@ -290,15 +290,20 @@ func collectProcesses(ctx context.Context) ([]processSummary, error) {
 		return parseWindowsProcesses(output)
 	}
 	command := exec.CommandContext(ctx, "ps", "-axo", "pid=,pcpu=,rss=,comm=")
+	command.Env = localeStableEnv(os.Environ())
 	output, err := boundedCommandOutput(command, 1024*1024)
 	if err != nil {
 		return nil, fmt.Errorf("collect processes: %w", err)
 	}
-	return parseUnixProcesses(output), nil
+	processes := parseUnixProcesses(output)
+	if len(processes) == 0 && strings.TrimSpace(output) != "" {
+		return nil, errors.New("collect processes: ps returned rows but none could be parsed")
+	}
+	return processes, nil
 }
 
 func parseUnixProcesses(output string) []processSummary {
-	var result []processSummary
+	result := make([]processSummary, 0)
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
@@ -323,7 +328,7 @@ func parseWindowsProcesses(output string) ([]processSummary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse process list: %w", err)
 	}
-	var result []processSummary
+	result := make([]processSummary, 0)
 	for _, row := range rows[1:] {
 		if len(row) < 4 {
 			continue
@@ -334,6 +339,18 @@ func parseWindowsProcesses(output string) ([]processSummary, error) {
 		result = append(result, processSummary{PID: pid, Name: filepath.Base(row[1]), CPUPercent: cpu, MemoryBytes: memory})
 	}
 	return result, nil
+}
+
+func localeStableEnv(environ []string) []string {
+	result := make([]string, 0, len(environ)+2)
+	for _, entry := range sanitizedEnv(environ) {
+		name, _, _ := strings.Cut(entry, "=")
+		if name == "LANG" || strings.HasPrefix(name, "LC_") {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, "LANG=C", "LC_ALL=C")
 }
 
 type clipboardContext struct {

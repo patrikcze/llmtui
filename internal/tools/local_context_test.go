@@ -125,6 +125,41 @@ func TestLocalContextProcessParserOmitsArguments(t *testing.T) {
 	}
 }
 
+func TestLocalContextProcessParserReturnsEmptyArray(t *testing.T) {
+	processes := parseUnixProcesses("")
+	if processes == nil || len(processes) != 0 {
+		t.Fatalf("empty processes = %#v, want non-nil empty slice", processes)
+	}
+	encoded, err := json.Marshal(processContext{Kind: LocalContextProcesses, Processes: processes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"processes":[]`) {
+		t.Fatalf("empty process JSON = %s", encoded)
+	}
+}
+
+func TestLocalContextProcessEnvironmentForcesCLocale(t *testing.T) {
+	environ := localeStableEnv([]string{
+		"PATH=/usr/bin:/bin",
+		"LANG=cs_CZ.UTF-8",
+		"LC_NUMERIC=cs_CZ.UTF-8",
+		"SAFE=value",
+		"LLMTUI_API_KEY=secret",
+	})
+	joined := strings.Join(environ, "\n")
+	for _, want := range []string{"PATH=/usr/bin:/bin", "SAFE=value", "LANG=C", "LC_ALL=C"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("locale-stable environment omitted %q: %v", want, environ)
+		}
+	}
+	for _, forbidden := range []string{"cs_CZ", "LLMTUI_API_KEY"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("locale-stable environment retained %q: %v", forbidden, environ)
+		}
+	}
+}
+
 func TestLocalContextProcessesAreSortedAndBounded(t *testing.T) {
 	collector := &defaultLocalContextCollector{root: t.TempDir(), readClipboard: func(context.Context, int) (string, bool, error) {
 		return "", false, nil
