@@ -50,7 +50,7 @@ func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.
 	pf.String("provider", "", "provider to use (ollama, lmstudio, openai_compatible, embedded, mock)")
 	pf.String("model", "", "model to use (a local .gguf file path for --provider embedded)")
 	pf.String("base-url", "", "override the provider base URL")
-	pf.String("api-key", "", "override the provider API key")
+	pf.String("api-key", "", "override the provider API key (visible to other local users via the process list — prefer LLMTUI_API_KEY or api_key_env)")
 	pf.Float64("temperature", 0, "sampling temperature")
 	pf.Float64("top-p", 0, "nucleus sampling top-p")
 	pf.Int("max-tokens", 0, "maximum tokens to generate")

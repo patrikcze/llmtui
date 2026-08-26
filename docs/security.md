@@ -18,6 +18,10 @@ untrusted-content framing and RAG content-secret scanning.
       api_key_env: LLMTUI_API_KEY
   ```
 
+- **Avoid `--api-key` on the command line.** Process arguments are readable
+  by any other process on the machine (`ps aux`, `/proc/<pid>/cmdline`) and
+  are recorded in your shell history. The flag exists for scripted one-offs;
+  for anything long-lived use `LLMTUI_API_KEY` or `api_key_env`.
 - API keys are never logged and never appear in `/debug`, `/prompt
   composed`, or error messages.
 - `config show` and `/config show` redact keys: anything shorter than 12
@@ -134,9 +138,11 @@ and an explicit category selection; the picker defaults to skip.
     why.
     Choosing the second approval row creates a 15-minute grant for only the
     exact tool and target (file path, command hash, URL, or MCP server/tool);
-    it never enables session-wide approval. `/tools ask` revokes all such
-    grants. Global auto mode is an explicit high-trust override, not the
-    recommended default.
+    it never enables session-wide approval. For `write_file` the grant also
+    pins a hash of the content you reviewed, so it authorises re-writing
+    exactly those bytes — not a licence to rewrite that path with anything.
+    `/tools ask` revokes all such grants. Global auto mode is an explicit
+    high-trust override, not the recommended default.
   - **Command classifier** — a command is auto-approved only when it is an
     allowlisted read-only program (`ls`, `cat`, `grep`, `rg`, `find`,
     `git status/log/diff/show`, `go list/version/env` in its observational
@@ -149,7 +155,10 @@ and an explicit category selection; the picker defaults to skip.
     managers, cloud/container CLIs) always ask, as does anything
     unrecognized. Ripgrep options that launch helper processes (`--pre`,
     `--hostname-bin`, and `-z`/`--search-zip`) also always ask; ordinary
-    searches remain automatic.
+    searches remain automatic. Flag values that carry a path are inspected
+    whether they are attached (`-f/etc/passwd`), separated by `=`
+    (`--file=/etc/passwd`), or a standalone token, so a path cannot hide
+    behind a leading `-`. `tree -o`/`--output` asks because it writes a file.
   - **Confinement** — file tools reject absolute paths, `..`, and symlinks
     resolving outside the launch directory. Commands run with the workspace
     as their working directory; path-like arguments are symlink-resolved
@@ -157,8 +166,10 @@ and an explicit category selection; the picker defaults to skip.
     and `git diff --no-index` always require explicit approval.
   - **Write guardrails** — writes into `.git/` (a model-written git hook
     would otherwise execute on your next git command), key-material
-    directories (`.ssh`, `.gnupg`), and shell startup files (`.bashrc`,
-    `.zshrc`, `.profile`, `config.fish`, …) are blocked.
+    directories (`.ssh`, `.gnupg`), `.llmtui/` (the workspace skill and
+    plugin discovery roots, whose contents are loaded into later sessions'
+    prompts), and shell startup files (`.bashrc`, `.zshrc`, `.profile`,
+    `config.fish`, …) are blocked.
   - **Secret-read approval** — reads of likely secret files (`.env`,
     `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `.netrc`, credential-named
     files) require approval even though ordinary reads run unprompted.
@@ -191,15 +202,20 @@ and an explicit category selection; the picker defaults to skip.
     action — prefer `ask` mode when working on untrusted repositories.
 - Web tools (`/web`) are off by default and add their own guardrails:
   - **SSRF guard** — only `http`/`https` URLs; hosts resolving to loopback,
-    private (RFC 1918), link-local, unique-local, or unspecified addresses
-    are refused. The check happens inside the dialer (the vetted IP is what
-    gets connected, so DNS rebinding cannot bypass it) and re-runs on every
-    redirect hop (max 5). A hostile page cannot use the model to probe
-    `localhost` or your LAN.
+    private (RFC 1918), carrier-grade NAT (RFC 6598, where tailnet-style
+    overlays live), link-local, unique-local, multicast, benchmarking,
+    class-E/broadcast, or unspecified addresses are refused. The check
+    happens inside the dialer (the vetted IP is what gets connected, so DNS
+    rebinding cannot bypass it) and re-runs on every redirect hop (max 5). A
+    hostile page cannot use the model to probe `localhost`, your LAN, or your
+    VPN.
   - **Per-URL approval for fetches** — a model-chosen URL can encode data
     in its query string (exfiltration), so `web_fetch` asks before every
-    request; `web_search` sends only the model's query to DuckDuckGo and
-    runs unprompted.
+    request. `web_search` sends only the model's query to DuckDuckGo and
+    normally runs unprompted, but it asks when the query has a shape a real
+    search never does — over 200 bytes, an embedded newline, or a single
+    opaque token over 64 characters — since those are how workspace contents
+    or a credential would be smuggled out through it.
   - **Bounded content** — response bodies are read up to 4 MB and reduced
     to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
     before reaching the model; binary content types are refused.

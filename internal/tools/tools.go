@@ -620,13 +620,51 @@ func sanitizedEnv(environ []string) []string {
 // approval) via its own NeedsApproval method.
 func NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWebSearch, ToolSkillLoad:
+	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad:
 		return false
+	case ToolWebSearch:
+		return webSearchNeedsApproval(c.Body)
 	case ToolRunCommand:
 		return ClassifyCommand(c.Body).Verdict != VerdictAuto
 	default:
 		return true
 	}
+}
+
+// maxAutoWebSearchQueryBytes bounds a search query that may leave the machine
+// without the user confirming it.
+const maxAutoWebSearchQueryBytes = 200
+
+// maxAutoWebSearchTokenBytes bounds one whitespace-delimited token inside an
+// auto-approved query. Natural-language search terms are short; a single long
+// opaque run is a credential or an encoded payload, not a search.
+const maxAutoWebSearchTokenBytes = 64
+
+// webSearchNeedsApproval reports whether a search query must be confirmed
+// before it leaves the machine. web_search is the one tool that combines
+// unapproved execution with model-authored outbound content: read_file, grep,
+// and list_dir also run unapproved, so a model that has been steered by
+// injected repository or web content can read workspace data and place it in
+// a query. web_fetch is already approval-gated and SSRF-guarded, which left
+// search as the weaker sibling.
+//
+// Ordinary searches (short natural-language questions) stay automatic — the
+// gate targets the shapes a genuine query never has: bulk length, embedded
+// newlines, or a single very long opaque token.
+func webSearchNeedsApproval(query string) bool {
+	query = strings.TrimSpace(query)
+	if len(query) > maxAutoWebSearchQueryBytes {
+		return true
+	}
+	if strings.ContainsAny(query, "\n\r") {
+		return true
+	}
+	for _, field := range strings.Fields(query) {
+		if len(field) > maxAutoWebSearchTokenBytes {
+			return true
+		}
+	}
+	return false
 }
 
 // NeedsApproval reports whether a call must be confirmed under this runner's
@@ -635,8 +673,10 @@ func NeedsApproval(c Call) bool {
 // id_rsa, …) asks first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolWebSearch, ToolSkillLoad:
+	case ToolListDir, ToolGlob, ToolSkillLoad:
 		return false
+	case ToolWebSearch:
+		return webSearchNeedsApproval(c.Body)
 	case ToolReadFile, ToolGrep:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:

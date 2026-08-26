@@ -485,6 +485,53 @@ func TestFlagValuePathSmugglingAsks(t *testing.T) {
 	}
 }
 
+// TestAttachedShortFlagPathSmugglingAsks locks in the fix for the sibling gap:
+// getopt-style short flags carry their value *attached* ("-f/etc/passwd"),
+// with no "=" to split on. flagPathValue returned "" for those, so both the
+// workspace-escape check and the secret check skipped them and the command
+// was auto-approved. flagPathCandidates now yields every suffix of a short
+// cluster, so the embedded path is seen.
+func TestAttachedShortFlagPathSmugglingAsks(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	for _, cmd := range []string{
+		"file -f/absolute/path",      // absolute escape hidden behind -f
+		"grep -f/etc/passwd x .",     // ditto, inside a cluster-capable prog
+		"file -f.env",                // secret file, no separator at all
+		"cat -f../../etc/passwd",     // relative escape
+		"tree -o/tmp/exfil .",        // writes a file outside the workspace
+		"tree -o notes.txt .",        // writes a file *inside* the workspace
+		"tree --output=/tmp/exfil .", // long-form of the same write
+	} {
+		cl := p.ClassifyCommand(cmd, root)
+		if cl.Verdict != VerdictAsk {
+			t.Errorf("%q = %v (%s), want ask", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
+// TestAttachedShortFlagCandidatesDoNotOverAsk guards the other direction:
+// expanding every suffix of a short cluster must not turn ordinary read-only
+// invocations into approval prompts. These are the shapes users type all day.
+func TestAttachedShortFlagCandidatesDoNotOverAsk(t *testing.T) {
+	p := DefaultGuardrails()
+	root := t.TempDir()
+	for _, cmd := range []string{
+		"ls -la",
+		"head -20 main.go",
+		"tail -5 server.log",
+		"grep -rn TODO .",
+		"rg -f patterns.txt src/",
+		"tree -L 2 internal",
+		"du -sh .",
+	} {
+		cl := p.ClassifyCommand(cmd, root)
+		if cl.Verdict != VerdictAuto {
+			t.Errorf("%q = %v (%s), want auto", cmd, cl.Verdict, cl.Reason)
+		}
+	}
+}
+
 // ---- adversarial verdict table (SEC-001) -----------------------------------
 
 // TestCommandApprovalAdversarialTable asserts the exact verdict table from

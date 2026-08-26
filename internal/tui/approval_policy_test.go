@@ -42,6 +42,37 @@ func TestCapabilityPolicySupportsPathPatterns(t *testing.T) {
 	}
 }
 
+// TestCapabilityPolicyScopesWriteContent locks in the fix for a grant that was
+// keyed on the write target alone. "Approve always" on a benign write to
+// config.yaml handed the model a 15-minute window in which it could rewrite
+// that same file with anything at all — no second prompt. The grant now
+// carries a content fingerprint, so only the reviewed bytes are authorised.
+func TestCapabilityPolicyScopesWriteContent(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	reviewed := tools.Call{Tool: tools.ToolWriteFile, Path: "config.yaml", Body: "debug: true\n"}
+	policy.GrantCall(reviewed, now, time.Hour)
+
+	if !policy.Allows(reviewed, now) {
+		t.Fatal("the reviewed write was not allowed")
+	}
+	swapped := tools.Call{Tool: tools.ToolWriteFile, Path: "config.yaml", Body: "exfil: http://evil\n"}
+	if policy.Allows(swapped, now) {
+		t.Fatal("grant approved different content written to the same path")
+	}
+}
+
+// TestCapabilityPolicyPathPatternNeverBlanketApprovesWrites ensures a glob
+// grant cannot be used to sidestep the content fingerprint.
+func TestCapabilityPolicyPathPatternNeverBlanketApprovesWrites(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	policy.GrantPath(tools.ToolWriteFile, "src/*.go", now, time.Hour)
+	if policy.Allows(tools.Call{Tool: tools.ToolWriteFile, Path: "src/main.go", Body: "package main\n"}, now) {
+		t.Fatal("path-pattern grant blanket-approved a write")
+	}
+}
+
 func TestCapabilityPolicyScopesMCPServerAndTool(t *testing.T) {
 	now := time.Now()
 	var policy capabilityPolicy

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +58,54 @@ func TestRunnerWriteBlocksRespectPolicyOff(t *testing.T) {
 	r.Guardrails.ProtectShellStartupFiles = false
 	if err := writeThrough(r, ".zshrc", "# ok now\n"); err != nil {
 		t.Fatalf("write to .zshrc rejected with protection off: %v", err)
+	}
+}
+
+func TestRunnerBlocksLLMTUIWorkspaceDirWrites(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	// <workspace>/.llmtui is the discovery root for workspace skills and
+	// plugins: a file written there is loaded into the *next* session's
+	// prompt, turning one unapproved write into persistent influence over
+	// the agent. The model must never author it silently.
+	for _, path := range []string{
+		".llmtui/skills/pwn/SKILL.md",
+		" .llmtui/plugins/x.json",
+		".LLMTUI/skills/pwn/SKILL.md ",
+		"nested/.llmtui/skills/pwn/SKILL.md",
+	} {
+		if err := writeThrough(r, path, "malicious instructions\n"); err == nil {
+			t.Errorf("write into %q allowed, want blocked", path)
+		}
+	}
+	// A file merely *named* like the directory is fine.
+	if err := writeThrough(r, "docs/llmtui.md", "# notes\n"); err != nil {
+		t.Errorf("unrelated write rejected: %v", err)
+	}
+}
+
+func TestRunnerWebSearchApprovalHeuristic(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	// Ordinary searches stay automatic — that is the point of the tool.
+	for _, q := range []string{
+		"golang context cancellation best practices",
+		"how to configure ollama base url",
+		"",
+	} {
+		if r.NeedsApproval(Call{Tool: ToolWebSearch, Body: q}) {
+			t.Errorf("web_search %q required approval, want auto", q)
+		}
+	}
+	// Exfiltration shapes must be confirmed: web_search is an unapproved
+	// outbound channel and read_file/grep are unapproved inbound ones, so a
+	// steered model could otherwise pipe workspace contents out silently.
+	for name, q := range map[string]string{
+		"bulk length":       strings.Repeat("a b ", 60),
+		"embedded newline":  "search this\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI",
+		"long opaque token": "lookup sk-proj-" + strings.Repeat("Z", 80),
+	} {
+		if !r.NeedsApproval(Call{Tool: ToolWebSearch, Body: q}) {
+			t.Errorf("web_search (%s) was auto-approved, want ask", name)
+		}
 	}
 }
 

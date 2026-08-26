@@ -160,6 +160,52 @@ func rgShortOptionsSpawnHelper(arg string) bool {
 	return false
 }
 
+// treeArgsAreObservational rejects tree's output-file option. tree is the only
+// otherwise-read-only program on the allowlist that can write a file, and a
+// workspace-relative destination ("tree -o notes.txt") is invisible to the
+// path-escape checks precisely because it stays inside the workspace — yet an
+// unapproved write is exactly what write_file's approval gate exists to
+// prevent.
+func treeArgsAreObservational(args []string) bool {
+	parseOptions := true
+	for _, arg := range args {
+		if !parseOptions {
+			continue
+		}
+		if arg == "--" {
+			parseOptions = false
+			continue
+		}
+		switch {
+		case arg == "--output", strings.HasPrefix(arg, "--output="):
+			return false
+		case treeShortOptionsWriteFile(arg):
+			return false
+		}
+	}
+	return true
+}
+
+// treeShortOptionsWriteFile recognizes -o inside a short-option cluster while
+// respecting options whose attached remainder is their value. For example -no
+// includes -o, but -Lo is "-L o" (a depth value) rather than the output option.
+func treeShortOptionsWriteFile(arg string) bool {
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'o':
+			return true
+		case 'L', 'P', 'I', 'H', 'T':
+			// These short options consume the remainder as their value, so
+			// any later o is data rather than the output option.
+			return false
+		}
+	}
+	return false
+}
+
 // ClassifyCommand classifies one run_command line conservatively: only an
 // allowlisted read-only program with no shell metacharacters, no escalating
 // arguments, and no path argument outside root earns VerdictAuto. Everything
@@ -217,6 +263,11 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 			return CommandClass{VerdictAsk, "rg option can execute a helper program"}
 		}
 		classReason = "read-only ripgrep query"
+	case "tree":
+		if !treeArgsAreObservational(fields[1:]) {
+			return CommandClass{VerdictAsk, "tree -o writes a file"}
+		}
+		classReason = "read-only tree listing"
 	case "go":
 		if len(fields) <= 1 {
 			return CommandClass{VerdictAsk, "go subcommand can modify files or fetch modules"}
@@ -244,21 +295,24 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 		}
 	}
 	for _, f := range fields[1:] {
-		value := flagPathValue(f)
-		if value == "" {
-			continue
-		}
-		if looksLikePathEscape(value, root) {
-			return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
-		}
-		if p.BlockSymlinkEscape && pathResolvesOutsideWorkspace(value, root) {
-			return CommandClass{VerdictAsk, "argument " + f + " resolves outside the workspace"}
+		for _, value := range flagPathCandidates(f) {
+			if value == "" {
+				continue
+			}
+			if looksLikePathEscape(value, root) {
+				return CommandClass{VerdictAsk, "argument " + f + " is outside the workspace"}
+			}
+			if p.BlockSymlinkEscape && pathResolvesOutsideWorkspace(value, root) {
+				return CommandClass{VerdictAsk, "argument " + f + " resolves outside the workspace"}
+			}
 		}
 	}
 	if p.RequireApprovalForSecretReads {
 		for _, f := range fields[1:] {
-			if value := flagPathValue(f); value != "" && IsSecretPath(value) {
-				return CommandClass{VerdictAsk, "reads a likely secret file (" + value + ")"}
+			for _, value := range flagPathCandidates(f) {
+				if value != "" && IsSecretPath(value) {
+					return CommandClass{VerdictAsk, "reads a likely secret file (" + value + ")"}
+				}
 			}
 		}
 	}
@@ -297,13 +351,14 @@ func CanonicalReadOnlyCommandIdentity(body, root string) (string, bool) {
 	return strings.Join(fields, " "), true
 }
 
-// flagPathValue returns the path-like value an argument carries: the
-// argument itself when it is a bare (non-flag) token, or the substring after
-// "=" when it is a "--flag=value"/"-f=value" flag — this is how a path gets
-// smuggled past a naive "skip anything starting with -" check (for example
-// "grep --file=/etc/passwd"). It returns "" for a flag with no "=" (a bare
-// flag like "-la", or a short flag with an attached value and no "=" such as
-// "-f/etc/passwd"), which callers must treat as "no path to check".
+// flagPathValue returns the single canonical path-like value an argument
+// carries: the argument itself when it is a bare (non-flag) token, or the
+// substring after "=" when it is a "--flag=value"/"-f=value" flag. It returns
+// "" for a flag with no "=", because such a token has no *unambiguous* value
+// — see flagPathCandidates for the security checks, which must consider every
+// reading. This function is only for rewriting a token in place
+// (CanonicalReadOnlyCommandIdentity) and must never be used to decide that an
+// argument is safe.
 func flagPathValue(f string) string {
 	if !strings.HasPrefix(f, "-") {
 		return f
@@ -312,6 +367,39 @@ func flagPathValue(f string) string {
 		return f[idx+1:]
 	}
 	return ""
+}
+
+// flagPathCandidates returns every substring of an argument that could be a
+// path when the command actually runs. Getopt-style short options accept an
+// *attached* value with no "=" ("-f/etc/passwd", "file -f.env", "tree
+// -o/tmp/out"), so a check that only looks at flagPathValue skips them
+// entirely and the command still earns VerdictAuto. Since the classifier
+// cannot know which letters of a short cluster are flags and which begin the
+// value, it conservatively treats every suffix as a candidate: "-la" yields
+// "la" and "a" (both harmless), while "-f/etc/passwd" yields "/etc/passwd"
+// and is caught.
+//
+// "--long" options are excluded: GNU-style long options carry their value
+// either after "=" (already covered above) or as a separate token (covered as
+// a bare token), never attached.
+func flagPathCandidates(f string) []string {
+	if f == "" {
+		return nil
+	}
+	if !strings.HasPrefix(f, "-") {
+		return []string{f}
+	}
+	if idx := strings.Index(f, "="); idx >= 0 {
+		return []string{f[idx+1:]}
+	}
+	if strings.HasPrefix(f, "--") {
+		return nil
+	}
+	candidates := make([]string, 0, len(f)-1)
+	for i := 1; i < len(f); i++ {
+		candidates = append(candidates, f[i:])
+	}
+	return candidates
 }
 
 // looksLikePathEscape reports whether argument f, treated as a path relative
@@ -406,6 +494,11 @@ var secretNamePattern = regexp.MustCompile(`(?i)(^|[-_. ])(password|passwd|secre
 // secretDirs are directories whose contents are key material.
 var secretDirs = map[string]bool{".ssh": true, ".gnupg": true}
 
+// llmtuiWorkspaceDir is llmtui's per-workspace state directory. It is the
+// discovery root for workspace skills and plugins, so its contents influence
+// later sessions' prompts.
+const llmtuiWorkspaceDir = ".llmtui"
+
 // IsSecretPath reports whether a path likely holds credentials: .env files,
 // key/certificate files, SSH identities, GPG/SSH directories, or
 // credential-ish names.
@@ -470,6 +563,13 @@ func (p GuardrailPolicy) checkWritePath(rel string) string {
 		}
 		if p.ProtectSecretFiles && secretDirs[strings.ToLower(part)] {
 			return "writing into " + part + " (key material) is not allowed"
+		}
+		// <workspace>/.llmtui holds llmtui's own workspace state: the skill
+		// and plugin discovery roots. A file written there outlives the
+		// session and is picked up by the next run's discovery, so a model
+		// must never author it silently.
+		if p.BlockGitDirWrites && strings.EqualFold(part, llmtuiWorkspaceDir) {
+			return "writing inside " + llmtuiWorkspaceDir + " (llmtui workspace state) is not allowed"
 		}
 	}
 	if p.ProtectShellStartupFiles && IsShellStartupPath(rel) {
