@@ -50,13 +50,41 @@ const maxActivityRows = 6
 // activityHeight is the number of terminal rows the live region occupies,
 // so resize()/maxInputLines can budget for it.
 func (m *Model) activityHeight() int {
+	height := m.verifierActivityHeight()
 	if m.activity == nil {
-		return 0
+		return height
 	}
 	if n := len(m.activity.entries); n <= maxActivityRows {
-		return n
+		return height + n
 	}
-	return maxActivityRows + 1
+	return height + maxActivityRows + 1
+}
+
+func (m *Model) verifierActivityHeight() int {
+	if m.agentLoop == nil || !m.agentLoop.verifying || m.agentLoop.verifierModel == "" || m.agentLoop.verifierStartedAt.IsZero() {
+		return 0
+	}
+	return 1
+}
+
+func (m *Model) renderVerifierActivity() string {
+	if m.verifierActivityHeight() == 0 || m.agentLoop.run == nil {
+		return ""
+	}
+	run := m.agentLoop.run
+	maxAttempts := max(m.cfg.Agent.Verifier.MaxAttempts, 1)
+	attempt := min(m.agentLoop.verifierAttempts+1, maxAttempts)
+	line := fmt.Sprintf(
+		"verifier · %s · cycle %d/%d · attempt %d/%d · fresh context · %s",
+		terminaltext.Sanitize(m.agentLoop.verifierModel),
+		run.Cycle,
+		run.Limits.MaxCycles,
+		attempt,
+		maxAttempts,
+		components.FormatElapsed(time.Since(m.agentLoop.verifierStartedAt)),
+	)
+	glyph := components.SpinnerFrame(m.frame, false, m.cfg.UI.Animations)
+	return m.theme.Spinner.Render(glyph) + " " + m.theme.SystemNote.Render(line)
 }
 
 // renderActivity renders the live region: one spinner-led line per running

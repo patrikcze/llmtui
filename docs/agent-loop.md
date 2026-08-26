@@ -269,6 +269,12 @@ OpenAI-compatible server). Reusing the executor model is a semantic second
 opinion, not independent validation — deterministic evidence always outranks
 it either way.
 
+While a semantic verifier request is running, a live row above the usage panel
+shows its effective model, cycle, attempt, fresh-context boundary, and elapsed
+time. The persistent status-bar model remains the selected executor model;
+deterministic verification does not show a model activity row because no model
+request is made.
+
 The parser accepts one JSON object, including a fenced object or harmless prose
 around it, and strictly validates the resulting envelope before any of it
 reaches run state: every one of the schema's 16 required fields must be

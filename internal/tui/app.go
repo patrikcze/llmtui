@@ -2854,7 +2854,9 @@ func (m *Model) render() string {
 			verb = "Working"
 		}
 		tokens := ""
-		if m.thinking {
+		if m.agentVerifying() && m.verifierActivityHeight() > 0 {
+			verb, start = "Verifying", m.agentLoop.verifierStartedAt
+		} else if m.thinking {
 			if n := (m.streamBuf.Len() + m.reasoningLen) / 4; n > 0 {
 				tokens = "↓ " + components.FormatTokens(n) + " tokens"
 			}
@@ -2870,6 +2872,9 @@ func (m *Model) render() string {
 	sections := []string{zone.Mark(chatViewportZoneID, chatView)}
 	if m.activity != nil {
 		sections = append(sections, m.renderActivity())
+	}
+	if verifierActivity := m.renderVerifierActivity(); verifierActivity != "" {
+		sections = append(sections, verifierActivity)
 	}
 	sections = append(sections, usage)
 	if len(m.sugs) > 0 {

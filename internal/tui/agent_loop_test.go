@@ -938,6 +938,9 @@ func TestVerifiedAgentCancellationWhileVerifyingEndsCancelled(t *testing.T) {
 	if verifyCmd == nil || !m.agentVerifying() {
 		t.Fatal("run did not reach the verifying stage")
 	}
+	if m.agentLoop.verifierModel != "test-model" || m.agentLoop.verifierStartedAt.IsZero() || m.verifierActivityHeight() != 1 {
+		t.Fatalf("verifier activity = model %q started %v height %d", m.agentLoop.verifierModel, m.agentLoop.verifierStartedAt, m.verifierActivityHeight())
+	}
 
 	result := make(chan tea.Msg, 1)
 	go func() { result <- verifyCmd() }()
@@ -949,6 +952,9 @@ func TestVerifiedAgentCancellationWhileVerifyingEndsCancelled(t *testing.T) {
 
 	m.cancelVerifiedRun("cancelled by test")
 	m.endAgentRun()
+	if m.agentLoop.verifierModel != "" || !m.agentLoop.verifierStartedAt.IsZero() || m.verifierActivityHeight() != 0 {
+		t.Fatalf("cancel left verifier activity: model %q started %v height %d", m.agentLoop.verifierModel, m.agentLoop.verifierStartedAt, m.verifierActivityHeight())
+	}
 
 	select {
 	case msg := <-result:
@@ -961,6 +967,63 @@ func TestVerifiedAgentCancellationWhileVerifyingEndsCancelled(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionCancelled {
 		t.Fatalf("status = %q, want cancelled", m.agentLoop.run.Status)
 	}
+}
+
+func TestVerifierActivityAdvancesOnRetry(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "openai/gpt-oss-20b"
+	m.cfg.Agent.Verifier.Model = "google/gemma-4-e4b"
+	m.cfg.Agent.Verifier.MaxAttempts = 2
+	m.agentLoop.run = &agent.AgentRun{
+		ID: "run-retry-activity", Cycle: 3, Stage: agent.StageVerifier, Status: agent.DecisionRunning,
+		Limits: agent.Limits{MaxCycles: 8},
+	}
+	m.agentLoop.verifying = true
+	m.agentLoop.verifyGen = 1
+	m.beginVerifierActivity("google/gemma-4-e4b")
+	firstStartedAt := m.agentLoop.verifierStartedAt
+
+	_, retry := m.handleAgentVerification(agentVerificationMsg{
+		runID: "run-retry-activity", cycle: 3, gen: 1, err: errors.New("temporary verifier failure"),
+	})
+	if retry == nil || !m.agentLoop.verifying {
+		t.Fatal("verifier failure did not schedule the bounded retry")
+	}
+	if m.agentLoop.verifierAttempts != 1 || m.agentLoop.verifyGen != 2 {
+		t.Fatalf("retry state = attempts %d gen %d", m.agentLoop.verifierAttempts, m.agentLoop.verifyGen)
+	}
+	if m.agentLoop.verifierModel != "google/gemma-4-e4b" || m.agentLoop.verifierStartedAt.Before(firstStartedAt) {
+		t.Fatalf("retry activity = model %q started %v; first started %v", m.agentLoop.verifierModel, m.agentLoop.verifierStartedAt, firstStartedAt)
+	}
+	if view := m.render(); !strings.Contains(view, "attempt 2/2") {
+		t.Fatalf("retry activity missing attempt 2/2: %s", view)
+	}
+	m.cancelVerifiedRun("test cleanup")
+}
+
+func TestStaleVerifierResultDoesNotClearCurrentActivity(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop.run = &agent.AgentRun{
+		ID: "run-stale-activity", Cycle: 2, Stage: agent.StageVerifier, Status: agent.DecisionRunning,
+		Limits: agent.Limits{MaxCycles: 8},
+	}
+	m.agentLoop.verifying = true
+	m.agentLoop.verifyGen = 2
+	m.beginVerifierActivity("google/gemma-4-e4b")
+	startedAt := m.agentLoop.verifierStartedAt
+
+	_, cmd := m.handleAgentVerification(agentVerificationMsg{
+		runID: "run-stale-activity", cycle: 2, gen: 1,
+	})
+	if cmd != nil {
+		t.Fatal("stale verifier result scheduled work")
+	}
+	if !m.agentLoop.verifying || m.agentLoop.verifierModel != "google/gemma-4-e4b" ||
+		!m.agentLoop.verifierStartedAt.Equal(startedAt) || m.verifierActivityHeight() != 1 {
+		t.Fatalf("stale result changed current activity: verifying=%v model=%q started=%v height=%d",
+			m.agentLoop.verifying, m.agentLoop.verifierModel, m.agentLoop.verifierStartedAt, m.verifierActivityHeight())
+	}
+	m.cancelVerifiedRun("test cleanup")
 }
 
 func TestVerifiedAgentRepairsVerifierFormatWithoutRepeatingExecutor(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -180,6 +181,59 @@ func TestWorkingLineDuringMCPBatch(t *testing.T) {
 	startTestBatch(t, m, "c1")
 	if !strings.Contains(m.render(), "Running tools") {
 		t.Error("footer should show the tool-batch working line")
+	}
+}
+
+func TestVerifierActivityShowsModelCycleAttemptAndElapsed(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "openai/gpt-oss-20b"
+	m.resize(180, 24)
+	m.cfg.UI.Animations = true
+	m.cfg.Agent.Verifier.MaxAttempts = 2
+	m.agentLoop.run = &agent.AgentRun{
+		Cycle:  3,
+		Limits: agent.Limits{MaxCycles: 8},
+	}
+	m.agentLoop.verifying = true
+	m.agentLoop.verifierAttempts = 0
+	heightBefore := m.viewport.Height()
+	m.beginVerifierActivity("google/gemma-4-e4b")
+	m.agentLoop.verifierStartedAt = time.Now().Add(-20 * time.Second)
+
+	if got := m.activityHeight(); got != 1 {
+		t.Fatalf("activity height = %d, want 1", got)
+	}
+	if got := m.viewport.Height(); got != heightBefore-1 {
+		t.Fatalf("viewport height = %d, want %d", got, heightBefore-1)
+	}
+	view := m.render()
+	for _, want := range []string{
+		"verifier", "google/gemma-4-e4b", "cycle 3/8", "attempt 1/2", "fresh context", "20s", "Verifying", "esc to interrupt",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("verifier activity missing %q", want)
+		}
+	}
+	if !strings.Contains(view, "openai/gpt-oss-20b") {
+		t.Error("persistent status bar should retain the executor model")
+	}
+
+	m.agentLoop.verifierAttempts = 1
+	if view := m.render(); !strings.Contains(view, "attempt 2/2") {
+		t.Errorf("retry activity missing attempt 2/2: %s", view)
+	}
+}
+
+func TestDeterministicVerificationHasNoModelActivity(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop.run = &agent.AgentRun{Cycle: 1, Limits: agent.Limits{MaxCycles: 8}}
+	m.agentLoop.verifying = true
+
+	if got := m.verifierActivityHeight(); got != 0 {
+		t.Fatalf("deterministic verifier activity height = %d, want 0", got)
+	}
+	if view := m.render(); strings.Contains(view, "verifier ·") {
+		t.Fatalf("deterministic verification implied a model request: %s", view)
 	}
 }
 

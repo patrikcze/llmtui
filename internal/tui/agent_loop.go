@@ -52,6 +52,11 @@ type agentLoopState struct {
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
+	// verifierModel and verifierStartedAt describe only a real semantic
+	// verifier request. Deterministic verification never sets them, so the UI
+	// cannot imply that a model is running when the controller decided locally.
+	verifierModel     string
+	verifierStartedAt time.Time
 	// verifierAttempts counts verifier-inference attempts made for the
 	// current cycle's verification (transport/format failures only —
 	// agentverify.Verify's own internal malformed-JSON repair is a separate,
@@ -191,6 +196,32 @@ func (m *Model) syncAgentDebug() {
 
 func (m *Model) agentVerifying() bool {
 	return m.agentLoop != nil && m.agentLoop.verifying
+}
+
+func (m *Model) effectiveVerifierModel() string {
+	model := strings.TrimSpace(m.cfg.Agent.Verifier.Model)
+	if model == "" {
+		return m.model
+	}
+	return model
+}
+
+func (m *Model) beginVerifierActivity(model string) {
+	if m.agentLoop == nil {
+		return
+	}
+	m.agentLoop.verifierModel = model
+	m.agentLoop.verifierStartedAt = time.Now()
+	m.relayout()
+}
+
+func (m *Model) clearVerifierActivity() {
+	if m.agentLoop == nil {
+		return
+	}
+	m.agentLoop.verifierModel = ""
+	m.agentLoop.verifierStartedAt = time.Time{}
+	m.relayout()
 }
 
 func (m *Model) agentNeedsUserInput() bool {
@@ -646,10 +677,8 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		Execution:         execution,
 		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
-	model := strings.TrimSpace(m.cfg.Agent.Verifier.Model)
-	if model == "" {
-		model = m.model
-	}
+	model := m.effectiveVerifierModel()
+	m.beginVerifierActivity(model)
 	maxTokens := m.cfg.Agent.Verifier.MaxTokens
 	timeout, _ := time.ParseDuration(m.cfg.Agent.Verifier.Timeout)
 	prov := m.prov
@@ -709,6 +738,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, nil
 	}
 	m.agentLoop.verifying = false
+	m.clearVerifierActivity()
 	if m.agentLoop.verifyCancel != nil {
 		m.agentLoop.verifyCancel()
 		m.agentLoop.verifyCancel = nil
@@ -845,6 +875,7 @@ func (m *Model) cancelVerifiedRun(reason string) {
 		m.agentLoop.verifyGen++
 		m.agentLoop.verifying = false
 	}
+	m.clearVerifierActivity()
 	if m.agentRunActive() {
 		m.agentLoop.run.Cancel(reason, time.Now())
 	}
