@@ -257,7 +257,7 @@ func normalizeGlobPattern(pattern string) (string, error) {
 	segments := strings.Split(pattern, "/")
 	for _, segment := range segments {
 		if segment == ".." {
-			return "", fmt.Errorf("glob pattern cannot contain ..")
+			return "", fmt.Errorf("glob pattern cannot contain parent-directory segments")
 		}
 		if segment == "**" {
 			continue

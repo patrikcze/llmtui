@@ -89,7 +89,8 @@ func TestExecutableRelativePaths_SymlinkResolution(t *testing.T) {
 	}
 
 	// Should be relative to the resolved path, not the link
-	if !filepath.HasPrefix(paths[0], filepath.Join(tmpDir, "real")) {
+	rel, err := filepath.Rel(filepath.Join(tmpDir, "real"), paths[0])
+	if err != nil || !filepath.IsLocal(rel) {
 		t.Errorf("Paths not relative to resolved symlink: %v", paths)
 	}
 }

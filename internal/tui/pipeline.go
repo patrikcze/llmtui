@@ -1398,11 +1398,11 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 	// the watchdog fires only when no token has arrived for that long, and
 	// handleStreamEvent resets it on every delta.
 	idle := app.RequestTimeout(m.cfg.Network)
-	ctx, gen, err := m.turnRuntime.beginStream(m.agentContext(), idle)
+	ctx, gen, err := m.beginStream(m.agentContext(), idle)
 	if err != nil {
 		m.thinking = false
 		m.errText = err.Error()
-		m.turnRuntime.complete(turnOutcomeExecutionFailure)
+		m.complete(turnOutcomeExecutionFailure)
 		m.failVerifiedRun(err)
 		m.endAgentRun()
 		m.refreshViewport()

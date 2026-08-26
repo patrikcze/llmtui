@@ -159,8 +159,8 @@ func TestVerifyFull_Success(t *testing.T) {
 	// Create test files with known content
 	testContent := []byte("test content for hashing")
 	testFiles := map[string]string{
-		"test1.txt": computeTestHash(testContent),
-		"test2.txt": computeTestHash(testContent),
+		"test1.txt": computeTestHash(t, testContent),
+		"test2.txt": computeTestHash(t, testContent),
 	}
 
 	for filename := range testFiles {
@@ -210,7 +210,7 @@ func TestVerifyQuick(t *testing.T) {
 	primaryLib := getPrimaryLibraryName()
 	testContent := []byte("primary library content")
 	testFiles := map[string]string{
-		primaryLib: computeTestHash(testContent),
+		primaryLib: computeTestHash(t, testContent),
 	}
 
 	path := filepath.Join(tmpDir, primaryLib)
@@ -241,7 +241,7 @@ func TestComputeFileSHA256(t *testing.T) {
 		t.Fatalf("computeFileSHA256() error = %v", err)
 	}
 
-	expected := computeTestHash(content)
+	expected := computeTestHash(t, content)
 	if hash != expected {
 		t.Errorf("computeFileSHA256() = %q, want %q", hash, expected)
 	}
@@ -272,12 +272,15 @@ func TestGetPrimaryLibraryName(t *testing.T) {
 }
 
 // computeTestHash is a helper that computes SHA256 for test content
-func computeTestHash(content []byte) string {
-	tmpDir, _ := os.MkdirTemp("", "hash-test")
-	defer os.RemoveAll(tmpDir)
-
-	path := filepath.Join(tmpDir, "temp")
-	os.WriteFile(path, content, 0644)
-	hash, _ := computeFileSHA256(path)
+func computeTestHash(t *testing.T, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "temp")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write hash fixture: %v", err)
+	}
+	hash, err := computeFileSHA256(path)
+	if err != nil {
+		t.Fatalf("hash fixture: %v", err)
+	}
 	return hash
 }

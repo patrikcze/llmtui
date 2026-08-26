@@ -194,33 +194,6 @@ func scoreExplanation(hit Hit) string {
 	return fmt.Sprintf("%s = %.3f", strings.Join(parts, ", "), hit.Score)
 }
 
-// filterByKind drops hits whose Item.Kind is not in kinds. An empty kinds
-// slice means no filtering.
-func filterByKind(hits []Hit, kinds []Kind) []Hit {
-	if len(kinds) == 0 {
-		return hits
-	}
-	allowed := make(map[Kind]struct{}, len(kinds))
-	for _, k := range kinds {
-		allowed[k] = struct{}{}
-	}
-	out := make([]Hit, 0, len(hits))
-	for _, h := range hits {
-		if _, ok := allowed[h.Item.Kind]; ok {
-			out = append(out, h)
-		}
-	}
-	return out
-}
-
-// dedupByContentHash keeps, for each non-empty ContentHash, only the
-// higher-ranked hit (per hitLess). Hits with an empty ContentHash are never
-// deduplicated against one another.
-func dedupByContentHash(hits []Hit) []Hit {
-	kept, _ := dedupByContentHashDetailed(hits)
-	return kept
-}
-
 func dedupByContentHashDetailed(hits []Hit) ([]Hit, []RejectedHit) {
 	kept := make([]Hit, 0, len(hits))
 	indexByHash := make(map[string]int, len(hits))

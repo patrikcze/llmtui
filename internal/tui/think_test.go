@@ -344,7 +344,7 @@ func TestReasoningDurationResetsBetweenTurns(t *testing.T) {
 	m.finishStream(&provider.Usage{}, false)
 
 	m.thinking = true
-	m.turnRuntime.state = turnModelStreaming
+	m.state = turnModelStreaming
 	m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
 		Type: provider.EventDelta, Delta: "second answer, no reasoning this time",
 	}, ok: true, gen: m.streamGen})

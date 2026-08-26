@@ -271,8 +271,8 @@ func TestTurnRuntimeOrdinaryChatCharacterization(t *testing.T) {
 
 	runStream(t, m, m.dispatch("hello", nil))
 
-	if m.turnRuntime.state != turnCompleted || m.turnRuntime.lastOutcome != turnOutcomeFinalAnswer {
-		t.Fatalf("ordinary chat terminal state = %s/%s", m.turnRuntime.state, m.turnRuntime.lastOutcome)
+	if m.state != turnCompleted || m.lastOutcome != turnOutcomeFinalAnswer {
+		t.Fatalf("ordinary chat terminal state = %s/%s", m.state, m.lastOutcome)
 	}
 	if m.busy() || m.stream != nil || m.streamCtx != nil || m.cancelStream != nil || m.idleWatchdog != nil {
 		t.Fatal("ordinary chat retained active execution state after its final answer")

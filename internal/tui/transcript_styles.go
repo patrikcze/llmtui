@@ -17,7 +17,7 @@ func (m *Model) renderPrompt(body string) string {
 	if width < 1 {
 		width = 1
 	}
-	return m.theme.PromptRail.Copy().Width(width).Render(body)
+	return m.theme.PromptRail.Width(width).Render(body)
 }
 
 // renderReasoning renders a captured reasoning block's header (and, when

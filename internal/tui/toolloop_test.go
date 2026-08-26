@@ -1279,7 +1279,7 @@ func TestBusy(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m.turnRuntime.state = c.state
+			m.state = c.state
 			if got := m.busy(); got != c.want {
 				t.Errorf("busy() = %v, want %v", got, c.want)
 			}

@@ -29,13 +29,13 @@ func createTestArchive(t *testing.T, files map[string]string) (string, int64, st
 	if err != nil {
 		t.Fatalf("create archive file: %v", err)
 	}
-	defer f.Close()
+	t.Cleanup(func() { _ = f.Close() })
 
 	gzw := gzip.NewWriter(f)
-	defer gzw.Close()
+	t.Cleanup(func() { _ = gzw.Close() })
 
 	tw := tar.NewWriter(gzw)
-	defer tw.Close()
+	t.Cleanup(func() { _ = tw.Close() })
 
 	// Write files to archive
 	for filename, content := range files {
@@ -54,9 +54,15 @@ func createTestArchive(t *testing.T, files map[string]string) (string, int64, st
 	}
 
 	// Close writers to flush
-	tw.Close()
-	gzw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
 
 	// Compute size and SHA256
 	data, err := os.ReadFile(archivePath)
@@ -122,7 +128,9 @@ func TestInstall_Success(t *testing.T) {
 			t.Fatalf("read archive: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -212,9 +220,15 @@ func TestInstall_ChecksumMismatch(t *testing.T) {
 	wrongSHA256 := strings.Repeat("0", 64)
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -318,13 +332,13 @@ func TestInstall_TraversalRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create archive: %v", err)
 	}
-	defer f.Close()
+	t.Cleanup(func() { _ = f.Close() })
 
 	gzw := gzip.NewWriter(f)
-	defer gzw.Close()
+	t.Cleanup(func() { _ = gzw.Close() })
 
 	tw := tar.NewWriter(gzw)
-	defer tw.Close()
+	t.Cleanup(func() { _ = tw.Close() })
 
 	// Try to write a file with .. in the path
 	evilContent := "evil content"
@@ -335,20 +349,33 @@ func TestInstall_TraversalRejection(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write evil header: %v", err)
 	}
-	io.WriteString(tw, evilContent)
+	if _, err := io.WriteString(tw, evilContent); err != nil {
+		t.Fatalf("write evil content: %v", err)
+	}
 
-	tw.Close()
-	gzw.Close()
-	f.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
 
 	// Read archive for server
-	data, _ := os.ReadFile(archivePath)
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read evil archive: %v", err)
+	}
 	h := sha256.Sum256(data)
 	archiveSHA256 := hex.EncodeToString(h[:])
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write evil archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -498,9 +525,15 @@ func TestInstall_AlreadyInstalled(t *testing.T) {
 	downloadCount := 0
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		downloadCount++
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -619,9 +652,15 @@ func TestInstall_ConcurrentInstall(t *testing.T) {
 		mu.Lock()
 		downloadCount++
 		mu.Unlock()
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -701,9 +740,15 @@ func TestUninstall_Success(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -765,9 +810,15 @@ func TestUninstall_RefusesExtraFiles(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -878,9 +929,15 @@ func TestList(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -953,9 +1010,15 @@ func TestVerify(t *testing.T) {
 	archivePath, archiveSize, archiveSHA256 := createTestArchive(t, files)
 
 	ts := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := os.ReadFile(archivePath)
+		data, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Errorf("read archive: %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write archive response: %v", err)
+		}
 	}))
 	defer ts.Close()
 

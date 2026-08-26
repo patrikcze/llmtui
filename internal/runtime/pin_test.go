@@ -168,7 +168,7 @@ func TestPlatformPinHashesFormat(t *testing.T) {
 			}
 			// Quick hex validation (all chars should be 0-9a-f)
 			for _, c := range hash {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 					t.Errorf("Platform %q, file %q: SHA256 contains non-hex char %q", platform, filename, c)
 					break
 				}
