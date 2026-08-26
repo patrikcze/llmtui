@@ -56,7 +56,7 @@ func (m *Model) pauseForAskUser(call tools.Call) tea.Cmd {
 	m.overlayOpen = false
 	m.keysMode = false
 	m.pendingAsk = &pendingAskUser{call: call}
-	m.turnRuntime.waitForUserInput()
+	m.waitForUserInput()
 	m.notice = "assistant is waiting for your answer"
 	if m.agentRunActive() {
 		if err := m.agentLoop.run.WaitForUserInput(call.Question, time.Now()); err != nil {
@@ -108,7 +108,7 @@ func (m *Model) answerAskUser(answer string) tea.Cmd {
 	}
 	m.pendingAsk = nil
 	m.closeOverlay()
-	m.turnRuntime.continueAfterUserInput()
+	m.continueAfterUserInput()
 	m.errText = ""
 	m.notice = "answer received; continuing the original task"
 	payload, _ := json.Marshal(map[string]any{
@@ -136,6 +136,6 @@ func (m *Model) completePendingAskForShutdown() {
 	}
 	result := tools.Result{Call: m.pendingAsk.call, Err: errors.New("application closed before the human answered; this incomplete interaction must not be replayed")}
 	m.pendingAsk = nil
-	m.turnRuntime.continueAfterUserInput()
+	m.continueAfterUserInput()
 	m.appendTerminalToolResults([]tools.Result{result})
 }

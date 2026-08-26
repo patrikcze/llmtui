@@ -111,7 +111,7 @@ func TestNewHumanTurnClearsToolDisclosure(t *testing.T) {
 	if _, ok := specByName(m.activeToolSpecs(), name); !ok {
 		t.Fatal("setup did not disclose tool")
 	}
-	m.turnRuntime.complete(turnOutcomeFinalAnswer)
+	m.complete(turnOutcomeFinalAnswer)
 	m.input.SetValue("start an unrelated task")
 	_ = m.send()
 	if _, ok := specByName(m.activeToolSpecs(), name); ok {

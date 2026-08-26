@@ -130,11 +130,12 @@ func Parse(reply string) []Call {
 		for j := i + 1; j < len(lines); j++ {
 			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
 				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
-				if call.Tool == ToolAskUser {
+				switch call.Tool {
+				case ToolAskUser:
 					decodeAskUserBody(&call)
-				} else if call.Tool == ToolLocalContext {
+				case ToolLocalContext:
 					decodeLocalContextBody(&call)
-				} else if call.Tool == ToolSearch {
+				case ToolSearch:
 					decodeToolSearchBody(&call)
 				}
 				if server, tool, ok := SplitMCPToolName(call.Tool); ok {

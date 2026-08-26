@@ -36,8 +36,8 @@ func TestAskUserNativeFreeTextPreservesToolCallID(t *testing.T) {
 	if cmd := m.startToolBatch([]tools.Call{call}); cmd != nil {
 		t.Fatal("ask_user should pause without starting background work")
 	}
-	if m.pendingAsk == nil || m.turnRuntime.state != turnWaitingUserInput || m.overlayOpen {
-		t.Fatalf("pending ask state = %+v, turn=%s overlay=%v", m.pendingAsk, m.turnRuntime.state, m.overlayOpen)
+	if m.pendingAsk == nil || m.state != turnWaitingUserInput || m.overlayOpen {
+		t.Fatalf("pending ask state = %+v, turn=%s overlay=%v", m.pendingAsk, m.state, m.overlayOpen)
 	}
 	m.input.SetValue("staging")
 	if cmd := m.send(); cmd == nil {

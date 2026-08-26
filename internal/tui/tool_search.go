@@ -140,7 +140,7 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		Truncated: len(allMatches) > len(matches) || len(allMatches) == tools.MaxToolSearchResults,
 	})
 	result := tools.Result{Call: call, Output: string(payload)}
-	m.turnRuntime.advanceToolRound()
+	m.advanceToolRound()
 	m.toolOK++
 	m.recordAgentToolResultsCount([]tools.Result{result}, false, 1)
 	if m.cfg.Tools.NoProgress.Enabled {
