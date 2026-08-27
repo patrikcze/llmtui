@@ -77,6 +77,45 @@ func TestLargeCatalogUsesProgressiveDisclosure(t *testing.T) {
 	}
 }
 
+func TestLargeCatalogPromotesCompactMCPDirectoryWithoutSchemas(t *testing.T) {
+	m := configureDiscoveryModel(t, 22, nil)
+	base := m.compositionBase("list Jira tools", nil, false)
+	prompt := base.input.SystemPrompt
+
+	for _, want := range []string{
+		"Compact connected MCP directory (22 tools",
+		`"jira" (22 tools)`,
+		"create_issue",
+		"tool_21",
+		"Never pass an MCP name to run_command",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("compact directory missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, unwanted := range []string{`"field_0"`, "JSON input schema", "Inspect Jira resource"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("compact directory promoted schema/description %q:\n%s", unwanted, prompt)
+		}
+	}
+	for _, spec := range m.activeToolSpecs() {
+		if _, _, dynamic := tools.SplitMCPToolName(spec.Name); dynamic {
+			t.Fatalf("compact directory made hidden schema callable: %s", spec.Name)
+		}
+	}
+}
+
+func TestCompactCatalogIdentifierIsQuotedAndBounded(t *testing.T) {
+	identifier := "safe\n" + strings.Repeat("x", maxCompactIdentifierRunes+20)
+	got := compactCatalogIdentifier(identifier)
+	if strings.ContainsRune(got, '\n') || !strings.Contains(got, `\n`) {
+		t.Fatalf("identifier line break was not escaped: %q", got)
+	}
+	if len([]rune(got)) > maxCompactIdentifierRunes+5 || !strings.Contains(got, "...") {
+		t.Fatalf("identifier was not bounded: %q", got)
+	}
+}
+
 func TestToolSearchDisclosesFullSchemaOnNextInference(t *testing.T) {
 	m := configureDiscoveryModel(t, 10, nil)
 	name := "mcp__jira__create_issue"
@@ -214,6 +253,32 @@ func TestToolSearchResultLimitUsesConfigurationCap(t *testing.T) {
 	_ = m.startToolBatch([]tools.Call{call})
 	if len(m.disclosedToolOrder) != 2 {
 		t.Fatalf("disclosed tools = %v, want config cap 2", m.disclosedToolOrder)
+	}
+}
+
+func TestToolSearchResultLabelsPartialCatalogAndReportsTotal(t *testing.T) {
+	m := configureDiscoveryModel(t, 22, nil)
+	call := tools.CallsFromNative([]provider.ToolCall{{
+		ID: "search-total", Name: tools.ToolSearch, Arguments: `{"query":"jira","max_results":5}`,
+	}})[0]
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleAssistant,
+		ToolCalls: []provider.ToolCall{{
+			ID: call.ID, Name: call.Tool,
+		}},
+	})
+	_ = m.startToolBatch([]tools.Call{call})
+
+	last := m.session.Messages[len(m.session.Messages)-1]
+	var result toolSearchResult
+	if err := json.Unmarshal([]byte(last.Content), &result); err != nil {
+		t.Fatalf("decode tool search result: %v\n%s", err, last.Content)
+	}
+	if len(result.Matches) != 5 || result.TotalMatches != 22 || !result.Truncated {
+		t.Fatalf("result = %+v, want five of 22 marked truncated", result)
+	}
+	if !strings.Contains(result.Hint, "Partial shortlist") || !strings.Contains(result.Hint, "complete catalog") {
+		t.Fatalf("partial-result hint = %q", result.Hint)
 	}
 }
 

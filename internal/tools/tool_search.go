@@ -73,13 +73,22 @@ func ValidateToolSearchCall(call *Call) error {
 	return nil
 }
 
-// SearchTools deterministically ranks eligible hidden tools without network,
+// SearchTools deterministically ranks eligible tools without network,
 // embeddings, or another model call.
 func SearchTools(query string, maxResults int, candidates []ToolSearchCandidate) []ToolSearchMatch {
+	matches, _ := SearchToolsWithTotal(query, maxResults, candidates)
+	return matches
+}
+
+// SearchToolsWithTotal returns the bounded ranked matches and the number of
+// candidates that matched before the output limit was applied. The count lets
+// callers distinguish a shortlist from a complete catalog without sending
+// every tool description or schema to the model.
+func SearchToolsWithTotal(query string, maxResults int, candidates []ToolSearchCandidate) ([]ToolSearchMatch, int) {
 	query = strings.TrimSpace(strings.ToLower(query))
 	queryTokens := toolSearchTokens(query)
 	if query == "" || len(queryTokens) == 0 || maxResults <= 0 {
-		return nil
+		return nil, 0
 	}
 	if maxResults > MaxToolSearchResults {
 		maxResults = MaxToolSearchResults
@@ -101,10 +110,11 @@ func SearchTools(query string, maxResults int, candidates []ToolSearchCandidate)
 		}
 		return matches[i].Name < matches[j].Name
 	})
+	total := len(matches)
 	if len(matches) > maxResults {
 		matches = matches[:maxResults]
 	}
-	return matches
+	return matches, total
 }
 
 func scoreToolCandidate(query string, queryTokens []string, candidate ToolSearchCandidate) int {

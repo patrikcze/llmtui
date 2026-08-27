@@ -112,12 +112,12 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolSearch,
-			Description: "Search currently available but not yet exposed tools by capability. Use this when none of the visible tools can perform the required action. Discovery grants no permission. Call it alone.",
+			Description: "Search connected MCP capabilities and disclose matching schemas. Use it before unrelated network or shell fallbacks when the compact MCP directory suggests a relevant tool; never pass an MCP tool name to run_command. Results can be a partial shortlist: check total_matches and truncated. Use max_results 1 when the directory gives you the tool name. Discovery grants no permission. Call it alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"query": {"type": "string", "description": "Short capability description, for example create Jira issue."},
-					"max_results": {"type": "integer", "minimum": 1, "maximum": 8}
+					"query": {"type": "string", "description": "Capability description or tool name from the compact MCP directory, for example jira_search_issues."},
+					"max_results": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Use 1 for a known tool name to keep prompt context small."}
 				},
 				"required": ["query"],
 				"additionalProperties": false
@@ -410,8 +410,10 @@ func LimitResults(calls []Call, max int) []Result {
 // withWeb adds the web-tool rules when the user has turned them on.
 func NativeInstructions(root string, withWeb bool) string {
 	webRules := ""
+	discoveryRoute := "before run_command"
 	if withWeb {
 		webRules = "\n\n" + webInstructions
+		discoveryRoute = "before web_search or run_command"
 	}
 	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using the provided tools.
 Rules:
@@ -420,6 +422,8 @@ Rules:
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
-- tool_search discovers capabilities but grants no permission. Use it when visible tools cannot perform the action.
-- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
+- Connected MCP schemas may be hidden to save context. The compact MCP directory is authoritative for inventory; use tool_search to make a matching tool callable.
+- For an MCP/external-service action whose schema is not already provided, use tool_search %s. Never pass an MCP tool name to run_command. A truncated search result is not the complete catalog.
+- When the compact directory gives you a likely tool name, search that name with max_results 1 to avoid loading unrelated schemas. Discovery grants no permission.
+- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, discoveryRoute, webRules))
 }

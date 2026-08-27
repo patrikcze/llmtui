@@ -266,7 +266,9 @@ ledger; normal tool-round and agent-run budgets still bound polling.
 Progressively discloses large connected MCP catalogs to reduce schema overhead
 for small local models. The full eligible catalog remains controller state;
 only the visible snapshot is sent to the provider and mirrored by the HTTP tool
-registry. Discovery is capability lookup, not authorization.
+registry. A bounded names-only directory remains in the system prompt so the
+model knows which connected services and capabilities exist without receiving
+every schema. Discovery is capability lookup, not authorization.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -277,7 +279,8 @@ registry. Discovery is capability lookup, not authorization.
 Disclosures are bounded to the current human task. Agent retries within that
 task may retain them; a new human request clears them. Disabled, disconnected,
 or unregistered tools are never searchable, and disconnecting an already
-disclosed server removes its schemas immediately.
+disclosed server removes its schemas immediately. Search results include
+`total_matches` and explicitly identify a bounded shortlist as truncated.
 
 ### `tools.web`
 

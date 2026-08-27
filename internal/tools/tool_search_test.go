@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,5 +49,21 @@ func TestToolSearchRankingAndDeterministicLimit(t *testing.T) {
 	source := SearchTools("azure", 8, candidates)
 	if len(source) == 0 || source[0].Name != "mcp__azure__list_issues" {
 		t.Fatalf("source match = %+v", source)
+	}
+}
+
+func TestToolSearchReportsTotalBeforeLimit(t *testing.T) {
+	candidates := make([]ToolSearchCandidate, 0, 22)
+	for index := range 22 {
+		candidates = append(candidates, ToolSearchCandidate{
+			Name:        fmt.Sprintf("mcp__jira__tool_%02d", index),
+			Description: "Inspect a Jira resource",
+			Source:      "mcp:jira",
+		})
+	}
+
+	matches, total := SearchToolsWithTotal("jira", 5, candidates)
+	if len(matches) != 5 || total != 22 {
+		t.Fatalf("matches=%d total=%d, want 5 and 22", len(matches), total)
 	}
 }

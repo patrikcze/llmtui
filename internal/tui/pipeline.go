@@ -375,6 +375,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			}
 			instructions += m.fencedDynamicToolInstructions()
 		}
+		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
 	templatePrompt := ""

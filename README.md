@@ -380,8 +380,9 @@ local-assistant tools are also available:
   requests, omits process arguments and identity/environment data, filters
   secret files, and asks before reading text from the clipboard.
 - `tool_search` performs deterministic local matching over currently eligible
-  hidden tools. It uses no model, embeddings, or network request and grants no
-  permission.
+  MCP tools. It uses no model, embeddings, or network request, reports the
+  complete match count even when its returned shortlist is bounded, and grants
+  no permission.
 
 These tools work in ordinary `/agent off` chat and in `/agent on`. With
 `native: auto` (the default)
@@ -434,10 +435,13 @@ fallback needs an instruction-tuned model (≥7B recommended).
 
 When the connected catalog stays at or below `tools.discovery.threshold`, all
 eligible tools remain visible as before. Above the threshold, core tools stay
-visible while MCP schemas are disclosed by `tool_search` for the current human
-task, up to a bounded result count. The next inference receives each selected
-full schema. A new human task clears disclosures; disconnecting a server removes
-its disclosed tools immediately. Hidden or guessed MCP names cannot execute.
+visible alongside a compact MCP directory containing server names, tool counts,
+and bounded tool names only. This keeps capability awareness in the prompt
+without carrying every description and JSON schema. `tool_search` discloses
+matching full schemas for the current human task, up to a bounded result count;
+the next inference receives each selected schema. A new human task clears full
+schema disclosures but retains the compact live directory. Disconnecting a
+server removes it immediately. Hidden or guessed MCP names cannot execute.
 
 ## Web tools
 

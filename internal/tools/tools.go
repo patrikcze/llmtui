@@ -937,9 +937,11 @@ func orWorkspace(path string) string {
 // withWeb adds the web tools when the user has turned them on.
 func Instructions(root string, withWeb bool) string {
 	webTools, webRules := "", ""
+	discoveryRoute := "before run_command"
 	if withWeb {
 		webTools = webFencedForms + "\n"
 		webRules = "\n\n" + webInstructions
+		discoveryRoute = "before web_search or run_command"
 	}
 	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using tools.
 To use a tool, emit a fenced code block whose info string is "tool <name> [path]". Available tools:
@@ -971,10 +973,12 @@ Rules:
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
-- tool_search discovers capabilities but grants no permission. Use it when visible tools cannot perform the action.
+- Connected MCP schemas may be hidden to save context. The compact MCP directory is authoritative for inventory; use tool_search to make a matching tool callable.
+- For an MCP/external-service action whose schema is not already provided, use tool_search %s. Never pass an MCP tool name to run_command. A truncated search result is not the complete catalog.
+- When the compact directory gives you a likely tool name, search that name with max_results 1 to avoid loading unrelated schemas. Discovery grants no permission.
 - After you emit tool blocks, stop and wait: the results come back in the next user message, marked "%s".
 - Use one block per action. If a body contains triple backticks, open the tool block with four.
-- When the task is complete, reply normally without any tool blocks.%s`, root, webTools, ResultsPrefix, webRules))
+- When the task is complete, reply normally without any tool blocks.%s`, root, webTools, discoveryRoute, ResultsPrefix, webRules))
 }
 
 // ErrDenied is the result error for calls the user rejected.

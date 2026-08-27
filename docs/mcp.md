@@ -76,8 +76,10 @@ Once a server is connected (`/mcp connect <server>`), its advertised tools
 become eligible whenever `/tools on` — the same switch native workspace tools
 use. There is no separate toggle. Small catalogs are offered directly. When the
 total eligible catalog exceeds `tools.discovery.threshold`, core tools remain
-visible and `tool_search` discloses bounded matching MCP schemas for the current
-human task.
+visible with a compact names-only MCP directory in prompt context.
+`tool_search` discloses bounded matching MCP schemas for the current human task.
+Use the directory for inventory and search a likely exact name with
+`max_results: 1` to avoid loading unrelated schemas.
 
 Each tool is exposed to the model as `mcp__<server>__<tool>` (e.g.
 `mcp__jiraWorklog__session_start`), so tools from different servers can
