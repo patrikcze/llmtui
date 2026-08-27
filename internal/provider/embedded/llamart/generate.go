@@ -131,10 +131,6 @@ func templateRenderError(nativeErr, jinjaErr error) error {
 	)
 }
 
-func jinjaTemplateData(messages []provider.Message, tools []provider.ToolSpec, reasoning string) (map[string]any, error) {
-	return jinjaTemplateDataForProtocol(messages, tools, reasoning, provider.ModelProtocol{})
-}
-
 func jinjaTemplateDataForProtocol(messages []provider.Message, tools []provider.ToolSpec, reasoning string, protocol provider.ModelProtocol) (map[string]any, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("chat request has no messages")
@@ -478,10 +474,6 @@ func (r *Runtime) newSampler(req embedded.GenRequest) (llama.Sampler, error) {
 		return fail(err)
 	}
 	return chain, nil
-}
-
-func tokenPiece(vocab llama.Vocab, token llama.Token) ([]byte, error) {
-	return tokenPieceSpecial(vocab, token, false)
 }
 
 func tokenPieceSpecial(vocab llama.Vocab, token llama.Token, special bool) ([]byte, error) {
