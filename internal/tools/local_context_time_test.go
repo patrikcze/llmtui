@@ -57,9 +57,10 @@ func TestLocalContextTimeDeterministicWithFixedClock(t *testing.T) {
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	// 2026-08-27 23:42:15 CEST (summer time, +02:00).
+	// 2026-08-27 23:42:15 CEST (summer time, +02:00). Pin the reported zone
+	// so the assertions hold regardless of the CI runner's system zone.
 	at := time.Date(2026, time.August, 27, 23, 42, 15, 0, prague)
-	c := fixedClockCollector(t, at)
+	c := fixedClockCollector(t, at, WithTimezone("Europe/Prague"))
 
 	first := collectTime(t, c)
 	second := collectTime(t, c)
