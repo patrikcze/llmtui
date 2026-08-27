@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	LocalContextTime        = "time"
 	LocalContextSystem      = "system"
 	LocalContextWorkspace   = "workspace"
 	LocalContextProcesses   = "processes"
@@ -61,9 +62,9 @@ func ValidateLocalContextCall(call *Call) error {
 	}
 	call.ContextKind = strings.ToLower(strings.TrimSpace(call.ContextKind))
 	switch call.ContextKind {
-	case LocalContextSystem, LocalContextWorkspace, LocalContextProcesses, LocalContextClipboard, LocalContextRecentFiles:
+	case LocalContextTime, LocalContextSystem, LocalContextWorkspace, LocalContextProcesses, LocalContextClipboard, LocalContextRecentFiles:
 	default:
-		return fmt.Errorf("local_context kind must be one of system, workspace, processes, clipboard, recent_files")
+		return fmt.Errorf("local_context kind must be one of time, system, workspace, processes, clipboard, recent_files")
 	}
 	if call.Max == 0 {
 		call.Max = DefaultLocalContextLimit
@@ -82,11 +83,48 @@ type LocalContextCollector interface {
 type defaultLocalContextCollector struct {
 	root          string
 	readClipboard func(context.Context, int) (string, bool, error)
+	// now is the injectable clock. Production leaves it nil and reads the
+	// wall clock lazily through collectorNow; tests set a fixed function so
+	// kind=time output is deterministic.
+	now func() time.Time
+	// tzOverride is the configured IANA timezone name (context.timezone).
+	// Empty means "use the system-local zone". An invalid value is reported
+	// as a tool error rather than silently falling back to UTC.
+	tzOverride string
+}
+
+// LocalContextOption customizes the production collector without widening the
+// NewRunner call surface. Existing callers keep passing just a root.
+type LocalContextOption func(*defaultLocalContextCollector)
+
+// WithClock injects a deterministic clock. Used by tests.
+func WithClock(now func() time.Time) LocalContextOption {
+	return func(c *defaultLocalContextCollector) { c.now = now }
+}
+
+// WithTimezone sets the configured IANA timezone name for kind=time. An empty
+// string keeps the system-local zone.
+func WithTimezone(name string) LocalContextOption {
+	return func(c *defaultLocalContextCollector) { c.tzOverride = strings.TrimSpace(name) }
 }
 
 // NewLocalContextCollector returns the production local-only collector.
-func NewLocalContextCollector(root string) LocalContextCollector {
-	return &defaultLocalContextCollector{root: root, readClipboard: clipboard.ReadText}
+func NewLocalContextCollector(root string, opts ...LocalContextOption) LocalContextCollector {
+	c := &defaultLocalContextCollector{root: root, readClipboard: clipboard.ReadText}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// collectorNow reads the injected clock, falling back to the wall clock so
+// manually constructed collectors (including existing tests) stay safe when
+// the field is nil.
+func (c *defaultLocalContextCollector) collectorNow() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) localContext(ctx context.Context, call Call) (string, error) {
@@ -113,6 +151,8 @@ func (c *defaultLocalContextCollector) Collect(ctx context.Context, kind string,
 	var value any
 	var err error
 	switch kind {
+	case LocalContextTime:
+		value, err = c.timeInfo()
 	case LocalContextSystem:
 		value = c.system(ctx)
 	case LocalContextWorkspace:
@@ -134,6 +174,108 @@ func (c *defaultLocalContextCollector) Collect(ctx context.Context, kind string,
 		return nil, fmt.Errorf("encode local context: %w", err)
 	}
 	return data, nil
+}
+
+// timeContext is the bounded authoritative-time result for kind=time. It
+// carries enough to resolve "today", "tomorrow", weekdays, relative dates,
+// and local-vs-UTC without the model guessing from training knowledge.
+type timeContext struct {
+	Kind                 string `json:"kind"`
+	CapturedAt           string `json:"captured_at"` // RFC 3339, local zone
+	Date                 string `json:"date"`        // YYYY-MM-DD, local
+	Time                 string `json:"time"`        // HH:MM:SS, local
+	Weekday              string `json:"weekday"`
+	Timezone             string `json:"timezone,omitempty"` // IANA name when reliably known
+	TimezoneSource       string `json:"timezone_source"`    // configured | iana | system
+	TimezoneAbbreviation string `json:"timezone_abbreviation,omitempty"`
+	UTCOffset            string `json:"utc_offset"` // ±HH:MM
+	UTCTime              string `json:"utc_time"`   // RFC 3339, Z
+	UnixSeconds          int64  `json:"unix_seconds"`
+}
+
+// timeInfo captures the current local and UTC time. It never makes a network
+// request, never shells out, and never guesses a location.
+func (c *defaultLocalContextCollector) timeInfo() (timeContext, error) {
+	loc, source, ianaName, err := c.timeLocation()
+	if err != nil {
+		return timeContext{}, err
+	}
+	nowLocal := c.collectorNow().In(loc)
+	abbr, offsetSeconds := nowLocal.Zone()
+	result := timeContext{
+		Kind:                 LocalContextTime,
+		CapturedAt:           nowLocal.Format(time.RFC3339),
+		Date:                 nowLocal.Format("2006-01-02"),
+		Time:                 nowLocal.Format("15:04:05"),
+		Weekday:              nowLocal.Weekday().String(),
+		Timezone:             ianaName,
+		TimezoneSource:       source,
+		TimezoneAbbreviation: strings.TrimSpace(abbr),
+		UTCOffset:            formatUTCOffset(offsetSeconds),
+		UTCTime:              nowLocal.UTC().Format(time.RFC3339),
+		UnixSeconds:          nowLocal.Unix(),
+	}
+	// A purely numeric abbreviation (e.g. "+02") repeats the offset and is
+	// not useful to the model; drop it so the field stays meaningful.
+	if result.TimezoneAbbreviation != "" && strings.ContainsAny(result.TimezoneAbbreviation, "+-0123456789") &&
+		!strings.ContainsAny(result.TimezoneAbbreviation, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") {
+		result.TimezoneAbbreviation = ""
+	}
+	return result, nil
+}
+
+// timeLocation resolves the zone kind=time reports in. A configured
+// context.timezone wins; otherwise the system-local zone is used and its
+// IANA name is filled in only when it can be determined reliably.
+func (c *defaultLocalContextCollector) timeLocation() (loc *time.Location, source, ianaName string, err error) {
+	if c.tzOverride != "" {
+		loc, err = time.LoadLocation(c.tzOverride)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("configured context.timezone %q is not a valid IANA name: %w", c.tzOverride, err)
+		}
+		return loc, "configured", c.tzOverride, nil
+	}
+	loc = time.Local
+	if name := systemIANAZoneName(); name != "" {
+		return loc, "iana", name, nil
+	}
+	return loc, "system", "", nil
+}
+
+// formatUTCOffset renders a zone offset in seconds as ±HH:MM.
+func formatUTCOffset(offsetSeconds int) string {
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	return fmt.Sprintf("%s%02d:%02d", sign, offsetSeconds/3600, (offsetSeconds%3600)/60)
+}
+
+// systemIANAZoneName returns the system's IANA timezone name when it can be
+// determined without shelling out, otherwise "". Order: the TZ environment
+// variable, then the /etc/localtime symlink target (Linux and macOS).
+func systemIANAZoneName() string {
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" && tz != "Local" {
+		if _, err := time.LoadLocation(tz); err == nil {
+			return tz
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	target, err := os.Readlink("/etc/localtime")
+	if err != nil {
+		return ""
+	}
+	target = filepath.ToSlash(target)
+	if idx := strings.LastIndex(target, "/zoneinfo/"); idx >= 0 {
+		name := target[idx+len("/zoneinfo/"):]
+		if _, err := time.LoadLocation(name); err == nil {
+			return name
+		}
+	}
+	return ""
 }
 
 type systemContext struct {
