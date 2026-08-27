@@ -416,6 +416,11 @@ func (m *Model) rebuildFromConfig() {
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
+		if tz := strings.TrimSpace(cfg.Context.Timezone); tz != "" {
+			// An unloadable name is not silently downgraded here: the collector
+			// returns a clear error for kind=time, and `llmtui doctor` flags it.
+			m.toolRunner.LocalContext = tools.NewLocalContextCollector(wd, tools.WithTimezone(tz))
+		}
 		g := cfg.Tools.Guardrails
 		m.toolRunner.Guardrails = tools.GuardrailPolicy{
 			BlockGitDirWrites:             g.BlockGitDirWrites,
