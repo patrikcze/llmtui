@@ -99,11 +99,11 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolLocalContext,
-			Description: "Read bounded information about the local computer or workspace. Use it instead of inventing shell commands for system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
+			Description: "Read bounded information about the local computer or workspace. Use kind=time whenever the request depends on the current date, time, timezone, weekday, or relative dates such as today, tomorrow, yesterday, or next Monday; never guess the current date from training knowledge. Use this tool instead of inventing shell commands for time, system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"kind": {"type": "string", "enum": ["system", "workspace", "processes", "clipboard", "recent_files"]},
+					"kind": {"type": "string", "enum": ["time", "system", "workspace", "processes", "clipboard", "recent_files"]},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Optional result limit for processes or recent_files; defaults to 10."}
 				},
 				"required": ["kind"],

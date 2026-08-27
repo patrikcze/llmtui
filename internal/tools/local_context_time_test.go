@@ -220,6 +220,37 @@ func TestLocalContextTimeDoesNotRequireApproval(t *testing.T) {
 	}
 }
 
+func TestLocalContextNativeSchemaCoversTime(t *testing.T) {
+	var spec provider.ToolSpec
+	for _, s := range Specs() {
+		if s.Name == ToolLocalContext {
+			spec = s
+		}
+	}
+	if spec.Name == "" {
+		t.Fatal("local_context native spec not found")
+	}
+	schema := string(spec.Parameters)
+	for _, want := range []string{`"time"`, `"system"`, `"workspace"`, `"processes"`, `"clipboard"`, `"recent_files"`, `"additionalProperties": false`} {
+		if !strings.Contains(schema, want) {
+			t.Fatalf("native schema missing %s: %s", want, schema)
+		}
+	}
+	desc := strings.ToLower(spec.Description)
+	for _, want := range []string{"kind=time", "tomorrow", "next monday", "never guess", "clipboard reads require human approval"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("native description missing %q: %s", want, spec.Description)
+		}
+	}
+}
+
+func TestLocalContextFencedInstructionsCoverTime(t *testing.T) {
+	instr := strings.ToLower(Instructions("/tmp/example", false))
+	if !strings.Contains(instr, "kind=time") || !strings.Contains(instr, "recent_files") {
+		t.Fatalf("fenced instructions missing time guidance: %s", instr)
+	}
+}
+
 func TestLocalContextTimeSystemZoneIsHonest(t *testing.T) {
 	// No configured override: the source must be one of the honest markers
 	// and, when no IANA name is resolved, the field is omitted rather than

@@ -953,7 +953,7 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - write_file <path> — create or overwrite a file with the block's body
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
-- local_context — read bounded local system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind and optional limit
+- local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval
 - tool_search — search currently available but hidden tools; the block body is one JSON object with query and optional max_results
 %s
 Example — save a script, then a read-only command:
