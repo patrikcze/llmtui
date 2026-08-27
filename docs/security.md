@@ -154,7 +154,23 @@ and an explicit category selection; the picker defaults to skip.
     results are capped. Recent files stay under the workspace, skip symlinks
     and likely secrets, and return metadata rather than contents. Clipboard
     text is capped, labeled untrusted, and always asks before it enters model
-    context; it is not promoted to memory automatically.
+    context; it is not promoted to memory automatically. `kind=time` reads a
+    local clock only — it never geolocates from an IP, never guesses a place
+    from the zone, and never shells out to `date`/PowerShell/`timedatectl`;
+    the zone name comes from `TZ` or the `/etc/localtime` symlink, and an
+    invalid `context.timezone` is a clear error rather than a silent UTC
+    fallback. `time` is read-only and non-sensitive, so it is not
+    approval-gated.
+  - **Volatile observations are not durable memory** — the deterministic
+    summarizer reduces every `local_context` result to a provenance marker.
+    An old `time`, `processes`, `workspace` (branch / dirty / file counts),
+    or `recent_files` snapshot is never carried forward as the current
+    state, and clipboard text is never written into a conversation summary,
+    episodic memory, project memory, or logs. Summarized tool output is
+    marked untrusted evidence so a line inside a tool result cannot become a
+    system instruction. `Message.Reasoning` (raw chain-of-thought) is never
+    summarized, and a leaked leading `<think>` / Harmony analysis block in
+    visible content is stripped before summarization.
   - **Discovery is not permission** — `tool_search` performs deterministic
     local name/description/source matching only. It uses no LLM, embeddings,
     network, or telemetry. It searches only enabled tools from connected

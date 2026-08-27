@@ -40,12 +40,52 @@ breakdown.
 
 ## The summary
 
-Built by a **heuristic summarizer** (no extra LLM call): it keeps lead
-sentences plus technically important lines — errors, file names, commands,
-decisions, code. The summary enters the prompt clearly marked as
-"Summary of earlier conversation (not verbatim)" and is capped at
-`context.summary_max_tokens`. Inspect it with `/context summary`,
+Built by a **heuristic summarizer** (no extra LLM call, deterministic): it
+keeps lead sentences plus technically important lines — errors and failures,
+explicit decisions and constraints, open work, command/test outcomes and exit
+status, exact file paths, files created or modified, and code. Lines are
+copied as written, so a recommendation is never rewritten into a decision and
+a proposed command is never recorded as executed. The summary enters the
+prompt clearly marked as "Summary of earlier conversation (not verbatim)" and
+is capped at `context.summary_max_tokens`. Inspect it with `/context summary`,
 rebuild with `/context rebuild`. Automatic summaries are rebuilt from the
 current older-message partition and replace the previous automatic summary;
 retries and tool-loop continuations therefore cannot append the same history
 again and grow the prompt repeatedly.
+
+### Volatile tool output is not durable
+
+`local_context` results are runtime observations, not facts. The summarizer
+reduces each one to a provenance marker and drops the payload:
+
+- `kind=time` — the old timestamp is never kept as the current time; the
+  marker tells the model to call `local_context(kind="time")` again.
+- `kind=system` / `workspace` / `processes` / `recent_files` — kept only as a
+  "point-in-time snapshot" note. An old git branch, `dirty` flag, modified
+  count, process list, or recent-file ordering is never presented as current.
+- `kind=clipboard` — the text is never written into a summary (or episodic /
+  project / user memory, or logs). Only a confirmed outcome that later work
+  acted on survives, through the messages that acted on it.
+
+Summarized tool output is labelled "untrusted evidence" so a line inside a
+tool result cannot be promoted to a system instruction. Raw model reasoning
+(`Message.Reasoning`) is never summarized, and a leaked leading `<think>` or
+GPT-OSS Harmony analysis block in visible content is stripped first.
+
+## Current date and time
+
+Local models do not know today's date. Two mechanisms cover this without
+invalidating the prompt/KV cache:
+
+- A **stable instruction** in the native tool rules tells the model to call
+  `local_context(kind="time")` for the current date, time, timezone, weekday,
+  or relative dates (today, tomorrow, next Monday, deadlines) and never to
+  infer the date from training knowledge. It carries no timestamp, so it does
+  not move the cached prompt prefix.
+- The **`local_context(kind="time")` tool** returns the authoritative current
+  local and UTC time on demand. `context.timezone` (empty = system zone;
+  otherwise an IANA name) pins the reported zone; an invalid value is flagged
+  by `llmtui doctor` and returns a clear tool error.
+
+An automatic per-turn date anchor (`context.time_context`) is planned as a
+follow-up; today the tool-driven path above is the supported mechanism.

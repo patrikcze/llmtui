@@ -375,10 +375,16 @@ local-assistant tools are also available:
 - `ask_user` pauses the current tool loop for one bounded question, up to four
   choices, or a free-text answer. The answer continues the original tool call;
   it is never approval for another operation.
-- `local_context` returns compact JSON for `system`, `workspace`, `processes`,
-  `clipboard`, or workspace-confined `recent_files`. It makes no network
-  requests, omits process arguments and identity/environment data, filters
-  secret files, and asks before reading text from the clipboard.
+- `local_context` returns compact JSON for `time`, `system`, `workspace`,
+  `processes`, `clipboard`, or workspace-confined `recent_files`. It makes no
+  network requests, omits process arguments and identity/environment data,
+  filters secret files, and asks before reading text from the clipboard.
+  `kind=time` gives the authoritative current local and UTC date, time,
+  weekday, timezone abbreviation, and numeric UTC offset — models should call
+  it (never guess) for anything that depends on the current or a relative date
+  (today, tomorrow, next Monday, deadlines). Time is read from a local clock
+  with no network call and no shelling out; set `context.timezone` to an IANA
+  name to override the system zone.
 - `tool_search` performs deterministic local matching over currently eligible
   MCP tools. It uses no model, embeddings, or network request, reports the
   complete match count even when its returned shortlist is bounded, and grants
