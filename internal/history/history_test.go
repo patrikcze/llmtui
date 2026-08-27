@@ -21,7 +21,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Messages: []provider.Message{
 			{Role: provider.RoleSystem, Content: "be helpful"},
 			{Role: provider.RoleUser, Content: "hi"},
-			{Role: provider.RoleAssistant, Content: "hello!", Reasoning: "ephemeral thought"},
+			{Role: provider.RoleAssistant, Content: "hello!", Reasoning: "ephemeral thought", Continuation: &provider.ProviderContinuation{Reasoning: "tool-cycle secret"}},
 		},
 		Prompt:    10,
 		Reply:     20,
@@ -52,7 +52,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
 	}
-	if strings.Contains(string(raw), "ephemeral thought") || strings.Contains(string(raw), "reasoning") {
+	if strings.Contains(string(raw), "ephemeral thought") || strings.Contains(string(raw), "tool-cycle secret") || strings.Contains(string(raw), "reasoning") || strings.Contains(string(raw), "continuation") {
 		t.Fatalf("saved session leaked reasoning: %s", raw)
 	}
 }

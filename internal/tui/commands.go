@@ -131,7 +131,7 @@ func slashCommands() []slashCommand {
 			return nil
 		}},
 		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", run: cmdProfile},
-		{name: "think", usage: "/think [on|off|auto|status]", desc: "reasoning models: request, suppress, or default the thinking phase", category: "Model", blockWhileThinking: true, run: cmdThink},
+		{name: "think", usage: "/think [auto|on|off|low|medium|high|status]", desc: "reasoning mode or GPT-OSS effort", category: "Model", blockWhileThinking: true, run: cmdThink},
 		{name: "thoughts", aliases: []string{"thinking"}, usage: "/thoughts [show|hide|toggle|status]", desc: "show or hide captured reasoning without changing model behavior", category: "Model", run: cmdThoughts},
 
 		// --- Prompt ---

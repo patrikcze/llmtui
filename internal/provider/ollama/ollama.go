@@ -138,9 +138,9 @@ type chatRequest struct {
 	Stream   bool          `json:"stream"`
 	Options  chatOptions   `json:"options"`
 	Tools    []wireTool    `json:"tools,omitempty"`
-	// Think toggles a reasoning model's thinking phase (Ollama native
-	// field). nil omits it so non-reasoning models are unaffected.
-	Think *bool `json:"think,omitempty"`
+	// Think is either a boolean for generic reasoning models or a string
+	// effort level for GPT-OSS. nil omits it.
+	Think any `json:"think,omitempty"`
 	// Format accepts either "json" or a JSON Schema object. LLMTUI uses the
 	// schema form so callers get field-level constraints where supported.
 	Format json.RawMessage `json:"format,omitempty"`
@@ -161,6 +161,7 @@ type wireFunction struct {
 // wireToolCall is one tool invocation. Ollama transports the arguments as a
 // JSON object, not a string, so RawMessage bridges both directions.
 type wireToolCall struct {
+	ID       string `json:"id,omitempty"`
 	Function struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -174,6 +175,7 @@ type wireMessage struct {
 	Images    []string       `json:"images,omitempty"`
 	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
+	Thinking  string         `json:"thinking,omitempty"`
 }
 
 func toWireTools(specs []provider.ToolSpec) []wireTool {
@@ -198,6 +200,7 @@ func toWireToolCalls(calls []provider.ToolCall) []wireToolCall {
 	out := make([]wireToolCall, 0, len(calls))
 	for _, c := range calls {
 		var wc wireToolCall
+		wc.ID = c.ID
 		wc.Function.Name = c.Name
 		if json.Valid([]byte(c.Arguments)) {
 			wc.Function.Arguments = json.RawMessage(c.Arguments)
@@ -212,7 +215,7 @@ func toWireToolCalls(calls []provider.ToolCall) []wireToolCall {
 func fromWireToolCalls(calls []wireToolCall) []provider.ToolCall {
 	out := make([]provider.ToolCall, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, provider.ToolCall{Name: c.Function.Name, Arguments: string(c.Function.Arguments)})
+		out = append(out, provider.ToolCall{ID: c.ID, Name: c.Function.Name, Arguments: string(c.Function.Arguments)})
 	}
 	return out
 }
@@ -225,6 +228,9 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 			Content:   m.Content,
 			ToolCalls: toWireToolCalls(m.ToolCalls),
 			ToolName:  m.ToolName,
+		}
+		if m.Continuation != nil && len(m.ToolCalls) > 0 {
+			wm.Thinking = m.Continuation.Reasoning
 		}
 		for _, img := range m.Images {
 			wm.Images = append(wm.Images, base64.StdEncoding.EncodeToString(img.Data))
@@ -279,16 +285,24 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 			NumPredict:  req.MaxTokens,
 		},
 	}
+	protocol := provider.ResolveModelProtocol(req.Model, "")
+	if protocol.HarmonyRequired {
+		effort, ok := provider.ReasoningEffort(protocol, req.Reasoning)
+		if !ok {
+			return nil, fmt.Errorf("%s: GPT-OSS reasoning must be low, medium, or high; disabling reasoning is unsupported", p.name)
+		}
+		body.Think = effort
+	}
 	if req.ResponseConstraint != nil {
 		body.Format = req.ResponseConstraint.JSONSchema
 	}
-	switch req.Reasoning {
-	case "on":
-		think := true
-		body.Think = &think
-	case "off":
-		think := false
-		body.Think = &think
+	if !protocol.HarmonyRequired {
+		switch req.Reasoning {
+		case "on":
+			body.Think = true
+		case "off":
+			body.Think = false
+		}
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -326,8 +340,11 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		usage       *provider.Usage
 		completion  strings.Builder
 		toolCalls   []provider.ToolCall
+		reasoning   strings.Builder
 		streamBytes int
 		truncated   bool
+		protocol    = provider.ResolveModelProtocol(req.Model, "")
+		guard       provider.HarmonyContentGuard
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -353,7 +370,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			return
 		}
 		if chunk.Message.Thinking != "" {
-			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: chunk.Message.Thinking}) {
+			reasoning.WriteString(chunk.Message.Thinking)
+			event := provider.ChatEvent{Type: provider.EventReasoning, Delta: chunk.Message.Thinking}
+			if protocol.HarmonyRequired {
+				event.Delta = ""
+				event.ReasoningBytes = len(chunk.Message.Thinking)
+			}
+			if !provider.Emit(ctx, events, event) {
 				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
@@ -368,8 +391,17 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			}
 		}
 		if chunk.Message.Content != "" {
-			completion.WriteString(chunk.Message.Content)
-			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: chunk.Message.Content}) {
+			visible := chunk.Message.Content
+			if protocol.HarmonyRequired {
+				var err error
+				visible, err = guard.Feed(visible)
+				if err != nil {
+					provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
+					return
+				}
+			}
+			completion.WriteString(visible)
+			if visible != "" && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: visible}) {
 				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
@@ -391,6 +423,18 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)})
 		return
 	}
+	if protocol.HarmonyRequired {
+		tail, err := guard.Finish()
+		if err != nil {
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
+			return
+		}
+		completion.WriteString(tail)
+		if tail != "" && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: tail}) {
+			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
+			return
+		}
+	}
 
 	if usage == nil {
 		prompt := 0
@@ -406,7 +450,14 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			Estimated:        true,
 		}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated})
+	turn := &provider.AssistantTurn{
+		FinalContent: completion.String(), Reasoning: reasoning.String(), ToolCalls: toolCalls,
+		Completed: len(toolCalls) == 0 && !truncated,
+	}
+	if len(toolCalls) > 0 && reasoning.Len() > 0 {
+		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning.String()}
+	}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn})
 }
 
 // Capabilities describes the native Ollama API.
@@ -423,4 +474,20 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		ReasoningEvents:  provider.CapabilityUnknown,
 		StructuredOutput: provider.CapabilitySupported,
 	}
+}
+
+func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
+	caps := p.Capabilities()
+	protocol := provider.ResolveModelProtocol(model, "")
+	if protocol.Family == provider.ModelFamilyGPTOSS {
+		caps.ModelFamily = protocol.Family
+		caps.TemplateOwnership = provider.TemplateOwnershipProvider
+		caps.HarmonyProtocol = provider.CapabilitySupported
+		caps.ReasoningContinuation = provider.CapabilitySupported
+		caps.StructuredReasoning = provider.CapabilitySupported
+		caps.StreamingReasoning = provider.CapabilitySupported
+		caps.NativeTools = provider.CapabilitySupported
+		caps.ReasoningEvents = provider.CapabilitySupported
+	}
+	return caps
 }

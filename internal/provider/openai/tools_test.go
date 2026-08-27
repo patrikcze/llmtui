@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -171,7 +172,7 @@ func TestChatNonStreamingToolCalls(t *testing.T) {
 // non-streaming path only ever read reasoning_content as a content
 // fallback when there were NO tool calls, so on every ordinary
 // think-then-call-a-tool turn the reasoning was silently dropped — never
-// reaching the transcript, history, or the thoughts header.
+// reaching the ephemeral provider continuation.
 func TestChatNonStreamingPreservesReasoningAlongsideToolCalls(t *testing.T) {
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -182,27 +183,83 @@ func TestChatNonStreamingPreservesReasoningAlongsideToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	p := New("test", srv.URL+"/v1", "")
-	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m",
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "gpt-oss-20b",
 		Messages: []provider.Message{{Role: provider.RoleUser, Content: "list the files"}}})
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	var reasoning string
 	var done provider.ChatEvent
 	for ev := range events {
 		switch ev.Type {
 		case provider.EventReasoning:
-			reasoning += ev.Delta
+			if ev.Delta != "" {
+				t.Fatalf("raw reasoning leaked through EventReasoning: %q", ev.Delta)
+			}
 		case provider.EventDone:
 			done = ev
 		case provider.EventError:
 			t.Fatalf("stream error: %v", ev.Err)
 		}
 	}
-	if reasoning != "I should list the directory first." {
-		t.Errorf("reasoning = %q, want the model's reasoning_content preserved even though tool_calls were present", reasoning)
+	if done.Turn == nil || done.Turn.Continuation == nil || done.Turn.Continuation.Reasoning != "I should list the directory first." {
+		t.Errorf("turn continuation = %+v, want raw reasoning preserved only for the tool cycle", done.Turn)
 	}
 	if len(done.ToolCalls) != 1 || done.ToolCalls[0].ID != "call_3" || done.ToolCalls[0].Name != "list_dir" {
 		t.Errorf("ToolCalls = %+v, want the list_dir call untouched", done.ToolCalls)
+	}
+}
+
+func TestGPTOSSRequestUsesStructuredEffortAndContinuation(t *testing.T) {
+	var got chatCompletionRequest
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"}}]}`)
+	}))
+	defer srv.Close()
+
+	p := New("lmstudio", srv.URL+"/v1", "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model: "openai/gpt-oss-20b", Reasoning: "high",
+		Messages: []provider.Message{
+			{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{}`}}, Continuation: &provider.ProviderContinuation{Reasoning: "private plan"}},
+			{Role: provider.RoleTool, ToolCallID: "call_1", Content: "result"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	if got.ReasoningEffort != "high" || got.ChatTemplateKwargs != nil {
+		t.Fatalf("effort/kwargs = %q/%v", got.ReasoningEffort, got.ChatTemplateKwargs)
+	}
+	if len(got.Messages) != 2 || got.Messages[0].Reasoning != "private plan" {
+		t.Fatalf("assistant continuation was not sent structurally: %+v", got.Messages)
+	}
+}
+
+func TestGPTOSSStreamingFailsClosedOnSplitHarmonyLeak(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"<|chan\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"nel|>analysis\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("lmstudio", srv.URL+"/v1", "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "gpt-oss-20b", Stream: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range events {
+		if ev.Type == provider.EventDelta {
+			t.Fatalf("Harmony leak reached visible stream: %q", ev.Delta)
+		}
+		if ev.Type == provider.EventError && !errors.Is(ev.Err, provider.ErrHarmonyProtocol) {
+			t.Fatalf("error = %v", ev.Err)
+		}
 	}
 }

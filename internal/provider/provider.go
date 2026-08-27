@@ -126,6 +126,33 @@ type Message struct {
 	// answer byte. Same rule as Reasoning: never serialized, cached,
 	// persisted, or sent back to a backend.
 	ReasoningDuration time.Duration `json:"-" yaml:"-"`
+	// Continuation carries provider-visible, privacy-sensitive state needed
+	// only while completing an active tool cycle. It is deliberately excluded
+	// from serialization so raw model reasoning never enters saved history.
+	// Providers may send it back only on the assistant tool-call message that
+	// produced it; callers must clear it after a final answer.
+	Continuation *ProviderContinuation `json:"-" yaml:"-"`
+}
+
+// ProviderContinuation is ephemeral state that a backend requires on the
+// next sampling request in the same tool cycle. Reasoning is raw model CoT:
+// it must never be displayed, logged, cached, exported, or persisted.
+type ProviderContinuation struct {
+	Reasoning string
+	Opaque    json.RawMessage
+}
+
+// AssistantTurn is the provider-neutral semantic result of one sampling
+// request. FinalContent and Reasoning are intentionally separate. Streaming
+// consumers receive visible content as EventDelta; the complete turn on
+// EventDone supplies tool calls and ephemeral continuation state.
+type AssistantTurn struct {
+	FinalContent     string
+	Reasoning        string
+	ReasoningSummary string
+	ToolCalls        []ToolCall
+	Continuation     *ProviderContinuation
+	Completed        bool
 }
 
 // ModelInfo describes a model available on a provider.
@@ -202,9 +229,10 @@ type ChatRequest struct {
 	// sent to the backend and the model may answer with ToolCalls instead of
 	// (or in addition to) text.
 	Tools []ToolSpec
-	// Reasoning, when "on" or "off", explicitly requests or suppresses a
-	// reasoning model's thinking phase. Empty means backend default: the
-	// provider must omit the corresponding wire field entirely.
+	// Reasoning selects the reasoning mode. Generic reasoning backends accept
+	// "on"/"off"; GPT-OSS accepts "low"/"medium"/"high" and defaults to
+	// medium when this is empty or "auto". Adapters must use structured
+	// provider/template fields rather than inserting prompt text.
 	Reasoning string
 	// ResponseConstraint asks the backend to enforce structured output. It is
 	// mutually exclusive with native tool calling because both install an
@@ -259,6 +287,13 @@ type ChatEvent struct {
 	Delta string
 	Usage *Usage
 	Err   error
+	// ReasoningBytes reports hidden reasoning activity without transporting
+	// the sensitive text into UI/controller code. EventReasoning producers
+	// should leave Delta empty for raw CoT and set this count instead.
+	ReasoningBytes int
+	// Turn is set on EventDone. Its Continuation is retained only for an
+	// active tool cycle and discarded after a final response.
+	Turn *AssistantTurn
 	// ToolCalls is set on EventDone when the model requested tool execution
 	// via native function calling.
 	ToolCalls []ToolCall
@@ -375,6 +410,10 @@ func EstimateMessageTokens(m Message) int {
 	}
 	total += EstimateTokens(m.ToolCallID)
 	total += EstimateTokens(m.ToolName)
+	if m.Continuation != nil {
+		total += EstimateTokens(m.Continuation.Reasoning)
+		total += EstimateTokens(string(m.Continuation.Opaque))
+	}
 	return total
 }
 

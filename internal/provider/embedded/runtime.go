@@ -16,6 +16,7 @@ type ModelMeta struct {
 	SizeBytes    int64
 	Parameters   uint64
 	HasTemplate  bool
+	Protocol     provider.ModelProtocol
 }
 
 // GenRequest carries one completion request into the native runtime.
@@ -56,6 +57,8 @@ type GenResult struct {
 	PromptTokens     int
 	CompletionTokens int
 	ToolCalls        []provider.ToolCall
+	Turn             *provider.AssistantTurn
+	Truncated        bool
 }
 
 // NativeDiagnostics describes the native backends visible to a loaded runtime.

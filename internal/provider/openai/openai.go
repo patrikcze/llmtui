@@ -10,14 +10,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 )
-
-var harmonyFunctionRecipientRE = regexp.MustCompile(`to\s*=\s*functions(?:\.|\s+[A-Za-z_])`)
 
 // Provider speaks the OpenAI chat completions API.
 type Provider struct {
@@ -181,6 +178,9 @@ type chatCompletionRequest struct {
 	Stream      bool           `json:"stream"`
 	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
 	Tools       []wireTool     `json:"tools,omitempty"`
+	// ReasoningEffort is the structured GPT-OSS control used by compatible
+	// servers. It is omitted for every other model family.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ChatTemplateKwargs passes template variables to backends that support
 	// them (vLLM, llama.cpp server). Only enable_thinking is set, and only
 	// when the user chose an explicit reasoning mode; backends that don't
@@ -273,6 +273,9 @@ type wireMessage struct {
 	Content    any            `json:"content"`
 	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+	// Reasoning is the community Chat Completions convention recommended by
+	// OpenAI for returning GPT-OSS raw CoT during an active tool cycle.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 type contentPart struct {
@@ -289,11 +292,16 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 	out := make([]wireMessage, 0, len(msgs))
 	for _, m := range msgs {
 		if len(m.Images) == 0 {
+			reasoning := ""
+			if m.Continuation != nil && len(m.ToolCalls) > 0 {
+				reasoning = m.Continuation.Reasoning
+			}
 			out = append(out, wireMessage{
 				Role:       string(m.Role),
 				Content:    m.Content,
 				ToolCalls:  toWireToolCalls(m.ToolCalls),
 				ToolCallID: m.ToolCallID,
+				Reasoning:  reasoning,
 			})
 			continue
 		}
@@ -335,6 +343,14 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		Stream:      req.Stream,
 		Tools:       toWireTools(req.Tools),
 	}
+	protocol := provider.ResolveModelProtocol(req.Model, "")
+	if protocol.HarmonyRequired {
+		effort, ok := provider.ReasoningEffort(protocol, req.Reasoning)
+		if !ok {
+			return nil, fmt.Errorf("%s: GPT-OSS reasoning must be low, medium, or high; disabling reasoning is unsupported", p.name)
+		}
+		body.ReasoningEffort = effort
+	}
 	if constraint := req.ResponseConstraint; constraint != nil {
 		name := constraint.Name
 		if name == "" {
@@ -347,11 +363,13 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	if req.Stream {
 		body.StreamOpts = &streamOptions{IncludeUsage: true}
 	}
-	switch req.Reasoning {
-	case "on":
-		body.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
-	case "off":
-		body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+	if !protocol.HarmonyRequired {
+		switch req.Reasoning {
+		case "on":
+			body.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
+		case "off":
+			body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+		}
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -389,6 +407,7 @@ type chatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
 			Content          string         `json:"content"`
+			Reasoning        string         `json:"reasoning"`
 			ReasoningContent string         `json:"reasoning_content"`
 			ToolCalls        []wireToolCall `json:"tool_calls"`
 		} `json:"message"`
@@ -433,34 +452,28 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 		return
 	}
 	content := out.Choices[0].Message.Content
-	reasoning := out.Choices[0].Message.ReasoningContent
-	if content == "" && len(toolCalls) == 0 && reasoning != "" {
-		// No visible answer and no tool call: the whole reply was spent
-		// thinking (typically max_tokens ran out mid-thought). Promote the
-		// reasoning to the visible answer instead of showing nothing.
-		content = reasoningFallback(reasoning)
-		reasoning = ""
+	protocol := provider.ResolveModelProtocol(req.Model, "")
+	reasoning := out.Choices[0].Message.Reasoning
+	if reasoning == "" {
+		reasoning = out.Choices[0].Message.ReasoningContent
 	}
 	if reasoning != "" {
-		// Any other shape — a final answer, a tool call, or both — keeps
-		// reasoning_content separate so it reaches the thoughts header
-		// instead of being silently dropped (previously it was only ever
-		// read inside the fallback above, so a normal think-then-answer or
-		// think-then-call-a-tool turn lost it entirely).
-		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: reasoning}) {
+		event := provider.ChatEvent{Type: provider.EventReasoning, Delta: reasoning}
+		if protocol.HarmonyRequired {
+			event.Delta = ""
+			event.ReasoningBytes = len(reasoning)
+		}
+		if !provider.Emit(ctx, events, event) {
 			return
 		}
 	}
-	// A backend can fail to parse the model's tool-call attempt into
-	// structured tool_calls and instead leak the raw, still-tokenized
-	// attempt into content (see looksLikeUnparsedToolCall). That text is not
-	// a real answer, so it must never reach the transcript or conversation
-	// history: suppress the delta entirely and let the caller retry.
-	malformed := len(toolCalls) == 0 && looksLikeUnparsedToolCall(content)
-	if !malformed {
-		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
-			return
-		}
+	if protocol.HarmonyRequired && (provider.ContainsHarmonyControlToken(content) || looksLikeUnparsedToolCall(content)) {
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: provider.ErrHarmonyProtocol})
+		return
+	}
+	malformed := !protocol.HarmonyRequired && len(toolCalls) == 0 && looksLikeUnparsedToolCall(content)
+	if !malformed && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
+		return
 	}
 	usage := out.Usage.toUsage()
 	if usage == nil {
@@ -468,10 +481,11 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	}
 	finishReason := out.Choices[0].FinishReason
 	truncated := finishReason != nil && *finishReason == "length"
-	provider.Emit(ctx, events, provider.ChatEvent{
-		Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls,
-		Truncated: truncated, MalformedToolCall: malformed,
-	})
+	turn := &provider.AssistantTurn{FinalContent: content, Reasoning: reasoning, ToolCalls: toolCalls, Completed: len(toolCalls) == 0 && !truncated}
+	if len(toolCalls) > 0 && reasoning != "" {
+		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning}
+	}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn, MalformedToolCall: malformed})
 }
 
 // looksLikeUnparsedToolCall reports whether content is a failed tool-call
@@ -483,7 +497,8 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 // `to=...?`; that ambiguous remnant is rejected only as the whole completion
 // so ordinary prose containing the notation remains valid.
 func looksLikeUnparsedToolCall(content string) bool {
-	return harmonyFunctionRecipientRE.MatchString(content) || strings.TrimSpace(content) == "to=...?"
+	trimmed := strings.TrimSpace(content)
+	return strings.HasPrefix(trimmed, "to=functions.") || strings.HasPrefix(trimmed, "to=functions ") || trimmed == "to=...?"
 }
 
 func estimateUsage(req provider.ChatRequest, completion string) *provider.Usage {
@@ -517,4 +532,22 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		ReasoningEvents:  provider.CapabilityUnknown,
 		StructuredOutput: provider.CapabilitySupported,
 	}
+}
+
+// CapabilitiesFor adds centralized selected-model protocol knowledge without
+// changing the conservative behavior for unknown OpenAI-compatible servers.
+func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
+	caps := p.Capabilities()
+	protocol := provider.ResolveModelProtocol(model, "")
+	if protocol.Family == provider.ModelFamilyGPTOSS {
+		caps.ModelFamily = protocol.Family
+		caps.TemplateOwnership = provider.TemplateOwnershipProvider
+		caps.HarmonyProtocol = provider.CapabilitySupported
+		caps.ReasoningContinuation = provider.CapabilitySupported
+		caps.StructuredReasoning = provider.CapabilitySupported
+		caps.StreamingReasoning = provider.CapabilitySupported
+		caps.NativeTools = provider.CapabilitySupported
+		caps.ReasoningEvents = provider.CapabilitySupported
+	}
+	return caps
 }

@@ -100,3 +100,62 @@ func TestChatParsesNativeToolCalls(t *testing.T) {
 		t.Errorf("arguments = %q (err %v)", calls[0].Arguments, err)
 	}
 }
+
+func TestGPTOSSUsesEffortAndPreservesToolContinuation(t *testing.T) {
+	var got chatRequest
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(w, `{"message":{"content":"done"},"done":true}`)
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model: "gpt-oss:20b", Reasoning: "low",
+		Messages: []provider.Message{
+			{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{}`}}, Continuation: &provider.ProviderContinuation{Reasoning: "private plan"}},
+			{Role: provider.RoleTool, ToolName: "read_file", ToolCallID: "call_1", Content: "result"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	if got.Think != "low" {
+		t.Fatalf("think = %#v, want low", got.Think)
+	}
+	if len(got.Messages) != 2 || got.Messages[0].Thinking != "private plan" || got.Messages[0].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("assistant continuation = %+v", got.Messages)
+	}
+}
+
+func TestGPTOSSResponseKeepsThinkingPrivate(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"message":{"thinking":"private plan","tool_calls":[{"id":"provider-id","function":{"name":"read_file","arguments":{}}}]},"done":true}`)
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "gpt-oss:20b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done provider.ChatEvent
+	for ev := range events {
+		if ev.Type == provider.EventReasoning && ev.Delta != "" {
+			t.Fatalf("raw reasoning leaked in event: %q", ev.Delta)
+		}
+		if ev.Type == provider.EventDone {
+			done = ev
+		}
+	}
+	if done.Turn == nil || done.Turn.Continuation == nil || done.Turn.Continuation.Reasoning != "private plan" {
+		t.Fatalf("turn = %+v", done.Turn)
+	}
+	if len(done.ToolCalls) != 1 || done.ToolCalls[0].ID != "provider-id" {
+		t.Fatalf("tool calls = %+v", done.ToolCalls)
+	}
+}

@@ -52,14 +52,15 @@ type turnRuntime struct {
 	state       turnState
 	lastOutcome turnOutcome
 
-	stream          <-chan provider.ChatEvent
-	streamCtx       context.Context
-	cancelStream    context.CancelFunc
-	idleWatchdog    *time.Timer
-	idleTimeout     time.Duration
-	streamStart     time.Time
-	streamGen       int
-	streamToolCalls []provider.ToolCall
+	stream             <-chan provider.ChatEvent
+	streamCtx          context.Context
+	cancelStream       context.CancelFunc
+	idleWatchdog       *time.Timer
+	idleTimeout        time.Duration
+	streamStart        time.Time
+	streamGen          int
+	streamToolCalls    []provider.ToolCall
+	streamContinuation *provider.ProviderContinuation
 
 	toolDepth                int
 	emptyContinuationRetried bool
@@ -161,6 +162,7 @@ func (r *turnRuntime) beginStream(parent context.Context, idle time.Duration) (c
 	r.stream = nil
 	r.streamStart = time.Now()
 	r.streamToolCalls = nil
+	r.streamContinuation = nil
 	r.streamGen++
 	r.transition(turnModelStreaming, turnOutcomeNone)
 	return ctx, r.streamGen, nil

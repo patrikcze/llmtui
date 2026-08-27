@@ -165,3 +165,35 @@ func TestTemplateMessagesPreserveToolContinuation(t *testing.T) {
 		t.Errorf("tool result = %+v", toolResult)
 	}
 }
+
+func TestGPTOSSTemplateUsesEffortAndThinkingContinuation(t *testing.T) {
+	protocol := provider.ResolveModelProtocol("gpt-oss-20b", "")
+	messages := []provider.Message{{
+		Role:         provider.RoleAssistant,
+		ToolCalls:    []provider.ToolCall{{Name: "read_file", Arguments: `{}`}},
+		Continuation: &provider.ProviderContinuation{Reasoning: "private plan"},
+	}}
+	template := `effort={{ reasoning_effort }}{% for message in messages %}{% if message.thinking is defined %}|thinking={{ message.thinking }}{% endif %}{% endfor %}`
+	nativeCalls := 0
+	rendered, err := renderChatTemplateWithProtocol(template, messages, nil, "high", protocol, func(string, []llama.ChatMessage) (string, error) {
+		nativeCalls++
+		return "incorrect native rendering", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.text != "effort=high|thinking=private plan" {
+		t.Fatalf("rendered = %q", rendered.text)
+	}
+	if nativeCalls != 0 {
+		t.Fatalf("legacy llama_chat_apply_template was used %d times for Harmony", nativeCalls)
+	}
+
+	data, err := jinjaTemplateDataForProtocol([]provider.Message{{Role: provider.RoleUser, Content: "hi"}}, nil, "auto", protocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data["reasoning_effort"] != "medium" {
+		t.Fatalf("default reasoning_effort = %v, want medium", data["reasoning_effort"])
+	}
+}

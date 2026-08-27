@@ -242,7 +242,7 @@ type Model struct {
 	profileMode   string // "auto" or a profile name
 	profiles      []modelprofile.Profile
 	template      string
-	reasoningMode string // session override for chat.reasoning: "", "auto", "on", "off"
+	reasoningMode string // session override: auto/on/off or GPT-OSS low/medium/high
 	summary       string
 	ctxStrategy   string
 	ctxUsed       int
@@ -2030,11 +2030,20 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// live indicator so a long thinking phase never looks frozen or times
 		// out.
 		reasoning := terminaltext.Sanitize(msg.event.Delta)
-		if m.reasoningStart.IsZero() {
+		reasoningBytes := msg.event.ReasoningBytes
+		if reasoningBytes == 0 {
+			reasoningBytes = len(reasoning)
+		}
+		if reasoningBytes > 0 && m.reasoningStart.IsZero() {
 			m.reasoningStart = time.Now()
 		}
-		m.reasoningLen += len(reasoning)
-		m.reasoningBuf.WriteString(reasoning)
+		m.reasoningLen += reasoningBytes
+		// Raw provider reasoning is activity and ephemeral continuation data,
+		// never transcript content. A provider-supplied safe summary would use
+		// a separate semantic field/event.
+		if reasoning != "" {
+			m.reasoningBuf.WriteString(reasoning)
+		}
 		m.touchStream()
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
@@ -2092,11 +2101,14 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
 		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
 		m.streamToolCalls = msg.event.ToolCalls
+		if msg.event.Turn != nil {
+			m.streamContinuation = msg.event.Turn.Continuation
+		}
 		// Captured before finishStream resets reasoningBuf: an empty-completion
 		// round never reaches session.AddMessage (reply == "" and no tool
 		// calls), so its reasoning text would otherwise vanish with nothing to
 		// diagnose why the round produced no usable output.
-		roundReasoningChars := m.reasoningBuf.Len()
+		roundReasoningChars := m.reasoningLen
 		m.finishStream(msg.event.Usage, msg.event.Truncated)
 		if msg.event.Truncated {
 			m.recordAgentTruncation()
@@ -2230,6 +2242,7 @@ func (m *Model) streamFailed(err error) {
 	m.reasoningStart = time.Time{}
 	m.reasoningEnd = time.Time{}
 	m.filteredReasoningLen = 0
+	m.clearProviderContinuations()
 	m.progressText = ""
 	stream, _ := m.turnRuntime.finishStream(turnOutcomeExecutionFailure)
 	drainProviderStream(stream)
@@ -2240,6 +2253,25 @@ func (m *Model) streamFailed(err error) {
 	}
 	m.endAgentRun() // a failed run clears run-scoped skills
 	m.refreshViewport()
+}
+
+// complete closes the lifecycle boundary owned by Model. Raw provider
+// continuation data is useful only while tools are still advancing the same
+// turn; every terminal outcome drops it before another turn can be prepared.
+func (m *Model) complete(outcome turnOutcome) turnTransition {
+	switch outcome {
+	case turnOutcomeFinalAnswer, turnOutcomeExecutionFailure, turnOutcomeCancelled:
+		m.clearProviderContinuations()
+	}
+	return m.turnRuntime.complete(outcome)
+}
+
+func (m *Model) cancelToolBatch() bool {
+	cancelled := m.turnRuntime.cancelToolBatch()
+	if cancelled {
+		m.clearProviderContinuations()
+	}
+	return cancelled
 }
 
 const abandonedStreamDrainTimeout = 250 * time.Millisecond
@@ -2311,18 +2343,25 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 	m.progressText = ""
 	toolCalls := m.streamToolCalls
 	m.streamToolCalls = nil
+	continuation := m.streamContinuation
+	m.streamContinuation = nil
 	stream, _ := m.turnRuntime.finishStream(turnOutcomeToolContinuation)
 	drainProviderStream(stream)
 	if truncated && reply != "" {
 		reply += truncatedResponseNotice
 	}
 	if reply != "" || len(toolCalls) > 0 {
+		if len(toolCalls) == 0 {
+			continuation = nil
+			m.clearProviderContinuations()
+		}
 		m.session.AddMessage(provider.Message{
 			Role:              provider.RoleAssistant,
 			Content:           reply,
 			ToolCalls:         toolCalls,
 			Reasoning:         reasoning,
 			ReasoningDuration: reasoningDuration,
+			Continuation:      continuation,
 		})
 		m.replyCount++
 	}
@@ -2379,6 +2418,15 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 		}
 	}
 	m.refreshViewport()
+}
+
+// clearProviderContinuations deterministically drops raw reasoning after a
+// completed final response. Continuations are never serialized, but clearing
+// in-memory state also prevents accidental reuse by later turns.
+func (m *Model) clearProviderContinuations() {
+	for index := range m.session.Messages {
+		m.session.Messages[index].Continuation = nil
+	}
 }
 
 // relayout recomputes panel heights after non-resize layout changes

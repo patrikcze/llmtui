@@ -58,11 +58,22 @@ func renderChatTemplate(
 	reasoning string,
 	native nativeTemplateRenderer,
 ) (renderedPrompt, error) {
+	return renderChatTemplateWithProtocol(template, messages, tools, reasoning, provider.ModelProtocol{}, native)
+}
+
+func renderChatTemplateWithProtocol(
+	template string,
+	messages []provider.Message,
+	tools []provider.ToolSpec,
+	reasoning string,
+	protocol provider.ModelProtocol,
+	native nativeTemplateRenderer,
+) (renderedPrompt, error) {
 	mode := strings.ToLower(strings.TrimSpace(reasoning))
 	auto := mode == "" || mode == "auto"
 
 	var nativeErr error
-	if auto && len(tools) == 0 && nativeCompatibleMessages(messages) {
+	if !protocol.HarmonyRequired && auto && len(tools) == 0 && nativeCompatibleMessages(messages) {
 		nativeMessages, err := chatMessages(messages)
 		if err == nil {
 			text, err := native(template, nativeMessages)
@@ -73,7 +84,7 @@ func renderChatTemplate(
 		}
 	}
 
-	data, err := jinjaTemplateData(messages, tools, mode)
+	data, err := jinjaTemplateDataForProtocol(messages, tools, mode, protocol)
 	if err != nil {
 		return renderedPrompt{}, err
 	}
@@ -121,6 +132,10 @@ func templateRenderError(nativeErr, jinjaErr error) error {
 }
 
 func jinjaTemplateData(messages []provider.Message, tools []provider.ToolSpec, reasoning string) (map[string]any, error) {
+	return jinjaTemplateDataForProtocol(messages, tools, reasoning, provider.ModelProtocol{})
+}
+
+func jinjaTemplateDataForProtocol(messages []provider.Message, tools []provider.ToolSpec, reasoning string, protocol provider.ModelProtocol) (map[string]any, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("chat request has no messages")
 	}
@@ -128,16 +143,24 @@ func jinjaTemplateData(messages []provider.Message, tools []provider.ToolSpec, r
 		"messages":              templateMessages(messages),
 		"add_generation_prompt": true,
 	}
-	switch reasoning {
-	case "", "auto":
-		// Omission is intentional: model templates can distinguish their own
-		// default from an explicit enable/disable request.
-	case "on":
-		result["enable_thinking"] = true
-	case "off":
-		result["enable_thinking"] = false
-	default:
-		return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
+	if protocol.HarmonyRequired {
+		effort, ok := provider.ReasoningEffort(protocol, reasoning)
+		if !ok {
+			return nil, fmt.Errorf("invalid GPT-OSS reasoning effort %q (supported: low, medium, high)", reasoning)
+		}
+		result["reasoning_effort"] = effort
+	} else {
+		switch reasoning {
+		case "", "auto":
+			// Omission is intentional: model templates can distinguish their own
+			// default from an explicit enable/disable request.
+		case "on":
+			result["enable_thinking"] = true
+		case "off":
+			result["enable_thinking"] = false
+		default:
+			return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
+		}
 	}
 	if len(tools) > 0 {
 		mapped, err := templateTools(tools)
@@ -179,6 +202,9 @@ func templateMessages(messages []provider.Message) []any {
 				})
 			}
 			mapped["tool_calls"] = calls
+			if message.Continuation != nil && message.Continuation.Reasoning != "" {
+				mapped["thinking"] = message.Continuation.Reasoning
+			}
 		}
 		if message.ToolCallID != "" {
 			mapped["tool_call_id"] = message.ToolCallID
@@ -455,11 +481,15 @@ func (r *Runtime) newSampler(req embedded.GenRequest) (llama.Sampler, error) {
 }
 
 func tokenPiece(vocab llama.Vocab, token llama.Token) ([]byte, error) {
+	return tokenPieceSpecial(vocab, token, false)
+}
+
+func tokenPieceSpecial(vocab llama.Vocab, token llama.Token, special bool) ([]byte, error) {
 	buf := make([]byte, tokenPieceBufSize)
-	written := llama.TokenToPiece(vocab, token, buf, 0, false)
+	written := llama.TokenToPiece(vocab, token, buf, 0, special)
 	if written < 0 {
 		buf = make([]byte, int(-written))
-		written = llama.TokenToPiece(vocab, token, buf, 0, false)
+		written = llama.TokenToPiece(vocab, token, buf, 0, special)
 	}
 	if written < 0 || int(written) > len(buf) {
 		return nil, fmt.Errorf("convert token %d to text: invalid length %d", token, written)

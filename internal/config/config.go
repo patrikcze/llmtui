@@ -146,7 +146,8 @@ type ChatConfig struct {
 	// Reasoning controls the thinking mode of reasoning models (Qwen,
 	// DeepSeek-R1, …): "auto" sends nothing and leaves it to the backend;
 	// "on"/"off" request or suppress thinking explicitly (OpenAI-compatible
-	// chat_template_kwargs.enable_thinking, Ollama think).
+	// chat_template_kwargs.enable_thinking, Ollama think). GPT-OSS additionally
+	// accepts "low", "medium", and "high" effort; auto defaults to medium.
 	Reasoning string `mapstructure:"reasoning" yaml:"reasoning"`
 }
 
@@ -955,7 +956,8 @@ chat:
   max_tokens: 4096
   stream: true
   # auto omits enable_thinking and lets each model/backend use its native
-  # behavior. Use /think on|off for a session-level override.
+  # behavior. Use /think on|off for generic models, or low|medium|high for
+  # GPT-OSS (auto defaults GPT-OSS to medium), as a session-level override.
   reasoning: auto
   strip_leaked_thinking: true
   # Allow pasting images even when the model is not recognized as vision-capable:

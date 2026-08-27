@@ -35,16 +35,22 @@ func (s CapabilitySupport) String() string {
 // Capabilities describes what a backend supports, for /doctor and prompt
 // composition decisions.
 type Capabilities struct {
-	SupportsStreaming    bool
-	SupportsModelList    bool
-	SupportsTokenUsage   bool
-	SupportsJSONMode     bool
-	SupportsSystemPrompt bool
-	NativeTools          CapabilitySupport
-	ParallelToolCalls    CapabilitySupport
-	ReasoningEvents      CapabilitySupport
-	StructuredOutput     CapabilitySupport
-	ContextWindowTokens  int // 0 = unknown; profiles/config provide fallback
+	SupportsStreaming     bool
+	SupportsModelList     bool
+	SupportsTokenUsage    bool
+	SupportsJSONMode      bool
+	SupportsSystemPrompt  bool
+	ModelFamily           ModelFamily
+	TemplateOwnership     TemplateOwnership
+	HarmonyProtocol       CapabilitySupport
+	ReasoningContinuation CapabilitySupport
+	StructuredReasoning   CapabilitySupport
+	StreamingReasoning    CapabilitySupport
+	NativeTools           CapabilitySupport
+	ParallelToolCalls     CapabilitySupport
+	ReasoningEvents       CapabilitySupport
+	StructuredOutput      CapabilitySupport
+	ContextWindowTokens   int // 0 = unknown; profiles/config provide fallback
 }
 
 // CapabilityReporter is implemented by providers that can describe
