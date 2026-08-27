@@ -251,6 +251,22 @@ func TestLocalContextFencedInstructionsCoverTime(t *testing.T) {
 	}
 }
 
+func TestNativeInstructionsCarryStableTimeGuidanceOnce(t *testing.T) {
+	instr := NativeInstructions("/tmp/example", false)
+	lower := strings.ToLower(instr)
+	if !strings.Contains(lower, "kind=time") || !strings.Contains(lower, "never infer the current date") {
+		t.Fatalf("native instructions missing stable time guidance:\n%s", instr)
+	}
+	if got := strings.Count(lower, "kind=time"); got != 1 {
+		t.Fatalf("stable time guidance appears %d times, want exactly 1:\n%s", got, instr)
+	}
+	// Stable across calls: no timestamp or per-call value that would move the
+	// KV-cache prefix.
+	if NativeInstructions("/tmp/example", false) != instr {
+		t.Fatal("native instructions are not stable across calls")
+	}
+}
+
 func TestLocalContextTimeSystemZoneIsHonest(t *testing.T) {
 	// No configured override: the source must be one of the honest markers
 	// and, when no IANA name is resolved, the field is omitted rather than
