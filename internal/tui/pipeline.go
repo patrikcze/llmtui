@@ -701,7 +701,7 @@ func compactLatestUserMessage(messages []provider.Message) (provider.Message, []
 func (m *Model) requestHistory() (messages []provider.Message, summary string, agentScoped bool) {
 	messages = m.session.Messages
 	summary = m.summary
-	if !m.agentRunActive() {
+	if !m.contextAgentOwnsState() {
 		return messages, summary, false
 	}
 	start := m.agentLoop.historyStart

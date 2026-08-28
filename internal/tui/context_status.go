@@ -165,7 +165,7 @@ func (m *Model) contextSnapshot() contextStatusSnapshot {
 	}
 	if agentScope {
 		snapshot.Scope = "agent"
-		snapshot.Agent = m.agentContextSnapshot(len(recent))
+		snapshot.Agent = m.agentContextSnapshot()
 	}
 	return snapshot
 }
@@ -189,7 +189,7 @@ func (m *Model) contextSummaryForInspection(requestSummary string, agentScoped b
 	return "", "none"
 }
 
-func (m *Model) agentContextSnapshot(currentMessages int) *agentContextStatus {
+func (m *Model) agentContextSnapshot() *agentContextStatus {
 	if m.agentLoop == nil || m.agentLoop.run == nil {
 		return nil
 	}
@@ -205,7 +205,7 @@ func (m *Model) agentContextSnapshot(currentMessages int) *agentContextStatus {
 		StartSummaryTokens:    provider.EstimateTokens(run.StartSummary),
 		CapturedStartTurns:    len(run.StartTurns),
 		VerifiedMemories:      len(run.Memory),
-		CurrentCycleMessages:  currentMessages,
+		CurrentCycleMessages:  m.currentCycleMessageCount(),
 		CompletedRawProjected: run.Cycle > 1 && len(m.agentLoop.cycleBoundaries) > 0,
 		CriteriaTotal:         len(run.Criteria),
 		UnresolvedCriteria:    len(run.UnresolvedCriteria()),
@@ -214,6 +214,22 @@ func (m *Model) agentContextSnapshot(currentMessages int) *agentContextStatus {
 		Verifier:              m.verifierContextSnapshot(run),
 	}
 	return status
+}
+
+func (m *Model) currentCycleMessageCount() int {
+	if m.agentLoop == nil {
+		return 0
+	}
+	start := m.agentLoop.historyStart
+	for _, boundary := range m.agentLoop.cycleBoundaries {
+		if boundary > start && boundary <= len(m.session.Messages) {
+			start = boundary
+		}
+	}
+	if start < 0 || start > len(m.session.Messages) {
+		return 0
+	}
+	return len(m.session.Messages) - start
 }
 
 func (m *Model) verifierContextSnapshot(run *agent.AgentRun) verifierContextStatus {
@@ -296,10 +312,10 @@ func (m *Model) contextAgentOwnsState() bool {
 // projections cannot run. Read-only context inspection does not use this
 // guard, so it remains available throughout active work.
 func (m *Model) contextMutationBlockedReason() string {
+	if m.pendingBudget {
+		return "a tool-round budget extension is pending"
+	}
 	if len(m.pendingCalls) > 0 {
-		if m.pendingBudget {
-			return "a tool-round budget extension is pending"
-		}
 		return "a tool approval is pending"
 	}
 	if m.pendingAsk != nil {
@@ -310,6 +326,9 @@ func (m *Model) contextMutationBlockedReason() string {
 			return "a verifier retry is active"
 		}
 		return "the verifier is active"
+	}
+	if m.thinking {
+		return "a model response is streaming"
 	}
 	switch m.state {
 	case turnModelStreaming:

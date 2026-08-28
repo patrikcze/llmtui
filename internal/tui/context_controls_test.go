@@ -120,17 +120,31 @@ func TestContextMutationBlockedDuringUnsafeLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			m := newTestModel(t)
-			m.summary = "unchanged"
-			test.setup(m)
-			cmdContext(m, "clear-summary")
-			if !strings.Contains(m.errText, test.want) {
-				t.Fatalf("error = %q, want %q", m.errText, test.want)
-			}
-			if m.summary != "unchanged" {
-				t.Fatal("blocked context mutation changed the session summary")
+			for _, command := range []string{"summarize", "compact", "rebuild", "clear-summary", "strategy none"} {
+				t.Run(command, func(t *testing.T) {
+					m := newTestModel(t)
+					m.summary = "unchanged"
+					m.ctxStrategy = "auto"
+					test.setup(m)
+					cmdContext(m, command)
+					if !strings.Contains(m.errText, test.want) {
+						t.Fatalf("error = %q, want %q", m.errText, test.want)
+					}
+					if m.summary != "unchanged" || m.ctxStrategy != "auto" {
+						t.Fatal("blocked context mutation changed context state")
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestContextMutationBlockedByThinkingMirror(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	cmdContext(m, "clear-summary")
+	if !strings.Contains(m.errText, "model response is streaming") {
+		t.Fatalf("error = %q", m.errText)
 	}
 }
 
