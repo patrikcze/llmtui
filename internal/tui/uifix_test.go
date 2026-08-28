@@ -44,36 +44,17 @@ func TestInputGrowthNeverStarvesViewport(t *testing.T) {
 	}
 }
 
-func TestWrapLinesCountsWordWrap(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-		width int
-		want  int
-	}{
-		{"empty", "", 10, 1},
-		{"single short line", "hello", 10, 1},
-		{"explicit newlines", "a\nb\nc", 10, 3},
-		// "hello world foo" at width 12: "hello world " + "foo" — a plain
-		// character count (15/12) would say 1 row + remainder ≈ 2; make sure
-		// word wrap agrees where it matters:
-		{"word wrap overflows earlier than char wrap", "aaaa bbbb cccc", 10, 2},
-		// Ten 6-char words at width 20: char count = 69/20 ≈ 4 rows, word
-		// wrap fits only 2 words (14 cells) per row = 5 rows.
-		{"many medium words", strings.TrimSpace(strings.Repeat("worddd ", 10)), 20, 5},
-		{"long word hard-breaks", strings.Repeat("x", 25), 10, 3},
-		// The textarea's final wrap flush uses >=: text that exactly fills
-		// the last row spills onto a fresh one, where the cursor sits.
-		{"exactly full row adds a cursor row", "aaaa bbbb", 9, 2},
-		{"full width word adds a cursor row", strings.Repeat("x", 10), 10, 2},
-		{"cap at six rows", strings.Repeat("word ", 200), 10, 6},
+func TestInputHeightUsesTextareaVisualLayout(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(18, 24)
+	m.input.SetValue(strings.Repeat("界", 8) + "\nemoji: 👩🏽‍💻")
+	m.syncInputHeight()
+
+	if m.inputLines != m.input.Height() {
+		t.Errorf("tracked input rows = %d, textarea rows = %d", m.inputLines, m.input.Height())
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := wrapLines(tc.value, tc.width, 6); got != tc.want {
-				t.Errorf("wrapLines(%q, %d) = %d, want %d", tc.value, tc.width, got, tc.want)
-			}
-		})
+	if m.inputLines < 3 {
+		t.Errorf("inputLines = %d, want wrapped Unicode text to occupy multiple rows", m.inputLines)
 	}
 }
 

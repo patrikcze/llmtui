@@ -81,6 +81,27 @@ func TestShiftEnterSequenceInsertsNewline(t *testing.T) {
 	}
 }
 
+// Bubble Tea v2 decodes enhanced Shift+Enter input into a normal key press.
+// This is distinct from the raw CSI fallback above, so keep a regression test
+// for the event shape delivered by current terminal runtimes.
+func TestDecodedShiftEnterInsertsNewline(t *testing.T) {
+	m := newTestModel(t)
+	typeText(m, "first")
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	typeText(m, "second")
+
+	if got := m.input.Value(); got != "first\nsecond" {
+		t.Errorf("input = %q, want newline inserted", got)
+	}
+	if userMessages(m) != 0 {
+		t.Error("shift+enter must not send")
+	}
+	if m.inputLines != 2 {
+		t.Errorf("inputLines = %d, want 2", m.inputLines)
+	}
+}
+
 func TestShiftEnterIsSwallowedDuringToolApproval(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "unchanged")

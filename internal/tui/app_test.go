@@ -623,25 +623,6 @@ func TestCtrlUClearsSlashSuggestions(t *testing.T) {
 	}
 }
 
-func TestWrapLines(t *testing.T) {
-	tests := []struct {
-		value string
-		width int
-		want  int
-	}{
-		{"", 40, 1},
-		{"short", 40, 1},
-		{strings.Repeat("x", 90), 40, 3},
-		{"a\nb\nc", 40, 3},
-		{strings.Repeat("long line\n", 20), 40, 6}, // capped at maxLines
-	}
-	for _, tt := range tests {
-		if got := wrapLines(tt.value, tt.width, 6); got != tt.want {
-			t.Errorf("wrapLines(%d chars, %d) = %d, want %d", len(tt.value), tt.width, got, tt.want)
-		}
-	}
-}
-
 func TestInputBoxGrowsAndShrinks(t *testing.T) {
 	m := newTestModel(t)
 	if m.inputLines != 1 {

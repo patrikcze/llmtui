@@ -64,6 +64,10 @@ type Options struct {
 // stalled. Distinct from a user Esc (context.Canceled) so we can report why.
 var errStreamIdle = errors.New("stream idle timeout")
 
+// maxComposerContentRows keeps the textarea's visible height independent from
+// its editable content length. Long prompts scroll after the layout cap.
+const maxComposerContentRows = 10_000
+
 type healthMsg struct {
 	err      error
 	provider string // which provider was checked, to discard stale results
@@ -280,6 +284,11 @@ func New(opts Options) *Model {
 	ta.Placeholder = "Ask anything… (/ for commands, Enter to send)"
 	ta.Prompt = "┃ "
 	ta.CharLimit = 0
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	// MaxHeight controls the visible composer; MaxContentHeight separately
+	// permits longer prompts to scroll once that visible cap is reached.
+	ta.MaxContentHeight = maxComposerContentRows
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	// textarea.New() defaults to DefaultDarkStyles() unconditionally; v1's
@@ -672,6 +681,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.overlayOpen {
 			return m.updateOverlay(msg)
+		}
+		// Bubble Tea v2 decodes enhanced keyboard input itself, so supported
+		// terminals deliver Shift+Enter as a regular KeyPressMsg instead of
+		// the raw CSI fallback handled above.
+		if msg.Code == tea.KeyEnter && msg.Mod.Contains(tea.ModShift) {
+			m.input.InsertString("\n")
+			m.syncInputHeight()
+			return m, nil
 		}
 		if len(m.sugs) > 0 {
 			switch msg.String() {
@@ -1846,78 +1863,13 @@ func (m *Model) quit() tea.Cmd {
 	}
 }
 
-// wrapLines counts how many rows value occupies at the given wrap width,
-// clamped to [1, maxLines]. The bubbles textarea renders with greedy *word*
-// wrapping, which produces more rows than a plain character count —
-// undercounting here left the box too short, so it scrolled internally and
-// hid all but the cursor row.
-func wrapLines(value string, width, maxLines int) int {
-	if width < 1 {
-		width = 1
-	}
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	lines := 0
-	for _, l := range strings.Split(value, "\n") {
-		lines += wordWrappedRows(l, width)
-	}
-	if lines < 1 {
-		lines = 1
-	}
-	if lines > maxLines {
-		lines = maxLines
-	}
-	return lines
-}
-
-// wordWrappedRows mirrors the textarea's greedy word wrap: a word (plus its
-// trailing spaces) moves to a fresh row when it would overflow the current
-// one; a word as wide as the row hard-breaks onto its own row.
-func wordWrappedRows(line string, width int) int {
-	rows, lineW, wordW, spaces := 1, 0, 0, 0
-	for _, r := range line {
-		if r == ' ' || r == '\t' {
-			spaces++
-		} else {
-			wordW++
-		}
-		switch {
-		case spaces > 0:
-			if lineW+wordW+spaces > width {
-				rows++
-				lineW = wordW + spaces
-			} else {
-				lineW += wordW + spaces
-			}
-			wordW, spaces = 0, 0
-		case wordW >= width:
-			// The word alone fills a row: place it on a fresh one.
-			if lineW > 0 {
-				rows++
-			}
-			lineW, wordW = width, 0
-		}
-	}
-	// Final flush matches the textarea's wrap exactly: it uses >= here, so
-	// content that exactly fills the last row spills onto a fresh one (the
-	// cursor needs somewhere to sit). Undercounting this row made the box
-	// scroll internally and hide the first line.
-	if lineW+wordW+spaces >= width {
-		rows++
-	}
-	return rows
-}
-
 // syncInputHeight grows and shrinks the input box with its content,
-// Claude-Code style: 1 row when empty, growing with the prompt up to a cap
-// that scales with the terminal height (maxInputLines) so multi-line prompts
-// stay fully visible instead of scrolling internally and hiding the top.
+// using bubbles' own visual-line calculation so Unicode width, tabs, and
+// wrapping always agree with the component that renders the prompt.
 func (m *Model) syncInputHeight() {
-	lines := wrapLines(m.input.Value(), m.width-8, m.maxInputLines())
+	lines := m.input.Height()
 	if lines != m.inputLines {
 		m.inputLines = lines
-		m.input.SetHeight(lines)
 		m.relayout()
 	}
 }
@@ -2449,7 +2401,14 @@ func (m *Model) relayout() {
 func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
 
+	if m.statusLines < 1 {
+		m.statusLines = 1
+	}
+	// Let the textarea calculate its height from the same cell-width-aware
+	// wrapping it uses to render. SetWidth triggers that recalculation.
+	m.input.MaxHeight = m.maxInputLines()
 	m.input.SetWidth(w - 6)
+	m.inputLines = m.input.Height()
 
 	// Layout: viewport fills space above the live activity region, usage
 	// panel (4), suggestion popup, input (border + content rows, +1 when
@@ -2458,9 +2417,6 @@ func (m *Model) resize(w, h int) {
 	inputHeight := 2 + m.inputLines
 	if len(m.attachments) > 0 {
 		inputHeight++
-	}
-	if m.statusLines < 1 {
-		m.statusLines = 1
 	}
 	vpHeight := h - 4 - len(m.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
 	if vpHeight < 3 {
