@@ -19,7 +19,7 @@ func TestReadFileRejectsFIFOWithoutOpeningIt(t *testing.T) {
 	}
 	defer os.Remove(path)
 
-	_, err := NewRunner(root, 1).readFile("input.fifo")
+	_, err := NewRunner(root, 1).readFile("input.fifo", 0, 0)
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("error = %v, want non-regular-file rejection", err)
 	}
@@ -58,7 +58,7 @@ func TestWorkspaceRootPreventsSymlinkSwapEscape(t *testing.T) {
 	}()
 	runner := NewRunner(root, 1)
 	for range 200 {
-		if output, err := runner.readFile("swap.txt"); err == nil && strings.Contains(output, "outside") {
+		if output, err := runner.readFile("swap.txt", 0, 0); err == nil && strings.Contains(output, "outside") {
 			cancel()
 			<-done
 			t.Fatal("descriptor-relative read escaped through a symlink swap")

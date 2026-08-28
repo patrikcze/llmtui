@@ -26,11 +26,13 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolReadFile,
-			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root.",
+			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root."}
+					"path": {"type": "string", "description": "File path relative to the project root."},
+					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500)."}
 				},
 				"required": ["path"]
 			}`),
@@ -70,6 +72,19 @@ func Specs() []provider.ToolSpec {
 					"content": {"type": "string", "description": "The full file content to write."}
 				},
 				"required": ["path", "content"]
+			}`),
+		},
+		{
+			Name:        ToolEditFile,
+			Description: "Replace one exact, unique text fragment in an existing workspace file. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "File path relative to the project root. The file must already exist."},
+					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate."},
+					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."}
+				},
+				"required": ["path", "old_text", "new_text"]
 			}`),
 		},
 		{
@@ -138,6 +153,10 @@ type nativeArgs struct {
 	Pattern    string `json:"pattern"`
 	Glob       string `json:"glob"`
 	Freshness  string `json:"freshness_token"`
+	Offset     int    `json:"offset"`
+	Limit      int    `json:"limit"`
+	OldText    string `json:"old_text"`
+	NewText    string `json:"new_text"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -290,6 +309,17 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
+		case ToolReadFile:
+			if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
+				c.InputErr = err.Error()
+			} else {
+				c.Offset, c.Limit = args.Offset, args.Limit
+			}
+		case ToolEditFile:
+			c.OldText, c.NewText = args.OldText, args.NewText
+			if err := ValidateEditFileCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolGlob:
 			c.Body = args.Pattern
 		case ToolGrep:
@@ -419,6 +449,7 @@ func NativeInstructions(root string, withWeb bool) string {
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
+- Use read_file with offset/limit when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.

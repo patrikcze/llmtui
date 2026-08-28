@@ -110,6 +110,12 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		// "overwrite README.md with anything at all".
 		sum := sha256.Sum256([]byte(c.Body))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
+	case tools.ToolEditFile:
+		// Path identifies the file; the exact old→new pair identifies the
+		// change. Approving one replacement must never authorise a different
+		// old_text or a different new_text against the same file.
+		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText))
+		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""
 	case tools.ToolRunCommand:
@@ -135,6 +141,8 @@ func approvalScopeDescription(c tools.Call) string {
 	switch c.Tool {
 	case tools.ToolWriteFile:
 		return fmt.Sprintf("%s %s with this exact content", c.Tool, strings.TrimSpace(c.Path))
+	case tools.ToolEditFile:
+		return fmt.Sprintf("%s %s with this exact replacement", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolReadFile, tools.ToolListDir, tools.ToolWebFetch:
 		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolRunCommand:

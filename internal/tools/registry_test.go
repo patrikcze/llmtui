@@ -6,11 +6,21 @@ import (
 
 func TestDefaultRegistryContainsAllBuiltins(t *testing.T) {
 	reg := DefaultRegistry()
-	required := []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch}
+	required := []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch}
 	for _, name := range required {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("missing capability %q", name)
 		}
+	}
+}
+
+func TestEditFileRegisteredAsWorkspaceWriteWithApproval(t *testing.T) {
+	info, ok := DefaultRegistry().Get(ToolEditFile)
+	if !ok {
+		t.Fatal("edit_file not registered")
+	}
+	if info.Source != "builtin" || info.Safety != SafetyWorkspaceWrite || info.Approval != "ask" {
+		t.Fatalf("edit_file capability = %+v", info)
 	}
 }
 
@@ -79,6 +89,7 @@ func TestBuiltinSafetyClasses(t *testing.T) {
 		ToolGlob:       SafetyReadOnly,
 		ToolGrep:       SafetyReadOnly,
 		ToolWriteFile:  SafetyWorkspaceWrite,
+		ToolEditFile:   SafetyWorkspaceWrite,
 		ToolRunCommand: SafetyCommand,
 		ToolWebSearch:  SafetyNetwork,
 		ToolWebFetch:   SafetyNetwork,

@@ -102,6 +102,36 @@ func TestProgressIdentityUsesExplicitFreshnessAndPagination(t *testing.T) {
 	}
 }
 
+// TestProgressFingerprintReadRangeAndEdit checks that paginating through a
+// file with read_file, and issuing distinct edits, each produce distinct
+// fingerprints — while semantically identical calls still collide.
+func TestProgressFingerprintReadRangeAndEdit(t *testing.T) {
+	whole := tools.Call{Tool: tools.ToolReadFile, Path: "big.go"}
+	p1 := tools.Call{Tool: tools.ToolReadFile, Path: "big.go", Offset: 1, Limit: 200}
+	p2 := tools.Call{Tool: tools.ToolReadFile, Path: "big.go", Offset: 201, Limit: 200}
+	if progressFingerprint(p1) == progressFingerprint(p2) {
+		t.Fatal("successive read_file pages collapsed to one fingerprint")
+	}
+	if progressFingerprint(whole) == progressFingerprint(p1) {
+		t.Fatal("a whole-file read and a ranged read collapsed")
+	}
+	// offset omitted + limit only == offset 1 + same limit: same operation.
+	if progressFingerprint(tools.Call{Tool: tools.ToolReadFile, Path: "big.go", Limit: 200}) != progressFingerprint(p1) {
+		t.Fatal("equivalent read ranges produced different fingerprints")
+	}
+
+	editA := tools.Call{Tool: tools.ToolEditFile, Path: "f.go", OldText: "x", NewText: "y"}
+	editB := tools.Call{Tool: tools.ToolEditFile, Path: "f.go", OldText: "x", NewText: "z"}
+	editC := tools.Call{Tool: tools.ToolEditFile, Path: "f.go", OldText: "q", NewText: "y"}
+	if progressFingerprint(editA) == progressFingerprint(editB) ||
+		progressFingerprint(editA) == progressFingerprint(editC) {
+		t.Fatal("different edit replacements collapsed to one fingerprint")
+	}
+	if progressFingerprint(editA) != progressFingerprint(tools.Call{Tool: tools.ToolEditFile, Path: "f.go", OldText: "x", NewText: "y"}) {
+		t.Fatal("identical edits produced different fingerprints")
+	}
+}
+
 func TestProgressLedgerBlocksOnlyAfterThreshold(t *testing.T) {
 	l := newProgressLedger(3)
 	call := tools.Call{Tool: tools.ToolWebSearch, Body: "weather Brno-Bystrc"}

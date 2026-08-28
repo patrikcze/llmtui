@@ -76,7 +76,8 @@ func OpenOperationLog(dir, session string) (*OperationLog, error) {
 // MCP tools are treated as mutating because their schemas do not communicate
 // effect semantics.
 func IsDurableSideEffect(c tools.Call) bool {
-	return c.MCPServer != "" || c.Tool == tools.ToolWriteFile || c.Tool == tools.ToolRunCommand
+	return c.MCPServer != "" || c.Tool == tools.ToolWriteFile ||
+		c.Tool == tools.ToolEditFile || c.Tool == tools.ToolRunCommand
 }
 
 // Begin durably records intent before a side effect. Existing started or
@@ -198,8 +199,11 @@ func operationKey(c tools.Call) string {
 		// Fenced calls have no provider ID. Their content hash becomes the
 		// idempotency key, favoring duplicate prevention over silently
 		// repeating an identical non-idempotent command after recovery.
+		// edit_file's replacement identity lives in OldText/NewText, so both
+		// are part of the key: a second, materially different edit to the same
+		// path must not be mistaken for a recovered duplicate.
 		material = strings.Join([]string{
-			"content", operationTool(c), c.Path, c.Body, c.MCPArgs,
+			"content", operationTool(c), c.Path, c.Body, c.MCPArgs, c.OldText, c.NewText,
 		}, "\x00")
 	}
 	sum := sha256.Sum256([]byte(material))

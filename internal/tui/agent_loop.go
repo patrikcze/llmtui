@@ -926,7 +926,7 @@ func (m *Model) recordAgentTruncation() {
 // server/tool name only, never the raw per-server argument JSON.
 func toolCallDetail(call tools.Call) string {
 	switch call.Tool {
-	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolListDir, tools.ToolSkillLoad:
+	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolListDir, tools.ToolSkillLoad:
 		return call.Path
 	case tools.ToolGrep, tools.ToolGlob:
 		if call.Path != "" {
@@ -978,7 +978,7 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err != nil {
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewError(kind, result.Call.Tool, result.Err))
 		}
-		if result.Err == nil && result.Call.Tool == tools.ToolWriteFile && strings.TrimSpace(result.Call.Path) != "" {
+		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) && strings.TrimSpace(result.Call.Path) != "" {
 			m.agentLoop.execution.ChangedFiles = append(m.agentLoop.execution.ChangedFiles, result.Call.Path)
 			m.agentLoop.execution.Artifacts = append(m.agentLoop.execution.Artifacts, result.Call.Path)
 		}
