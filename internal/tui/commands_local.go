@@ -398,41 +398,38 @@ func (m *Model) templateOverlay() string {
 func cmdContext(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
-	case "":
-		m.openOverlay(m.contextOverlay())
-	case "compact":
-		return cmdContext(m, "rebuild")
+	case "", "status":
+		m.openOverlay(m.contextStatusOverlay())
 	case "summary":
-		var b strings.Builder
-		b.WriteString(m.theme.Badge.Render("session summary") + "\n\n")
-		if m.summary == "" {
-			b.WriteString(m.theme.SystemNote.Render("no summary yet — one is built when the conversation grows past the context budget") + "\n")
-		} else {
-			for _, line := range strings.Split(m.summary, "\n") {
-				b.WriteString("  " + m.theme.StatusValue.Render(line) + "\n")
-			}
+		m.openOverlay(m.contextSummaryOverlay(m.contextSnapshot()))
+	case "preview":
+		m.openOverlay(m.contextPreviewOverlay(m.contextSnapshot()))
+	case "refresh":
+		m.openOverlay(m.contextStatusOverlay())
+		m.notice = "context diagnostics refreshed"
+	case "summarize", "compact", "rebuild":
+		if blocked := m.contextMutationBlockedReason(); blocked != "" {
+			return m.fail(fmt.Sprintf("/context summarize is unavailable while %s; stop or complete the active work first", blocked))
 		}
-		m.openOverlay(m.overlayFooter(&b))
-	case "rebuild":
 		older, _ := contextmgr.Split(m.session.Messages, m.cfg.Context.KeepLastMessages)
 		if len(older) == 0 {
 			return m.fail("nothing old enough to summarize yet")
 		}
-		out, err := contextmgr.HeuristicSummarizer{}.Summarize(context.Background(), contextmgr.SummaryInput{
-			Messages: older, MaxTokens: m.cfg.Context.SummaryMaxTokens,
-		})
-		if err != nil {
-			return m.fail("summarize: " + err.Error())
-		}
-		m.summary = out.Summary
-		m.notice = fmt.Sprintf("summary rebuilt (≈ %s tokens)", components.FormatTokens(provider.EstimateTokens(out.Summary)))
+		m.summary = m.summarizeMessages(older, m.cfg.Context.SummaryMaxTokens)
+		m.notice = fmt.Sprintf("summary rebuilt (≈ %s tokens)", components.FormatTokens(provider.EstimateTokens(m.summary)))
 	case "clear-summary":
+		if blocked := m.contextMutationBlockedReason(); blocked != "" {
+			return m.fail(fmt.Sprintf("/context clear-summary is unavailable while %s; stop or complete the active work first", blocked))
+		}
 		m.summary = ""
 		m.notice = "session summary cleared"
 	case "strategy":
 		if rest == "" {
-			m.notice = "context strategy: " + m.ctxStrategy + " (none|truncate|summarize|auto)"
+			m.openOverlay(m.contextStrategyOverlay(m.contextSnapshot()))
 			return nil
+		}
+		if blocked := m.contextMutationBlockedReason(); blocked != "" {
+			return m.fail(fmt.Sprintf("/context strategy is unavailable while %s; stop or complete the active work first", blocked))
 		}
 		if !contextmgr.ValidStrategy(rest) {
 			return m.fail("unknown strategy " + rest + " (none|truncate|summarize|auto)")
@@ -440,53 +437,132 @@ func cmdContext(m *Model, args string) tea.Cmd {
 		m.ctxStrategy = rest
 		m.notice = "context strategy set to " + rest
 	default:
-		return m.fail("usage: /context [summary|compact|clear-summary|strategy <s>]")
+		return m.fail("usage: /context [status|summary|summarize|compact|rebuild|preview|refresh|clear-summary|strategy <s>]")
 	}
 	return nil
 }
 
-func (m *Model) contextOverlay() string {
-	window, source := m.contextWindow()
-	prepared, _ := m.prepareRequest("", nil, true)
-	used := prepared.estimate.Total
-	if used == 0 {
-		used = contextmgr.EstimateTokens(m.session.Messages)
-	}
+func (m *Model) contextStatusOverlay() string {
+	snapshot := m.contextSnapshot()
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("context") + "\n\n")
-	m.kv(&b, "strategy", m.ctxStrategy)
-	m.kv(&b, "window", fmt.Sprintf("%s tokens (%s)", components.FormatTokens(window), source))
-	m.kv(&b, "used", fmt.Sprintf("%s tokens (estimated)", components.FormatTokens(used)))
-	if prepared.estimate.Total > 0 {
-		m.kv(&b, "breakdown", fmt.Sprintf("system %s · messages %s · tool schemas %s",
-			components.FormatTokens(prepared.estimate.System),
-			components.FormatTokens(prepared.estimate.Messages),
-			components.FormatTokens(prepared.estimate.Tools)))
+	m.kv(&b, "scope", contextScopeLabel(snapshot))
+	m.kv(&b, "strategy", snapshot.Strategy)
+	m.kv(&b, "window", fmt.Sprintf("%s tokens (%s)", components.FormatTokens(snapshot.WindowTokens), snapshot.WindowSource))
+	m.kv(&b, "estimated request", fmt.Sprintf("%s tokens", components.FormatTokens(snapshot.EstimatedPromptTokens)))
+	m.kv(&b, "response reserve", fmt.Sprintf("%s tokens", components.FormatTokens(snapshot.ResponseReserveTokens)))
+	m.kv(&b, "available budget", fmt.Sprintf("%s tokens", components.FormatTokens(snapshot.AvailableTokens)))
+	m.kv(&b, "breakdown", fmt.Sprintf("system %s · messages %s · tool schemas %s · summary %s",
+		components.FormatTokens(snapshot.SystemTokens), components.FormatTokens(snapshot.MessageTokens),
+		components.FormatTokens(snapshot.ToolSchemaTokens), components.FormatTokens(snapshot.SummaryTokens)))
+	m.kv(&b, "memory / RAG", "not refreshed in context status")
+	m.kv(&b, "summary", snapshot.SummaryKind)
+	m.kv(&b, "older messages", fmt.Sprintf("%d represented compactly", snapshot.OlderMessages))
+	m.kv(&b, "recent messages", fmt.Sprintf("%d retained verbatim", snapshot.RecentMessages))
+	compression := "not required"
+	if snapshot.CompressionRequired {
+		compression = snapshot.CompressionStrategy + " on next request"
 	}
-	m.kv(&b, "reserve", fmt.Sprintf("%s tokens for the response", components.FormatTokens(m.cfg.Context.ReserveResponseTokens)))
-	m.kv(&b, "keep last", fmt.Sprintf("%d messages verbatim", m.cfg.Context.KeepLastMessages))
-	m.kv(&b, "summarize after", fmt.Sprintf("%d messages", m.cfg.Context.SummarizeAfterMessages))
-	sum := "none"
-	if m.summary != "" {
-		sum = fmt.Sprintf("active (≈ %s tokens) — /context summary", components.FormatTokens(provider.EstimateTokens(m.summary)))
+	m.kv(&b, "compression", compression)
+	if snapshot.Agent != nil {
+		m.renderAgentContextStatus(&b, snapshot.Agent)
 	}
-	m.kv(&b, "summary", sum)
+	m.renderTurnContextStatus(&b, snapshot.Turn)
+	if snapshot.MutationAllowed {
+		m.kv(&b, "context mutation", "allowed")
+	} else {
+		m.kv(&b, "context mutation", "blocked")
+		m.kv(&b, "blocked by", snapshot.BlockedReason)
+	}
 
-	// Usage bar.
-	frac := 0.0
-	if window > 0 {
-		frac = float64(used) / float64(window)
-		if frac > 1 {
-			frac = 1
-		}
-	}
+	frac := min(snapshot.UsagePercent/100, 1)
 	barWidth := 30
 	filled := int(frac * float64(barWidth))
 	bar := m.theme.ChartBar.Render(strings.Repeat("█", filled)) + m.theme.StatusBar.Render(strings.Repeat("░", barWidth-filled))
 	fmt.Fprintf(&b, "\n  %s %.0f%%\n", bar, frac*100)
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("/context strategy <s> · /compact · /context clear-summary"))
+	b.WriteString("\n" + m.theme.SystemNote.Render("/context status · /context summary · /context preview · /context summarize\n/context strategy <s> · /context clear-summary"))
 	return m.overlayFooter(&b)
+}
+
+func (m *Model) contextSummaryOverlay(snapshot contextStatusSnapshot) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render(snapshot.SummaryKind) + "\n\n")
+	if !snapshot.SummaryActive {
+		b.WriteString(m.theme.SystemNote.Render("no summary currently applies to the next request") + "\n")
+	} else {
+		for _, line := range strings.Split(snapshot.SummaryPreview, "\n") {
+			b.WriteString("  " + m.theme.StatusValue.Render(line) + "\n")
+		}
+	}
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) contextPreviewOverlay(snapshot contextStatusSnapshot) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("context preview") + "\n\n")
+	categories := []string{"Stable system instructions"}
+	if snapshot.Agent != nil {
+		categories = append(categories, "Agent directive and verified cycle memory")
+	}
+	if len(m.activeSkillIDs()) > 0 {
+		categories = append(categories, "Active skills")
+	}
+	categories = append(categories, "Optional memory/RAG (not refreshed here)")
+	if snapshot.SummaryActive {
+		categories = append(categories, snapshot.SummaryKind)
+	}
+	categories = append(categories, fmt.Sprintf("Recent verbatim messages (%d)", snapshot.RecentMessages))
+	if snapshot.Turn.HarmonyContinuation || snapshot.Turn.State == string(turnProcessingResults) {
+		categories = append(categories, "Current tool continuation")
+	}
+	categories = append(categories, fmt.Sprintf("Tool schemas (%s tokens)", components.FormatTokens(snapshot.ToolSchemaTokens)))
+	for index, category := range categories {
+		fmt.Fprintf(&b, "  %d. %s\n", index+1, m.theme.StatusValue.Render(category))
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("Memory and RAG are not refreshed by context preview. Use /prompt preview for the exact outgoing prompt."))
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) contextStrategyOverlay(snapshot contextStatusSnapshot) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("context strategy") + "\n\n")
+	m.kv(&b, "active", snapshot.Strategy)
+	m.kv(&b, "source", "runtime session setting")
+	b.WriteString("\n" + m.theme.SystemNote.Render("/context strategy <none|truncate|summarize|auto>"))
+	return m.overlayFooter(&b)
+}
+
+func contextScopeLabel(snapshot contextStatusSnapshot) string {
+	if snapshot.Agent == nil {
+		return "session"
+	}
+	return fmt.Sprintf("agent cycle %d", snapshot.Agent.Cycle)
+}
+
+func (m *Model) renderAgentContextStatus(b *strings.Builder, status *agentContextStatus) {
+	m.kv(b, "agent run", status.RunID)
+	m.kv(b, "objective", status.Objective)
+	m.kv(b, "cycle", fmt.Sprintf("%d / %d", status.Cycle, status.MaxCycles))
+	m.kv(b, "stage", status.Stage)
+	m.kv(b, "status", status.Status)
+	m.kv(b, "start context", fmt.Sprintf("captured %t · %d turns · summary %s", status.StartContextCaptured, status.CapturedStartTurns, components.FormatTokens(status.StartSummaryTokens)))
+	m.kv(b, "criteria", fmt.Sprintf("%d total, %d unresolved", status.CriteriaTotal, status.UnresolvedCriteria))
+	m.kv(b, "verified memories", fmt.Sprintf("%d", status.VerifiedMemories))
+	m.kv(b, "raw cycles projected", fmt.Sprintf("%t", status.CompletedRawProjected))
+	m.kv(b, "last compression", status.LastCompression)
+	m.kv(b, "verifier", fmt.Sprintf("%s · %s · attempt %d/%d · last verdict %s · evidence %d", status.Verifier.State, status.Verifier.Model, status.Verifier.Attempt, status.Verifier.MaxAttempts, status.Verifier.LastVerdict, status.Verifier.EvidenceItems))
+}
+
+func (m *Model) renderTurnContextStatus(b *strings.Builder, status turnContextStatus) {
+	m.kv(b, "turn state", status.State)
+	m.kv(b, "streaming", fmt.Sprintf("%t", status.Streaming))
+	m.kv(b, "pending tool calls", fmt.Sprintf("%d", status.PendingToolCalls))
+	m.kv(b, "native tool batch", fmt.Sprintf("running %t", status.NativeBatchRunning))
+	m.kv(b, "MCP tool batch", fmt.Sprintf("running %t · depth %d", status.MCPBatchRunning, status.ToolDepth))
+	m.kv(b, "pending approvals", fmt.Sprintf("%d", status.PendingApprovals))
+	m.kv(b, "pending budget", fmt.Sprintf("%t", status.PendingBudget))
+	m.kv(b, "pending ask_user", fmt.Sprintf("%t", status.PendingAskUser))
+	m.kv(b, "Harmony continuation", fmt.Sprintf("%t", status.HarmonyContinuation))
 }
 
 // --- /doctor -----------------------------------------------------------------

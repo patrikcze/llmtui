@@ -244,17 +244,21 @@ type Model struct {
 	template      string
 	reasoningMode string // session override: auto/on/off or GPT-OSS low/medium/high
 	summary       string
-	ctxStrategy   string
-	ctxUsed       int
-	ctxWindow     int
-	lastUserMsg   string
-	lastImages    []provider.Image
-	lastDebug     debugInfo
-	debugMode     bool
-	keysMode      bool
-	keysRaw       bool
-	keyLog        []string
-	cfgPath       string
+	// agentContextSummary is a bounded in-memory record of the last
+	// agent-scoped summary committed to a provider request. It is never saved
+	// or used as agent state.
+	agentContextSummary agentScopedSummary
+	ctxStrategy         string
+	ctxUsed             int
+	ctxWindow           int
+	lastUserMsg         string
+	lastImages          []provider.Image
+	lastDebug           debugInfo
+	debugMode           bool
+	keysMode            bool
+	keysRaw             bool
+	keyLog              []string
+	cfgPath             string
 
 	// Optional bounded verified loop. The implementation lives in
 	// agent_loop.go so ordinary chat remains a direct compatibility path.

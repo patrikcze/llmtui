@@ -214,6 +214,16 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `verifier.max_attempts` | `2` | Verifier-inference attempts per cycle (a provider error, timeout, or exhausted internal format repair) before the cycle is parked as `verification_unavailable` instead of restarting the executor — see [agent-loop.md](agent-loop.md#verification) |
 | `enforce_budgets_live` | `true` | Check `max_tool_calls`/`max_tokens` on every tool round using the run's true running totals, not only when a cycle completes. Set `false` to fall back to the cycle-boundary-only check if this causes an unexpected early stop — see [agent-loop.md](agent-loop.md#stop-conditions-and-budgets) |
 
+### Context controls
+
+Context inspection and mutation controls are runtime slash commands, not
+persisted state. `/context status`, `/context summary`, `/context preview`,
+`/context refresh`, and `/context strategy` are read-only. `/context summarize`
+(and its `/context compact`, `/context rebuild`, and `/compact` aliases),
+`/context clear-summary`, and `/context strategy <value>` mutate only when the
+turn and agent lifecycle are idle. See [context-management.md](context-management.md)
+for safe boundaries, summary scope, and `/prompt preview` for the exact prompt.
+
 ### `tools`
 
 Workspace file tools let the model list, read, and write files under the

@@ -81,6 +81,7 @@ func (m *Model) endAgentRun() {
 	if m.agentRunActive() {
 		return
 	}
+	m.agentContextSummary = agentScopedSummary{}
 	m.releaseAgentContext()
 	if m.skillMgr == nil {
 		return
