@@ -100,7 +100,7 @@ func TestChatSendsImagePayload(t *testing.T) {
 	}
 }
 
-func TestReasoningOnlyStreamFallsBack(t *testing.T) {
+func TestReasoningOnlyStreamStaysSeparate(t *testing.T) {
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking hard about MARCO\"}}]}\n\n")
@@ -114,18 +114,27 @@ func TestReasoningOnlyStreamFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	var text strings.Builder
+	var reasoning strings.Builder
+	var visible strings.Builder
+	var done provider.ChatEvent
 	for ev := range events {
-		if ev.Type == provider.EventDelta {
-			text.WriteString(ev.Delta)
+		switch ev.Type {
+		case provider.EventReasoning:
+			reasoning.WriteString(ev.Delta)
+		case provider.EventDelta:
+			visible.WriteString(ev.Delta)
+		case provider.EventDone:
+			done = ev
 		}
 	}
-	got := text.String()
-	if !strings.Contains(got, "thinking hard about MARCO and POLO") {
-		t.Errorf("reasoning not surfaced: %q", got)
+	if got := reasoning.String(); got != "thinking hard about MARCO and POLO" {
+		t.Errorf("reasoning = %q, want dedicated reasoning events", got)
 	}
-	if !strings.Contains(got, "raise max_tokens") {
-		t.Errorf("fallback should explain the token budget: %q", got)
+	if got := visible.String(); got != "" {
+		t.Errorf("visible content = %q, want raw reasoning kept out of transcript deltas", got)
+	}
+	if done.Turn == nil || done.Turn.FinalContent != "" || done.Turn.Reasoning != reasoning.String() {
+		t.Errorf("done turn = %+v, want reasoning-only semantic result", done.Turn)
 	}
 }
 

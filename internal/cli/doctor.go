@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,6 +44,13 @@ func newDoctorCmd(r *Root) *cobra.Command {
 				ok(fmt.Sprintf("active model resolves to %q", model))
 			} else {
 				warn("no model configured (set default_model or --model)")
+			}
+			if tz := strings.TrimSpace(r.cfg.Context.Timezone); tz != "" {
+				if _, tzErr := time.LoadLocation(tz); tzErr != nil {
+					warn(fmt.Sprintf("context.timezone %q is not a valid IANA name (local_context kind=time will error): %v", tz, tzErr))
+				} else {
+					ok(fmt.Sprintf("context.timezone %q is valid", tz))
+				}
 			}
 
 			fmt.Fprintln(out, "\nproviders")

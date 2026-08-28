@@ -42,7 +42,9 @@ func TestDefaultCapabilities(t *testing.T) {
 		t.Errorf("defaults = %+v, should be conservative about optional features", c)
 	}
 	if c.NativeTools != CapabilityUnknown || c.ParallelToolCalls != CapabilityUnknown ||
-		c.ReasoningEvents != CapabilityUnknown || c.StructuredOutput != CapabilityUnknown {
+		c.ReasoningEvents != CapabilityUnknown || c.StructuredOutput != CapabilityUnknown ||
+		c.HarmonyProtocol != CapabilityUnknown || c.ReasoningContinuation != CapabilityUnknown ||
+		c.StructuredReasoning != CapabilityUnknown || c.StreamingReasoning != CapabilityUnknown {
 		t.Errorf("defaults = %+v, model-dependent capabilities should be unknown", c)
 	}
 }

@@ -1062,6 +1062,11 @@ func historyFingerprint(msgs []provider.Message) string {
 		writeFingerprintField(h, []byte("tool-calls-end"))
 		writeFingerprintField(h, []byte(msg.ToolCallID))
 		writeFingerprintField(h, []byte(msg.ToolName))
+		if msg.Continuation != nil {
+			writeFingerprintField(h, []byte(msg.Continuation.Reasoning))
+			writeFingerprintField(h, msg.Continuation.Opaque)
+		}
+		writeFingerprintField(h, []byte("continuation-end"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -1287,7 +1292,7 @@ func (m *Model) effectiveReasoning() string {
 		v = m.cfg.Chat.Reasoning
 	}
 	switch v {
-	case "on", "off":
+	case "on", "off", "low", "medium", "high":
 		return v
 	}
 	return "auto"

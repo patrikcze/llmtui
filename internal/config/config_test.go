@@ -86,6 +86,40 @@ chat:
 	}
 }
 
+func TestContextTimezoneDefaultsEmptyAndLoadsFromFile(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Context.Timezone != "" {
+		t.Fatalf("context.timezone default = %q, want empty (system zone)", cfg.Context.Timezone)
+	}
+
+	path := writeConfig(t, `
+context:
+  timezone: Europe/Prague
+`)
+	v, err = NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err = Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Context.Timezone != "Europe/Prague" {
+		t.Fatalf("context.timezone = %q, want Europe/Prague", cfg.Context.Timezone)
+	}
+	// Untouched sibling keys keep their defaults.
+	if cfg.Context.SummaryMaxTokens != 1200 {
+		t.Fatalf("summary_max_tokens = %d, want default 1200", cfg.Context.SummaryMaxTokens)
+	}
+}
+
 func TestProviderCapabilityOverridesPreserveExplicitFalse(t *testing.T) {
 	path := writeConfig(t, `
 providers:

@@ -188,8 +188,17 @@ Three built-ins are controlled before ordinary Runner execution:
     `tool_call_id`. It is never an approval. Side-effecting siblings in the same
     batch do not run.
 - `local_context` uses an injectable local collector behind `Runner`. It returns
-    bounded structured facts for system, workspace, processes, clipboard, and
-    recent files. Clipboard is the only kind that enters approval.
+    bounded structured facts for `time`, `system`, `workspace`, `processes`,
+    `clipboard`, and `recent_files`. Clipboard is the only kind that enters
+    approval. `kind=time` returns the authoritative current local and UTC time
+    (date, time, weekday, IANA zone when reliably known, zone abbreviation,
+    numeric UTC offset, RFC 3339 timestamps, unix seconds) from an injectable
+    clock — production reads the wall clock, tests inject a fixed one. It makes
+    no network request and never shells out; the system zone name comes from
+    `TZ` or the `/etc/localtime` symlink, and `context.timezone` can pin an
+    IANA zone. An unloadable `context.timezone` is a clear tool error, never a
+    silent UTC fallback. Asking only for `time` does not run the slower
+    system-information collectors.
 - `tool_search` searches the authoritative eligible catalog deterministically.
     It adds selected full schemas to a bounded task-local disclosure set, so the
     next inference can invoke them through the normal execution and approval

@@ -146,7 +146,7 @@ could make otherwise compatible servers reject requests.
 | `history_dir` | `~/.local/share/llmtui/history` | Where history lives |
 | `force_vision` | `false` | Allow image paste for unrecognized models |
 | `model_profile` | auto | Pin a model profile by name |
-| `reasoning` | `auto` | `auto` \| `on` \| `off` — explicit thinking toggle for reasoning models; `auto` sends nothing |
+| `reasoning` | `auto` | `auto` \| `on` \| `off` for generic reasoning models; GPT-OSS also accepts `low` \| `medium` \| `high` and resolves `auto`/`on` to `medium` |
 | `strip_leaked_thinking` | `true` | Reroute a leading `<think>…</think>` block leaked into content by a misconfigured backend template out of the visible answer, history, and cache |
 
 `llmtui chat --resume <name>` and `--continue` read saved sessions from
@@ -225,8 +225,12 @@ section and [security.md](security.md)):
 
 The core set also includes `ask_user`, bounded `local_context`, and local
 `tool_search`. `local_context(kind="clipboard")` always enters the sensitive
-read approval flow under the default policy; its other kinds are bounded local
-reads. None of these tools enables another tool or grants permission.
+read approval flow under the default policy; its other kinds (`time`, `system`,
+`workspace`, `processes`, `recent_files`) are bounded local reads that run
+without approval. `local_context(kind="time")` returns the authoritative
+current local and UTC time from a local clock — no network call, no shelling
+out — so models can retrieve the current or a relative date instead of
+guessing. None of these tools enables another tool or grants permission.
 
 ### `tools.guardrails`
 
@@ -258,8 +262,9 @@ since any change in the result resets the count. See
 | `enabled` | `true` | Master switch. Set `false` to revert to pre-v1 pass-through behavior if this produces a false positive in practice |
 | `threshold` | `3` | Consecutive no-new-evidence repeats of the same call allowed before the next one is blocked |
 
-`local_context` reads are volatile and are not permanently blocked by this
-ledger; normal tool-round and agent-run budgets still bound polling.
+`local_context` reads (including `kind=time`) are volatile and are not
+permanently blocked by this ledger; normal tool-round and agent-run budgets
+still bound polling.
 
 ### `tools.discovery`
 
@@ -361,7 +366,17 @@ and each subsequent native LLM request use the same visible snapshot.
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),
 [prompt-composition.md](prompt-composition.md), and
-[context-management.md](context-management.md). Network:
+[context-management.md](context-management.md).
+
+`context.timezone` (default `""`) selects the zone reported by
+`local_context(kind="time")`. Empty uses the system-local zone. A non-empty
+value must be a valid IANA name such as `Europe/Prague`; an unloadable name is
+reported by `llmtui doctor` and makes `kind=time` return a clear error rather
+than silently falling back to UTC. Windows has no standard IANA mapping, so
+without an override the result carries the zone abbreviation and numeric UTC
+offset but omits the IANA name.
+
+Network:
 
 ```yaml
 network:

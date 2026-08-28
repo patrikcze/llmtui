@@ -18,6 +18,7 @@ type streamChunk struct {
 			Content string `json:"content"`
 			// Reasoning models (served by LM Studio, vLLM, …) stream their
 			// thinking separately from the visible answer.
+			Reasoning        string           `json:"reasoning"`
 			ReasoningContent string           `json:"reasoning_content"`
 			ToolCalls        []streamToolCall `json:"tool_calls"`
 		} `json:"delta"`
@@ -87,13 +88,6 @@ func (a *toolCallAccumulator) result() ([]provider.ToolCall, error) {
 	return out, nil
 }
 
-// reasoningFallback formats captured reasoning when the model produced no
-// visible answer (typically because max_tokens ran out mid-thinking).
-func reasoningFallback(reasoning string) string {
-	return "_(the model spent its whole token budget thinking — raise max_tokens for a final answer; reasoning shown below)_\n\n" +
-		strings.TrimSpace(reasoning)
-}
-
 // streamResponse parses a server-sent-events stream of chat completion chunks.
 // Each event is a line of the form "data: {json}" terminated by "data: [DONE]".
 func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req provider.ChatRequest, events chan<- provider.ChatEvent) {
@@ -107,6 +101,8 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		toolCalls   toolCallAccumulator
 		streamBytes int
 		finishLen   bool
+		protocol    = provider.ResolveModelProtocol(req.Model, "")
+		guard       provider.HarmonyContentGuard
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -149,11 +145,20 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 				provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
 				return
 			}
-			if choice.Delta.ReasoningContent != "" {
-				reasoning.WriteString(choice.Delta.ReasoningContent)
+			reasoningDelta := choice.Delta.Reasoning
+			if reasoningDelta == "" {
+				reasoningDelta = choice.Delta.ReasoningContent
+			}
+			if reasoningDelta != "" {
+				reasoning.WriteString(reasoningDelta)
 				// Emit reasoning as activity so consumers know the model is
 				// working during a long thinking phase (and don't time out).
-				if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventReasoning, Delta: choice.Delta.ReasoningContent}) {
+				event := provider.ChatEvent{Type: provider.EventReasoning, Delta: reasoningDelta}
+				if protocol.HarmonyRequired {
+					event.Delta = ""
+					event.ReasoningBytes = len(reasoningDelta)
+				}
+				if !provider.Emit(ctx, events, event) {
 					provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 					return
 				}
@@ -161,8 +166,17 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			if choice.Delta.Content == "" {
 				continue
 			}
-			completion.WriteString(choice.Delta.Content)
-			if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: choice.Delta.Content}) {
+			visible := choice.Delta.Content
+			if protocol.HarmonyRequired {
+				var err error
+				visible, err = guard.Feed(visible)
+				if err != nil {
+					provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: err})
+					return
+				}
+			}
+			completion.WriteString(visible)
+			if visible != "" && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: visible}) {
 				provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 				return
 			}
@@ -180,13 +194,14 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		return
 	}
 
-	// A reasoning model that ran out of tokens produced no visible answer;
-	// surface the reasoning rather than an empty reply. A reply that is pure
-	// tool calls is not that case: the calls are the answer.
-	if completion.Len() == 0 && reasoning.Len() > 0 && len(calls) == 0 {
-		fallback := reasoningFallback(reasoning.String())
-		completion.WriteString(fallback)
-		if !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: fallback}) {
+	if protocol.HarmonyRequired {
+		tail, err := guard.Finish()
+		if err != nil || looksLikeUnparsedToolCall(completion.String()+tail) {
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: provider.ErrHarmonyProtocol})
+			return
+		}
+		completion.WriteString(tail)
+		if tail != "" && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: tail}) {
 			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 			return
 		}
@@ -195,14 +210,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if usage == nil {
 		usage = estimateUsage(req, completion.String())
 	}
-	// The garbled text (if any) was already streamed as EventDelta chunks by
-	// the time a full leaked tool-call attempt can be recognized, so this
-	// can't suppress it from the live transcript the way the non-streaming
-	// path does — it only flags EventDone so the caller drops it from
-	// conversation history instead of treating it as a real answer.
-	malformed := len(calls) == 0 && looksLikeUnparsedToolCall(completion.String())
-	provider.Emit(ctx, events, provider.ChatEvent{
-		Type: provider.EventDone, Usage: usage, ToolCalls: calls,
-		Truncated: finishLen, MalformedToolCall: malformed,
-	})
+	malformed := !protocol.HarmonyRequired && len(calls) == 0 && looksLikeUnparsedToolCall(completion.String())
+	turn := &provider.AssistantTurn{
+		FinalContent: completion.String(), Reasoning: reasoning.String(), ToolCalls: calls,
+		Completed: len(calls) == 0 && !finishLen,
+	}
+	if len(calls) > 0 && reasoning.Len() > 0 {
+		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning.String()}
+	}
+	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls, Truncated: finishLen, Turn: turn, MalformedToolCall: malformed})
 }

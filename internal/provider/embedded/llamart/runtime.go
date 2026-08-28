@@ -65,6 +65,7 @@ type Runtime struct {
 	nCtx      int
 	batchSize int
 	opts      embedded.Options
+	protocol  provider.ModelProtocol
 	kvTokens  []llama.Token
 	// kvContaminated is set as soon as mtmd evaluation may have inserted image
 	// embeddings. Prefix reuse stays disabled until a later text request has
@@ -307,6 +308,7 @@ func (r *Runtime) Load(
 		SizeBytes:    sizeBytes,
 		Parameters:   llama.ModelNParams(model),
 		HasTemplate:  template != "",
+		Protocol:     provider.ResolveModelProtocol(opts.ModelPath, architecture),
 	}
 
 	opts.Sampling.Stop = slices.Clone(opts.Sampling.Stop)
@@ -317,6 +319,7 @@ func (r *Runtime) Load(
 	r.nCtx = nCtx
 	r.batchSize = batchSize
 	r.opts = opts
+	r.protocol = meta.Protocol
 	r.kvTokens = []llama.Token{}
 	r.kvContaminated = false
 	loaded = true
@@ -369,18 +372,24 @@ func (r *Runtime) Generate(
 		messages = injectVisionMarkers(messages, marker)
 	}
 	toolFormat := req.ToolFormat
-	if len(req.Tools) > 0 && toolFormat == "" {
+	if r.protocol.HarmonyRequired {
+		if _, ok := provider.ReasoningEffort(r.protocol, req.Reasoning); !ok {
+			return result, errors.New("GPT-OSS reasoning must be low, medium, or high; disabling reasoning is unsupported")
+		}
+	} else if len(req.Tools) > 0 && toolFormat == "" {
 		var ok bool
 		toolFormat, ok = embedded.ResolveToolFormat(r.opts.ToolFormat, r.opts.ModelPath)
 		if !ok {
 			return result, fmt.Errorf("native tool format is unknown for model %q", r.opts.ModelPath)
 		}
 	}
-	messages, err = prepareToolMessages(messages, req.Tools, toolFormat)
-	if err != nil {
-		return result, err
+	if !r.protocol.HarmonyRequired {
+		messages, err = prepareToolMessages(messages, req.Tools, toolFormat)
+		if err != nil {
+			return result, err
+		}
 	}
-	rendered, err := renderChatTemplate(r.template, messages, req.Tools, req.Reasoning, applyTemplate)
+	rendered, err := renderChatTemplateWithProtocol(r.template, messages, req.Tools, req.Reasoning, r.protocol, applyTemplate)
 	if err != nil {
 		return result, err
 	}
@@ -439,7 +448,23 @@ func (r *Runtime) Generate(
 	stopScanner := embedded.NewStopScanner(r.opts.Sampling.Stop)
 	reasoningRouter := newReasoningRouter(rendered)
 	toolRouter := newToolOutputRouter(toolFormat, req.Tools)
+	var harmony *harmonyDecoder
+	if r.protocol.HarmonyRequired {
+		harmony = newHarmonyDecoder(req.Tools)
+	}
+	var routeErr error
 	emitRouted := func(text string) {
+		if harmony != nil {
+			deltas, err := harmony.Push(text)
+			if err != nil {
+				routeErr = err
+				return
+			}
+			for _, delta := range deltas {
+				emit(delta)
+			}
+			return
+		}
 		for _, delta := range reasoningRouter.Push(text) {
 			if delta.Kind == embedded.DeltaReasoning || len(req.Tools) == 0 {
 				emit(delta)
@@ -452,6 +477,7 @@ func (r *Runtime) Generate(
 	}
 	var batch []llama.Token
 	stopped := false
+	terminated := false
 
 	for range maxNew {
 		if err := ctx.Err(); err != nil {
@@ -475,42 +501,75 @@ func (r *Runtime) Generate(
 		if token == llama.TokenNull {
 			return result, errors.New("llama.cpp sampler returned an invalid token")
 		}
-		if llama.VocabIsEOG(r.vocab, token) {
+		isEOG := llama.VocabIsEOG(r.vocab, token)
+		if isEOG && harmony == nil {
+			terminated = true
 			break
 		}
 
-		result.CompletionTokens++
-		piece, err := tokenPiece(r.vocab, token)
+		if !isEOG {
+			result.CompletionTokens++
+		}
+		piece, err := tokenPieceSpecial(r.vocab, token, harmony != nil)
 		if err != nil {
 			return result, err
 		}
 		text := assembler.Push(piece)
 		if text != "" {
-			out, stop := stopScanner.Push(text)
-			if out != "" {
-				emitRouted(out)
+			if harmony != nil {
+				emitRouted(text)
+				if routeErr != nil {
+					return result, routeErr
+				}
+			} else {
+				out, stop := stopScanner.Push(text)
+				if out != "" {
+					emitRouted(out)
+				}
+				if stop {
+					stopped = true
+					terminated = true
+					break
+				}
 			}
-			if stop {
-				stopped = true
-				break
-			}
+		}
+		if isEOG {
+			terminated = true
+			break
 		}
 		batch = []llama.Token{token}
 	}
 
-	if !stopped {
+	if !stopped || harmony != nil {
 		if tail := assembler.Flush(); tail != "" {
-			out, stop := stopScanner.Push(tail)
-			if out != "" {
-				emitRouted(out)
+			if harmony != nil {
+				emitRouted(tail)
+			} else {
+				out, stop := stopScanner.Push(tail)
+				if out != "" {
+					emitRouted(out)
+				}
+				stopped = stop
 			}
-			stopped = stop
 		}
 	}
-	if !stopped {
+	if !stopped && harmony == nil {
 		if tail := stopScanner.Flush(); tail != "" {
 			emitRouted(tail)
 		}
+	}
+	if routeErr != nil {
+		return result, routeErr
+	}
+	if harmony != nil {
+		turn, err := harmony.Finish()
+		if err != nil {
+			result.Truncated = !terminated
+			return result, err
+		}
+		result.ToolCalls = turn.ToolCalls
+		result.Turn = &turn
+		return result, nil
 	}
 	for _, delta := range reasoningRouter.Flush() {
 		if delta.Kind == embedded.DeltaReasoning || len(req.Tools) == 0 {
@@ -554,6 +613,7 @@ func (r *Runtime) Close() (err error) {
 	r.template = ""
 	r.nCtx = 0
 	r.batchSize = 0
+	r.protocol = provider.ModelProtocol{}
 	r.kvTokens = []llama.Token{}
 	r.kvContaminated = false
 

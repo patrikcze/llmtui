@@ -716,6 +716,13 @@ func TestHistoryFingerprintIncludesProviderVisibleFields(t *testing.T) {
 				Role: provider.RoleUser, Content: "same text", ToolCallID: "call-1", ToolName: "read_file",
 			},
 		},
+		{
+			name: "provider continuation",
+			message: provider.Message{
+				Role: provider.RoleUser, Content: "same text",
+				Continuation: &provider.ProviderContinuation{Reasoning: "private reasoning"},
+			},
+		},
 	}
 
 	baseHash := historyFingerprint([]provider.Message{base})

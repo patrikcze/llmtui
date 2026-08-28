@@ -69,7 +69,32 @@ sampling or context fields into remote requests.
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
 
-## Reasoning models (Qwen 3.5 / 3.6 / 3.8, DeepSeek-R1)
+## GPT-OSS and Harmony
+
+`gpt-oss-20b` uses OpenAI's Harmony protocol. Harmony is rendered exactly
+once: LM Studio and Ollama own rendering for server-backed requests, while the
+embedded provider renders the trusted `tokenizer.chat_template` stored in the
+GGUF. LLMTUI sends structured messages and tools to server providers and never
+adds local Harmony tokens to those requests.
+
+Reasoning, final content, and tool calls remain separate typed data. Raw
+analysis is retained only on assistant tool-call messages while that tool
+cycle is active, then cleared when a final answer, cancellation, or failure
+ends the cycle. It is never shown, logged as text, cached, exported, or saved
+in session history. `/thoughts` therefore does not expose GPT-OSS raw analysis.
+
+Use `/think low`, `/think medium`, or `/think high`; `auto` and `on` resolve
+to GPT-OSS's `medium` default. `off` is rejected because GPT-OSS does not
+support disabling reasoning. LM Studio receives `reasoning_effort`, Ollama
+receives its string `think` level, and Embedded passes `reasoning_effort` to
+the GGUF Jinja template.
+
+If a provider exposes `<|start|>`, `<|channel|>`, `<|message|>`, `<|call|>`,
+or another Harmony control token as ordinary content, LLMTUI fails the turn as
+a protocol error. It does not strip or repair the response. Update the model
+runtime/template and use `/doctor` to confirm the selected model capability.
+
+## Other reasoning models (Qwen 3.5 / 3.6 / 3.8, DeepSeek-R1)
 
 Server providers use structured chat APIs (`/v1/chat/completions`, Ollama
 `/api/chat`) and apply their own chat templates. The embedded provider

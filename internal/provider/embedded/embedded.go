@@ -227,21 +227,61 @@ func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
 	if requested := expandHome(model); requested != "" {
 		opts.ModelPath = requested
 	}
+	protocol := p.protocolFor(model)
 	nativeTools := provider.CapabilityUnsupported
-	if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); ok {
+	if protocol.NativeToolsSupported {
+		nativeTools = provider.CapabilitySupported
+	} else if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); ok {
 		nativeTools = provider.CapabilitySupported
 	}
 	return provider.Capabilities{
-		SupportsStreaming:    true,
-		SupportsModelList:    true,
-		SupportsTokenUsage:   true,
-		SupportsSystemPrompt: true,
-		NativeTools:          nativeTools,
-		ParallelToolCalls:    nativeTools,
-		ReasoningEvents:      provider.CapabilitySupported,
-		StructuredOutput:     provider.CapabilitySupported,
-		ContextWindowTokens:  p.effectiveContextLen(),
+		SupportsStreaming:     true,
+		SupportsModelList:     true,
+		SupportsTokenUsage:    true,
+		SupportsSystemPrompt:  true,
+		ModelFamily:           protocol.Family,
+		TemplateOwnership:     provider.TemplateOwnershipEmbeddedRuntime,
+		HarmonyProtocol:       support(protocol.HarmonyRequired),
+		ReasoningContinuation: support(protocol.ReasoningContinuationRequired),
+		StructuredReasoning:   support(protocol.HarmonyRequired),
+		StreamingReasoning:    support(protocol.HarmonyRequired),
+		NativeTools:           nativeTools,
+		ParallelToolCalls:     parallelToolSupport(protocol, nativeTools),
+		ReasoningEvents:       provider.CapabilitySupported,
+		StructuredOutput:      provider.CapabilitySupported,
+		ContextWindowTokens:   p.effectiveContextLen(),
 	}
+}
+
+func support(value bool) provider.CapabilitySupport {
+	if value {
+		return provider.CapabilitySupported
+	}
+	return provider.CapabilityUnsupported
+}
+
+func parallelToolSupport(protocol provider.ModelProtocol, nativeTools provider.CapabilitySupport) provider.CapabilitySupport {
+	// The trusted gpt-oss template terminates an assistant turn at the first
+	// <|call|>. Sequential tool rounds are supported; parallel calls are not.
+	if protocol.HarmonyRequired {
+		return provider.CapabilityUnsupported
+	}
+	return nativeTools
+}
+
+func (p *Provider) protocolFor(model string) provider.ModelProtocol {
+	p.mu.Lock()
+	meta, haveMeta, activePath := p.meta, p.haveM, p.activePath
+	p.mu.Unlock()
+	requested := expandHome(model)
+	if requested == "" {
+		requested = activePath
+	}
+	architecture := ""
+	if haveMeta && requested == activePath {
+		architecture = meta.Architecture
+	}
+	return provider.ResolveModelProtocol(requested, architecture)
 }
 
 // Chat runs one completion. Native tool calls are not supported: if the
@@ -249,7 +289,12 @@ func (p *Provider) CapabilitiesFor(model string) provider.Capabilities {
 // tool-fallback detector recognizes, so the session degrades to the
 // prompt-based tool protocol automatically.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	if err := validateReasoning(req.Reasoning); err != nil {
+	protocol := p.protocolFor(req.Model)
+	if protocol.HarmonyRequired {
+		if _, ok := provider.ReasoningEffort(protocol, req.Reasoning); !ok {
+			return nil, fmt.Errorf("embedded provider %q: GPT-OSS reasoning must be low, medium, or high; disabling reasoning is unsupported", p.name)
+		}
+	} else if err := validateReasoning(req.Reasoning); err != nil {
 		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
 	}
 	if err := provider.ValidateResponseConstraint(req); err != nil {
@@ -263,8 +308,10 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		if requested := expandHome(req.Model); requested != "" {
 			opts.ModelPath = requested
 		}
-		if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); !ok {
-			return nil, fmt.Errorf("embedded provider %q does not support native tool calls for model %q: tool format is unknown — set providers.%s.tool_format or use llmtui's prompt-based tool protocol", p.name, opts.ModelPath, p.name)
+		if !protocol.HarmonyRequired {
+			if _, ok := ResolveToolFormat(opts.ToolFormat, opts.ModelPath); !ok {
+				return nil, fmt.Errorf("embedded provider %q does not support native tool calls for model %q: tool format is unknown — set providers.%s.tool_format or use llmtui's prompt-based tool protocol", p.name, opts.ModelPath, p.name)
+			}
 		}
 	}
 
@@ -353,6 +400,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		p.st = stateReady
 		p.mu.Unlock()
 	}
+	protocol := p.protocolFor(req.Model)
 
 	genReq := GenRequest{
 		Messages:    req.Messages,
@@ -385,7 +433,12 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		if delta.Kind == DeltaReasoning {
 			eventType = provider.EventReasoning
 		}
-		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: eventType, Delta: delta.Text}) {
+		event := provider.ChatEvent{Type: eventType, Delta: delta.Text}
+		if eventType == provider.EventReasoning && protocol.HarmonyRequired {
+			event.Delta = ""
+			event.ReasoningBytes = len(delta.Text)
+		}
+		if !provider.Emit(genCtx, events, event) {
 			aborted = true
 		}
 	})
@@ -404,7 +457,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		return
 	}
 
-	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Usage: &provider.Usage{
+	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Turn: result.Turn, Truncated: result.Truncated, Usage: &provider.Usage{
 		PromptTokens:     result.PromptTokens,
 		CompletionTokens: result.CompletionTokens,
 		TotalTokens:      result.PromptTokens + result.CompletionTokens,

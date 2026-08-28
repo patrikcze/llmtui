@@ -146,7 +146,8 @@ type ChatConfig struct {
 	// Reasoning controls the thinking mode of reasoning models (Qwen,
 	// DeepSeek-R1, …): "auto" sends nothing and leaves it to the backend;
 	// "on"/"off" request or suppress thinking explicitly (OpenAI-compatible
-	// chat_template_kwargs.enable_thinking, Ollama think).
+	// chat_template_kwargs.enable_thinking, Ollama think). GPT-OSS additionally
+	// accepts "low", "medium", and "high" effort; auto defaults to medium.
 	Reasoning string `mapstructure:"reasoning" yaml:"reasoning"`
 }
 
@@ -226,6 +227,12 @@ type ContextConfig struct {
 	SummarizeAfterMessages int    `mapstructure:"summarize_after_messages" yaml:"summarize_after_messages"`
 	KeepLastMessages       int    `mapstructure:"keep_last_messages" yaml:"keep_last_messages"`
 	SummaryMaxTokens       int    `mapstructure:"summary_max_tokens" yaml:"summary_max_tokens"`
+	// Timezone overrides the zone reported by local_context kind=time. Empty
+	// uses the system-local zone. A non-empty value must be a valid IANA name
+	// (e.g. "Europe/Prague"); an unloadable name is reported by `llmtui
+	// doctor` and surfaces as a clear tool error rather than a silent
+	// fallback.
+	Timezone string `mapstructure:"timezone" yaml:"timezone"`
 }
 
 // AgentConfig controls the optional bounded and verified multi-cycle loop.
@@ -809,6 +816,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context.summarize_after_messages", 12)
 	v.SetDefault("context.keep_last_messages", 8)
 	v.SetDefault("context.summary_max_tokens", 1200)
+	v.SetDefault("context.timezone", "")
 
 	v.SetDefault("agent.enabled", false)
 	v.SetDefault("agent.max_cycles", 8)
@@ -955,7 +963,8 @@ chat:
   max_tokens: 4096
   stream: true
   # auto omits enable_thinking and lets each model/backend use its native
-  # behavior. Use /think on|off for a session-level override.
+  # behavior. Use /think on|off for generic models, or low|medium|high for
+  # GPT-OSS (auto defaults GPT-OSS to medium), as a session-level override.
   reasoning: auto
   strip_leaked_thinking: true
   # Allow pasting images even when the model is not recognized as vision-capable:
@@ -1014,6 +1023,7 @@ context:
   summarize_after_messages: 12
   keep_last_messages: 8
   summary_max_tokens: 1200
+  timezone: "" # "" = system zone; otherwise an IANA name for local_context kind=time
 
 # Optional bounded multi-cycle mode. Ordinary chat is unchanged until enabled
 # here or for the current session with /agent on.

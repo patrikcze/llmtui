@@ -47,7 +47,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/profile list` | Choose and pin a model profile with `↑`/`↓` and `Enter` |
 | `/profile auto` | Restore automatic profile matching for the active model |
 | `/profile set <name>` / `/profile inspect` | Pin a named profile / inspect the active profile |
-| `/think [on\|off\|auto\|status]` | Reasoning models: request, suppress, or default the thinking phase |
+| `/think [on\|off\|auto\|low\|medium\|high\|status]` | Reasoning mode; GPT-OSS uses low/medium/high effort and defaults to medium |
 | `/thoughts [show\|hide\|toggle\|status]` | Show or hide captured reasoning without changing model behavior |
 
 ## Prompt

@@ -103,6 +103,51 @@ func TestChatMapsReasoningDeltasAndPropagatesMode(t *testing.T) {
 	}
 }
 
+func TestGPTOSSEmbeddedCapabilitiesAndPrivateContinuation(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "gpt-oss-20b-MXFP4.gguf")
+	turn := &provider.AssistantTurn{
+		Reasoning:    "private plan",
+		ToolCalls:    []provider.ToolCall{{Name: "read_file", Arguments: `{}`}},
+		Continuation: &provider.ProviderContinuation{Reasoning: "private plan"},
+	}
+	rt := &scriptedRuntime{
+		loadMeta:  embeddedModelMetaForGPTOSS(),
+		genDeltas: []GenDelta{{Kind: DeltaReasoning, Text: "private plan"}},
+		genResult: GenResult{ToolCalls: turn.ToolCalls, Turn: turn},
+	}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+	if caps := p.CapabilitiesFor(modelPath); caps.NativeTools != provider.CapabilitySupported || caps.ReasoningEvents != provider.CapabilitySupported {
+		t.Fatalf("GPT-OSS capabilities = %+v", caps)
+	}
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model: modelPath, Reasoning: "high", Tools: []provider.ToolSpec{{Name: "read_file", Parameters: []byte(`{"type":"object"}`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done provider.ChatEvent
+	for _, event := range drain(events) {
+		if event.Type == provider.EventReasoning && (event.Delta != "" || event.ReasoningBytes != len("private plan")) {
+			t.Fatalf("raw embedded reasoning escaped: %+v", event)
+		}
+		if event.Type == provider.EventDone {
+			done = event
+		}
+	}
+	if done.Turn == nil || done.Turn.Continuation == nil || done.Turn.Continuation.Reasoning != "private plan" {
+		t.Fatalf("done turn = %+v", done.Turn)
+	}
+}
+
+func embeddedModelMetaForGPTOSS() ModelMeta {
+	return ModelMeta{
+		Architecture: "gpt-oss",
+		Protocol:     provider.ResolveModelProtocol("", "gpt-oss"),
+	}
+}
+
 func TestChatPreservesImageAttachmentsForRuntime(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "vision.gguf")

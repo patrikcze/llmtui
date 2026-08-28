@@ -266,6 +266,21 @@ The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
 
 ## Vision, tools, and reasoning
 
+GPT-OSS is a special native protocol path. The embedded runtime identifies it
+from GGUF architecture metadata (with a centralized filename fallback),
+renders the GGUF's trusted Jinja chat template with Harmony's
+`reasoning_effort`, and decodes Harmony control tokens before emitting typed
+reasoning, final-content, or tool-call events. It never uses the generic tool
+grammar or leaked-thinking filter for GPT-OSS. A missing or incompatible GGUF
+template is an explicit error; there is no generic-template fallback.
+
+The current `yzma/pkg/llama` binding exposes GGUF metadata, tokenization, and
+special-token conversion but not llama.cpp `common/chat`'s C++ parser API.
+LLMTUI consequently performs the small strict streaming state-machine decode
+at the binding boundary. Embedded GPT-OSS supports sequential tool rounds;
+the upstream template terminates at the first `<|call|>`, so it does not
+advertise parallel tool calls in one assistant response.
+
 - Vision requires both the main GGUF and its matching `mmproj` GGUF. Paste a
   PNG or JPEG with `Ctrl+V`; attachments are passed as encoded bytes directly
   to mtmd in memory. Up to 8 images are accepted per request, with limits of

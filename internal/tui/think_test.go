@@ -242,10 +242,60 @@ func TestEffectiveReasoningPrecedence(t *testing.T) {
 	if got := m.effectiveReasoning(); got != "on" {
 		t.Fatalf("override = %q, want on", got)
 	}
+	m.reasoningMode = "high"
+	if got := m.effectiveReasoning(); got != "high" {
+		t.Fatalf("GPT-OSS effort override = %q, want high", got)
+	}
 	m.cfg.Chat.Reasoning = "bogus"
 	m.reasoningMode = ""
 	if got := m.effectiveReasoning(); got != "auto" {
 		t.Fatalf("invalid config value = %q, want auto", got)
+	}
+}
+
+func TestRawReasoningContinuationIsEphemeralAndNeverTranscriptContent(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.streamToolCalls = []provider.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{}`}}
+	m.streamContinuation = &provider.ProviderContinuation{Reasoning: "private chain of thought"}
+	m.reasoningLen = len("private chain of thought")
+	m.finishStream(&provider.Usage{}, false)
+
+	if len(m.session.Messages) != 2 {
+		t.Fatalf("messages = %+v", m.session.Messages)
+	}
+	toolTurn := m.session.Messages[len(m.session.Messages)-1]
+	if toolTurn.Reasoning != "" || toolTurn.Continuation == nil || toolTurn.Continuation.Reasoning != "private chain of thought" {
+		t.Fatalf("tool turn did not isolate continuation: %+v", toolTurn)
+	}
+	if strings.Contains(m.viewport.View(), "private chain of thought") {
+		t.Fatal("raw reasoning appeared in the TUI")
+	}
+
+	m.streamBuf.WriteString("final answer")
+	m.finishStream(&provider.Usage{}, false)
+	for _, message := range m.session.Messages {
+		if message.Continuation != nil {
+			t.Fatal("continuation survived the final response")
+		}
+	}
+	if last := m.session.Messages[len(m.session.Messages)-1]; last.Content != "final answer" || last.Reasoning != "" || last.Continuation != nil {
+		t.Fatalf("final message = %+v", last)
+	}
+}
+
+func TestRawReasoningContinuationClearsOnCancellation(t *testing.T) {
+	m := newTestModel(t)
+	m.session.AddMessage(provider.Message{
+		Role:         provider.RoleAssistant,
+		ToolCalls:    []provider.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{}`}},
+		Continuation: &provider.ProviderContinuation{Reasoning: "private chain of thought"},
+	})
+
+	m.complete(turnOutcomeCancelled)
+
+	if got := m.session.Messages[len(m.session.Messages)-1].Continuation; got != nil {
+		t.Fatal("continuation survived cancellation")
 	}
 }
 

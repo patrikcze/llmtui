@@ -99,11 +99,11 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolLocalContext,
-			Description: "Read bounded information about the local computer or workspace. Use it instead of inventing shell commands for system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
+			Description: "Read bounded information about the local computer or workspace. Use kind=time whenever the request depends on the current date, time, timezone, weekday, or relative dates such as today, tomorrow, yesterday, or next Monday; never guess the current date from training knowledge. Use this tool instead of inventing shell commands for time, system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"kind": {"type": "string", "enum": ["system", "workspace", "processes", "clipboard", "recent_files"]},
+					"kind": {"type": "string", "enum": ["time", "system", "workspace", "processes", "clipboard", "recent_files"]},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Optional result limit for processes or recent_files; defaults to 10."}
 				},
 				"required": ["kind"],
@@ -422,6 +422,7 @@ Rules:
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
+- For the current date, time, timezone, weekday, or relative dates (today, tomorrow, yesterday, next Monday, deadlines, schedules), call local_context with kind=time; never infer the current date from training knowledge.
 - Connected MCP schemas may be hidden to save context. The compact MCP directory is authoritative for inventory; use tool_search to make a matching tool callable.
 - For an MCP/external-service action whose schema is not already provided, use tool_search %s. Never pass an MCP tool name to run_command. A truncated search result is not the complete catalog.
 - When the compact directory gives you a likely tool name, search that name with max_results 1 to avoid loading unrelated schemas. Discovery grants no permission.
