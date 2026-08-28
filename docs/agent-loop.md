@@ -263,7 +263,9 @@ review regardless of cost.
 When a semantic evaluation runs, the active provider is reused, which avoids
 loading a second local model, but the request has a fresh message slice, an
 evaluator-only system prompt, no tools, reasoning disabled, temperature zero,
-and a bounded JSON response. `agent.verifier.model` may select another model
+and a bounded JSON response. When the verifier model is a GPT-OSS (Harmony)
+model, which cannot disable reasoning, the request uses `low` effort instead.
+`agent.verifier.model` may select another model
 ID exposed by the same provider (useful with LM Studio or another
 OpenAI-compatible server). Reusing the executor model is a semantic second
 opinion, not independent validation — deterministic evidence always outranks

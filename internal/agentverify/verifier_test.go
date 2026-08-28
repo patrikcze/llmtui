@@ -134,6 +134,30 @@ func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
 	}
 }
 
+// TestVerifierReasoningForGPTOSSModel guards the fix for a verifier that
+// hardcoded Reasoning:"off" — GPT-OSS (Harmony) cannot disable reasoning, so
+// every verification request 400'd and the run parked as
+// DecisionVerificationUnavailable. The verifier must send the lowest effort
+// instead.
+func TestVerifierReasoningForGPTOSSModel(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  string
+	}{
+		{"local", "off"},
+		{"openai/gpt-oss-20b", "low"},
+		{"gpt-oss-120b", "low"},
+	} {
+		client := &recordingClient{reply: validReply("passed")}
+		if _, err := Verify(context.Background(), client, Config{Model: tc.model, Timeout: time.Second}, Input{}); err != nil {
+			t.Fatalf("%s: %v", tc.model, err)
+		}
+		if got := client.requests[0].Reasoning; got != tc.want {
+			t.Fatalf("%s: Reasoning = %q, want %q", tc.model, got, tc.want)
+		}
+	}
+}
+
 func TestVerifierRequestsStructuredOutputWhenSupported(t *testing.T) {
 	client := &recordingClient{
 		reply: validReply("passed"),
