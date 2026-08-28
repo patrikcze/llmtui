@@ -2800,6 +2800,11 @@ func (m *Model) renderApprovalPrompt() string {
 			b.WriteString("\n")
 			b.WriteString(text.Render(fmt.Sprintf("    %s (%d bytes)", terminaltext.Sanitize(c.Path), len(c.Body))))
 			b.WriteString("\n")
+		case tools.ToolEditFile:
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ edit file"))
+			b.WriteString("\n")
+			b.WriteString(text.Render(fmt.Sprintf("    %s (replace %d bytes with %d)", terminaltext.Sanitize(c.Path), len(c.OldText), len(c.NewText))))
+			b.WriteString("\n")
 		default:
 			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + terminaltext.Sanitize(c.Describe())))
 			b.WriteString("\n")

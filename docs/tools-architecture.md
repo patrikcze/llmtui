@@ -309,4 +309,24 @@ And in `NeedsApproval` (`tools.go:529` / `tools.go:544`) it'd fall into the defa
 
 **8. Tests** — per the playbook: parser/native-conversion test, a success case, a failure case (bad technique/negative duration), and an approval-classification test confirming it does *not* prompt.
 
-That's the whole shape: **schema → parse/convert → approval gate → sandboxed execution → structured result → fed back to the model**. Every real tool in this codebase (`read_file`, `write_file`, `run_command`, `web_fetch`, MCP tools) is this same skeleton with different amounts of guardrail machinery bolted onto step 5 depending on what it's capable of touching.
+That's the whole shape: **schema → parse/convert → approval gate → sandboxed execution → structured result → fed back to the model**. Every real tool in this codebase (`read_file`, `write_file`, `edit_file`, `run_command`, `web_fetch`, MCP tools) is this same skeleton with different amounts of guardrail machinery bolted onto step 5 depending on what it's capable of touching.
+
+### `edit_file` and ranged `read_file`
+
+`read_file` takes an optional 1-based `offset`/`limit` line range (default 200
+lines, hard cap `MaxReadLimit` = 500). Omitting both is the unchanged
+whole-file read. A ranged read returns the selected lines **verbatim** —
+`renderLineRange` adds one compact `[read_file: path lines A-B of N,
+next_offset=C]` header and never per-line numbers, so the model can copy a
+fragment straight into an `edit_file` `old_text`.
+
+`edit_file` performs exactly one literal, exact-match replacement in an
+existing text file: zero matches or more than one fails without writing.
+It does not extend the tool subsystem — it shares `write_file`'s
+`writeFileChecked` core (workspace confinement, blocked-path guardrails, the
+size cap, the display diff). The only addition is a precondition: `edit_file`
+passes the bytes it computed the change against, and `writeFileChecked`
+refuses the write if the file no longer holds exactly those bytes, so a
+concurrent external change is never silently clobbered. `old_text` itself is
+the deterministic precondition — there is no session state requiring a prior
+`read_file`.

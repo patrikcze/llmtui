@@ -55,7 +55,58 @@ const (
 	// current agent run. It executes no code and grants no permissions: the
 	// skill body is included by the prompt composer on the next inference.
 	ToolSkillLoad = "skill_load"
+	// ToolEditFile replaces one exact, unique text fragment in an existing
+	// workspace file. It shares write_file's guardrails and approval class and
+	// adds a stale-content precondition; it never creates a file.
+	ToolEditFile = "edit_file"
 )
+
+// read_file optional line-range bounds. DefaultReadLimit applies when a range
+// is requested with only an offset; MaxReadLimit is the hard ceiling so one
+// call cannot pull an unbounded slice of a large file into model context.
+const (
+	DefaultReadLimit = 200
+	MaxReadLimit     = 500
+)
+
+// CanonicalReadRange normalizes read_file's optional line range. ranged is
+// false for a whole-file read (both arguments omitted or non-positive), which
+// keeps the legacy behavior byte-for-byte. When ranged, start is the 1-based
+// first line and count the bounded number of lines. It never reports an
+// error — call ValidateReadRange first for the model-facing checks.
+func CanonicalReadRange(offset, limit int) (start, count int, ranged bool) {
+	if offset <= 0 && limit <= 0 {
+		return 0, 0, false
+	}
+	start = offset
+	if start < 1 {
+		start = 1
+	}
+	count = limit
+	if count <= 0 {
+		count = DefaultReadLimit
+	}
+	if count > MaxReadLimit {
+		count = MaxReadLimit
+	}
+	return start, count, true
+}
+
+// ValidateReadRange rejects a read_file range a model can correct from: a
+// negative bound, or a limit past the hard ceiling. Omitted (zero) bounds are
+// valid — they select the legacy whole-file read or the default line count.
+func ValidateReadRange(offset, limit int) error {
+	if offset < 0 {
+		return fmt.Errorf("read_file offset must be 1 or greater (1-based line number)")
+	}
+	if limit < 0 {
+		return fmt.Errorf("read_file limit must be 1 or greater")
+	}
+	if limit > MaxReadLimit {
+		return fmt.Errorf("read_file limit %d exceeds the maximum of %d lines; page through the file with successive offset values", limit, MaxReadLimit)
+	}
+	return nil
+}
 
 // Call is one tool invocation: parsed from a fenced block in an assistant
 // reply, or converted from a native function call (in which case ID is set
@@ -67,6 +118,16 @@ type Call struct {
 	Body string
 	// Filter optionally narrows search tools (for example grep's file glob).
 	Filter string
+	// Offset and Limit are read_file's optional 1-based line range. Both zero
+	// (or negative) means a whole-file read, preserving the legacy behavior.
+	// See CanonicalReadRange / ValidateReadRange.
+	Offset int
+	Limit  int
+	// OldText and NewText carry edit_file's single exact replacement. OldText
+	// must match the target file exactly once; NewText may be empty (a
+	// controlled deletion of that exact fragment).
+	OldText string
+	NewText string
 	// InputErr records malformed native JSON arguments. The call remains in
 	// the batch so the model receives a correlated tool error, but Execute
 	// must not run a zero-valued approximation of the requested operation.
@@ -137,6 +198,10 @@ func Parse(reply string) []Call {
 					decodeLocalContextBody(&call)
 				case ToolSearch:
 					decodeToolSearchBody(&call)
+				case ToolReadFile:
+					decodeReadFileBody(&call)
+				case ToolEditFile:
+					decodeEditFileBody(&call)
 				}
 				if server, tool, ok := SplitMCPToolName(call.Tool); ok {
 					call.MCPServer, call.MCPTool = server, tool
@@ -310,7 +375,9 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolListDir:
 		res.Output, res.Err = r.listDir(c.Path)
 	case ToolReadFile:
-		res.Output, res.Err = r.readFile(c.Path)
+		res.Output, res.Err = r.readFile(c.Path, c.Offset, c.Limit)
+	case ToolEditFile:
+		res.Output, res.Diff, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
 	case ToolGlob:
 		res.Output, res.Err = r.globFiles(ctx, c.Path, c.Body)
 	case ToolGrep:
@@ -332,8 +399,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolSearch:
 		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
 	default:
-		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s)",
-			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
+		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
 	}
 	return res
 }
@@ -376,9 +443,12 @@ func (r *Runner) listDir(rel string) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func (r *Runner) readFile(rel string) (output string, err error) {
+func (r *Runner) readFile(rel string, offset, limit int) (output string, err error) {
 	if rel == "" {
 		return "", fmt.Errorf("read_file needs a path")
+	}
+	if err := ValidateReadRange(offset, limit); err != nil {
+		return "", err
 	}
 	if _, err := r.resolve(rel); err != nil {
 		return "", err
@@ -399,7 +469,7 @@ func (r *Runner) readFile(rel string) (output string, err error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%q is not a regular file", rel)
 	}
-	limit := int64(r.maxKB) * 1024
+	byteLimit := int64(r.maxKB) * 1024
 	file, err := root.Open(name)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
@@ -412,24 +482,93 @@ func (r *Runner) readFile(rel string) (output string, err error) {
 	if !openedInfo.Mode().IsRegular() {
 		return "", fmt.Errorf("%q is not a regular file", rel)
 	}
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	// A bounded read is enough for both modes: the whole-file read is capped
+	// at byteLimit as before, and a line range is sliced out of that same
+	// bounded prefix (io.LimitReader also contains a pathological single
+	// multi-gigabyte line).
+	data, err := io.ReadAll(io.LimitReader(file, byteLimit+1))
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
-	truncated := int64(len(data)) > limit
-	if truncated {
-		data = data[:limit]
+	bytesTruncated := int64(len(data)) > byteLimit
+	if bytesTruncated {
+		data = data[:byteLimit]
 	}
-	text, consumed := boundedUTF8(data, int(limit))
-	outputTruncated := truncated || consumed < len(data)
-	if outputTruncated {
-		total := openedInfo.Size()
-		if truncated && total < int64(len(data))+1 {
-			total = int64(len(data)) + 1
+
+	start, count, ranged := CanonicalReadRange(offset, limit)
+	if !ranged {
+		text, consumed := boundedUTF8(data, int(byteLimit))
+		if bytesTruncated || consumed < len(data) {
+			total := openedInfo.Size()
+			if bytesTruncated && total < int64(len(data))+1 {
+				total = int64(len(data)) + 1
+			}
+			return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), nil
 		}
-		return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), nil
+		return text, nil
 	}
-	return text, nil
+	return renderLineRange(filepath.ToSlash(name), data, bytesTruncated, start, count, int(byteLimit))
+}
+
+// renderLineRange slices [start, start+count) 1-based lines out of the bounded
+// file bytes, verbatim, with one compact header line and no per-line numbers
+// (so the model cannot copy an artificial number into an edit_file old_text).
+// An offset past the last available line is a recoverable error, never a
+// silent empty success.
+func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start, count, byteLimit int) (string, error) {
+	segments := splitKeepNewline(data)
+	totalKnown := !bytesTruncated
+	if start > len(segments) {
+		if totalKnown {
+			return "", fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, len(segments))
+		}
+		return "", fmt.Errorf("read_file offset %d is past the %d lines that fit within the %d KB read limit for %q", start, len(segments), byteLimit/1024, displayPath)
+	}
+	first := start - 1
+	last := first + count
+	if last > len(segments) {
+		last = len(segments)
+	}
+	selected := bytes.Join(segments[first:last], nil)
+	text, consumed := boundedUTF8(selected, byteLimit)
+	lineCapped := consumed < len(selected)
+
+	var header strings.Builder
+	fmt.Fprintf(&header, "[read_file: %s lines %d-%d", displayPath, start, last)
+	if totalKnown {
+		fmt.Fprintf(&header, " of %d", len(segments))
+	}
+	switch {
+	case last < len(segments):
+		fmt.Fprintf(&header, ", next_offset=%d]", last+1)
+	case bytesTruncated:
+		fmt.Fprintf(&header, ", more of the file is past the %d KB read limit]", byteLimit/1024)
+	case lineCapped:
+		fmt.Fprintf(&header, ", line %d truncated at the %d KB limit]", last, byteLimit/1024)
+	case totalKnown:
+		header.WriteString(", end of file]")
+	default:
+		header.WriteString("]")
+	}
+	if text == "" {
+		return header.String(), nil
+	}
+	return header.String() + "\n\n" + text, nil
+}
+
+// splitKeepNewline splits file bytes into line segments that each retain their
+// trailing "\n", so rejoining a slice reproduces the original bytes exactly. A
+// final empty segment after a trailing newline is dropped: "a\nb\n" is two
+// lines, not three.
+func splitKeepNewline(data []byte) [][]byte {
+	if len(data) == 0 {
+		return nil
+	}
+	segments := bytes.SplitAfter(data, []byte{'\n'})
+	if n := len(segments); n > 0 && len(segments[n-1]) == 0 {
+		segments = segments[:n-1]
+	}
+	return segments
 }
 
 // boundedUTF8 converts arbitrary file bytes into valid UTF-8 without letting
@@ -455,26 +594,44 @@ func boundedUTF8(data []byte, maxBytes int) (text string, consumed int) {
 }
 
 func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {
+	diff, err = r.writeFileChecked(rel, content, nil)
+	if err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, nil
+}
+
+// writeFileChecked is the shared safe-write implementation behind both
+// write_file and edit_file: workspace confinement, blocked-path guardrails,
+// the size cap, parent-directory creation, the O_TRUNC write, and the
+// display diff. It returns only the diff; callers format their own result
+// line.
+//
+// When expectCurrent is non-nil the write is a surgical edit: the file must
+// already exist, be readable within the cap, and hold exactly the bytes the
+// edit was computed against. Any mismatch fails the write untouched so a
+// concurrent external change is never silently clobbered.
+func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (diff string, err error) {
 	rel = strings.TrimSpace(rel)
 	if rel == "" {
-		return "", "", fmt.Errorf("write_file needs a path")
+		return "", fmt.Errorf("write_file needs a path")
 	}
 	rel = filepath.Clean(rel)
 	displayPath := filepath.ToSlash(rel)
 	// Block writes into .git (a hook would execute on the next git command),
 	// key-material directories, and shell startup files.
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
-		return "", "", errors.New(msg)
+		return "", errors.New(msg)
 	}
 	if len(content) > r.maxKB*1024 {
-		return "", "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
+		return "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
 	}
 	if _, err := r.resolve(rel); err != nil {
-		return "", "", err
+		return "", err
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", "", fmt.Errorf("open workspace root: %w", err)
+		return "", fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	// Capture the previous content so the TUI can show what changed.
@@ -483,7 +640,7 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 	oldTooBig := false
 	if info, err := root.Stat(rel); err == nil {
 		if info.IsDir() {
-			return "", "", fmt.Errorf("%q is a directory", rel)
+			return "", fmt.Errorf("%q is a directory", rel)
 		}
 		existed = true
 		if info.Size() <= int64(r.maxKB)*1024 {
@@ -496,26 +653,102 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 			oldTooBig = true
 		}
 	}
+	if expectCurrent != nil {
+		if !existed {
+			return "", fmt.Errorf("%q no longer exists; use write_file to create it", displayPath)
+		}
+		if oldTooBig {
+			return "", fmt.Errorf("%q changed and is no longer readable within the %d KB limit; re-read it and retry", displayPath, r.maxKB)
+		}
+		if oldContent != *expectCurrent {
+			return "", fmt.Errorf("%q changed since it was read; re-read the file and retry the edit against its current text", displayPath)
+		}
+	}
 	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
-		return "", "", fmt.Errorf("create parent directory: %w", err)
+		return "", fmt.Errorf("create parent directory: %w", err)
 	}
 	file, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return "", "", fmt.Errorf("open file for writing: %w", err)
+		return "", fmt.Errorf("open file for writing: %w", err)
 	}
 	if _, err := io.WriteString(file, content); err != nil {
 		_ = file.Close()
-		return "", "", fmt.Errorf("write file: %w", err)
+		return "", fmt.Errorf("write file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", "", fmt.Errorf("close written file: %w", err)
+		return "", fmt.Errorf("close written file: %w", err)
 	}
 	if oldTooBig {
-		diff = fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath)
-	} else {
-		diff = RenderWriteDiff(displayPath, oldContent, content, existed)
+		return fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath), nil
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), displayPath), diff, nil
+	return RenderWriteDiff(displayPath, oldContent, content, existed), nil
+}
+
+// editFile performs exactly one literal, exact-match replacement in an
+// existing text file. It never creates a file, never uses regex or fuzzy
+// matching, and fails without writing when old_text is absent or matches more
+// than once — the model is expected to re-read and retry with unique context.
+func (r *Runner) editFile(rel, oldText, newText string) (output, diff string, err error) {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return "", "", fmt.Errorf("edit_file needs a path")
+	}
+	if oldText == "" {
+		return "", "", fmt.Errorf("edit_file needs old_text — the exact fragment to replace")
+	}
+	if oldText == newText {
+		return "", "", fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+	}
+	rel = filepath.Clean(rel)
+	displayPath := filepath.ToSlash(rel)
+	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
+		return "", "", errors.New(msg)
+	}
+	if _, err := r.resolve(rel); err != nil {
+		return "", "", err
+	}
+	root, err := os.OpenRoot(r.root)
+	if err != nil {
+		return "", "", fmt.Errorf("open workspace root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+	info, statErr := root.Stat(rel)
+	if errors.Is(statErr, os.ErrNotExist) {
+		return "", "", fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath)
+	}
+	if statErr != nil {
+		return "", "", fmt.Errorf("edit file: %w", statErr)
+	}
+	if info.IsDir() {
+		return "", "", fmt.Errorf("%q is a directory", displayPath)
+	}
+	if !info.Mode().IsRegular() {
+		return "", "", fmt.Errorf("%q is not a regular file", displayPath)
+	}
+	byteLimit := int64(r.maxKB) * 1024
+	data, err := readRootFileLimited(root, rel, byteLimit)
+	if err != nil {
+		return "", "", fmt.Errorf("%q is larger than the %d KB edit limit; use write_file to replace it wholesale", displayPath, r.maxKB)
+	}
+	if !utf8.Valid(data) {
+		return "", "", fmt.Errorf("%q is not valid UTF-8 text; edit_file only edits text files", displayPath)
+	}
+	current := string(data)
+	switch matches := strings.Count(current, oldText); {
+	case matches == 0:
+		return "", "", fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath)
+	case matches > 1:
+		return "", "", fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath)
+	}
+	updated := strings.Replace(current, oldText, newText, 1)
+	if int64(len(updated)) > byteLimit {
+		return "", "", fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB)
+	}
+	diff, err = r.writeFileChecked(rel, updated, &current)
+	if err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, nil
 }
 
 func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, err error) {
@@ -910,6 +1143,13 @@ func (c Call) Describe() string {
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:
 		return fmt.Sprintf("write %s (%d bytes)", c.Path, len(c.Body))
+	case ToolEditFile:
+		return fmt.Sprintf("edit_file %s (exact replacement)", c.Path)
+	case ToolReadFile:
+		if start, count, ranged := CanonicalReadRange(c.Offset, c.Limit); ranged {
+			return fmt.Sprintf("%s %s (lines %d-%d)", c.Tool, c.Path, start, start+count-1)
+		}
+		return c.Tool + " " + c.Path
 	case ToolWebSearch:
 		return fmt.Sprintf("web_search(%q)", strings.TrimSpace(c.Body))
 	case ToolWebFetch:
@@ -947,10 +1187,11 @@ func Instructions(root string, withWeb bool) string {
 To use a tool, emit a fenced code block whose info string is "tool <name> [path]". Available tools:
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
-- read_file <path> — return a file's contents
+- read_file <path> — return a file's contents; an optional JSON body {"offset":1,"limit":200} returns just that 1-based line range
 - glob [path] — recursively find files; the glob pattern is the block's body
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body
+- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 - local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval
@@ -970,6 +1211,7 @@ grep -rn "TODO" scripts
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
+- Use ranged read_file when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 - ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.

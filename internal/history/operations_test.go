@@ -93,3 +93,49 @@ func TestOperationLogUsesCallIDAsIdempotencyKey(t *testing.T) {
 		t.Fatalf("replayed provider call state = %v, want completed", decision.State)
 	}
 }
+
+func TestEditFileIsDurableSideEffect(t *testing.T) {
+	if !IsDurableSideEffect(tools.Call{Tool: tools.ToolEditFile, Path: "a.go", OldText: "x", NewText: "y"}) {
+		t.Fatal("edit_file must be journaled as a durable side effect")
+	}
+}
+
+// A fenced edit_file has no provider call ID, so its idempotency key must be
+// derived from the replacement identity: two materially different edits to the
+// same path must not collide (which would make the journal skip the second as
+// a recovered duplicate), while an identical replay must.
+func TestOperationKeyDistinguishesFencedEditReplacements(t *testing.T) {
+	base := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "B"}
+	sameReplay := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "B"}
+	differentNew := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "C"}
+	differentOld := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "X", NewText: "B"}
+
+	if operationKey(base) != operationKey(sameReplay) {
+		t.Fatal("identical fenced edits produced different keys")
+	}
+	if operationKey(base) == operationKey(differentNew) || operationKey(base) == operationKey(differentOld) {
+		t.Fatal("materially different fenced edits collided to one key")
+	}
+}
+
+func TestOperationLogDoesNotPersistEditReplacementText(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenOperationLog(dir, "session-edit-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "OLD-SECRET-abc", NewText: "NEW-SECRET-xyz"}
+	if _, err := log.Begin(call); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Complete(call, true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".operations", "session-edit-secret.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SECRET") || strings.Contains(string(data), "cfg.go") {
+		t.Fatalf("operation log leaked edit content: %s", data)
+	}
+}

@@ -141,8 +141,19 @@ and an explicit category selection; the picker defaults to skip.
     it never enables session-wide approval. For `write_file` the grant also
     pins a hash of the content you reviewed, so it authorises re-writing
     exactly those bytes — not a licence to rewrite that path with anything.
+    An `edit_file` grant is likewise pinned to the exact `old_text`→`new_text`
+    pair: a different replacement to the same file re-prompts.
     `/tools ask` revokes all such grants. Global auto mode is an explicit
     high-trust override, not the recommended default.
+  - **Surgical edits** — `edit_file` replaces one exact, unique text fragment
+    in an *existing* file and shares every `write_file` guardrail (workspace
+    confinement, `.git`/key-material/shell-startup blocks, symlink-escape
+    rejection, the `tools.max_file_kb` cap). It never creates a file, refuses
+    a non-UTF-8 file, fails without writing on zero or multiple matches, and
+    aborts if the file changed between the read it was computed from and the
+    write — so a concurrent external change is never clobbered. A ranged
+    `read_file` is still a `read_file`: the same secret-file approval and
+    workspace confinement apply regardless of the line range.
   - **Clarification is not authorization** — `ask_user` pauses for one
     bounded decision or missing fact and returns the answer through the
     original tool call. It cannot approve a write, command, web request, or

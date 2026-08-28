@@ -370,7 +370,7 @@ func TestReadFileIsBoundedAtIOAndUTF8Safe(t *testing.T) {
 			if err := os.WriteFile(path, tt.content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := runner.readFile(tt.name)
+			got, err := runner.readFile(tt.name, 0, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -406,7 +406,7 @@ func TestReadFileSparseLargeFileReturnsOnlyBoundedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := NewRunner(root, 1).readFile("large.bin")
+	got, err := NewRunner(root, 1).readFile("large.bin", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,6 +428,7 @@ func TestNeedsApproval(t *testing.T) {
 		{Call{Tool: ToolGlob, Body: "*.go"}, false},
 		{Call{Tool: ToolGrep, Body: "TODO"}, false},
 		{Call{Tool: ToolWriteFile, Path: "a.txt", Body: "x"}, true},
+		{Call{Tool: ToolEditFile, Path: "a.txt", OldText: "x", NewText: "y"}, true},
 		{Call{Tool: ToolRunCommand, Body: "ls -la"}, false},
 		{Call{Tool: ToolRunCommand, Body: "rm -rf ."}, true},
 		{Call{Tool: "mystery"}, true},
@@ -456,7 +457,7 @@ func TestFormatResults(t *testing.T) {
 
 func TestInstructionsMentionEveryTool(t *testing.T) {
 	ins := Instructions("/tmp/project", false)
-	for _, want := range []string{ToolListDir, ToolReadFile, ToolWriteFile, ResultsPrefix, "/tmp/project"} {
+	for _, want := range []string{ToolListDir, ToolReadFile, ToolWriteFile, ToolEditFile, ResultsPrefix, "/tmp/project"} {
 		if !strings.Contains(ins, want) {
 			t.Errorf("instructions missing %q", want)
 		}

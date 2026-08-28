@@ -1676,6 +1676,7 @@ func (m *Model) toolsOverlay() string {
 	m.kv(&b, tools.ToolGlob, "find workspace files by glob pattern (auto)")
 	m.kv(&b, tools.ToolGrep, "search workspace contents with a regular expression (auto; secret files skipped)")
 	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
+	m.kv(&b, tools.ToolEditFile, "replace one exact unique text fragment in an existing file (approval)")
 	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
 	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")
 	m.kv(&b, tools.ToolWebFetch, "fetch one page as Markdown (approval per URL)")

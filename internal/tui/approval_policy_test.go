@@ -62,6 +62,41 @@ func TestCapabilityPolicyScopesWriteContent(t *testing.T) {
 	}
 }
 
+// TestCapabilityPolicyScopesEditReplacement checks an edit_file grant is
+// pinned to the exact old→new pair: a different new_text, a different
+// old_text, or a different file must each re-prompt.
+func TestCapabilityPolicyScopesEditReplacement(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	reviewed := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "B"}
+	policy.GrantCall(reviewed, now, time.Hour)
+
+	if !policy.Allows(reviewed, now) {
+		t.Fatal("the reviewed edit was not allowed")
+	}
+	for _, other := range []tools.Call{
+		{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "C"},
+		{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "X", NewText: "B"},
+		{Tool: tools.ToolEditFile, Path: "other.go", OldText: "A", NewText: "B"},
+		{Tool: tools.ToolWriteFile, Path: "cfg.go", Body: "A"},
+	} {
+		if policy.Allows(other, now) {
+			t.Fatalf("edit grant leaked to %+v", other)
+		}
+	}
+}
+
+// A glob path grant carries no variant, so it must never match edit_file
+// (every edit is fingerprinted by its replacement).
+func TestCapabilityPolicyPathPatternNeverApprovesEdits(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	policy.GrantPath(tools.ToolEditFile, "src/*.go", now, time.Hour)
+	if policy.Allows(tools.Call{Tool: tools.ToolEditFile, Path: "src/main.go", OldText: "a", NewText: "b"}, now) {
+		t.Fatal("a path pattern blanket-approved an edit")
+	}
+}
+
 // TestCapabilityPolicyPathPatternNeverBlanketApprovesWrites ensures a glob
 // grant cannot be used to sidestep the content fingerprint.
 func TestCapabilityPolicyPathPatternNeverBlanketApprovesWrites(t *testing.T) {

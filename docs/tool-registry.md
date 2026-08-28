@@ -78,13 +78,17 @@ Response:
   "tools": [
     {
       "name": "read_file",
-      "description": "Read a file in the project workspace and return its contents.",
+      "description": "Read a file in the project workspace and return its contents. Pass offset/limit to read only a line range of a large file.",
       "source": "builtin",
       "safety": "read_only",
       "approval": "ask for secret files",
       "input_schema": {
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+          "path": {"type": "string"},
+          "offset": {"type": "integer", "minimum": 1},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 500}
+        },
         "required": ["path"]
       }
     }
@@ -103,6 +107,9 @@ cannot race session toggles. The snapshot is assembled by the same
 `activeToolSpecs` path used for provider requests:
 
 - `/tools off` returns an empty tool array.
+- `read_file` accepts an optional 1-based `offset`/`limit` line range;
+  `edit_file` (one exact, unique text replacement in an existing file) is a
+  `workspace_write` builtin alongside `write_file`.
 - `/web on|off` adds or removes `web_search` and `web_fetch`.
 - `skill_load` appears only while the model-visible skill catalog is available.
 - A configured MCP server contributes no tools until `/mcp connect` completes
