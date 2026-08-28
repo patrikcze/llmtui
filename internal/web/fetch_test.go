@@ -141,7 +141,7 @@ func TestFetchRetriesOverHTTP1AfterTransportError(t *testing.T) {
 				t.Errorf("hijack: %v", err)
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
