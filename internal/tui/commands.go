@@ -139,9 +139,9 @@ func slashCommands() []slashCommand {
 		{name: "template", usage: "/template [list|use <name>|clear|inspect <name>]", desc: "reusable conversation templates", category: "Prompt", run: cmdTemplate},
 
 		// --- Context ---
-		{name: "context", usage: "/context [summary|compact|clear-summary|strategy <s>]", desc: "context window management and session summary", category: "Context", run: cmdContext},
-		{name: "compact", usage: "/compact", desc: "summarize older messages now to free up context (alias for /context compact)", category: "Context", run: func(m *Model, _ string) tea.Cmd {
-			return cmdContext(m, "compact")
+		{name: "context", usage: "/context [status|summary|summarize|compact|rebuild|preview|refresh|clear-summary|strategy <s>]", desc: "inspect and safely manage context", category: "Context", run: cmdContext},
+		{name: "compact", usage: "/compact", desc: "summarize older messages now to free up context (alias for /context summarize)", category: "Context", run: func(m *Model, _ string) tea.Cmd {
+			return cmdContext(m, "summarize")
 		}},
 
 		// --- Cache ---

@@ -973,8 +973,16 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 }
 
 func (m *Model) commitPrepared(prepared preparedRequest) {
-	if !prepared.agentScoped {
+	if prepared.agentScoped {
+		m.agentContextSummary = agentScopedSummary{
+			RunID: m.agentRunID(), Cycle: 0, Summary: boundedContextPreview(prepared.summary), RecordedAt: time.Now(),
+		}
+		if m.agentLoop != nil && m.agentLoop.run != nil {
+			m.agentContextSummary.Cycle = m.agentLoop.run.Cycle
+		}
+	} else {
 		m.summary = prepared.summary
+		m.agentContextSummary = agentScopedSummary{}
 	}
 	m.ragLast = prepared.ragResults
 	m.ctxUsed = prepared.decision.Used
