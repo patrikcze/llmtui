@@ -253,6 +253,12 @@ and an explicit category selection; the picker defaults to skip.
   - **Bounded content** — response bodies are read up to 4 MB and reduced
     to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
     before reaching the model; binary content types are refused.
+  - **Request shape** — `web_fetch` presents a mainstream desktop-browser
+    `User-Agent` (a tool-identifying string is rejected by much of the public
+    web) and, on a transport failure or a `403`/`429`/`503`, retries once over
+    HTTP/1.1. It stays GET-only, adds no cookies or auth, and both the primary
+    and fallback clients use the same SSRF-guarded dialer and 5-hop redirect
+    limit. A deliberate SSRF rejection is never retried.
   - **Prompt-injection posture** — fetched pages are untrusted input. The
     result itself and the system prompt say so explicitly, and the result body
     is enclosed in matching, collision-checked untrusted-content markers. The

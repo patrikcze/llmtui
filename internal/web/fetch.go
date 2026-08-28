@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -21,7 +22,25 @@ import (
 // then bounds what reaches the model.
 const rawReadCap = 4 << 20
 
-const userAgent = "llmtui (+https://github.com/patrikcze/llmtui)"
+// userAgent presents as a mainstream desktop browser. A tool-identifying
+// string ("llmtui/…") is refused or served a bot challenge by a large share
+// of public sites (news, weather, anything behind Cloudflare/Akamai), which
+// made web_fetch fail on exactly the pages users ask for. The request stays
+// GET-only, rate-unfriendly behaviour is not added, and robots are not
+// bypassed — this only stops trivial UA-string filtering.
+const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+	"(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+const acceptLanguage = "en-US,en;q=0.9"
+
+// retryableStatuses are answered again once over HTTP/1.1: they are the codes
+// bot-protection layers use for "prove you're a browser" holds rather than a
+// genuine "this page does not exist".
+var retryableStatuses = map[int]bool{
+	http.StatusForbidden:          true, // 403
+	http.StatusTooManyRequests:    true, // 429
+	http.StatusServiceUnavailable: true, // 503
+}
 
 // Fetch downloads one page and reduces it to Markdown/plain text. On non-2xx
 // statuses the page (with any text body) and an error are both returned so
@@ -34,14 +53,7 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
 	if err := checkURL(u); err != nil {
 		return Page{URL: rawURL}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return Page{URL: rawURL}, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/*;q=0.9,application/json;q=0.8,*/*;q=0.1")
-
-	resp, err := c.http.Do(req)
+	resp, err := c.fetchResponse(ctx, u)
 	if err != nil {
 		return Page{URL: rawURL}, fmt.Errorf("fetch: %w", err)
 	}
@@ -73,6 +85,49 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
 		return page, fmt.Errorf("fetch failed: status %d", resp.StatusCode)
 	}
 	return page, nil
+}
+
+// fetchResponse issues the GET over the default (HTTP/2-capable) client, then
+// retries once over an HTTP/1.1-only client when the first attempt fails at
+// the transport layer or comes back with a retryable block status. Public
+// bot-protection layers routinely reset HTTP/2 streams for non-browser
+// clients (surfacing as "stream error: …"), and an HTTP/1.1 retry with a
+// browser User-Agent clears a large fraction of those without weakening any
+// guardrail — the SSRF-checked dialer and redirect policy are shared by both
+// clients.
+func (c *Client) fetchResponse(ctx context.Context, u *url.URL) (*http.Response, error) {
+	resp, err := c.doFetch(ctx, c.http, u)
+	if !c.shouldRetryHTTP1(ctx, resp, err) {
+		return resp, err
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+	return c.doFetch(ctx, c.httpH1, u)
+}
+
+func (c *Client) doFetch(ctx context.Context, client *http.Client, u *url.URL) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/*;q=0.9,application/json;q=0.8,*/*;q=0.1")
+	req.Header.Set("Accept-Language", acceptLanguage)
+	return client.Do(req)
+}
+
+// shouldRetryHTTP1 reports whether the HTTP/1.1 fallback is worth trying. It
+// never retries once the caller's context is done (the deadline covers both
+// attempts) or when the failure is a deliberate guardrail rejection.
+func (c *Client) shouldRetryHTTP1(ctx context.Context, resp *http.Response, err error) bool {
+	if c.httpH1 == nil || ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		return !errors.Is(err, errBlockedAddress)
+	}
+	return retryableStatuses[resp.StatusCode]
 }
 
 // htmlToMarkdown extracts the readable article and converts it to Markdown,

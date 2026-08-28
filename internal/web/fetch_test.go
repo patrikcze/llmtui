@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,5 +98,101 @@ func TestFetchNon2xxReturnsErrorWithBody(t *testing.T) {
 	}
 	if page.Status != 404 || !strings.Contains(page.Content, "gone fishing") {
 		t.Errorf("status=%d content=%q", page.Status, page.Content)
+	}
+}
+
+func TestFetchSendsBrowserHeaders(t *testing.T) {
+	seen := make(chan http.Header, 1)
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case seen <- r.Header.Clone():
+		default:
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "ok")
+	}))
+	defer srv.Close()
+	if _, err := testClient(64).Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	h := <-seen
+	if ua := h.Get("User-Agent"); !strings.HasPrefix(ua, "Mozilla/5.0") || strings.Contains(ua, "llmtui") {
+		t.Errorf("User-Agent = %q, want a browser string", ua)
+	}
+	if h.Get("Accept-Language") == "" {
+		t.Error("Accept-Language header missing")
+	}
+}
+
+// TestFetchRetriesOverHTTP1AfterTransportError simulates the HTTP/2 stream
+// reset that bot-protection layers trigger for non-browser clients: the first
+// connection is closed before any response, the retry succeeds.
+func TestFetchRetriesOverHTTP1AfterTransportError(t *testing.T) {
+	var calls int32
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("ResponseWriter is not a Hijacker")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "recovered")
+	}))
+	defer srv.Close()
+
+	page, err := testClient(64).Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if page.Content != "recovered" {
+		t.Errorf("content = %q, want recovered", page.Content)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("server calls = %d, want 2 (initial + retry)", got)
+	}
+}
+
+func TestFetchRetriesOnceOnBlockStatusThenStops(t *testing.T) {
+	var calls int32
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "bot challenge", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	page, err := testClient(64).Fetch(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("want 403 error, got %v", err)
+	}
+	if page.Status != 403 || !strings.Contains(page.Content, "bot challenge") {
+		t.Errorf("status=%d content=%q", page.Status, page.Content)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("server calls = %d, want exactly 2 (no retry loop)", got)
+	}
+}
+
+func TestFetchDoesNotRetryOnNon2xxThatIsNotABlock(t *testing.T) {
+	var calls int32
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	if _, err := testClient(64).Fetch(context.Background(), srv.URL); err == nil {
+		t.Fatal("want 404 error")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("server calls = %d, want 1 (404 is not retried)", got)
 	}
 }
