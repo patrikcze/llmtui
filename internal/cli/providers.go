@@ -4,18 +4,21 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/patrikcze/llmtui/internal/app"
+	"github.com/patrikcze/llmtui/internal/config"
 )
 
 func newProvidersCmd(r *Root) *cobra.Command {
-	return &cobra.Command{
-		Use:   "providers",
-		Short: "List configured providers and their status",
+	cmd := &cobra.Command{
+		Use:     "providers",
+		Aliases: []string{"provider"},
+		Short:   "List configured providers and their status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			names := make([]string, 0, len(r.cfg.Providers))
 			for name := range r.cfg.Providers {
@@ -50,4 +53,30 @@ func newProvidersCmd(r *Root) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "switch <provider>",
+		Short: "Persist the default provider",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if _, ok := r.cfg.Providers[name]; !ok {
+				names := make([]string, 0, len(r.cfg.Providers))
+				for provider := range r.cfg.Providers {
+					names = append(names, provider)
+				}
+				sort.Strings(names)
+				return fmt.Errorf("unknown provider %q (available: %s)", name, strings.Join(names, ", "))
+			}
+			path, err := r.configPath()
+			if err != nil {
+				return err
+			}
+			if err := config.SetDefaultProvider(path, name); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.Root().OutOrStdout(), "default provider set to %q\n", name)
+			return nil
+		},
+	})
+	return cmd
 }

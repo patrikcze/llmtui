@@ -88,6 +88,12 @@ available as built-ins even with an empty config. `default_provider` and
 `model_path` wins over both defaults; an explicit `--model` or
 `LLMTUI_MODEL` wins over `model_path`.
 
+Run `llmtui provider switch <name>` to persist a built-in or configured
+provider as `default_provider` for future sessions. It changes only that YAML
+setting and preserves the rest of the file, including `api_key_env` references.
+An explicit `--provider` flag or `LLMTUI_PROVIDER` environment variable still
+overrides the saved default for that invocation and is never written to config.
+
 Embedded-only provider keys:
 
 | Key | Default | Meaning |

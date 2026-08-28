@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // EnvPrefix is the prefix for all llmtui environment variables.
@@ -1247,6 +1248,85 @@ func WriteDefault(path string) error {
 	}
 	if err := os.WriteFile(path, []byte(DefaultYAML), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
+// SetDefaultProvider persists provider as the default_provider value while
+// preserving all unrelated YAML settings.
+func SetDefaultProvider(path, provider string) error {
+	var document yaml.Node
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	if len(data) == 0 {
+		document = yaml.Node{
+			Kind:    yaml.DocumentNode,
+			Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}},
+		}
+	} else if err := yaml.Unmarshal(data, &document); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("config root must be a YAML mapping")
+	}
+	mapping := document.Content[0]
+	for index := 0; index < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == "default_provider" {
+			value := mapping.Content[index+1]
+			if value.Kind == yaml.ScalarNode {
+				value.Tag = "!!str"
+				value.Value = provider
+			} else {
+				mapping.Content[index+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: provider}
+			}
+			return writeConfigDocument(path, &document)
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "default_provider"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: provider},
+	)
+	return writeConfigDocument(path, &document)
+}
+
+func writeConfigDocument(path string, document *yaml.Node) error {
+	data, err := yaml.Marshal(document)
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	temporaryOpen := true
+	defer func() {
+		if temporaryOpen {
+			_ = temporary.Close()
+		}
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("set temporary config permissions: %w", err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary config: %w", err)
+	}
+	temporaryOpen = false
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil
 }

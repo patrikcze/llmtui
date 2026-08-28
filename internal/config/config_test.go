@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -83,6 +84,57 @@ chat:
 	// Untouched keys keep defaults.
 	if cfg.Chat.MaxTokens != 4096 {
 		t.Errorf("MaxTokens = %d, want default 4096", cfg.Chat.MaxTokens)
+	}
+}
+
+func TestSetDefaultProviderPreservesOtherConfig(t *testing.T) {
+	path := writeConfig(t, `
+# Keep this comment and every unrelated configuration section.
+default_provider: ollama # Keep the selected-provider note.
+providers:
+  remote:
+    type: openai_compatible
+    api_key_env: LLMTUI_REMOTE_KEY
+chat:
+  temperature: 0.3
+`)
+
+	if err := SetDefaultProvider(path, "remote"); err != nil {
+		t.Fatalf("SetDefaultProvider: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"# Keep this comment and every unrelated configuration section.",
+		"default_provider: remote # Keep the selected-provider note.",
+		"api_key_env: LLMTUI_REMOTE_KEY",
+		"temperature: 0.3",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("updated config missing %q:\n%s", want, text)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat updated config: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("updated config mode = %o, want 600", info.Mode().Perm())
+	}
+
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultProvider != "remote" {
+		t.Errorf("DefaultProvider = %q, want remote", cfg.DefaultProvider)
 	}
 }
 

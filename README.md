@@ -226,6 +226,7 @@ The full reference for every section lives in
 | `llmtui chat` | Interactive full-screen chat (`--resume <name>` / `--continue` to resume a saved session) |
 | `llmtui models` | List models on the active provider |
 | `llmtui providers` | List configured providers and their status |
+| `llmtui provider switch <name>` | Persist a provider as the default for future sessions |
 | `llmtui config init / show / path` | Manage configuration |
 | `llmtui doctor` | Diagnose config and backend connectivity |
 | `llmtui history` | List saved chat sessions |
