@@ -146,7 +146,7 @@ could make otherwise compatible servers reject requests.
 | `system_prompt` | helpful-assistant text | First system section of every request |
 | `temperature` | `0.7` | Sampling temperature; `0` is honored (deterministic) |
 | `top_p` | `0.9` | Nucleus sampling |
-| `max_tokens` | `4096` | Maximum response budget; embedded requests clamp it to the positions remaining after the prompt. A response cut off by this limit is flagged (not silently accepted) — raise it for models/tasks that rewrite large files with `write_file` |
+| `max_tokens` | `4096` | Maximum response budget; embedded requests clamp it to the positions remaining after the prompt. A response cut off by this limit is flagged (not silently accepted) — raise it for models/tasks that rewrite whole files with `write_file` (small changes should use `edit_file` instead) |
 | `stream` | `true` | Stream tokens (`--no-stream` overrides) |
 | `save_history` | `true` | Enables sessions + `usage.jsonl` under `history_dir` |
 | `history_dir` | `~/.local/share/llmtui/history` | Where history lives |
@@ -258,7 +258,7 @@ command line would be classified, and `/tools list` / `/tools inspect
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `block_git_dir_writes` | `true` | Reject `write_file` into `.git` (a written hook would run on your next git command) |
+| `block_git_dir_writes` | `true` | Reject `write_file`/`edit_file` into `.git` (a written hook would run on your next git command) |
 | `block_symlink_escape` | `true` | Reject paths whose symlinks resolve outside the workspace root |
 | `protect_secret_files` | `true` | Reject writes into key-material directories (`.ssh`, `.gnupg`) |
 | `protect_shell_startup_files` | `true` | Reject writes to shell startup files (`.bashrc`, `.zshrc`, `.profile`, `config.fish`, …) |

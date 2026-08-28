@@ -368,10 +368,21 @@ tools:
     max_results: 5
 ```
 
-The six workspace tools are `list_dir`, `read_file`, `glob`, `grep`,
-`write_file`, and `run_command` (one shell command in the workspace — `sh` on
-macOS/Linux, `cmd` on Windows, detected automatically). Three controller and
-local-assistant tools are also available:
+The seven workspace tools are `list_dir`, `read_file`, `glob`, `grep`,
+`write_file`, `edit_file`, and `run_command` (one shell command in the
+workspace — `sh` on macOS/Linux, `cmd` on Windows, detected automatically):
+
+- `read_file` returns a whole file, or — with an optional 1-based `offset` and
+  `limit` — just that line range (default 200 lines, hard cap 500), so a large
+  file can be paged through without spending the context on all of it.
+- `write_file` creates a file or replaces one whole.
+- `edit_file` replaces **one exact, unique** text fragment in an existing file
+  (`old_text` → `new_text`). It fails without writing if `old_text` is missing
+  or matches more than once, never creates a file, and refuses if the file
+  changed since it was read. Use it for small changes instead of regenerating
+  the whole file; it shares `write_file`'s guardrails and approval.
+
+Three controller and local-assistant tools are also available:
 
 - `ask_user` pauses the current tool loop for one bounded question, up to four
   choices, or a free-text answer. The answer continues the original tool call;
