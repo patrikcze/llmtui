@@ -455,6 +455,7 @@ func (m *Model) contextStatusOverlay() string {
 	m.kv(&b, "breakdown", fmt.Sprintf("system %s · messages %s · tool schemas %s · summary %s",
 		components.FormatTokens(snapshot.SystemTokens), components.FormatTokens(snapshot.MessageTokens),
 		components.FormatTokens(snapshot.ToolSchemaTokens), components.FormatTokens(snapshot.SummaryTokens)))
+	m.kv(&b, "memory / RAG", "not refreshed in context status")
 	m.kv(&b, "summary", snapshot.SummaryKind)
 	m.kv(&b, "older messages", fmt.Sprintf("%d represented compactly", snapshot.OlderMessages))
 	m.kv(&b, "recent messages", fmt.Sprintf("%d retained verbatim", snapshot.RecentMessages))
@@ -499,18 +500,25 @@ func (m *Model) contextSummaryOverlay(snapshot contextStatusSnapshot) string {
 func (m *Model) contextPreviewOverlay(snapshot contextStatusSnapshot) string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("context preview") + "\n\n")
-	b.WriteString("  1. " + m.theme.StatusValue.Render("Stable system instructions") + "\n")
+	categories := []string{"Stable system instructions"}
 	if snapshot.Agent != nil {
-		b.WriteString("  2. " + m.theme.StatusValue.Render("Agent directive and verified cycle memory") + "\n")
+		categories = append(categories, "Agent directive and verified cycle memory")
 	}
+	if len(m.activeSkillIDs()) > 0 {
+		categories = append(categories, "Active skills")
+	}
+	categories = append(categories, "Optional memory/RAG (not refreshed here)")
 	if snapshot.SummaryActive {
-		b.WriteString("  3. " + m.theme.StatusValue.Render(snapshot.SummaryKind) + "\n")
+		categories = append(categories, snapshot.SummaryKind)
 	}
-	b.WriteString("  4. " + m.theme.StatusValue.Render(fmt.Sprintf("Recent verbatim messages (%d)", snapshot.RecentMessages)) + "\n")
+	categories = append(categories, fmt.Sprintf("Recent verbatim messages (%d)", snapshot.RecentMessages))
 	if snapshot.Turn.HarmonyContinuation || snapshot.Turn.State == string(turnProcessingResults) {
-		b.WriteString("  5. " + m.theme.StatusValue.Render("Current tool continuation") + "\n")
+		categories = append(categories, "Current tool continuation")
 	}
-	b.WriteString("  6. " + m.theme.StatusValue.Render(fmt.Sprintf("Tool schemas (%s tokens)", components.FormatTokens(snapshot.ToolSchemaTokens))) + "\n")
+	categories = append(categories, fmt.Sprintf("Tool schemas (%s tokens)", components.FormatTokens(snapshot.ToolSchemaTokens)))
+	for index, category := range categories {
+		fmt.Fprintf(&b, "  %d. %s\n", index+1, m.theme.StatusValue.Render(category))
+	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("Memory and RAG are not refreshed by context preview. Use /prompt preview for the exact outgoing prompt."))
 	return m.overlayFooter(&b)
 }
