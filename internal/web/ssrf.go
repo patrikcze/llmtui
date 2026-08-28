@@ -10,6 +10,11 @@ import (
 
 var errTooManyRedirects = errors.New("stopped after 5 redirects")
 
+// errBlockedAddress is a deterministic guardrail rejection: the host resolved
+// only to addresses that must never be dialed. Retrying it over HTTP/1.1 would
+// fail identically, so the fetch fallback skips it.
+var errBlockedAddress = errors.New("host resolves to a private or local address — not allowed")
+
 // checkURL admits only plain web URLs.
 func checkURL(u *url.URL) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
@@ -82,6 +87,6 @@ func (c *Client) guardedDial(d *net.Dialer) func(ctx context.Context, network, a
 				return d.DialContext(ctx, network, net.JoinHostPort(a.IP.String(), port))
 			}
 		}
-		return nil, fmt.Errorf("host %s resolves to a private or local address — not allowed", host)
+		return nil, fmt.Errorf("resolve %s: %w", host, errBlockedAddress)
 	}
 }

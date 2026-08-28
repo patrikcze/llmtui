@@ -4,6 +4,7 @@
 package web
 
 import (
+	"crypto/tls"
 	"net"
 	"net/http"
 	"time"
@@ -25,7 +26,8 @@ type Page struct {
 // Client implements search and fetch over plain HTTP. The zero value is not
 // usable; construct with NewClient.
 type Client struct {
-	http      *http.Client
+	http      *http.Client // default, HTTP/2-capable
+	httpH1    *http.Client // HTTP/1.1-only fallback for fetch retries
 	maxPageKB int
 	searchURL string // test override; defaults to DuckDuckGo
 
@@ -47,19 +49,30 @@ func NewClient(timeout time.Duration, maxPageKB int) *Client {
 	}
 	c := &Client{maxPageKB: maxPageKB, searchURL: defaultSearchURL}
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport := &http.Transport{
-		DialContext:       c.guardedDial(dialer),
-		ForceAttemptHTTP2: true,
+	redirect := func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errTooManyRedirects
+		}
+		return checkURL(req.URL) // every hop must stay http(s)
 	}
 	c.http = &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errTooManyRedirects
-			}
-			return checkURL(req.URL) // every hop must stay http(s)
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:       c.guardedDial(dialer),
+			ForceAttemptHTTP2: true,
 		},
+		CheckRedirect: redirect,
+	}
+	// HTTP/1.1-only fallback: a non-nil, empty TLSNextProto disables the
+	// transport's automatic HTTP/2 upgrade. Same SSRF-guarded dialer and
+	// redirect policy as the primary client.
+	c.httpH1 = &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:  c.guardedDial(dialer),
+			TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+		},
+		CheckRedirect: redirect,
 	}
 	return c
 }
