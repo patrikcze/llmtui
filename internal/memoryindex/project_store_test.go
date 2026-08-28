@@ -26,7 +26,13 @@ func newTestProjectStore(t *testing.T, root string) *ProjectStore {
 }
 
 func TestResolveProjectCanonicalizesSymlinks(t *testing.T) {
-	realRoot := t.TempDir()
+	// A distinctive, non-hex workspace name: t.TempDir() roots end in a short
+	// numeric segment ("001") that can appear verbatim inside a SHA-256 hex
+	// digest, which made the leak assertion below flaky.
+	realRoot := filepath.Join(t.TempDir(), "llmtui-workspace")
+	if err := os.Mkdir(realRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
 	linkParent := t.TempDir()
 	linkRoot := filepath.Join(linkParent, "workspace-link")
 	if err := os.Symlink(realRoot, linkRoot); err != nil {

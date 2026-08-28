@@ -307,10 +307,13 @@ func TestVerifiedAgentVerifierModelSelectionCompatibility(t *testing.T) {
 		name          string
 		verifierModel string
 		wantModel     string
+		// wantReasoning is the isolated verifier thinking mode: "off" for
+		// models that can disable it, "low" for GPT-OSS which cannot.
+		wantReasoning string
 	}{
-		{name: "empty reuses executor", verifierModel: "", wantModel: "openai/gpt-oss-20b"},
-		{name: "explicit same model", verifierModel: "openai/gpt-oss-20b", wantModel: "openai/gpt-oss-20b"},
-		{name: "separate model", verifierModel: "google/gemma-4-e4b", wantModel: "google/gemma-4-e4b"},
+		{name: "empty reuses executor", verifierModel: "", wantModel: "openai/gpt-oss-20b", wantReasoning: "low"},
+		{name: "explicit same model", verifierModel: "openai/gpt-oss-20b", wantModel: "openai/gpt-oss-20b", wantReasoning: "low"},
+		{name: "separate model", verifierModel: "google/gemma-4-e4b", wantModel: "google/gemma-4-e4b", wantReasoning: "off"},
 	}
 
 	for _, tt := range tests {
@@ -338,7 +341,7 @@ func TestVerifiedAgentVerifierModelSelectionCompatibility(t *testing.T) {
 				t.Fatalf("verifier model = %q, want %q", verifyReq.Model, tt.wantModel)
 			}
 			if len(verifyReq.Messages) != 2 || len(verifyReq.Tools) != 0 || verifyReq.Stream ||
-				verifyReq.Reasoning != "off" || verifyReq.Temperature != 0 || verifyReq.TopP != 1 {
+				verifyReq.Reasoning != tt.wantReasoning || verifyReq.Temperature != 0 || verifyReq.TopP != 1 {
 				t.Fatalf("verifier request lost isolated settings: %+v", verifyReq)
 			}
 		})

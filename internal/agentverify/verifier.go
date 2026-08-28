@@ -134,7 +134,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		TopP:        1,
 		MaxTokens:   cfg.MaxTokens,
 		Stream:      false,
-		Reasoning:   "off",
+		Reasoning:   verifierReasoning(cfg.Model),
 	}
 	if reporter, ok := client.(interface{ Capabilities() provider.Capabilities }); ok &&
 		reporter.Capabilities().StructuredOutput == provider.CapabilitySupported {
@@ -162,6 +162,20 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 	repaired, repairErr := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
 	repaired.Usage = mergeUsage(first.Usage, repaired.Usage)
 	return repaired, repairErr
+}
+
+// verifierReasoning resolves the fresh-context verdict's thinking mode. The
+// verifier wants the fastest deterministic tool-free pass, so it disables
+// reasoning — except for model families that cannot disable it. GPT-OSS
+// (Harmony) always emits an analysis channel, so "off" is a provider request
+// error there; the lowest documented effort is used instead. Only the model
+// ID is available at this boundary, which is enough for the documented
+// segment-based fallback in provider.ResolveModelProtocol.
+func verifierReasoning(model string) string {
+	if provider.ResolveModelProtocol(model, "").Family == provider.ModelFamilyGPTOSS {
+		return "low"
+	}
+	return "off"
 }
 
 // isProviderRejection reports whether err is a request-level provider
