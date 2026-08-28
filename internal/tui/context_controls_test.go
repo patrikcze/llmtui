@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -109,6 +110,44 @@ func TestContextSnapshotShowsCompletedAgentRunUnderSessionScope(t *testing.T) {
 	}
 	if snapshot.Agent.Status != string(agent.DecisionDone) {
 		t.Fatalf("completed run status = %q", snapshot.Agent.Status)
+	}
+}
+
+func TestContextSnapshotDoesNotAlterAgentRun(t *testing.T) {
+	m := newTestModel(t)
+	run := &agent.AgentRun{
+		ID: "run-immutable", Cycle: 2, Status: agent.DecisionRunning, Stage: agent.StageExecutor,
+		Limits: agent.DefaultLimits(), Objective: "keep this objective", StartContextCaptured: true,
+		StartSummary: "captured start summary", StartTurns: []agent.ContextTurn{{Role: "user", Content: "prior request"}},
+		Criteria: []agent.Criterion{{ID: "c1", Text: "preserve state", Status: agent.CriterionPending}},
+	}
+	m.agentLoop = &agentLoopState{run: run, historyStart: 0}
+	before, err := json.Marshal(run)
+	if err != nil {
+		t.Fatalf("marshal before snapshot: %v", err)
+	}
+	_ = m.contextSnapshot()
+	after, err := json.Marshal(run)
+	if err != nil {
+		t.Fatalf("marshal after snapshot: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("context snapshot mutated AgentRun:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestCommitPreparedKeepsAgentSummarySeparate(t *testing.T) {
+	m := newTestModel(t)
+	m.summary = "ordinary session summary"
+	m.agentLoop = &agentLoopState{run: &agent.AgentRun{
+		ID: "run-summary", Cycle: 2, Status: agent.DecisionRunning, Limits: agent.DefaultLimits(),
+	}}
+	m.commitPrepared(preparedRequest{agentScoped: true, summary: "agent-only summary"})
+	if m.summary != "ordinary session summary" {
+		t.Fatalf("session summary = %q, want unchanged", m.summary)
+	}
+	if m.agentContextSummary.RunID != "run-summary" || m.agentContextSummary.Summary != "agent-only summary" {
+		t.Fatalf("agent summary = %+v", m.agentContextSummary)
 	}
 }
 
