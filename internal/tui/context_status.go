@@ -110,6 +110,7 @@ func (m *Model) contextSnapshot() contextStatusSnapshot {
 	window, source := m.contextWindow()
 	history, requestSummary, agentScoped := m.requestHistory()
 	agentScope := agentScoped || m.contextAgentOwnsState()
+	hasAgentRun := m.agentLoop != nil && m.agentLoop.run != nil
 	specs := m.activeToolSpecs()
 	systemTokens := provider.EstimateTokens(m.cfg.Chat.SystemPrompt)
 	toolTokens := provider.EstimateToolSpecsTokens(specs)
@@ -163,9 +164,11 @@ func (m *Model) contextSnapshot() contextStatusSnapshot {
 		MutationAllowed:       blocked == "",
 		BlockedReason:         blocked,
 	}
+	if hasAgentRun {
+		snapshot.Agent = m.agentContextSnapshot()
+	}
 	if agentScope {
 		snapshot.Scope = "agent"
-		snapshot.Agent = m.agentContextSnapshot()
 	}
 	return snapshot
 }

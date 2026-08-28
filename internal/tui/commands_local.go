@@ -442,10 +442,6 @@ func cmdContext(m *Model, args string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) contextOverlay() string {
-	return m.contextStatusOverlay()
-}
-
 func (m *Model) contextStatusOverlay() string {
 	snapshot := m.contextSnapshot()
 	var b strings.Builder

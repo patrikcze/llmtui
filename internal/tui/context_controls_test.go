@@ -96,6 +96,22 @@ func TestContextSummaryLabelsAgentScopedProjection(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotShowsCompletedAgentRunUnderSessionScope(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop = &agentLoopState{run: &agent.AgentRun{
+		ID: "run-complete", Cycle: 2, Status: agent.DecisionDone, Stage: agent.StageStopCheck,
+		Limits: agent.DefaultLimits(),
+	}}
+
+	snapshot := m.contextSnapshot()
+	if snapshot.Scope != "session" || snapshot.Agent == nil {
+		t.Fatalf("completed run snapshot = %+v", snapshot)
+	}
+	if snapshot.Agent.Status != string(agent.DecisionDone) {
+		t.Fatalf("completed run status = %q", snapshot.Agent.Status)
+	}
+}
+
 func TestContextMutationBlockedDuringUnsafeLifecycle(t *testing.T) {
 	tests := []struct {
 		name  string
