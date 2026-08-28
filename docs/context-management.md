@@ -72,6 +72,62 @@ tool result cannot be promoted to a system instruction. Raw model reasoning
 (`Message.Reasoning`) is never summarized, and a leaked leading `<think>` or
 GPT-OSS Harmony analysis block in visible content is stripped first.
 
+## Context controls
+
+`/context` is an alias for `/context status`. The following inspection
+commands are always available, including while a model, tool batch, or
+verifier is active. They read an immutable diagnostic snapshot: they do not
+alter the conversation, summary, strategy, RAG results, cache, agent state, or
+pending tool/approval state, and they never invoke a model, tool, MCP server,
+or summarizer.
+
+| Command | Meaning |
+| --- | --- |
+| `/context` / `/context status` | Token budget, request scope, summary state, agent/verifier status, and tool lifecycle ownership |
+| `/context summary` | The bounded summary applicable to the next request, labeled as session, agent start, or agent-scoped request context |
+| `/context preview` | Ordered context categories and bounded token metadata; use `/prompt preview` for the exact outgoing prompt |
+| `/context refresh` | Recompute the diagnostic snapshot without forcing compaction or refreshing RAG/memory retrieval |
+| `/context strategy` | Show the runtime strategy and its source |
+
+The following commands change prompt projections and therefore run only at an
+idle safe boundary:
+
+| Command | Meaning |
+| --- | --- |
+| `/context summarize` | Rebuild the idle session summary from eligible older turns |
+| `/context compact` / `/context rebuild` / `/compact` | Backward-compatible aliases for `/context summarize` |
+| `/context clear-summary` | Clear only the idle session summary |
+| `/context strategy <none\|truncate\|summarize\|auto>` | Change the runtime strategy |
+
+Mutations are rejected, never deferred or auto-cancelled, while a streamed
+response, tool batch, tool approval, budget extension, `ask_user` prompt,
+tool-result continuation, Harmony continuation, verifier request/retry, or
+resumable agent cycle owns context. The status snapshot names the exact blocker.
+
+## Agent and verifier scope
+
+An ordinary chat request uses the **session summary**. An agent's first cycle
+may use its bounded captured **agent start summary** and start turns. Later
+cycles retain structured **verified cycle memory** and current-cycle messages
+verbatim while projecting completed raw tool exchanges away. A summary derived
+only for an agent request is held in bounded process memory as an
+**agent-scoped request summary**; it never overwrites the ordinary session
+summary and is never treated as agent state.
+
+`AgentRun`, its cycle, acceptance-criteria ledger, execution result, verifier
+verdict/evidence, retry state, tool IDs/results, approvals, `ask_user` state,
+run memory, provenance, and stop reason remain authoritative structured state.
+Summaries are prompt projections only and are never used to reconstruct that
+state machine.
+
+Automatic compression occurs only while a stable provider request is being
+prepared: before streaming starts, or after a complete tool-result batch is
+correlated and appended for a continuation. It never cuts between a tool call
+and its result or runs during approval, `ask_user`, execution, verifier work,
+or cancellation cleanup. The verifier remains separately assembled from
+structured observable evidence in fresh, tool-free context; session summaries,
+ordinary history, tool schemas, and hidden reasoning never enter its request.
+
 ## Current date and time
 
 Local models do not know today's date. Two mechanisms cover this without

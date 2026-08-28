@@ -62,11 +62,20 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 ## Context
 | Command | Description |
 | --- | --- |
-| `/context` | Window, usage bar, strategy, summary state |
-| `/context summary` | Show the current session summary |
-| `/context rebuild` | Rebuild the summary from older messages |
-| `/context clear-summary` | Drop the summary |
-| `/context strategy <none\|truncate\|summarize\|auto>` | Change strategy |
+| `/context` / `/context status` | Immutable context snapshot: budget, scope, summaries, agent/verifier, and active turn state |
+| `/context summary` | Show the bounded summary applicable to the next request with its scope label |
+| `/context preview` | Bounded categories and token metadata; `/prompt preview` shows the exact prompt |
+| `/context refresh` | Recompute the read-only diagnostic snapshot |
+| `/context strategy` | Show the active runtime strategy |
+| `/context summarize` | Rebuild eligible older idle session context |
+| `/context compact` / `/context rebuild` / `/compact` | Aliases for `/context summarize` |
+| `/context clear-summary` | Clear only the idle session summary |
+| `/context strategy <none\|truncate\|summarize\|auto>` | Change strategy while safe |
+
+The first five commands are read-only and remain available during active work.
+The mutation commands are rejected while a response, tool batch, approval,
+budget extension, `ask_user`, tool continuation, verifier, or resumable agent
+cycle owns context. They never stop work automatically.
 
 ## Cache
 | Command | Description |

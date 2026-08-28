@@ -418,6 +418,23 @@ This makes "did truncation or summarization eat evidence this cycle needed"
 directly answerable from a run's persisted JSON instead of requiring
 after-the-fact message-size reconstruction.
 
+`/context status` adds a process-local snapshot of the active run: run ID,
+objective, cycle/stage/status, captured start context, verified memory count,
+criteria totals, projected raw-cycle status, last compression event, current
+tool state, and verifier model/attempt/verdict/evidence count. It contains no
+raw reasoning or tool output. Agent-scoped request summaries are bounded,
+in-memory prompt projections associated with a run and cycle; they never
+replace the ordinary session summary or become an authority for persisted run
+state.
+
+Context mutations are unavailable while an active/resumable run owns its
+captured context, including executor, tool, approval, user-input, verifier,
+and retry phases. Request preparation may compact only at a stable boundary:
+before an executor request starts, or after complete correlated tool results
+are appended for its continuation. The verifier remains fresh-context and
+tool-free, built only from structured run evidence rather than session history
+or summaries.
+
 `privacy.store_prompts: false` disables agent persistence even when
 `agent.persist: true`, because a resumable run necessarily needs its request.
 Set `agent.persist: false` to keep runs in memory only. `/agent resume` loads the
