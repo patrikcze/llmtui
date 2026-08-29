@@ -157,8 +157,7 @@ type Model struct {
 	// call, so the paste-image gate can use provider.ResolveVision even after
 	// the model picker overlay closes and clears pickerModels.
 	visionInfoByID  map[string]provider.ModelInfo
-	sugs            []slashCommand
-	sugIdx          int
+	suggest         suggestState // slash-command autocomplete dropdown
 	historyDir      string
 	sessionName     string
 	operationLog    *history.OperationLog
@@ -673,16 +672,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputHeight()
 			return m, nil
 		}
-		if len(m.sugs) > 0 {
+		if len(m.suggest.sugs) > 0 {
 			switch msg.String() {
 			case "up":
-				m.sugIdx = (m.sugIdx - 1 + len(m.sugs)) % len(m.sugs)
+				m.suggest.sugIdx = (m.suggest.sugIdx - 1 + len(m.suggest.sugs)) % len(m.suggest.sugs)
 				return m, nil
 			case "down":
-				m.sugIdx = (m.sugIdx + 1) % len(m.sugs)
+				m.suggest.sugIdx = (m.suggest.sugIdx + 1) % len(m.suggest.sugs)
 				return m, nil
 			case "tab":
-				m.input.SetValue("/" + m.sugs[m.sugIdx].name + " ")
+				m.input.SetValue("/" + m.suggest.sugs[m.suggest.sugIdx].name + " ")
 				m.input.CursorEnd()
 				m.updateSuggestions()
 				return m, nil
@@ -1867,7 +1866,7 @@ func (m *Model) maxInputLines() int {
 	}
 	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help)
 	// - activity. Solve for the largest lines keeping vpHeight >= minChatRows.
-	max := m.height - 7 - len(m.sugs) - m.statusLines - attach - minChatRows - m.activityHeight()
+	max := m.height - 7 - len(m.suggest.sugs) - m.statusLines - attach - minChatRows - m.activityHeight()
 	if max < 1 {
 		max = 1
 	}
@@ -2399,7 +2398,7 @@ func (m *Model) resize(w, h int) {
 	if len(m.attachments) > 0 {
 		inputHeight++
 	}
-	vpHeight := h - 4 - len(m.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
+	vpHeight := h - 4 - len(m.suggest.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -2870,7 +2869,7 @@ func (m *Model) render() string {
 		sections = append(sections, verifierActivity)
 	}
 	sections = append(sections, usage)
-	if len(m.sugs) > 0 {
+	if len(m.suggest.sugs) > 0 {
 		sections = append(sections, m.suggestionsView())
 	}
 	sections = append(sections, inputView, status,

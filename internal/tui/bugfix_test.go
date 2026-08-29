@@ -21,10 +21,10 @@ func TestExactCommandNameWinsOverSuggestion(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue("/model")
 	m.updateSuggestions()
-	if len(m.sugs) == 0 || m.sugs[0].name != "model" {
+	if len(m.suggest.sugs) == 0 || m.suggest.sugs[0].name != "model" {
 		t.Fatalf("exact match should lead suggestions, got %v", func() []string {
-			names := make([]string, len(m.sugs))
-			for i, c := range m.sugs {
+			names := make([]string, len(m.suggest.sugs))
+			for i, c := range m.suggest.sugs {
 				names[i] = c.name
 			}
 			return names
