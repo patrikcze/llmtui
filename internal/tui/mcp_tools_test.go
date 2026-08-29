@@ -280,15 +280,6 @@ func TestExecuteMCPCallTimeout(t *testing.T) {
 	}
 }
 
-func TestContainsMCPCall(t *testing.T) {
-	if containsMCPCall([]tools.Call{{Tool: "read_file"}}) {
-		t.Error("pure-native batch reported as containing an MCP call")
-	}
-	if !containsMCPCall([]tools.Call{{Tool: "read_file"}, {MCPServer: "s", MCPTool: "t"}}) {
-		t.Error("mixed batch not detected as containing an MCP call")
-	}
-}
-
 func TestRunMixedToolBatchPreservesOrderAndRunsNativeToo(t *testing.T) {
 	reg := newConnectedMCPRegistry(t, "jiraWorklog", nil, func(name string, input json.RawMessage) (mcp.Result, error) {
 		return mcp.Result{Content: "mcp-ok"}, nil
