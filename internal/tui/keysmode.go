@@ -9,19 +9,29 @@ import (
 
 const maxKeyLog = 12
 
+// keyInspectorState holds the interactive key-inspector overlay's state
+// (/keys, /keys raw): whether it is active, whether it shows raw byte
+// sequences, and the bounded ring of recently received key events. Every
+// field's zero value is the correct "inspector closed" state.
+type keyInspectorState struct {
+	keysMode bool
+	keysRaw  bool
+	keyLog   []string
+}
+
 // enterKeysMode starts the interactive key inspector (/keys, /keys raw).
 func (m *Model) enterKeysMode(raw bool) {
-	m.keysMode = true
-	m.keysRaw = raw
-	m.keyLog = nil
+	m.keys.keysMode = true
+	m.keys.keysRaw = raw
+	m.keys.keyLog = nil
 	m.openOverlay(m.keysOverlay())
 }
 
 // logKey records one received key event and refreshes the inspector.
 func (m *Model) logKey(entry string) {
-	m.keyLog = append(m.keyLog, entry)
-	if len(m.keyLog) > maxKeyLog {
-		m.keyLog = m.keyLog[len(m.keyLog)-maxKeyLog:]
+	m.keys.keyLog = append(m.keys.keyLog, entry)
+	if len(m.keys.keyLog) > maxKeyLog {
+		m.keys.keyLog = m.keys.keyLog[len(m.keys.keyLog)-maxKeyLog:]
 	}
 	m.viewport.SetContent(m.keysOverlay())
 	m.viewport.GotoBottom()
@@ -37,7 +47,7 @@ func (m *Model) updateKeysMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			name = "shift+enter (modified enter)"
 		}
 		entry := name
-		if m.keysRaw {
+		if m.keys.keysRaw {
 			entry += fmt.Sprintf("  —  ESC[%s", seq)
 		}
 		m.logKey(entry)
@@ -49,7 +59,7 @@ func (m *Model) updateKeysMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.String() == "esc" {
-		m.keysMode = false
+		m.keys.keysMode = false
 		m.closeOverlay()
 		return m, nil
 	}
@@ -58,7 +68,7 @@ func (m *Model) updateKeysMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	entry := key.String()
-	if m.keysRaw && key.Text != "" {
+	if m.keys.keysRaw && key.Text != "" {
 		entry += fmt.Sprintf("  —  text %q", key.Text)
 	}
 	m.logKey(entry)
@@ -71,10 +81,10 @@ func (m *Model) keysOverlay() string {
 	b.WriteString(m.theme.SystemNote.Render("Press keys to inspect what the terminal sends. Esc exits.") + "\n\n")
 
 	b.WriteString(m.theme.UserLabel.Render("received") + "\n")
-	if len(m.keyLog) == 0 {
+	if len(m.keys.keyLog) == 0 {
 		b.WriteString(m.theme.StatusBar.Render("  (nothing yet — try enter, shift+enter, alt+enter, ctrl+j)") + "\n")
 	}
-	for _, k := range m.keyLog {
+	for _, k := range m.keys.keyLog {
 		b.WriteString("  " + m.theme.StatusValue.Render("· "+k) + "\n")
 	}
 

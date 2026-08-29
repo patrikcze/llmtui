@@ -244,9 +244,7 @@ type Model struct {
 	lastImages          []provider.Image
 	lastDebug           debugInfo
 	debugMode           bool
-	keysMode            bool
-	keysRaw             bool
-	keyLog              []string
+	keys                keyInspectorState // /keys interactive inspector overlay
 	cfgPath             string
 
 	// Optional bounded verified loop. The implementation lives in
@@ -597,7 +595,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// The /keys inspector sees every input event when no approval is pending.
-	if m.keysMode {
+	if m.keys.keysMode {
 		switch msg.(type) {
 		case tea.KeyPressMsg:
 			return m.updateKeysMode(msg)
@@ -1292,7 +1290,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		// command (e.g. /help) would otherwise still be "the thing on
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
-		m.keysMode = false
+		m.keys.keysMode = false
 		m.waitForApproval(plan, true)
 		m.refreshViewport()
 		return nil
@@ -1300,7 +1298,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 	for _, c := range runnable {
 		if m.callNeedsApproval(c) {
 			m.overlayOpen = false
-			m.keysMode = false
+			m.keys.keysMode = false
 			m.waitForApproval(plan, false)
 			m.refreshViewport()
 			return nil

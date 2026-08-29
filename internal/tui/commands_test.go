@@ -520,21 +520,21 @@ func TestMemoryListEpisodeAndRunTiers(t *testing.T) {
 func TestKeysCommandEntersInspector(t *testing.T) {
 	m := newTestModel(t)
 	runCommand(m, "/keys")
-	if !m.keysMode {
+	if !m.keys.keysMode {
 		t.Fatal("/keys should enter the inspector")
 	}
 	// Keys are logged, not executed.
 	m.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
-	if len(m.keyLog) != 1 || !strings.Contains(m.keyLog[0], "ctrl+l") {
-		t.Errorf("keyLog = %v", m.keyLog)
+	if len(m.keys.keyLog) != 1 || !strings.Contains(m.keys.keyLog[0], "ctrl+l") {
+		t.Errorf("keyLog = %v", m.keys.keyLog)
 	}
 	// Shift+enter sequences show up by name.
 	m.Update(fakeCSI("27;2;13~"))
-	if !strings.Contains(strings.Join(m.keyLog, "|"), "shift+enter") {
-		t.Errorf("keyLog = %v, want shift+enter entry", m.keyLog)
+	if !strings.Contains(strings.Join(m.keys.keyLog, "|"), "shift+enter") {
+		t.Errorf("keyLog = %v, want shift+enter entry", m.keys.keyLog)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if m.keysMode {
+	if m.keys.keysMode {
 		t.Error("esc should exit the inspector")
 	}
 }
