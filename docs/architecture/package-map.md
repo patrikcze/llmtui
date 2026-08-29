@@ -108,6 +108,7 @@ the size is (`app.go` ~3000 LOC, several siblings 1200–1800). See
 | `approval_policy.go` | Narrowly-scoped temporary approval grants (per tool / path / content-hash, 15-minute TTL). |
 | `activity.go`, `progress.go`, `context_status.go`, `usage.go`, `exitsummary.go` | Live status / diagnostics / usage rendering. `progress.go` is the repeated-call / no-progress ledger (ADR 0002). |
 | `selection.go`, `keysmode.go`, `extkeys.go`, `ask_user.go`, `transcript_styles.go` | Input and rendering details: mouse text selection, `/keys` inspector, Shift+Enter decoding. |
+| `composer_history.go` | Shell-like `↑`/`↓` recall of submitted prompts and slash commands. Bounded, session-local, in-memory, never persisted; arbitrates against pickers, suggestions, and multiline cursor navigation. |
 | `tui/components` | Reusable widgets: `statusbar`, `barchart`, `sparkline`, `heatmap`, `usagepanel`, `status` (spinner), `button`. |
 | `tui/styles` | The adaptive light / dark theme (`theme.go`). |
 

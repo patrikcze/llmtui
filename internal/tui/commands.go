@@ -253,6 +253,11 @@ func (m *Model) runSlashCommand() tea.Cmd {
 		}
 	}
 
+	// Record what the user actually typed (e.g. "/agent off") for Up/Down
+	// recall, before the box is cleared. Re-submitting a recalled command
+	// re-runs this same path, so suggestion resolution still applies.
+	m.composerHistory.record(val)
+
 	m.input.Reset()
 	m.updateSuggestions()
 	m.syncInputHeight()
@@ -448,7 +453,7 @@ func (m *Model) helpOverlay(topic string) string {
 			{"ctrl+u", "clear the whole prompt box"},
 			{"esc", "stop generation · close this overlay"},
 			{"ctrl+l", "clear conversation"},
-			{"↑/↓", "navigate command suggestions · scroll"},
+			{"↑/↓", "recall submitted input (empty composer) · command suggestions · multiline cursor"},
 			{"tab", "complete selected command"},
 			{"ctrl+c", "press twice to quit (first stops/clears)"},
 		}

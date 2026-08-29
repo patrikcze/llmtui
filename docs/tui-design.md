@@ -83,3 +83,16 @@ final hint points at `llmtui history`. The renderer lives in
   the mouse so the terminal's native text selection works.
 - Animations are subtle by design: one spinner, a pulsing working button,
   and nothing else moves while you read.
+- Composer history (`internal/tui/composer_history.go`): every accepted
+  submission — prompt or slash command — is appended to a bounded
+  (`maxComposerHistoryEntries`), session-local, in-memory buffer, captured
+  just before the textarea is reset in `send()` / `runSlashCommand()`.
+  Arbitration of `↑` / `↓` runs in `Model.Update` *after* the modal owners
+  (approval, `/keys`, overlays and pickers) and *before* the slash-suggestion
+  popup: only bare `up`/`down` are eligible; while browsing a recalled entry
+  the keys move the textarea cursor until it hits the top/bottom visual row
+  (`LineInfo`-based, soft-wrap aware) and then step to the older/newer entry;
+  while not browsing, `↑` on an *empty* composer enters history at the newest
+  entry and every other case is left to the textarea. Any edit to a recalled
+  entry detaches from browsing. Nothing is persisted; the buffer is unrelated
+  to `internal/history` and survives `/clear`.
