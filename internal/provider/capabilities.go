@@ -84,11 +84,6 @@ func DefaultCapabilities() Capabilities {
 	}
 }
 
-// CapabilitiesOf returns the provider's self-description or defaults.
-func CapabilitiesOf(p Provider) Capabilities {
-	return CapabilitiesFor(p, "")
-}
-
 // CapabilitiesFor returns the selected-model report when available, then the
 // provider-wide report, then conservative defaults.
 func CapabilitiesFor(p Provider, model string) Capabilities {

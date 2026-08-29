@@ -224,18 +224,6 @@ func editDistance(a, b string) int {
 	return previous[len(br)]
 }
 
-// containsMCPCall reports whether any call in the batch targets an MCP
-// server — the signal runToolCalls (Task 7) uses to decide between the
-// unchanged synchronous native path and the new async path.
-func containsMCPCall(calls []tools.Call) bool {
-	for _, c := range calls {
-		if c.MCPServer != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // mcpBatchNotice names the first MCP call in a batch, so the UI shows what
 // it's waiting on instead of looking frozen while the async command runs.
 func mcpBatchNotice(calls []tools.Call) string {
@@ -247,17 +235,16 @@ func mcpBatchNotice(calls []tools.Call) string {
 	return "⚒ running tool call(s)…"
 }
 
-// runMixedToolBatch executes every native/MCP batch as a single async
-// tea.Cmd. Calls run sequentially and in order because MCP servers commonly
-// serialize session state
-// (jiraWorklog sets allow_parallel: false) and the latency cost of
-// sequential execution is negligible next to model-inference time for the
-// handful of calls a typical turn makes.
 type operationGuard struct {
 	log *history.OperationLog
 	err error
 }
 
+// runMixedToolBatch executes every native/MCP batch as a single async
+// tea.Cmd. Calls run sequentially and in order because MCP servers commonly
+// serialize session state (jiraWorklog sets allow_parallel: false) and the
+// latency cost of sequential execution is negligible next to model-inference
+// time for the handful of calls a typical turn makes.
 func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Registry, calls []tools.Call, guards ...operationGuard) tea.Cmd {
 	return runPlannedToolBatch(ctx, runner, mcpReg, newToolBatchPlan(calls), guards...)
 }
