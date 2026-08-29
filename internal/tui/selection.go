@@ -21,6 +21,21 @@ import (
 // reliable 1:1 mapping back to source once markdown/wrapping have run.
 const chatViewportZoneID = "chat-viewport"
 
+// selectionState holds the click-drag text selection over the chat
+// transcript. Coordinates are relative to the chat viewport's on-screen
+// position (see chatViewportZoneID), not absolute terminal coordinates, and
+// not normalized (start may be after end — normalizeSelection sorts them).
+// selecting is true only while the button is held; hasSelection stays true
+// after release so the highlight and the copied text remain visible until
+// the next click, a scroll, or Esc clears it. Every field's zero value is
+// the correct "no selection" state.
+type selectionState struct {
+	selecting            bool
+	hasSelection         bool
+	selStartX, selStartY int
+	selEndX, selEndY     int
+}
+
 // beginSelection starts a new selection at the clicked cell, replacing any
 // prior one. Only left-clicks inside the chat viewport start a selection;
 // a click elsewhere (input box, status bar) or while an overlay owns the
@@ -34,10 +49,10 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	x, y := z.Pos(msg)
-	m.selecting = true
-	m.hasSelection = false
-	m.selStartX, m.selStartY = x, y
-	m.selEndX, m.selEndY = x, y
+	m.sel.selecting = true
+	m.sel.hasSelection = false
+	m.sel.selStartX, m.sel.selStartY = x, y
+	m.sel.selEndX, m.sel.selEndY = x, y
 	return m, nil
 }
 
@@ -46,7 +61,7 @@ func (m *Model) beginSelection(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // (matches native terminal selection: dragging off the pane still extends
 // the selection to the edge) rather than dropping the event.
 func (m *Model) extendSelection(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
-	if !m.selecting {
+	if !m.sel.selecting {
 		return m, nil
 	}
 	z := zone.Get(chatViewportZoneID)
@@ -54,7 +69,7 @@ func (m *Model) extendSelection(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	x, y := clampToZone(z, msg.X, msg.Y)
-	m.selEndX, m.selEndY = x, y
+	m.sel.selEndX, m.sel.selEndY = x, y
 	return m, nil
 }
 
@@ -63,20 +78,20 @@ func (m *Model) extendSelection(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 // clipboard.WriteText + copyResultMsg path ctrl+y's copyLastReply already
 // uses, so the notice/confirmation behavior is identical.
 func (m *Model) endSelection(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
-	if !m.selecting {
+	if !m.sel.selecting {
 		return m, nil
 	}
-	m.selecting = false
+	m.sel.selecting = false
 	if z := zone.Get(chatViewportZoneID); z != nil {
 		x, y := clampToZone(z, msg.X, msg.Y)
-		m.selEndX, m.selEndY = x, y
+		m.sel.selEndX, m.sel.selEndY = x, y
 	}
 	text := m.selectedText()
 	if text == "" {
-		m.hasSelection = false
+		m.sel.hasSelection = false
 		return m, nil
 	}
-	m.hasSelection = true
+	m.sel.hasSelection = true
 	return m, func() tea.Msg {
 		err := clipboard.WriteText(context.Background(), text)
 		return copyResultMsg{chars: len(text), label: "selection", err: err}
@@ -88,8 +103,8 @@ func (m *Model) endSelection(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
 // under a scroll, so keeping a stale highlight around would be visibly
 // wrong) and on Esc.
 func (m *Model) clearSelection() {
-	m.selecting = false
-	m.hasSelection = false
+	m.sel.selecting = false
+	m.sel.hasSelection = false
 }
 
 // clampToZone converts absolute terminal coordinates into viewport-relative
@@ -126,12 +141,12 @@ func normalizeSelection(startX, startY, endX, endY int) (x0, y0, x1, y1 int) {
 // ansi.Cut (styling-aware) and then stripped, so wide characters and
 // embedded ANSI codes don't corrupt the boundary.
 //
-// Deliberately doesn't gate on m.selecting/m.hasSelection: endSelection
-// needs to compute this after already clearing m.selecting (so a caller
+// Deliberately doesn't gate on m.sel.selecting/m.sel.hasSelection: endSelection
+// needs to compute this after already clearing m.sel.selecting (so a caller
 // checking that flag afterward sees the drag is over), and a start==end
 // coordinate pair already means "no selection" on its own.
 func (m *Model) selectedText() string {
-	x0, y0, x1, y1 := normalizeSelection(m.selStartX, m.selStartY, m.selEndX, m.selEndY)
+	x0, y0, x1, y1 := normalizeSelection(m.sel.selStartX, m.sel.selStartY, m.sel.selEndX, m.sel.selEndY)
 	if x0 == x1 && y0 == y1 {
 		return ""
 	}
@@ -174,10 +189,10 @@ func (m *Model) selectedText() string {
 // fully rendered view. Runs on every render while a selection is active or
 // being dragged; view is otherwise returned unchanged.
 func (m *Model) applySelectionHighlight(view string) string {
-	if !m.selecting && !m.hasSelection {
+	if !m.sel.selecting && !m.sel.hasSelection {
 		return view
 	}
-	x0, y0, x1, y1 := normalizeSelection(m.selStartX, m.selStartY, m.selEndX, m.selEndY)
+	x0, y0, x1, y1 := normalizeSelection(m.sel.selStartX, m.sel.selStartY, m.sel.selEndX, m.sel.selEndY)
 	if x0 == x1 && y0 == y1 {
 		return view
 	}

@@ -141,23 +141,14 @@ type Model struct {
 	frame                int
 	renderWidth          int
 	mouseEnabled         bool
-	// Click-drag text selection over the chat transcript. Coordinates are
-	// relative to the chat viewport's on-screen position (see
-	// chatViewportZoneID), not absolute terminal coordinates, and not
-	// normalized (start may be after end — normalizeSelection sorts them).
-	// selecting is true only while the button is held; hasSelection stays
-	// true after release so the highlight and the copied text remain
-	// visible until the next click, a scroll, or Esc clears it.
-	selecting            bool
-	hasSelection         bool
-	selStartX, selStartY int
-	selEndX, selEndY     int
-	notice               string
-	overlayOpen          bool
-	pickerKind           pickerKind
-	pickerItems          []string
-	pickerIdx            int
-	pickerModels         []provider.ModelInfo
+	// Click-drag text selection over the chat transcript (see selectionState).
+	sel          selectionState
+	notice       string
+	overlayOpen  bool
+	pickerKind   pickerKind
+	pickerItems  []string
+	pickerIdx    int
+	pickerModels []provider.ModelInfo
 	// pickerHeader is the executor's actual question text, shown above the
 	// options list when pickerKind == pickerAgentQuestion. Unused by every
 	// other picker kind.
@@ -673,7 +664,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A text-selection drag that started in the chat viewport (see
 		// beginSelection) finalizes here — copies to the clipboard if it
 		// covers more than a single cell. A release that never started a
-		// drag (m.selecting false) is a no-op.
+		// drag (m.sel.selecting false) is a no-op.
 		return m.endSelection(msg)
 
 	case tea.KeyPressMsg:
