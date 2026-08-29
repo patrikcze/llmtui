@@ -49,6 +49,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/profile set <name>` / `/profile inspect` | Pin a named profile / inspect the active profile |
 | `/think [on\|off\|auto\|low\|medium\|high\|status]` | Reasoning mode; GPT-OSS uses low/medium/high effort and defaults to medium |
 | `/thoughts [show\|hide\|toggle\|status]` | Show or hide captured reasoning without changing model behavior |
+| `/math [on\|off\|toggle\|status]` | Render LaTeX math (`$…$`, `$$…$$`) in Markdown answers as terminal Unicode; display-only, needs `ui.markdown` |
 
 ## Prompt
 | Command | Description |

@@ -133,6 +133,7 @@ func slashCommands() []slashCommand {
 		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", run: cmdProfile},
 		{name: "think", usage: "/think [auto|on|off|low|medium|high|status]", desc: "reasoning mode or GPT-OSS effort", category: "Model", blockWhileThinking: true, run: cmdThink},
 		{name: "thoughts", aliases: []string{"thinking"}, usage: "/thoughts [show|hide|toggle|status]", desc: "show or hide captured reasoning without changing model behavior", category: "Model", run: cmdThoughts},
+		{name: "math", usage: "/math [on|off|toggle|status]", desc: "render LaTeX math in Markdown answers as terminal Unicode (display only)", category: "Model", run: cmdMath},
 
 		// --- Prompt ---
 		{name: "prompt", usage: "/prompt [preview|raw|composed|mode <m>]", desc: "inspect and configure prompt composition", category: "Prompt", run: cmdPrompt},

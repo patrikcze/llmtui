@@ -86,6 +86,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | `internal/skill` | Skills and Plugins engine: discover `SKILL.md` files, parse YAML front matter, validate, track per-run / per-session activation. Skills are instructions, not code — activating one executes nothing. `manager.go` is the stateful core; `plugin.go` / `discover.go` / `parse.go` support it. See `docs/skills.md`. | `skill.go`, `manager.go`, `discover.go`, `plugin.go`, `parse.go` |
 | `internal/untrusted` | Deterministic structural delimiters wrapped around data a model may read but must not treat as instructions (used by `prompt`, `tools/web`, `mcp_tools`). | `frame.go` |
 | `internal/terminaltext` | Strips C0/C1 + CSI/OSC/DCS escape sequences from provider / MCP / RAG / web text *before* it reaches the terminal renderer. One shared policy, deliberately below the TUI. | `sanitize.go` |
+| `internal/terminalmath` | Display-only LaTeX-in-Markdown → terminal Unicode expansion (`ExpandMarkdown`), applied between `terminaltext.Sanitize` and Glamour in the TUI when `ui.math.enabled`. Wraps `github.com/doug/termtex`; guards Markdown tables against multi-row expansions. Opt-in, off by default. | `render.go` |
 | `internal/clipboard` | Read images (and text) from the system clipboard via platform CLIs (`pbpaste`, `xclip`, `wl-paste`, PowerShell) — no cgo. | `clipboard.go`, `text.go`, `write.go` |
 | `internal/procutil` | Subprocess-group management so wrapper commands cannot orphan grandchildren. Unix / Windows split. | `proc_unix.go`, `proc_windows.go` |
 

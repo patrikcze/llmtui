@@ -52,6 +52,11 @@ keeps them testable without a terminal.
 - Markdown rendering uses a fixed Glamour style chosen once from the
   detected background — never a per-frame terminal query, which can stall
   odd terminals or SSH sessions.
+- Answer rendering pipeline: raw response → `terminaltext.Sanitize` →
+  (optional) `terminalmath.ExpandMarkdown` when `ui.math.enabled` → Glamour →
+  viewport. Math expansion is display-only and only runs on settled messages,
+  not mid-stream; an incomplete `$…` simply shows raw until the message
+  finishes. See [configuration.md](configuration.md).
 
 ## Exit summary
 

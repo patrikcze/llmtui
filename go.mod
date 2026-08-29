@@ -13,6 +13,7 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/ardanlabs/jinja v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/doug/termtex v0.0.0-20260626010055-e3e21f41b38e
 	github.com/ebitengine/purego v0.10.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/hybridgroup/yzma v1.24.0
