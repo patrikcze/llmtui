@@ -80,8 +80,8 @@ func TestMaybeRunToolsAsksBeforeWriting(t *testing.T) {
 		t.Errorf("toolDepth = %d, want 1", m.toolDepth)
 	}
 	// Tool follow-ups are not user-sent messages.
-	if m.sentCount != 0 {
-		t.Errorf("sentCount = %d, want 0", m.sentCount)
+	if m.exit.sentCount != 0 {
+		t.Errorf("sentCount = %d, want 0", m.exit.sentCount)
 	}
 }
 
@@ -612,8 +612,8 @@ func TestSendResetsToolBudget(t *testing.T) {
 	if m.toolDepth != 0 {
 		t.Errorf("toolDepth = %d, want 0 after a fresh user turn", m.toolDepth)
 	}
-	if m.sentCount != 1 {
-		t.Errorf("sentCount = %d, want 1", m.sentCount)
+	if m.exit.sentCount != 1 {
+		t.Errorf("sentCount = %d, want 1", m.exit.sentCount)
 	}
 }
 

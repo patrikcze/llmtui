@@ -210,7 +210,7 @@ func TestSkillLoadToolLoop(t *testing.T) {
 	m := agentModel(t)
 	m.session.AddUser("review my agent loop")
 	m.thinking = true
-	m.streamStart = m.startedAt
+	m.streamStart = m.exit.startedAt
 
 	_, cmd := m.handleStreamEvent(streamEventMsg{event: provider.ChatEvent{
 		Type: provider.EventDone,

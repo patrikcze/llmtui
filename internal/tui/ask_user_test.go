@@ -50,8 +50,8 @@ func TestAskUserNativeFreeTextPreservesToolCallID(t *testing.T) {
 	if !strings.Contains(last.Content, `"answer":"staging"`) || !strings.Contains(last.Content, `"grants_authorization":false`) {
 		t.Fatalf("tool result content = %q", last.Content)
 	}
-	if m.sentCount != 0 {
-		t.Fatalf("sentCount = %d, answer must not become a new human turn", m.sentCount)
+	if m.exit.sentCount != 0 {
+		t.Fatalf("sentCount = %d, answer must not become a new human turn", m.exit.sentCount)
 	}
 }
 

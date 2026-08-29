@@ -69,15 +69,15 @@ func TestRecordModelUsageAggregates(t *testing.T) {
 	m.recordModelUsage("ollama", "qwen3", 50, 10, true, time.Second)
 	m.recordModelUsage("lmstudio", "phi-4", 30, 5, false, time.Second)
 
-	if len(m.modelStats) != 2 {
-		t.Fatalf("modelStats = %d entries, want 2", len(m.modelStats))
+	if len(m.exit.modelStats) != 2 {
+		t.Fatalf("modelStats = %d entries, want 2", len(m.exit.modelStats))
 	}
-	first := m.modelStats[0]
+	first := m.exit.modelStats[0]
 	if first.Requests != 2 || first.Prompt != 150 || first.Reply != 30 || !first.Estimated {
 		t.Errorf("aggregated stat = %+v", first)
 	}
-	if m.apiTime != 4*time.Second {
-		t.Errorf("apiTime = %v, want 4s", m.apiTime)
+	if m.exit.apiTime != 4*time.Second {
+		t.Errorf("apiTime = %v, want 4s", m.exit.apiTime)
 	}
 }
 
@@ -197,9 +197,9 @@ func TestRenderExitSummaryKeepsTokenCountsOnOneLine(t *testing.T) {
 
 func TestExitSummarySnapshot(t *testing.T) {
 	m := newTestModel(t)
-	m.sentCount = 4
-	m.replyCount = 3
-	m.savedPath = "/tmp/x.json"
+	m.exit.sentCount = 4
+	m.exit.replyCount = 3
+	m.exit.savedPath = "/tmp/x.json"
 	m.recordModelUsage("mock", "demo-model", 100, 50, false, time.Second)
 
 	d := m.exitSummary()
