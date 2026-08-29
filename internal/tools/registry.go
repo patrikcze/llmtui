@@ -112,7 +112,7 @@ var approvalForTool = map[string]string{
 	ToolWriteFile:    "ask",
 	ToolEditFile:     "ask",
 	ToolRunCommand:   "ask unless read-only",
-	ToolWebSearch:    "no",
+	ToolWebSearch:    "no for ordinary queries; ask for bulk or opaque ones",
 	ToolWebFetch:     "ask",
 	ToolSkillLoad:    "no",
 	ToolAskUser:      "no (never authorizes another tool)",

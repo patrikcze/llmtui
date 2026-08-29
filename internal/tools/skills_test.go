@@ -79,7 +79,7 @@ func TestRunnerSkillLoad(t *testing.T) {
 func TestSkillLoadNeedsNoApproval(t *testing.T) {
 	r := NewRunner(t.TempDir(), 64)
 	c := Call{Tool: ToolSkillLoad, Path: "x"}
-	if NeedsApproval(c) || r.NeedsApproval(c) {
+	if r.NeedsApproval(c) {
 		t.Error("skill_load must be approval-free")
 	}
 }

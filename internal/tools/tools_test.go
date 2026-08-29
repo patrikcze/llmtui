@@ -418,7 +418,8 @@ func TestReadFileSparseLargeFileReturnsOnlyBoundedPrefix(t *testing.T) {
 	}
 }
 
-func TestNeedsApproval(t *testing.T) {
+func TestRunnerNeedsApproval(t *testing.T) {
+	runner := NewRunner(t.TempDir(), 64)
 	cases := []struct {
 		call Call
 		want bool
@@ -434,8 +435,8 @@ func TestNeedsApproval(t *testing.T) {
 		{Call{Tool: "mystery"}, true},
 	}
 	for _, c := range cases {
-		if got := NeedsApproval(c.call); got != c.want {
-			t.Errorf("NeedsApproval(%+v) = %v, want %v", c.call, got, c.want)
+		if got := runner.NeedsApproval(c.call); got != c.want {
+			t.Errorf("Runner.NeedsApproval(%+v) = %v, want %v", c.call, got, c.want)
 		}
 	}
 }

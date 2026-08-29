@@ -887,28 +887,6 @@ func sanitizedEnv(environ []string) []string {
 	return out
 }
 
-// NeedsApproval reports whether a call mutates state or runs code and must
-// be confirmed by the user (unless approvals are set to auto). Read-only
-// calls and provably read-only commands run without asking. This is the
-// policy-free view; a Runner applies its GuardrailPolicy (secret-read
-// approval) via its own NeedsApproval method.
-func NeedsApproval(c Call) bool {
-	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolSkillLoad, ToolAskUser:
-		return false
-	case ToolLocalContext:
-		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
-	case ToolSearch:
-		return false
-	case ToolWebSearch:
-		return webSearchNeedsApproval(c.Body)
-	case ToolRunCommand:
-		return ClassifyCommand(c.Body).Verdict != VerdictAuto
-	default:
-		return true
-	}
-}
-
 // maxAutoWebSearchQueryBytes bounds a search query that may leave the machine
 // without the user confirming it.
 const maxAutoWebSearchQueryBytes = 200
@@ -946,9 +924,8 @@ func webSearchNeedsApproval(query string) bool {
 }
 
 // NeedsApproval reports whether a call must be confirmed under this runner's
-// guardrail policy. It matches the package-level NeedsApproval but adds
-// secret-read gating: read_file of a likely secret file (.env, *.pem,
-// id_rsa, …) asks first when RequireApprovalForSecretReads is on.
+// guardrail policy. read_file and grep of a likely secret file (.env, *.pem,
+// id_rsa, …) ask first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
 	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:

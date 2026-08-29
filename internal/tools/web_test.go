@@ -141,10 +141,11 @@ func TestWebFetchErrorKeepsBody(t *testing.T) {
 }
 
 func TestWebNeedsApprovalAndDescribe(t *testing.T) {
-	if NeedsApproval(Call{Tool: ToolWebSearch, Body: "q"}) {
+	runner := NewRunner(t.TempDir(), 64)
+	if runner.NeedsApproval(Call{Tool: ToolWebSearch, Body: "q"}) {
 		t.Error("web_search must auto-run")
 	}
-	if !NeedsApproval(Call{Tool: ToolWebFetch, Path: "https://a.example"}) {
+	if !runner.NeedsApproval(Call{Tool: ToolWebFetch, Path: "https://a.example"}) {
 		t.Error("web_fetch must need approval")
 	}
 	if d := (Call{Tool: ToolWebSearch, Body: "q"}).Describe(); d != `web_search("q")` {
