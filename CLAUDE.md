@@ -5,12 +5,12 @@ Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
 in-process. Local-first: no telemetry, no network call the user did not
 configure. Audience: developers running models on their own machine.
 
-This is a mature ~35-package codebase, not a scaffold. Read the code before
+This is a mature ~36-package codebase, not a scaffold. Read the code before
 changing it.
 
 ## Commands
 
-All verified passing on `master` @ `1a89731`, Go 1.27.0, macOS arm64.
+All verified passing on `master` @ `93e5092`, Go 1.27.0, macOS arm64.
 
 ```bash
 make build                # go build -ldflags … -o llmtui ./cmd/llmtui
@@ -161,6 +161,10 @@ them **and add a regression test for the specific case it touches**:
 - The Charm imports are `charm.land/{bubbletea,bubbles,lipgloss,glamour}/v2`,
   not `github.com/charmbracelet/*`. Charts are hand-written in
   `internal/tui/components/` — there is no charting dependency.
+- `internal/terminalmath` wraps `github.com/doug/termtex` for opt-in
+  LaTeX→Unicode math in Markdown answers (`ui.math.enabled`, off by default).
+  termtex's only dependency is `github.com/yuin/goldmark v1.8.2`, the exact
+  version `glamour/v2` already pins — don't let a tidy bump that.
 - `Update` must never block; long work returns a `tea.Cmd`.
 - Optional subsystems (tools, web, RAG, MCP, memory, agent) are **off by
   default** and a broken/disabled one must not block normal chat startup.
