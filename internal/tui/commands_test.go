@@ -640,3 +640,29 @@ func TestThoughtsCommandDoesNotChangeReasoningMode(t *testing.T) {
 		t.Fatalf("invalid mode error = %q", m.errText)
 	}
 }
+
+func TestMathCommandTogglesDisplayOnly(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.UI.Markdown = true
+	if m.cfg.UI.Math.Enabled {
+		t.Fatal("math should default off")
+	}
+
+	runCommand(m, "/math on")
+	if !m.cfg.UI.Math.Enabled {
+		t.Fatal("/math on should enable math rendering")
+	}
+	runCommand(m, "/math toggle")
+	if m.cfg.UI.Math.Enabled {
+		t.Fatal("/math toggle should disable math rendering")
+	}
+	runCommand(m, "/math off")
+	if m.cfg.UI.Math.Enabled {
+		t.Fatal("/math off should keep math rendering disabled")
+	}
+
+	runCommand(m, "/math banana")
+	if !strings.Contains(m.errText, "usage: /math") {
+		t.Fatalf("invalid mode error = %q", m.errText)
+	}
+}

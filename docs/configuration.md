@@ -443,11 +443,22 @@ backend and model that support it.
 
 ### `ui` and `privacy`
 
-`ui.theme` (`claude_inspired` (default), `midnight`, or `forest`), `ui.markdown`, and
-`ui.show_reasoning` are honored today. `show_reasoning` defaults to `true` and
-can be changed for the current session with `/thoughts show|hide`; it affects
-only presentation and does not enable or disable model reasoning. The
-remaining `ui` keys (`use_nerd_font`, `animations`, `show_usage_chart`,
+`ui.theme` (`claude_inspired` (default), `midnight`, or `forest`), `ui.markdown`,
+`ui.math.enabled`, and `ui.show_reasoning` are honored today. `show_reasoning`
+defaults to `true` and can be changed for the current session with
+`/thoughts show|hide`; it affects only presentation and does not enable or
+disable model reasoning.
+
+`ui.math.enabled` (default `false`) turns on terminal rendering of LaTeX-style
+math found in Markdown answers: `$…$` and `$$…$$` become Unicode (`≈`, `m³`,
+`α`, fractions, roots) before Glamour renders the Markdown. It is display-only —
+provider messages, history, prompts, and cache keys are untouched — and has no
+effect unless `ui.markdown` is also `true`. Toggle it for the current session
+with `/math on|off`. Currency (`$100`), escaped dollars (`\$100`), inline code,
+and fenced code blocks are left alone; an expression that cannot be rendered
+safely (including inside a Markdown table cell) is kept as its original LaTeX.
+
+The remaining `ui` keys (`use_nerd_font`, `animations`, `show_usage_chart`,
 `show_token_stats`, `compact_mode`) are reserved for future use. The
 `privacy` section is declarative — the behaviors it describes (local-first,
 key redaction) are hardcoded and not configurable off; see

@@ -36,6 +36,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/rag"
 	"github.com/patrikcze/llmtui/internal/skill"
+	"github.com/patrikcze/llmtui/internal/terminalmath"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/toolapi"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -2433,6 +2434,13 @@ func (m *Model) renderMarkdown(s string) string {
 	s = terminaltext.Sanitize(s)
 	if !m.cfg.UI.Markdown || m.renderer == nil {
 		return s
+	}
+	if m.cfg.UI.Math.Enabled {
+		// Display-only LaTeX → Unicode expansion, then re-sanitize as
+		// defense in depth: termtex is invoked without ANSI colour so it
+		// cannot emit escapes, but the security boundary must not depend on
+		// that. terminaltext.Sanitize is idempotent on clean text.
+		s = terminaltext.Sanitize(terminalmath.ExpandMarkdown(s))
 	}
 	out, err := m.renderer.Render(s)
 	if err != nil {

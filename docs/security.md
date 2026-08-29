@@ -112,7 +112,10 @@ and an explicit category selection; the picker defaults to skip.
   memory without bound.
 - All provider, tool, MCP, RAG, and web text crosses a terminal-sanitization
   boundary that strips C0/C1 controls and CSI/OSC/DCS sequences before
-  rendering, including OSC 52 clipboard writes.
+  rendering, including OSC 52 clipboard writes. The optional LaTeX-math
+  expansion (`ui.math.enabled`, `internal/terminalmath`) runs *after* that
+  boundary but invokes `termtex` without ANSI colour and re-sanitizes its
+  output, so it cannot reintroduce escape sequences.
 - Skills and plugins ([docs](skills.md)) are declarative text treated as
   potentially untrusted local input: strict schema and ID validation, size
   caps, UTF-8 and hidden-control-character rejection, and plugin manifest

@@ -249,6 +249,36 @@ func cmdThoughts(m *Model, args string) tea.Cmd {
 	return nil
 }
 
+func cmdMath(m *Model, args string) tea.Cmd {
+	mode := strings.TrimSpace(strings.ToLower(args))
+	changed := true
+	switch mode {
+	case "", "status":
+		changed = false
+	case "on":
+		m.cfg.UI.Math.Enabled = true
+	case "off":
+		m.cfg.UI.Math.Enabled = false
+	case "toggle":
+		m.cfg.UI.Math.Enabled = !m.cfg.UI.Math.Enabled
+	default:
+		return m.fail("usage: /math [on|off|toggle|status]")
+	}
+	state := "off"
+	if m.cfg.UI.Math.Enabled {
+		state = "on"
+	}
+	if m.cfg.UI.Markdown {
+		m.notice = "math rendering is " + state + " — LaTeX in answers shows as terminal Unicode when on"
+	} else {
+		m.notice = "math rendering is " + state + " — no effect while ui.markdown is off"
+	}
+	if changed {
+		m.refreshViewport()
+	}
+	return nil
+}
+
 // --- /prompt -----------------------------------------------------------------
 
 func cmdPrompt(m *Model, args string) tea.Cmd {

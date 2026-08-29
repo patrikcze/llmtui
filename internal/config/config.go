@@ -162,6 +162,15 @@ type UIConfig struct {
 	ShowReasoning  bool   `mapstructure:"show_reasoning" yaml:"show_reasoning"`
 	Markdown       bool   `mapstructure:"markdown" yaml:"markdown"`
 	CompactMode    bool   `mapstructure:"compact_mode" yaml:"compact_mode"`
+
+	Math MathConfig `mapstructure:"math" yaml:"math"`
+}
+
+// MathConfig controls terminal rendering of LaTeX-style mathematics found in
+// Markdown responses. Opt-in: when disabled, Markdown renders exactly as it
+// did before the feature existed. Has no effect unless ui.markdown is also on.
+type MathConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 }
 
 // PrivacyConfig holds local-first privacy settings.
@@ -779,6 +788,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ui.show_reasoning", true)
 	v.SetDefault("ui.markdown", true)
 	v.SetDefault("ui.compact_mode", false)
+	v.SetDefault("ui.math.enabled", false)
 
 	v.SetDefault("privacy.local_first", true)
 	v.SetDefault("privacy.redact_api_keys_in_logs", true)
@@ -984,6 +994,11 @@ ui:
   show_reasoning: true
   markdown: true
   compact_mode: false
+  # Render LaTeX-style math ($…$ and $$…$$) in Markdown answers as terminal
+  # Unicode (≈, m³, α, fractions, roots). Display-only; opt-in; needs
+  # markdown: true. Toggle in a session with /math on|off.
+  math:
+    enabled: false
 
 privacy:
   local_first: true
