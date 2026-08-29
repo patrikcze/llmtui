@@ -485,15 +485,15 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 	})
 
 	cmdSkills(m, "list")
-	if !m.overlayOpen || m.pickerKind != pickerSkill {
+	if !m.overlayOpen || m.picker.pickerKind != pickerSkill {
 		t.Fatal("/skills list should open the skills picker")
 	}
-	if len(m.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter activate/deactivate") {
-		t.Fatalf("skills picker = items %v, view:\n%s", m.pickerItems, m.viewport.View())
+	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter activate/deactivate") {
+		t.Fatalf("skills picker = items %v, view:\n%s", m.picker.pickerItems, m.viewport.View())
 	}
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	selected := m.pickerItems[m.pickerIdx]
+	selected := m.picker.pickerItems[m.picker.pickerIdx]
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.overlayOpen {
 		t.Error("activating a skill should close the picker")
@@ -503,8 +503,8 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 	}
 
 	cmdSkills(m, "list")
-	if m.pickerItems[m.pickerIdx] != selected {
-		t.Errorf("picker index = %d, want active skill %q", m.pickerIdx, selected)
+	if m.picker.pickerItems[m.picker.pickerIdx] != selected {
+		t.Errorf("picker index = %d, want active skill %q", m.picker.pickerIdx, selected)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if _, active := m.skillMgr.IsActive(selected); active {
@@ -526,17 +526,17 @@ func TestSkillsPickerActiveSkillDoesNotTruncateNavigation(t *testing.T) {
 	}
 
 	cmdSkills(m, "list")
-	if got, want := len(m.pickerItems), 5; got != want {
-		t.Fatalf("picker items = %d, want %d: %v", got, want, m.pickerItems)
+	if got, want := len(m.picker.pickerItems), 5; got != want {
+		t.Fatalf("picker items = %d, want %d: %v", got, want, m.picker.pickerItems)
 	}
-	if got := m.pickerItems[m.pickerIdx]; got != "user:beta" {
+	if got := m.picker.pickerItems[m.picker.pickerIdx]; got != "user:beta" {
 		t.Fatalf("initial selection = %q, want active skill user:beta", got)
 	}
 
 	for range 3 {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if got := m.pickerItems[m.pickerIdx]; got != "user:gamma" {
+	if got := m.picker.pickerItems[m.picker.pickerIdx]; got != "user:gamma" {
 		t.Errorf("selection after moving to the last row = %q, want user:gamma", got)
 	}
 }
@@ -643,14 +643,14 @@ func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
 	m.skillMgr.Configure(skill.Options{Enabled: true, Paths: skill.Paths{UserPluginDir: pluginDir}})
 
 	cmdPlugins(m, "list")
-	if !m.overlayOpen || m.pickerKind != pickerPlugin {
+	if !m.overlayOpen || m.picker.pickerKind != pickerPlugin {
 		t.Fatal("/plugins list should open the plugins picker")
 	}
-	if len(m.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter enable/disable") {
-		t.Fatalf("plugins picker = items %v, view:\n%s", m.pickerItems, m.viewport.View())
+	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter enable/disable") {
+		t.Fatalf("plugins picker = items %v, view:\n%s", m.picker.pickerItems, m.viewport.View())
 	}
 
-	selected := m.pickerItems[m.pickerIdx]
+	selected := m.picker.pickerItems[m.picker.pickerIdx]
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.overlayOpen {
 		t.Error("toggling a plugin should close the picker")
@@ -673,8 +673,8 @@ func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
 	}
 
 	cmdPlugins(m, "list")
-	if m.pickerItems[m.pickerIdx] != selected {
-		t.Errorf("picker index = %d, want previously-enabled plugin %q", m.pickerIdx, selected)
+	if m.picker.pickerItems[m.picker.pickerIdx] != selected {
+		t.Errorf("picker index = %d, want previously-enabled plugin %q", m.picker.pickerIdx, selected)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	for _, p := range m.skillMgr.Plugins() {

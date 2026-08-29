@@ -171,7 +171,7 @@ func (m *Model) profileListOverlay() string {
 	for i, p := range m.profiles {
 		marker := "  "
 		name := m.theme.StatusValue.Render(fmt.Sprintf("%-10s", p.Name))
-		if m.pickerKind == pickerProfile && i == m.pickerIdx {
+		if m.picker.pickerKind == pickerProfile && i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			name = m.theme.BadgeOK.Render(fmt.Sprintf("%-10s", p.Name))
 		}

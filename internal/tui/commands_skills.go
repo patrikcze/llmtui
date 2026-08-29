@@ -67,14 +67,14 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 // and unambiguous when the selected skill is activated.
 func (m *Model) openSkillsPicker() {
 	skills := m.skillMgr.Skills()
-	m.pickerKind = pickerSkill
-	m.pickerItems = make([]string, 0, len(skills))
-	m.pickerIdx = 0
+	m.picker.pickerKind = pickerSkill
+	m.picker.pickerItems = make([]string, 0, len(skills))
+	m.picker.pickerIdx = 0
 	foundActive := false
 	for i, s := range skills {
-		m.pickerItems = append(m.pickerItems, s.QualifiedID())
+		m.picker.pickerItems = append(m.picker.pickerItems, s.QualifiedID())
 		if _, active := m.skillMgr.IsActive(s.QualifiedID()); active && !foundActive {
-			m.pickerIdx = i
+			m.picker.pickerIdx = i
 			foundActive = true
 		}
 	}
@@ -213,7 +213,7 @@ func (m *Model) skillsPickerOverlay() string {
 		if isActive {
 			label = m.theme.StatusValue.Render(row)
 		}
-		if m.pickerKind == pickerSkill && i == m.pickerIdx {
+		if m.picker.pickerKind == pickerSkill && i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(row)
 		}
@@ -439,14 +439,14 @@ func (m *Model) pluginsListOverlay() string {
 // than silently doing nothing.
 func (m *Model) openPluginsPicker() {
 	plugins := m.skillMgr.Plugins()
-	m.pickerKind = pickerPlugin
-	m.pickerItems = make([]string, 0, len(plugins))
-	m.pickerIdx = 0
+	m.picker.pickerKind = pickerPlugin
+	m.picker.pickerItems = make([]string, 0, len(plugins))
+	m.picker.pickerIdx = 0
 	foundEnabled := false
 	for i, p := range plugins {
-		m.pickerItems = append(m.pickerItems, p.Manifest.ID)
+		m.picker.pickerItems = append(m.picker.pickerItems, p.Manifest.ID)
 		if p.Enabled && !foundEnabled {
-			m.pickerIdx = i
+			m.picker.pickerIdx = i
 			foundEnabled = true
 		}
 	}
@@ -521,7 +521,7 @@ func (m *Model) pluginsPickerOverlay() string {
 		case p.Enabled:
 			label = m.theme.StatusValue.Render(row)
 		}
-		if m.pickerKind == pickerPlugin && i == m.pickerIdx {
+		if m.picker.pickerKind == pickerPlugin && i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(row)
 		}

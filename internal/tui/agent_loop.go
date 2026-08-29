@@ -231,10 +231,10 @@ func (m *Model) agentNeedsUserInput() bool {
 // openAgentQuestionPicker is the shared human-choice overlay used by both
 // verifier-detected questions and explicit ask_user calls.
 func (m *Model) openAgentQuestionPicker(question string, options []string) {
-	m.pickerKind = pickerAgentQuestion
-	m.pickerHeader = question
-	m.pickerItems = append([]string{}, options...)
-	m.pickerIdx = 0
+	m.picker.pickerKind = pickerAgentQuestion
+	m.picker.pickerHeader = question
+	m.picker.pickerItems = append([]string{}, options...)
+	m.picker.pickerIdx = 0
 	m.overlayOpen = true
 	m.renderPicker()
 }
@@ -250,11 +250,11 @@ func (m *Model) agentQuestionPickerOverlay() string {
 		}
 	}
 	b.WriteString(m.theme.Badge.Render(label) + "\n\n")
-	b.WriteString(m.theme.UserLabel.Render(m.pickerHeader) + "\n\n")
-	for i, option := range m.pickerItems {
+	b.WriteString(m.theme.UserLabel.Render(m.picker.pickerHeader) + "\n\n")
+	for i, option := range m.picker.pickerItems {
 		marker := "  "
 		label := m.theme.SystemNote.Render(option)
-		if i == m.pickerIdx {
+		if i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(option)
 		}
@@ -268,10 +268,10 @@ func (m *Model) openAgentPromotionPicker() {
 	if !m.agentPromotionAvailable() {
 		return
 	}
-	m.pickerKind = pickerAgentPromotion
-	m.pickerHeader = "Promote this verified outcome to project memory?"
-	m.pickerItems = []string{"architecture", "convention", "decision", "skip"}
-	m.pickerIdx = len(m.pickerItems) - 1
+	m.picker.pickerKind = pickerAgentPromotion
+	m.picker.pickerHeader = "Promote this verified outcome to project memory?"
+	m.picker.pickerItems = []string{"architecture", "convention", "decision", "skip"}
+	m.picker.pickerIdx = len(m.picker.pickerItems) - 1
 	m.overlayOpen = true
 	m.renderPicker()
 }
@@ -284,11 +284,11 @@ func (m *Model) agentPromotionAvailable() bool {
 func (m *Model) agentPromotionPickerOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("verified outcome") + "\n\n")
-	b.WriteString(m.theme.UserLabel.Render(m.pickerHeader) + "\n\n")
-	for index, option := range m.pickerItems {
+	b.WriteString(m.theme.UserLabel.Render(m.picker.pickerHeader) + "\n\n")
+	for index, option := range m.picker.pickerItems {
 		marker := "  "
 		label := m.theme.SystemNote.Render(option)
-		if index == m.pickerIdx {
+		if index == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(option)
 		}

@@ -338,11 +338,11 @@ func (m *Model) closeOverlay() {
 }
 
 func (m *Model) clearPicker() {
-	m.pickerKind = pickerNone
-	m.pickerItems = []string{}
-	m.pickerModels = []provider.ModelInfo{}
-	m.pickerIdx = 0
-	m.pickerHeader = ""
+	m.picker.pickerKind = pickerNone
+	m.picker.pickerItems = []string{}
+	m.picker.pickerModels = []provider.ModelInfo{}
+	m.picker.pickerIdx = 0
+	m.picker.pickerHeader = ""
 }
 
 func (m *Model) setModel(id string) {
@@ -352,34 +352,34 @@ func (m *Model) setModel(id string) {
 }
 
 func (m *Model) openModelsPicker(models []provider.ModelInfo) {
-	m.pickerKind = pickerModel
-	m.pickerModels = append([]provider.ModelInfo{}, models...)
-	m.pickerItems = make([]string, 0, len(models))
+	m.picker.pickerKind = pickerModel
+	m.picker.pickerModels = append([]provider.ModelInfo{}, models...)
+	m.picker.pickerItems = make([]string, 0, len(models))
 	for _, model := range models {
-		m.pickerItems = append(m.pickerItems, model.ID)
+		m.picker.pickerItems = append(m.picker.pickerItems, model.ID)
 	}
-	m.pickerIdx = selectedIndex(m.pickerItems, m.model)
+	m.picker.pickerIdx = selectedIndex(m.picker.pickerItems, m.model)
 	m.overlayOpen = true
 	m.renderPicker()
 }
 
 func (m *Model) openProvidersPicker() {
-	m.pickerKind = pickerProvider
-	m.pickerItems = make([]string, 0, len(m.cfg.Providers))
+	m.picker.pickerKind = pickerProvider
+	m.picker.pickerItems = make([]string, 0, len(m.cfg.Providers))
 	for name := range m.cfg.Providers {
-		m.pickerItems = append(m.pickerItems, name)
+		m.picker.pickerItems = append(m.picker.pickerItems, name)
 	}
-	sort.Strings(m.pickerItems)
-	m.pickerIdx = selectedIndex(m.pickerItems, m.prov.Name())
+	sort.Strings(m.picker.pickerItems)
+	m.picker.pickerIdx = selectedIndex(m.picker.pickerItems, m.prov.Name())
 	m.overlayOpen = true
 	m.renderPicker()
 }
 
 func (m *Model) openProfilesPicker() {
-	m.pickerKind = pickerProfile
-	m.pickerItems = make([]string, 0, len(m.profiles))
+	m.picker.pickerKind = pickerProfile
+	m.picker.pickerItems = make([]string, 0, len(m.profiles))
 	for _, profile := range m.profiles {
-		m.pickerItems = append(m.pickerItems, profile.Name)
+		m.picker.pickerItems = append(m.picker.pickerItems, profile.Name)
 	}
 
 	selected := m.profileMode
@@ -387,7 +387,7 @@ func (m *Model) openProfilesPicker() {
 		active, _ := m.activeProfile()
 		selected = active.Name
 	}
-	m.pickerIdx = selectedIndex(m.pickerItems, selected)
+	m.picker.pickerIdx = selectedIndex(m.picker.pickerItems, selected)
 	m.overlayOpen = true
 	m.renderPicker()
 }
@@ -403,9 +403,9 @@ func selectedIndex(items []string, selected string) int {
 
 func (m *Model) renderPicker() {
 	var content string
-	switch m.pickerKind {
+	switch m.picker.pickerKind {
 	case pickerModel:
-		content = m.modelsOverlay(m.pickerModels)
+		content = m.modelsOverlay(m.picker.pickerModels)
 	case pickerProvider:
 		content = m.providersOverlay()
 	case pickerProfile:
@@ -504,7 +504,7 @@ func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
 		marker := "  "
 		id := terminaltext.Sanitize(mi.ID)
 		label := m.theme.StatusValue.Render(id)
-		if m.pickerKind == pickerModel && i == m.pickerIdx {
+		if m.picker.pickerKind == pickerModel && i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(id)
 		}
@@ -533,7 +533,7 @@ func (m *Model) providersOverlay() string {
 		pc := m.cfg.Providers[name]
 		marker := "  "
 		label := m.theme.StatusValue.Render(fmt.Sprintf("%-20s", name))
-		if m.pickerKind == pickerProvider && i == m.pickerIdx {
+		if m.picker.pickerKind == pickerProvider && i == m.picker.pickerIdx {
 			marker = m.theme.BadgeOK.Render("▸ ")
 			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-20s", name))
 		}

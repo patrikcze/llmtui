@@ -386,8 +386,8 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 	}
 
 	m.openModelsPicker(models)
-	if m.pickerIdx != 1 {
-		t.Fatalf("initial picker index = %d, want active model at 1", m.pickerIdx)
+	if m.picker.pickerIdx != 1 {
+		t.Fatalf("initial picker index = %d, want active model at 1", m.picker.pickerIdx)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	// The marker and the label are separate Render() calls; lipgloss v2
@@ -395,7 +395,7 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 	// process), so strip them before checking the two land next to each
 	// other as plain text.
 	view := ansi.Strip(m.viewport.View())
-	if m.pickerIdx != 2 || !strings.Contains(view, "▸ omega") {
+	if m.picker.pickerIdx != 2 || !strings.Contains(view, "▸ omega") {
 		t.Fatalf("down did not select omega:\n%s", view)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -437,12 +437,12 @@ func TestProvidersPickerNavigatesAndSelects(t *testing.T) {
 	}
 
 	m.openProvidersPicker()
-	if m.pickerIdx != 1 {
-		t.Fatalf("initial picker index = %d, want active provider at 1", m.pickerIdx)
+	if m.picker.pickerIdx != 1 {
+		t.Fatalf("initial picker index = %d, want active provider at 1", m.picker.pickerIdx)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.pickerIdx != 0 {
-		t.Fatalf("up picker index = %d, want 0", m.pickerIdx)
+	if m.picker.pickerIdx != 0 {
+		t.Fatalf("up picker index = %d, want 0", m.picker.pickerIdx)
 	}
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.prov.Name() != "mock" || m.cfg.Provider != "alpha" {
@@ -462,15 +462,15 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 	m.profileMode = "auto"
 
 	runCommand(m, "/profile list")
-	if m.pickerKind != pickerProfile || !m.overlayOpen {
+	if m.picker.pickerKind != pickerProfile || !m.overlayOpen {
 		t.Fatal("/profile list should open the profile picker")
 	}
-	if selected := m.pickerItems[m.pickerIdx]; selected != "qwen" {
+	if selected := m.picker.pickerItems[m.picker.pickerIdx]; selected != "qwen" {
 		t.Fatalf("initial profile selection = %q, want auto-matched qwen", selected)
 	}
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	want := m.pickerItems[m.pickerIdx]
+	want := m.picker.pickerItems[m.picker.pickerIdx]
 	// The marker and the label are separate Render() calls; lipgloss v2
 	// always emits color codes (no more auto-disable for a non-tty test
 	// process), so strip them before checking the two land next to each
@@ -484,7 +484,7 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 	if m.profileMode != want {
 		t.Errorf("profileMode = %q, want pinned profile %q", m.profileMode, want)
 	}
-	if m.overlayOpen || m.pickerKind != pickerNone {
+	if m.overlayOpen || m.picker.pickerKind != pickerNone {
 		t.Error("selecting a profile should close and clear the picker")
 	}
 	if !strings.Contains(m.notice, "profile pinned to "+want) {
@@ -498,14 +498,14 @@ func TestProfilePickerClickSelectsRow(t *testing.T) {
 	m.profileMode = "auto"
 
 	runCommand(m, "/profile list")
-	if m.pickerKind != pickerProfile || !m.overlayOpen {
+	if m.picker.pickerKind != pickerProfile || !m.overlayOpen {
 		t.Fatal("/profile list should open the profile picker")
 	}
 
 	// Any row other than the auto-matched default, so a successful click
 	// is unambiguous.
-	targetIdx := (m.pickerIdx + 1) % len(m.pickerItems)
-	target := m.pickerItems[targetIdx]
+	targetIdx := (m.picker.pickerIdx + 1) % len(m.picker.pickerItems)
+	target := m.picker.pickerItems[targetIdx]
 
 	m.View() // triggers zone.Scan(), registering row bounds
 	z := waitForZone(t, pickerRowZoneID(targetIdx))
@@ -515,7 +515,7 @@ func TestProfilePickerClickSelectsRow(t *testing.T) {
 	if m.profileMode != target {
 		t.Errorf("profileMode = %q, want clicked profile %q", m.profileMode, target)
 	}
-	if m.overlayOpen || m.pickerKind != pickerNone {
+	if m.overlayOpen || m.picker.pickerKind != pickerNone {
 		t.Error("clicking a profile should close and clear the picker")
 	}
 	if !strings.Contains(m.notice, "profile pinned to "+target) {
@@ -550,7 +550,7 @@ func TestPickerEscapeCancelsSelection(t *testing.T) {
 	if m.model != "demo-model" {
 		t.Errorf("model = %q after cancel, want demo-model", m.model)
 	}
-	if m.overlayOpen || m.pickerKind != pickerNone {
+	if m.overlayOpen || m.picker.pickerKind != pickerNone {
 		t.Error("escape should close and clear the picker")
 	}
 }
