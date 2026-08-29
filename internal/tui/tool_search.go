@@ -58,20 +58,6 @@ func (m *Model) toolDiscoveryActive(eligible []provider.ToolSpec) bool {
 	return false
 }
 
-func (m *Model) hiddenToolSpecs() []provider.ToolSpec {
-	eligible := m.eligibleToolSpecs()
-	if !m.toolDiscoveryActive(eligible) {
-		return nil
-	}
-	var hidden []provider.ToolSpec
-	for _, spec := range eligible {
-		if _, _, dynamic := tools.SplitMCPToolName(spec.Name); dynamic && !m.disclosedTools[spec.Name] {
-			hidden = append(hidden, spec)
-		}
-	}
-	return hidden
-}
-
 // searchableMCPToolSpecs returns the complete live MCP catalog, including
 // tools already disclosed during this human turn. Search counts therefore do
 // not shrink after a tool is selected, and inventory queries remain stable.
