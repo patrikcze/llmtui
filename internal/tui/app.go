@@ -152,7 +152,8 @@ type Model struct {
 	// call, so the paste-image gate can use provider.ResolveVision even after
 	// the model picker overlay closes and clears picker.pickerModels.
 	visionInfoByID  map[string]provider.ModelInfo
-	suggest         suggestState // slash-command autocomplete dropdown
+	suggest         suggestState         // slash-command autocomplete dropdown
+	composerHistory composerHistoryState // Up/Down recall of submitted input (see composerHistoryState)
 	historyDir      string
 	sessionName     string
 	operationLog    *history.OperationLog
@@ -667,6 +668,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputHeight()
 			return m, nil
 		}
+		// Shell-like composer-history recall on bare Up/Down. Returns false
+		// (falls through to suggestions / textarea navigation) unless it fully
+		// owns the key — see updateComposerHistory for the arbitration.
+		if m.updateComposerHistory(msg) {
+			return m, nil
+		}
 		if len(m.suggest.sugs) > 0 {
 			switch msg.String() {
 			case "up":
@@ -978,7 +985,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// stays reachable via the mouse wheel regardless (see below, which
 		// also clears any active text selection on scroll — PgUp/PgDown no
 		// longer touch the viewport at all, so there's nothing to clear here).
+		before := m.input.Value()
 		m.input, cmd = m.input.Update(msg)
+		// Any key that changes the composer value while a history entry is
+		// showing detaches from browsing, so editing behaves normally and the
+		// suggestion popup regains Up/Down.
+		if m.composerHistory.browsing && m.input.Value() != before {
+			m.composerHistory.stopBrowsing()
+		}
 		m.updateSuggestions()
 		m.syncInputHeight()
 		return m, cmd
@@ -1179,6 +1193,9 @@ func (m *Model) send() tea.Cmd {
 	if text == "" && len(m.attachments) == 0 {
 		return nil
 	}
+	// Record the submitted text for Up/Down recall before the box is cleared.
+	// record ignores "" so an attachment-only send adds no entry.
+	m.composerHistory.record(text)
 	m.input.Reset()
 	m.errText = ""
 	m.notice = ""
