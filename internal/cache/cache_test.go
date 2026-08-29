@@ -39,10 +39,12 @@ func TestKeyHashStability(t *testing.T) {
 		func(k *Key) { k.PromptMode = "strict" },
 		func(k *Key) { k.Template = "golang" },
 		func(k *Key) { k.Temperature = 0.1 },
+		func(k *Key) { k.TopP = 0.1 },
 		func(k *Key) { k.MaxTokens = 100 },
 		func(k *Key) { k.HistoryHash = "different" },
 		func(k *Key) { k.ToolsHash = "different" },
 		func(k *Key) { k.Reasoning = "off" },
+		func(k *Key) { k.SkillsHash = "different" },
 	}
 	for i, mutate := range variants {
 		k := testKey()
