@@ -191,10 +191,18 @@ func slashCommands() []slashCommand {
 
 const maxSuggestions = 6
 
+// suggestState is the slash-command autocomplete dropdown: the currently
+// matching commands (capped at maxSuggestions) and the highlighted row. Both
+// fields' zero value is the correct "no popup" state.
+type suggestState struct {
+	sugs   []slashCommand
+	sugIdx int
+}
+
 // updateSuggestions recomputes the command popup from the current input.
 func (m *Model) updateSuggestions() {
-	prev := len(m.sugs)
-	m.sugs = nil
+	prev := len(m.suggest.sugs)
+	m.suggest.sugs = nil
 
 	val := m.input.Value()
 	// Suggest only while the command name itself is being typed.
@@ -205,20 +213,20 @@ func (m *Model) updateSuggestions() {
 				// An exact name match leads the list ("/model" must not
 				// highlight "/models" just because it registers earlier).
 				if c.is(typed) {
-					m.sugs = append([]slashCommand{c}, m.sugs...)
+					m.suggest.sugs = append([]slashCommand{c}, m.suggest.sugs...)
 				} else {
-					m.sugs = append(m.sugs, c)
+					m.suggest.sugs = append(m.suggest.sugs, c)
 				}
-				if len(m.sugs) == maxSuggestions {
+				if len(m.suggest.sugs) == maxSuggestions {
 					break
 				}
 			}
 		}
 	}
-	if m.sugIdx >= len(m.sugs) {
-		m.sugIdx = 0
+	if m.suggest.sugIdx >= len(m.suggest.sugs) {
+		m.suggest.sugIdx = 0
 	}
-	if len(m.sugs) != prev {
+	if len(m.suggest.sugs) != prev {
 		m.relayout()
 	}
 }
@@ -231,7 +239,7 @@ func (m *Model) runSlashCommand() tea.Cmd {
 
 	// A highlighted suggestion completes a partially typed name, but an
 	// exactly typed command always runs itself ("/model" is not "/models").
-	if len(m.sugs) > 0 && !m.sugs[m.sugIdx].is(name) {
+	if len(m.suggest.sugs) > 0 && !m.suggest.sugs[m.suggest.sugIdx].is(name) {
 		exact := false
 		for _, c := range slashCommands() {
 			if c.is(name) {
@@ -240,7 +248,7 @@ func (m *Model) runSlashCommand() tea.Cmd {
 			}
 		}
 		if !exact {
-			name = m.sugs[m.sugIdx].name
+			name = m.suggest.sugs[m.suggest.sugIdx].name
 		}
 	}
 
@@ -626,10 +634,10 @@ func (m *Model) historyOverlay() string {
 
 // suggestionsView renders the command popup shown above the input.
 func (m *Model) suggestionsView() string {
-	lines := make([]string, len(m.sugs))
-	for i, c := range m.sugs {
+	lines := make([]string, len(m.suggest.sugs))
+	for i, c := range m.suggest.sugs {
 		usage := fmt.Sprintf("%-20s", c.usage)
-		if i == m.sugIdx {
+		if i == m.suggest.sugIdx {
 			lines[i] = m.theme.UserLabel.Render(" ▸ "+usage) + m.theme.StatusValue.Render(c.desc)
 		} else {
 			lines[i] = m.theme.StatusBar.Render("   "+usage) + m.theme.StatusBar.Render(c.desc)

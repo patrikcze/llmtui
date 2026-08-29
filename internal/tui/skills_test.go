@@ -696,13 +696,13 @@ func TestHelpAndCompletionIncludeSkills(t *testing.T) {
 	m.input.SetValue("/skil")
 	m.updateSuggestions()
 	found := false
-	for _, c := range m.sugs {
+	for _, c := range m.suggest.sugs {
 		if c.name == "skills" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("completion missing /skills: %+v", m.sugs)
+		t.Errorf("completion missing /skills: %+v", m.suggest.sugs)
 	}
 }
 

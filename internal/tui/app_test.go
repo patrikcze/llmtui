@@ -257,7 +257,7 @@ func TestSlashShowsSuggestions(t *testing.T) {
 	m := newTestModel(t)
 
 	typeText(m, "/")
-	if len(m.sugs) == 0 {
+	if len(m.suggest.sugs) == 0 {
 		t.Fatal("typing / should show command suggestions")
 	}
 	if !strings.Contains(m.render(), "/help") {
@@ -265,14 +265,14 @@ func TestSlashShowsSuggestions(t *testing.T) {
 	}
 
 	typeText(m, "he")
-	if len(m.sugs) != 1 || m.sugs[0].name != "help" {
-		t.Fatalf("suggestions for /he = %+v, want only help", m.sugs)
+	if len(m.suggest.sugs) != 1 || m.suggest.sugs[0].name != "help" {
+		t.Fatalf("suggestions for /he = %+v, want only help", m.suggest.sugs)
 	}
 
 	// Plain text hides the popup again.
 	m.input.Reset()
 	typeText(m, "hello")
-	if len(m.sugs) != 0 {
+	if len(m.suggest.sugs) != 0 {
 		t.Error("plain text should not show suggestions")
 	}
 }
@@ -280,14 +280,14 @@ func TestSlashShowsSuggestions(t *testing.T) {
 func TestSuggestionNavigationAndTabComplete(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "/")
-	first := m.sugs[m.sugIdx].name
+	first := m.suggest.sugs[m.suggest.sugIdx].name
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.sugs[m.sugIdx].name == first {
+	if m.suggest.sugs[m.suggest.sugIdx].name == first {
 		t.Error("down should move the selection")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.sugs[m.sugIdx].name != first {
+	if m.suggest.sugs[m.suggest.sugIdx].name != first {
 		t.Error("up should move the selection back")
 	}
 
@@ -570,7 +570,7 @@ func TestEscClearsSlashInput(t *testing.T) {
 	typeText(m, "/mod")
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if m.input.Value() != "" || len(m.sugs) != 0 {
+	if m.input.Value() != "" || len(m.suggest.sugs) != 0 {
 		t.Error("esc should clear the pending command and popup")
 	}
 }
@@ -624,12 +624,12 @@ func TestCtrlUClearsWholePrompt(t *testing.T) {
 func TestCtrlUClearsSlashSuggestions(t *testing.T) {
 	m := newTestModel(t)
 	typeText(m, "/mod")
-	if len(m.sugs) == 0 {
+	if len(m.suggest.sugs) == 0 {
 		t.Fatal("expected command suggestions after typing /mod")
 	}
 	m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
-	if m.input.Value() != "" || len(m.sugs) != 0 {
-		t.Errorf("ctrl+u should clear input and suggestions: value=%q sugs=%d", m.input.Value(), len(m.sugs))
+	if m.input.Value() != "" || len(m.suggest.sugs) != 0 {
+		t.Errorf("ctrl+u should clear input and suggestions: value=%q sugs=%d", m.input.Value(), len(m.suggest.sugs))
 	}
 }
 
