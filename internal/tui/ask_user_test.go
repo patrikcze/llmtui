@@ -63,8 +63,8 @@ func TestAskUserChoicePickerContinuesOriginalTurn(t *testing.T) {
 	call := nativeAskCall(t, "ask-choice", `{"question":"Which environment?","choices":["development","staging","production"]}`)
 	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
 	m.startToolBatch([]tools.Call{call})
-	if !m.overlayOpen || m.pickerKind != pickerAgentQuestion || len(m.pickerItems) != 3 {
-		t.Fatalf("picker state = open:%v kind:%v items:%v", m.overlayOpen, m.pickerKind, m.pickerItems)
+	if !m.overlayOpen || m.picker.pickerKind != pickerAgentQuestion || len(m.picker.pickerItems) != 3 {
+		t.Fatalf("picker state = open:%v kind:%v items:%v", m.overlayOpen, m.picker.pickerKind, m.picker.pickerItems)
 	}
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

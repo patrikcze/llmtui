@@ -142,20 +142,14 @@ type Model struct {
 	renderWidth          int
 	mouseEnabled         bool
 	// Click-drag text selection over the chat transcript (see selectionState).
-	sel          selectionState
-	notice       string
-	overlayOpen  bool
-	pickerKind   pickerKind
-	pickerItems  []string
-	pickerIdx    int
-	pickerModels []provider.ModelInfo
-	// pickerHeader is the executor's actual question text, shown above the
-	// options list when pickerKind == pickerAgentQuestion. Unused by every
-	// other picker kind.
-	pickerHeader string
+	sel         selectionState
+	notice      string
+	overlayOpen bool
+	// picker holds the arrow-key picker overlay state (see pickerState).
+	picker pickerState
 	// visionInfoByID caches model metadata from the last successful ListModels
 	// call, so the paste-image gate can use provider.ResolveVision even after
-	// the model picker overlay closes and clears pickerModels.
+	// the model picker overlay closes and clears picker.pickerModels.
 	visionInfoByID  map[string]provider.ModelInfo
 	suggest         suggestState // slash-command autocomplete dropdown
 	historyDir      string
@@ -1012,7 +1006,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // arrows to choose an item and Enter to apply it; regular overlays retain
 // their scroll-and-close behavior.
 func (m *Model) updateOverlay(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.pickerKind != pickerNone {
+	if m.picker.pickerKind != pickerNone {
 		return m.updatePicker(msg)
 	}
 	switch msg.String() {
@@ -1037,7 +1031,7 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m.handleCtrlC()
 	case "esc":
-		if m.pickerKind == pickerAgentQuestion && m.pendingAsk != nil && !m.pendingAsk.call.AllowText {
+		if m.picker.pickerKind == pickerAgentQuestion && m.pendingAsk != nil && !m.pendingAsk.call.AllowText {
 			m.notice = "choose one of the available answers"
 			return m, nil
 		}
@@ -1047,24 +1041,24 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "up":
-		if len(m.pickerItems) > 0 {
-			m.pickerIdx = (m.pickerIdx - 1 + len(m.pickerItems)) % len(m.pickerItems)
+		if len(m.picker.pickerItems) > 0 {
+			m.picker.pickerIdx = (m.picker.pickerIdx - 1 + len(m.picker.pickerItems)) % len(m.picker.pickerItems)
 			m.renderPicker()
 		}
 		return m, nil
 	case "down":
-		if len(m.pickerItems) > 0 {
-			m.pickerIdx = (m.pickerIdx + 1) % len(m.pickerItems)
+		if len(m.picker.pickerItems) > 0 {
+			m.picker.pickerIdx = (m.picker.pickerIdx + 1) % len(m.picker.pickerItems)
 			m.renderPicker()
 		}
 		return m, nil
 	case "enter":
-		if len(m.pickerItems) == 0 {
+		if len(m.picker.pickerItems) == 0 {
 			m.closeOverlay()
 			return m, nil
 		}
-		selection := m.pickerItems[m.pickerIdx]
-		kind := m.pickerKind
+		selection := m.picker.pickerItems[m.picker.pickerIdx]
+		kind := m.picker.pickerKind
 		m.closeOverlay()
 		if kind == pickerProfile {
 			m.profileMode = selection
@@ -1114,8 +1108,8 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // pickerRowZoneID is the bubblezone ID for the i-th row of whichever picker
 // is currently open. Index-based, not content-based: every picker kind
 // (profile/model/provider/skill/plugin/agent-question) selects by
-// m.pickerIdx into the shared m.pickerItems, so position is what identifies
-// a row, not its label.
+// m.picker.pickerIdx into the shared m.picker.pickerItems, so position is
+// what identifies a row, not its label.
 func pickerRowZoneID(i int) string {
 	return "picker-row-" + strconv.Itoa(i)
 }
@@ -1127,12 +1121,12 @@ func pickerRowZoneID(i int) string {
 // path. The bool return reports whether the click hit a zone at all, so
 // the caller can fall through to normal mouse handling on a miss.
 func (m *Model) updatePickerClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
-	if msg.Button != tea.MouseLeft || m.pickerKind == pickerNone {
+	if msg.Button != tea.MouseLeft || m.picker.pickerKind == pickerNone {
 		return m, nil, false
 	}
-	for i := range m.pickerItems {
+	for i := range m.picker.pickerItems {
 		if zone.Get(pickerRowZoneID(i)).InBounds(msg) {
-			m.pickerIdx = i
+			m.picker.pickerIdx = i
 			model, cmd := m.updatePicker(tea.KeyPressMsg{Code: tea.KeyEnter})
 			return model, cmd, true
 		}

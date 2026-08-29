@@ -204,8 +204,8 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 			t.Fatalf("event %d = %q, want %q", i, m.agentLoop.run.Events[i].Kind, kind)
 		}
 	}
-	if m.pickerKind != pickerNone || m.overlayOpen {
-		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.pickerKind, m.overlayOpen)
+	if m.picker.pickerKind != pickerNone || m.overlayOpen {
+		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.picker.pickerKind, m.overlayOpen)
 	}
 }
 
@@ -218,8 +218,8 @@ func TestVerifiedAgentMemoryOffSuppressesPromotion(t *testing.T) {
 	cmdMemory(m, "off")
 	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
 
-	if m.pickerKind != pickerNone || m.overlayOpen {
-		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.pickerKind, m.overlayOpen)
+	if m.picker.pickerKind != pickerNone || m.overlayOpen {
+		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.picker.pickerKind, m.overlayOpen)
 	}
 	if err := m.promoteAgentOutcome("decision"); err == nil || !strings.Contains(err.Error(), "memory is disabled") {
 		t.Fatalf("promotion while memory is off returned %v", err)
@@ -1147,33 +1147,33 @@ func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionNeedsUserInput {
 		t.Fatalf("status = %q, want needs_user_input", m.agentLoop.run.Status)
 	}
-	if m.pickerKind != pickerAgentQuestion {
-		t.Fatalf("pickerKind = %v, want pickerAgentQuestion", m.pickerKind)
+	if m.picker.pickerKind != pickerAgentQuestion {
+		t.Fatalf("pickerKind = %v, want pickerAgentQuestion", m.picker.pickerKind)
 	}
-	if m.pickerHeader != question {
-		t.Fatalf("pickerHeader = %q, want %q", m.pickerHeader, question)
+	if m.picker.pickerHeader != question {
+		t.Fatalf("pickerHeader = %q, want %q", m.picker.pickerHeader, question)
 	}
 	want := []string{"Prague", "Humpolec", "Brno"}
-	if len(m.pickerItems) != len(want) {
-		t.Fatalf("pickerItems = %v, want %v", m.pickerItems, want)
+	if len(m.picker.pickerItems) != len(want) {
+		t.Fatalf("pickerItems = %v, want %v", m.picker.pickerItems, want)
 	}
 	for i := range want {
-		if m.pickerItems[i] != want[i] {
-			t.Fatalf("pickerItems[%d] = %q, want %q", i, m.pickerItems[i], want[i])
+		if m.picker.pickerItems[i] != want[i] {
+			t.Fatalf("pickerItems[%d] = %q, want %q", i, m.picker.pickerItems[i], want[i])
 		}
 	}
 
 	runID := m.agentLoop.run.ID
 	_, downCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	driveAgentCommands(t, m, downCmd)
-	if m.pickerIdx != 1 {
-		t.Fatalf("pickerIdx = %d, want 1 (Humpolec) after one down-arrow", m.pickerIdx)
+	if m.picker.pickerIdx != 1 {
+		t.Fatalf("pickerIdx = %d, want 1 (Humpolec) after one down-arrow", m.picker.pickerIdx)
 	}
 	_, enterCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	driveAgentCommands(t, m, enterCmd)
 
-	if m.pickerKind != pickerAgentPromotion {
-		t.Fatalf("pickerKind = %v, want pickerAgentPromotion after completed resume", m.pickerKind)
+	if m.picker.pickerKind != pickerAgentPromotion {
+		t.Fatalf("pickerKind = %v, want pickerAgentPromotion after completed resume", m.picker.pickerKind)
 	}
 	if m.agentLoop.run.ID != runID || m.agentLoop.run.Cycle != 2 || m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("selecting an option did not resume the same run: %+v", m.agentLoop.run)
@@ -1205,8 +1205,8 @@ func TestPendingToolApprovalOutranksAgentQuestionPicker(t *testing.T) {
 	if len(m.pendingCalls) != 0 {
 		t.Fatalf("tool approval was not resolved: pendingCalls=%d", len(m.pendingCalls))
 	}
-	if m.pickerKind != pickerAgentQuestion {
-		t.Fatalf("pickerKind = %v, want pickerAgentQuestion untouched by the approval keypress", m.pickerKind)
+	if m.picker.pickerKind != pickerAgentQuestion {
+		t.Fatalf("pickerKind = %v, want pickerAgentQuestion untouched by the approval keypress", m.picker.pickerKind)
 	}
 }
 
