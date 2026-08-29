@@ -114,6 +114,16 @@ func TestCtrlVRefusedForNonVisionModel(t *testing.T) {
 	}
 }
 
+func TestCtrlVUsesVisionHeuristicWithoutBackendCapability(t *testing.T) {
+	m := newTestModel(t)
+	m.model = "llava:13b"
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("vision heuristic should allow image paste when the backend provides no capability data")
+	}
+}
+
 func TestCtrlVAllowedWithForceVision(t *testing.T) {
 	m := newTestModel(t)
 	m.model = "qwen3:8b"

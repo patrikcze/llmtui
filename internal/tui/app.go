@@ -162,12 +162,10 @@ type Model struct {
 	// options list when pickerKind == pickerAgentQuestion. Unused by every
 	// other picker kind.
 	pickerHeader string
-	// visionByID caches backend-reported vision capability (model ID ->
-	// supports images) from the last successful ListModels call, so the
-	// paste-image gate can use real data instead of the SupportsVision
-	// heuristic even after the model picker overlay closes and clears
-	// pickerModels.
-	visionByID      map[string]bool
+	// visionInfoByID caches model metadata from the last successful ListModels
+	// call, so the paste-image gate can use provider.ResolveVision even after
+	// the model picker overlay closes and clears pickerModels.
+	visionInfoByID  map[string]provider.ModelInfo
 	sugs            []slashCommand
 	sugIdx          int
 	historyDir      string
@@ -1705,28 +1703,26 @@ type firstStreamMsg struct {
 	gen int
 }
 
-// cacheVisionInfo remembers backend-reported vision capability from a
-// ListModels call so it survives after pickerModels is cleared.
+// cacheVisionInfo remembers model metadata from a ListModels call so it
+// survives after pickerModels is cleared.
 func (m *Model) cacheVisionInfo(models []provider.ModelInfo) {
+	if m.visionInfoByID == nil {
+		m.visionInfoByID = make(map[string]provider.ModelInfo, len(models))
+	}
 	for _, mi := range models {
-		if mi.Vision == nil {
-			continue
-		}
-		if m.visionByID == nil {
-			m.visionByID = make(map[string]bool, len(models))
-		}
-		m.visionByID[mi.ID] = *mi.Vision
+		m.visionInfoByID[mi.ID] = mi
 	}
 }
 
 // supportsVision reports whether the currently selected model accepts image
-// input, preferring backend-reported capability data over the model-ID
-// heuristic when we have it cached.
+// input. Provider capability resolution prefers backend-reported data and
+// falls back to model-ID heuristics only when that data is unavailable.
 func (m *Model) supportsVision() bool {
-	if v, ok := m.visionByID[m.model]; ok {
-		return v
+	info, ok := m.visionInfoByID[m.model]
+	if !ok {
+		info.ID = m.model
 	}
-	return provider.SupportsVision(m.model)
+	return provider.ResolveVision(info)
 }
 
 func (m *Model) pasteImage() tea.Cmd {
