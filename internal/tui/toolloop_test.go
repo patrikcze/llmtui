@@ -180,7 +180,7 @@ func TestPendingApprovalClosesKeysInspector(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
-	m.keysMode = true
+	m.keys.keysMode = true
 
 	withToolReply(m, "```tool write_file approval.txt\napproved\n```")
 	m.maybeRunTools()
@@ -188,7 +188,7 @@ func TestPendingApprovalClosesKeysInspector(t *testing.T) {
 	if len(m.pendingCalls) != 1 {
 		t.Fatalf("pendingCalls = %d, want 1", len(m.pendingCalls))
 	}
-	if m.keysMode {
+	if m.keys.keysMode {
 		t.Fatal("keys inspector must close once a tool approval is pending")
 	}
 

@@ -46,7 +46,7 @@ func (m *Model) handleAskUserBatch(calls []tools.Call) (tea.Cmd, bool) {
 
 func (m *Model) pauseForAskUser(call tools.Call) tea.Cmd {
 	m.overlayOpen = false
-	m.keysMode = false
+	m.keys.keysMode = false
 	m.pendingAsk = &pendingAskUser{call: call}
 	m.waitForUserInput()
 	m.notice = "assistant is waiting for your answer"

@@ -109,7 +109,7 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 	}
 	if m.toolDepth >= m.toolMaxIter() {
 		m.overlayOpen = false
-		m.keysMode = false
+		m.keys.keysMode = false
 		m.waitForApproval(newToolBatchPlan(calls), true)
 		m.refreshViewport()
 		return nil, true
