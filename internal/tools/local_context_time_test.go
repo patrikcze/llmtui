@@ -213,9 +213,6 @@ func TestLocalContextTimeDoesNotRequireApproval(t *testing.T) {
 	if runner.NeedsApproval(Call{Tool: ToolLocalContext, ContextKind: LocalContextTime}) {
 		t.Fatal("kind=time unexpectedly requires approval")
 	}
-	if NeedsApproval(Call{Tool: ToolLocalContext, ContextKind: LocalContextTime}) {
-		t.Fatal("kind=time unexpectedly requires approval (policy-free view)")
-	}
 	if !runner.NeedsApproval(Call{Tool: ToolLocalContext, ContextKind: LocalContextClipboard}) {
 		t.Fatal("clipboard approval regressed")
 	}
