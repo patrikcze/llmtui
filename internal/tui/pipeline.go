@@ -1150,7 +1150,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		if ok {
 			m.session.AddUser(raw)
 			m.session.AddAssistant(entry.Response)
-			m.replyCount++
+			m.exit.replyCount++
 			st := m.session.RecordUsage(provider.Usage{
 				PromptTokens:     entry.PromptTokens,
 				CompletionTokens: entry.CompletionTokens,

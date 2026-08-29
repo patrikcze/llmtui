@@ -22,6 +22,20 @@ type modelUsageStat struct {
 	Estimated bool
 }
 
+// exitSummaryState is the per-session bookkeeping rendered after the TUI
+// closes: wall-clock start, cumulative provider API time, per-model usage,
+// message counts, and whether the transcript was saved. Every field's zero
+// value is the correct "nothing happened yet" state; startedAt is set once
+// in New.
+type exitSummaryState struct {
+	startedAt  time.Time
+	apiTime    time.Duration
+	modelStats []modelUsageStat
+	sentCount  int
+	replyCount int
+	savedPath  string
+}
+
 // exitSummaryData is everything the exit summary needs, decoupled from the
 // Bubble Tea model so rendering stays a pure, testable function.
 type exitSummaryData struct {
@@ -44,14 +58,14 @@ type exitSummaryData struct {
 func (m *Model) exitSummary() exitSummaryData {
 	d := exitSummaryData{
 		SessionID: m.sessionName,
-		Saved:     m.savedPath != "",
-		UserMsgs:  m.sentCount,
-		ReplyMsgs: m.replyCount,
+		Saved:     m.exit.savedPath != "",
+		UserMsgs:  m.exit.sentCount,
+		ReplyMsgs: m.exit.replyCount,
 		ToolOK:    m.toolOK,
 		ToolErr:   m.toolErr,
-		WallTime:  time.Since(m.startedAt),
-		APITime:   m.apiTime,
-		Models:    m.modelStats,
+		WallTime:  time.Since(m.exit.startedAt),
+		APITime:   m.exit.apiTime,
+		Models:    m.exit.modelStats,
 		Width:     m.width,
 	}
 	if m.responseCache != nil {
@@ -66,9 +80,9 @@ func (m *Model) exitSummary() exitSummaryData {
 // recordModelUsage folds one completed provider request into the per-model
 // totals. Cache hits never reach here: they make no API request.
 func (m *Model) recordModelUsage(providerName, model string, prompt, reply int, estimated bool, d time.Duration) {
-	m.apiTime += d
-	for i := range m.modelStats {
-		s := &m.modelStats[i]
+	m.exit.apiTime += d
+	for i := range m.exit.modelStats {
+		s := &m.exit.modelStats[i]
 		if s.Provider == providerName && s.Model == model {
 			s.Requests++
 			s.Prompt += prompt
@@ -77,7 +91,7 @@ func (m *Model) recordModelUsage(providerName, model string, prompt, reply int, 
 			return
 		}
 	}
-	m.modelStats = append(m.modelStats, modelUsageStat{
+	m.exit.modelStats = append(m.exit.modelStats, modelUsageStat{
 		Provider: providerName, Model: model,
 		Requests: 1, Prompt: prompt, Reply: reply, Estimated: estimated,
 	})

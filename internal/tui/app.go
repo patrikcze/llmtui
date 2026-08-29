@@ -167,13 +167,9 @@ type Model struct {
 	ctrlCAt         time.Time
 	quitting        bool
 
-	// Exit summary bookkeeping, reported after the TUI closes.
-	startedAt  time.Time
-	apiTime    time.Duration
-	modelStats []modelUsageStat
-	sentCount  int
-	replyCount int
-	savedPath  string
+	// Exit summary bookkeeping, reported after the TUI closes (see
+	// exitSummaryState).
+	exit exitSummaryState
 
 	// Workspace tools (list/read/write/run under the launch directory).
 	toolsOn          bool
@@ -315,7 +311,7 @@ func New(opts Options) *Model {
 		mouseEnabled: true,
 		sessionName:  history.NewSessionName(time.Now()),
 		inputLines:   1,
-		startedAt:    time.Now(),
+		exit:         exitSummaryState{startedAt: time.Now()},
 		turnRuntime:  newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
 
 		memEnabled:    cfg.Memory.Enabled,
@@ -1198,9 +1194,9 @@ func (m *Model) send() tea.Cmd {
 	m.attachments = nil
 	m.syncInputHeight()
 	m.relayout()
-	m.sentCount++
+	m.exit.sentCount++
 	if m.pendingAsk != nil {
-		m.sentCount--
+		m.exit.sentCount--
 		return m.answerAskUser(text)
 	}
 	m.resetToolDisclosure()
@@ -1664,7 +1660,7 @@ func (m *Model) retryLast() tea.Cmd {
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	m.errText = ""
 	m.notice = "retrying last message"
-	m.sentCount++
+	m.exit.sentCount++
 	// Mirror send()'s agent-mode routing exactly: retrying while /agent on is
 	// active must go through the same run/cycle-stage machinery a fresh
 	// Enter keypress would, not the bare dispatch() used for ordinary chat.
@@ -1762,7 +1758,7 @@ func (m *Model) saveWithNotice() {
 		m.refreshViewport()
 		return
 	}
-	m.savedPath = path
+	m.exit.savedPath = path
 	m.notice = "✓ session saved to " + path
 }
 
@@ -1831,7 +1827,7 @@ func (m *Model) quit() tea.Cmd {
 	m.completePendingAskForShutdown()
 	if m.historyDir != "" && m.hasUserContent() {
 		if path, err := m.saveSession(m.cfg.Memory.Episodic.Capture); err == nil { // best effort on exit
-			m.savedPath = path
+			m.exit.savedPath = path
 		}
 	}
 	m.notice = "shutting down…"
@@ -2182,7 +2178,7 @@ func (m *Model) streamFailed(err error) {
 			Reasoning:         m.reasoningBuf.String(),
 			ReasoningDuration: m.reasoningDuration(),
 		})
-		m.replyCount++
+		m.exit.replyCount++
 		m.streamBuf.Reset()
 		m.errText += " (partial reply kept)"
 	}
@@ -2311,7 +2307,7 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 			ReasoningDuration: reasoningDuration,
 			Continuation:      continuation,
 		})
-		m.replyCount++
+		m.exit.replyCount++
 	}
 	// Cache the successful response (never failures, empty replies,
 	// truncated/incomplete replies, or tool-calling turns — those depend on
