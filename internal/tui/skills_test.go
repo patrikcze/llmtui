@@ -562,10 +562,6 @@ func TestSkillsOverlaysRender(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list := m.skillsListOverlay()
-	if !strings.Contains(list, "go-agent-loop-review") || !strings.Contains(list, "session") {
-		t.Errorf("list overlay = %q", list)
-	}
 	s, err := m.skillMgr.Resolve("go-agent-loop-review")
 	if err != nil {
 		t.Fatal(err)

@@ -185,37 +185,6 @@ func (m *Model) skillsStatusOverlay() string {
 	return m.overlayFooter(&b)
 }
 
-func (m *Model) skillsListOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("skills") + "\n\n")
-	skills := m.skillMgr.Skills()
-	if len(skills) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no skills found — add one under a search path (/skills paths) or enable a plugin") + "\n")
-		return m.overlayFooter(&b)
-	}
-	b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%-26s %-9s %-22s %-8s %s", "id", "version", "source", "active", "description")) + "\n")
-	for _, s := range skills {
-		scope, isActive := m.skillMgr.IsActive(s.QualifiedID())
-		activeStr := "-"
-		if isActive {
-			activeStr = string(scope)
-		}
-		src := string(s.Source)
-		if s.Source == skill.SourcePlugin {
-			src = "plugin:" + s.PluginID
-		}
-		row := fmt.Sprintf("%-26s %-9s %-22s %-8s %s",
-			s.Meta.ID, orNone(s.Meta.Version), src, activeStr, truncateForRow(s.Meta.Description))
-		if isActive {
-			b.WriteString("  " + m.theme.StatusValue.Render(row) + "\n")
-		} else {
-			b.WriteString("  " + m.theme.SystemNote.Render(row) + "\n")
-		}
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("/skills inspect <id> · /skills use <id> [--scope run|session]"))
-	return m.overlayFooter(&b)
-}
-
 func (m *Model) skillsPickerOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("skills") + "\n\n")
