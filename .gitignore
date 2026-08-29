@@ -5,8 +5,16 @@
 *.log
 .DS_Store
 
-# Local editor/agent settings and secrets — never publish.
-.claude/
+# Local editor/agent settings and secrets — never publish. Note the pattern is
+# ".claude/*" (children), not ".claude/" (the directory): git cannot re-include
+# anything under an excluded directory, so the negations below would be dead.
+.claude/*
+# Shared agent instructions, linked from AGENTS.md and CLAUDE.md — these must be
+# in the repo or the links dangle for everyone who clones.
+!.claude/agents/
+!.claude/skills/
+# Still local-only: settings.local.json (absolute home paths, local model
+# libraries), tasks/ (ephemeral per-branch task docs), worktrees/.
 /.gopath/
 *.env
 config.local.yaml

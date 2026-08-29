@@ -1,460 +1,186 @@
-# Project: Local LLM Terminal UI in Go
+# llmtui
 
-You are building a professional Golang Terminal UI application for chatting with local and OpenAI-compatible LLM backends.
+A keyboard-first Go terminal UI and bounded agent runtime for **local** LLMs —
+Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
+in-process. Local-first: no telemetry, no network call the user did not
+configure. Audience: developers running models on their own machine.
 
-The application must feel premium, smooth, animated, keyboard-first, and visually polished. It should be inspired by modern terminal coding assistants such as Claude Code, but it must not copy proprietary branding, logos, exact color palette, wording, or protected UI assets. Create an original “Claude-Code-inspired” aesthetic: calm, elegant, minimal, terminal-native, fast, and highly readable.
+This is a mature ~35-package codebase, not a scaffold. Read the code before
+changing it.
 
-## Primary Goal
+## Commands
 
-Build a full-screen TUI CLI application in Go that allows the user to chat with local LLMs hosted by:
-
-* Ollama
-* LM Studio
-* Unsloth / vLLM / llama.cpp or any OpenAI-compatible server
-* Generic OpenAI-compatible endpoint
-* Future providers through clean provider interfaces
-
-The app must support interactive chat, streaming tokens, provider/model switching, YAML configuration, command-line flags, usage charts, session history, and a beautiful terminal dashboard.
-
-## Technical Stack
-
-Use Go.
-
-Use these libraries unless there is a strong reason not to:
-
-* `github.com/spf13/cobra` for CLI commands
-* `github.com/spf13/viper` for YAML config, environment variables, and defaults
-* `github.com/charmbracelet/bubbletea` for the TUI runtime
-* `github.com/charmbracelet/bubbles` for reusable TUI components
-* `github.com/charmbracelet/lipgloss` for layout, borders, colors, spacing, and typography
-* `github.com/charmbracelet/glamour` for Markdown rendering inside chat responses
-* `github.com/charmbracelet/harmonica` or another suitable animation approach for smooth transitions
-* A Bubble Tea compatible charting/sparkline library such as `ntcharts` if suitable
-* Standard Go `net/http` with streaming support for provider clients
-* `httptest` for provider tests
-
-Before adding a dependency, check if it is maintained, idiomatic, and appropriate.
-
-## Non-Negotiable UX Requirements
-
-The terminal UI is the most important part of this project.
-
-The TUI must include:
-
-* Full-screen chat interface
-* Smooth animated loading/thinking indicator
-* Streaming token rendering
-* Markdown rendering for assistant responses
-* Syntax-highlighted code blocks if feasible
-* Usage panel with token counts, elapsed time, tokens/sec, context usage, and session totals
-* Visual chart showing usage over time, similar to a terminal-native graph
-* Provider status indicator
-* Current model indicator
-* Keyboard help footer
-* Command palette or quick action overlay
-* Configurable themes
-* Graceful fallback for non-TrueColor terminals
-* Graceful fallback when Nerd Font symbols are unavailable
-* Mouse support only as enhancement, never as a requirement
-* Fast startup
-* No flickering
-* No broken layout on resize
-* Clean behavior over SSH and in standard terminals
-
-The design should use:
-
-* Rounded borders when supported
-* Subtle panels
-* Minimal but premium icons
-* Unicode block charts and sparklines
-* Carefully aligned columns
-* Soft contrast
-* Clear state changes
-* Smooth transitions, not noisy animations
-* A compact but readable layout
-
-The app cannot force a terminal font. Document recommended terminal fonts instead, such as JetBrains Mono Nerd Font, MesloLGS NF, Berkeley Mono, or SF Mono where available. All UI must still work without Nerd Fonts.
-
-## CLI Requirements
-
-The binary name should be short and memorable. Use `llmtui` unless a better name is chosen.
-
-Required commands:
+All verified passing on `master` @ `1a89731`, Go 1.27.0, macOS arm64.
 
 ```bash
-llmtui chat
-llmtui chat --provider ollama --model qwen3
-llmtui models
-llmtui providers
-llmtui provider switch ollama
-llmtui config init
-llmtui config show
-llmtui config path
-llmtui doctor
-llmtui version
+make build                # go build -ldflags … -o llmtui ./cmd/llmtui
+make check                # fmt + vet + lint + test-race — run before committing
+go test -count=1 ./...    # full suite; ~35s
+go vet ./...
+gofmt -l .                # must print nothing (CI fails on any output)
+golangci-lint run ./...   # config .golangci.yml (schema v2); currently 0 issues
+govulncheck ./...         # CI runs this; currently no vulnerabilities
 ```
 
-Required flags:
+Race subset CI actually gates on (faster than `-race ./...`):
 
 ```bash
---config
---provider
---model
---base-url
---api-key
---temperature
---top-p
---max-tokens
---system
---theme
---no-stream
---debug
+go test -race -count=1 ./internal/agent/... ./internal/agentverify/... \
+  ./internal/mcp/... ./internal/provider/... ./internal/tools/... ./internal/tui/...
 ```
 
-Configuration precedence must be:
+Not runnable in a plain checkout:
 
-1. CLI flags
-2. Environment variables
-3. YAML config file
-4. Built-in defaults
+- `internal/provider/embedded/llamart` integration tests **skip silently**
+  unless `LLMTUI_TEST_GGUF`, `LLMTUI_TEST_CPU` and `YZMA_LIB` are set (see
+  `.github/workflows/ci.yml` `native-integration`). A green `go test ./...`
+  does *not* mean native inference was exercised.
+- `make dist-archive` must run on the native target OS/arch — it installs and
+  hash-verifies that platform's llama.cpp binaries (`Makefile:179`).
 
-Environment variable prefix:
+## Architecture
 
-```text
-LLMTUI_
-```
+Full package-by-package map, dependency shape, and the "why do `skill` /
+`memory` / `runtime` appear in several folders" cross-check:
+**`docs/architecture/package-map.md`**. ADRs: `docs/architecture/decisions/`.
+Per-topic docs live in `docs/` (18 files) — check there before inferring
+behavior from source.
 
-Examples:
+Five things that are easy to get wrong:
 
-```bash
-LLMTUI_PROVIDER=ollama
-LLMTUI_MODEL=qwen3
-LLMTUI_BASE_URL=http://localhost:11434
-LLMTUI_API_KEY=...
-```
+1. **`internal/runtime` is not Go's `runtime`.** It resolves, hash-verifies and
+   installs llama.cpp shared libraries. Where both are needed, stdlib is
+   aliased `goruntime` (`internal/runtime/platform.go:8`).
+2. **Embedded inference binds llama.cpp without cgo** — `purego`/`yzma`, no
+   `import "C"` anywhere. But that is *not* the same as `CGO_ENABLED=0`:
+   darwin and android release builds set `CGO_ENABLED=1` because Metal spawns
+   native threads that need Go's real cgo runtime; Linux and Windows stay at
+   `0` (`Makefile:18`, `docs/architecture/embedded-local-inference.md:126`).
+   All native contact is confined to `internal/provider/embedded/llamart` so
+   every other package builds and tests with no llama.cpp installed.
+3. **Dependencies point one way.** `internal/tui` is the hub (~25 internal
+   imports); nothing imports it but `internal/cli`. Lower layers never import
+   upward, and some package docs state the ban explicitly
+   (`internal/memoryindex/types.go:1-8`). Adding an upward import is a design
+   error, not a convenience.
+4. **Providers do not own timeouts.** No global `http.Client.Timeout` — a
+   stream can take minutes. Connect timeout belongs in
+   `internal/app/factory.go`; the inactivity watchdog belongs in
+   `internal/tui/pipeline.go:1406` (`startRequest`).
+5. **The raw user message is never rewritten.** Memory, RAG, skills, summaries
+   and model hints are separate labeled sections in `internal/prompt/compose.go`;
+   the user's text goes in last, verbatim. See `docs/prompt-composition.md`.
 
-## Config File
+## Conventions
 
-Default config locations:
+Each rule below is what the code already does — match it, don't improve on it.
 
-* macOS/Linux: `~/.config/llmtui/config.yaml`
-* Windows: `%APPDATA%\llmtui\config.yaml`
-
-Example config:
-
-```yaml
-default_provider: ollama
-default_model: qwen3
-
-providers:
-  ollama:
-    type: ollama
-    base_url: http://localhost:11434
-    api_key: ""
-    default_model: qwen3
-
-  lmstudio:
-    type: openai_compatible
-    base_url: http://localhost:1234/v1
-    api_key: ""
-    default_model: local-model
-
-  unsloth:
-    type: openai_compatible
-    base_url: http://localhost:8000/v1
-    api_key: ""
-    default_model: local-model
-
-  openai_compatible:
-    type: openai_compatible
-    base_url: http://localhost:8080/v1
-    api_key_env: LLMTUI_API_KEY
-    api_key: ""
-    default_model: local-model
-
-chat:
-  system_prompt: "You are a helpful local assistant."
-  temperature: 0.7
-  top_p: 0.9
-  max_tokens: 4096
-  stream: true
-  save_history: true
-  history_dir: "~/.local/share/llmtui/history"
-
-ui:
-  theme: claude_inspired
-  use_nerd_font: auto
-  animations: true
-  show_usage_chart: true
-  show_token_stats: true
-  markdown: true
-  compact_mode: false
-
-privacy:
-  local_first: true
-  redact_api_keys_in_logs: true
-  store_prompts: true
-```
-
-## Provider Architecture
-
-Create a clean provider abstraction:
-
-```go
-type Provider interface {
-    Name() string
-    ListModels(ctx context.Context) ([]ModelInfo, error)
-    Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
-    HealthCheck(ctx context.Context) error
-}
-```
-
-Implement at least:
-
-* `OllamaProvider`
-* `OpenAICompatibleProvider`
-
-Ollama support:
-
-* Native Ollama API where appropriate
-* OpenAI-compatible mode where useful
-* Default base URL: `http://localhost:11434`
-
-LM Studio support:
-
-* Use OpenAI-compatible endpoints
-* Default base URL: `http://localhost:1234/v1`
-
-Unsloth/vLLM/llama.cpp support:
-
-* Treat as OpenAI-compatible unless a dedicated API is later implemented
-
-Streaming must be implemented properly. Do not fake streaming.
-
-## TUI Architecture
-
-Use Bubble Tea idioms correctly.
-
-Suggested package structure:
-
-```text
-cmd/llmtui/
-internal/app/
-internal/cli/
-internal/config/
-internal/provider/
-internal/provider/ollama/
-internal/provider/openai/
-internal/tui/
-internal/tui/components/
-internal/tui/styles/
-internal/tui/theme/
-internal/tui/charts/
-internal/chat/
-internal/history/
-internal/diagnostics/
-```
-
-TUI screens:
-
-* Chat screen
-* Model picker
-* Provider picker
-* Config editor/read-only viewer
-* Help screen
-* Doctor/diagnostics screen
-
-Components:
-
-* Chat viewport
-* Input box
-* Status bar
-* Usage chart
-* Token meter
-* Provider badge
-* Model badge
-* Spinner/thinking animation
-* Error toast
-* Modal overlay
-* Help footer
-
-Keyboard shortcuts:
-
-```text
-Ctrl+C        Quit
-Ctrl+S        Save session
-Ctrl+L        Clear screen
-Ctrl+P        Provider picker
-Ctrl+M        Model picker
-Ctrl+K        Command palette
-Ctrl+H / ?    Help
-Esc           Close modal
-Enter         Send message
-Shift+Enter   Newline if terminal supports it
-```
-
-## Usage Chart Requirements
-
-The app must show a terminal-native usage chart.
-
-Track:
-
-* Prompt tokens
-* Completion tokens
-* Total tokens
-* Tokens/sec
-* Request duration
-* Context window usage if known
-* Session total tokens
-* Rolling token usage per message
-
-The chart should be rendered as Unicode bars, blocks, sparklines, or an `ntcharts` graph. It should look like a polished full terminal graphic, not a simple table.
-
-If the provider does not return token usage, estimate usage approximately and mark it clearly as estimated.
-
-## Privacy and Security
-
-This app is local-first.
-
-Requirements:
-
-* Never log API keys
-* Redact secrets in debug output
-* Do not send telemetry
-* Do not call external services unless explicitly configured
-* Make history saving configurable
-* Store config with reasonable file permissions
-* Do not store provider secrets in shell history examples
-* Support `api_key_env` so users can reference environment variables instead of writing secrets into YAML
-
-Example:
-
-```yaml
-providers:
-  openai_compatible:
-    api_key_env: LLMTUI_API_KEY
-```
+- **Errors**: wrap with `fmt.Errorf("context: %w", err)`
+  (`internal/cli/root.go:114`). 397 of 740 `fmt.Errorf` calls use `%w`. No
+  `pkg/errors`. Do not panic for normal runtime failures.
+- **Logging**: there is none. No `slog`, `log`, `logrus`, or `zap` anywhere in
+  non-test code. Diagnostics surface through the TUI, `llmtui doctor`, and
+  `--debug`. Do not introduce a logger to "help debugging".
+- **Config precedence**: changed flags > `LLMTUI_*` env > YAML > defaults.
+  Only flags the user actually set are bound (`f.Changed`,
+  `internal/cli/root.go:110-116`) so an unset `--temperature` cannot clobber a
+  configured value with `0`. Env prefix constant:
+  `internal/config/config.go:18`.
+- **File permissions**: config and state written `0o600`, dirs `0o755`, writes
+  are temp-file + `Chmod` + rename (`internal/config/config.go:1246-1315`).
+- **Secrets**: never in logs, cache keys, command env, debug output, or
+  `config show`. `--api-key`'s own help text warns it is visible in the process
+  list and points at `LLMTUI_API_KEY` / `api_key_env`
+  (`internal/cli/root.go:53`).
+- **Untrusted text** (provider, MCP, web, RAG output) goes through
+  `internal/terminaltext.Sanitize` before rendering and
+  `internal/untrusted.Frame` before entering a prompt. Both are deliberately
+  below the TUI — don't reimplement either locally.
+- **Provider contract**: `internal/provider/provider.go:320`. `Chat` returns a
+  channel, emits deltas/reasoning, finishes with exactly one `EventDone` or
+  `EventError`, closes the channel, and honors context cancellation. Providers
+  holding resources implement `Closer` (`provider.go:332`); callers must
+  `CloseProvider` on switch and exit.
+- **Cross-platform code**: split by `//go:build` into `*_unix.go` /
+  `*_windows.go` / `*_other.go` (`internal/procutil/`, `internal/runtime/`,
+  `internal/tools/local_context_disk_*.go`). Tests follow the same suffixes.
+- **Tests**: stdlib `testing` only — **no testify**. Table-driven with named
+  subtests where it fits (27 files). `httptest` via `internal/testutil`.
+  Deterministic — temp dirs and fakes, not sleeps. Test files sit beside the
+  code as `x_test.go` in the same package.
+- **Package docs**: every package has one, and several encode contracts
+  (import bans, deliberate non-goals). Read it before editing the package;
+  update it when the contract changes.
+- **Commits**: Conventional Commits scoped to the package —
+  `feat(tools):`, `fix(tui):`, `test(web):`, `docs:`. One branch + one PR per
+  change (`feat/…`, `fix/…`, `docs/…`). **No AI-attribution trailers**
+  (`Co-Authored-By`, `Generated with`) — the history has none, keep it that way.
 
 ## Workspace Tool Safety Invariants
 
 `internal/tools` and `internal/mcp` let a model read/write files and run shell
-commands. These invariants are non-negotiable — any change that touches path
+commands. Every one of these came from a confirmed bug (see
+`docs/architecture/v1-security-review.md`). Any change touching path
 resolution, command classification, or the approval flow must preserve all of
-them, and should add a regression test for the specific case it touches:
+them **and add a regression test for the specific case it touches**:
 
-* Path confinement must be enforced on the resolved, symlink-evaluated path,
-  not just checked-and-discarded when the target doesn't exist yet (a
-  not-yet-existing file inside a symlinked directory must still resolve
-  through the symlink before the workspace-boundary check runs).
-* `run_command` must confine file-system access to the workspace the same way
-  `read_file`/`write_file`/`list_dir` do. Setting `cmd.Dir` alone does not
-  stop an allowlisted read command (`cat`, `grep`, `find`, …) from taking an
-  absolute path or a `../` argument that reads outside the workspace.
-* Command classification must inspect enough of a command line that a
-  "read-only" verdict can't be produced by a destructive subcommand or flag
-  (e.g. a git subcommand allowlisted as read-only must not also cover its own
-  mutating flags/forms, like branch deletion or remote changes).
-* Secret-file detection (`IsSecretPath` and friends) must not be defeated by
-  shell quoting, escaping, or path normalization tricks — classify the
-  logical path, not the raw token.
-* A tool call awaiting approval must always be the thing the next keypress
-  resolves. If any other input-owning UI state (an overlay, a modal, a
-  picker) can be open at the same time a tool approval becomes pending, the
-  approval must take precedence in a way the user can actually see — never
-  let an unrelated "dismiss" keypress silently approve a pending tool call.
-* The cache key for a response must reflect everything that actually varies
-  the request sent to the provider (conversation history, the fully composed
-  system prompt including tool instructions, RAG/memory context) — never
-  key on a subset that can collide across materially different requests.
+- Confinement is enforced on the resolved, symlink-evaluated path — never
+  checked-and-discarded because the target doesn't exist yet. A not-yet-existing
+  file inside a symlinked directory must still resolve through the symlink
+  before the boundary check.
+- `run_command` confines file-system access exactly like
+  `read_file`/`write_file`/`list_dir`. `cmd.Dir` alone does not stop an
+  allowlisted read command (`cat`, `grep`, `find`, …) from being handed an
+  absolute or `../` path.
+- Command classification inspects enough of the line that a "read-only" verdict
+  cannot come from a destructive subcommand or flag (an allowlisted read-only
+  `git` subcommand must not also cover its mutating forms, e.g. branch deletion
+  or remote changes).
+- `IsSecretPath` and friends classify the *logical* path — shell quoting,
+  escaping, and normalization tricks must not defeat detection.
+- A pending tool approval is always what the next keypress resolves. If any
+  other input-owning UI state can be open at the same moment, the approval takes
+  visible precedence — an unrelated "dismiss" must never silently approve.
+- The response cache key covers everything that varies the request (history,
+  the fully composed system prompt including tool instructions, RAG/memory
+  context) — never a subset that can collide across different requests, and
+  never an API key.
 
-## Testing Requirements
+## Gotchas
 
-Implement useful tests from the beginning.
+- `go test ./...` passing does not cover native inference or the release
+  archive; both are CI-only paths (see Commands).
+- `make lint` **silently skips** when `golangci-lint` is absent
+  (`Makefile:98-102`). "Lint passed" from `make check` may mean "lint didn't
+  run" — call `golangci-lint run ./...` directly if you need certainty.
+- `.golangci.yml` excludes `errcheck` on deferred `Close`, `Fprint*`,
+  `json.Encoder.Encode`, `os.Remove`. Those unchecked returns are intentional.
+- `go.mod` has `replace github.com/jupiterrider/ffi => ./third_party/ffi` to
+  keep libffi lazy so non-embedded providers start on Linux without
+  `libffi.so.8`. Don't remove it while tidying.
+- The Charm imports are `charm.land/{bubbletea,bubbles,lipgloss,glamour}/v2`,
+  not `github.com/charmbracelet/*`. Charts are hand-written in
+  `internal/tui/components/` — there is no charting dependency.
+- `Update` must never block; long work returns a `tea.Cmd`.
+- Optional subsystems (tools, web, RAG, MCP, memory, agent) are **off by
+  default** and a broken/disabled one must not block normal chat startup.
+- Declaring an MCP server starts nothing; only an explicit connect launches a
+  subprocess.
+- `internal/tui/app.go` (~3000 LOC), `commands_local.go` (~1800),
+  `internal/tools/tools.go` (~1200) and `internal/config/config.go` (~1300) are
+  known size hot-spots. Add to them reluctantly; extraction targets are listed
+  at the end of `docs/architecture/package-map.md`.
 
-Required tests:
+## Out of scope — ask first
 
-* Config loading and precedence
-* Provider request creation
-* Provider streaming parser
-* Provider error handling
-* TUI model update logic where practical
-* Usage statistics calculations
-* History save/load
-* Doctor command checks
-* Workspace tool guardrails (see Workspace Tool Safety Invariants above):
-  symlink escape via not-yet-existing paths, `run_command` path confinement,
-  command classification edge cases, cache-key completeness
+- `third_party/ffi/` — vendored upstream, plus the `go.mod` replace above.
+- `internal/runtime/pin.json` and the embedded trusted digests — changing a pin
+  changes what binaries users download and verify against.
+- `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/` staging in the Makefile.
+- `.github/workflows/` and the `dist-*` Makefile targets (release surface).
+- Removing or loosening any guardrail, approval prompt, or SSRF check.
+- Adding a dependency, or running `go mod tidy` as a drive-by.
+- Adding a tool that deletes files.
 
-Use `httptest` for mock providers.
-
-Do not only create happy-path tests.
-
-## Quality Requirements
-
-Code must be:
-
-* Idiomatic Go
-* Modular
-* Readable
-* Properly error-handled
-* Context-aware
-* Testable
-* Cross-platform
-* Race-safe where applicable
-
-Run before considering work complete:
-
-```bash
-go fmt ./...
-go test ./...
-go vet ./...
-```
-
-If a linter config is added, also run it.
-
-## Documentation Requirements
-
-Create:
-
-* `README.md`
-* `docs/configuration.md`
-* `docs/providers.md`
-* `docs/tui-design.md`
-* `docs/security.md`
-
-README must include:
-
-* Screenshots or terminal mockups if possible
-* Installation
-* Quick start with Ollama
-* Quick start with LM Studio
-* Quick start with OpenAI-compatible endpoint
-* Config examples
-* Keyboard shortcuts
-* Troubleshooting
-
-## Implementation Style
-
-Work incrementally.
-
-Do not create a huge untested monolith.
-
-Suggested phases:
-
-1. Project skeleton, Cobra CLI, config loading
-2. Provider interfaces and mock provider
-3. OpenAI-compatible provider with streaming
-4. Ollama provider
-5. Basic Bubble Tea chat UI
-6. Premium styling with Lip Gloss
-7. Usage chart and token stats
-8. Provider/model picker
-9. Session history
-10. Doctor command
-11. Polish, tests, README
-
-At every phase, keep the app buildable and runnable.
-
-## Important Constraint
-
-The goal is not to clone Claude Code. The goal is to build an original local LLM TUI with similar quality, elegance, smoothness, and terminal-native polish.
+If the repo is inconsistent on something not listed here, say so and ask —
+do not pick a winner and call it the convention.
