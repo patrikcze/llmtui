@@ -209,6 +209,8 @@ chat:
 
 ui:
   show_reasoning: true # /thoughts hide changes this for the current session
+  math:
+    enabled: false # render $…$ / $$…$$ LaTeX as terminal Unicode (opt-in; /math on)
 
 tools:
   enabled: false
@@ -238,6 +240,7 @@ The full reference for every section lives in
 | Key | Action |
 | --- | --- |
 | `Enter` | Send message |
+| `↑` / `↓` | On an empty composer, recall previously submitted prompts and slash commands (shell-style); otherwise move the cursor between input lines. Session-local, not persisted |
 | `Shift+Enter` | Insert a newline — works out of the box in iTerm2, VS Code, WezTerm, Ghostty, Alacritty (see note below) |
 | `\` + `Enter` | Insert a newline — trailing backslash continues the line, works in **every** terminal |
 | `Ctrl+J` | Insert a newline (also works everywhere) |
@@ -597,6 +600,7 @@ internal/mcp/             Model Context Protocol server config, registry, client
 internal/toolapi/         read-only HTTP mirror of the active tool catalog (docs/tool-registry.md)
 internal/untrusted/       structural framing around untrusted model-visible content
 internal/terminaltext/    terminal-escape sanitization shared by provider/MCP/RAG/web boundaries
+internal/terminalmath/    opt-in LaTeX→Unicode math expansion for Markdown answers (ui.math.enabled)
 internal/skill/           declarative skills + plugin packages (/skills, /plugins)
 internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log
