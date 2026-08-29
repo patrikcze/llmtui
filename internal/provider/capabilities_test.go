@@ -13,6 +13,18 @@ type capabilityTestProvider struct {
 	closed bool
 }
 
+type modelCapabilityTestProvider struct {
+	capabilityTestProvider
+	modelCaps map[string]Capabilities
+}
+
+func (p *modelCapabilityTestProvider) CapabilitiesFor(model string) Capabilities {
+	if caps, ok := p.modelCaps[model]; ok {
+		return caps
+	}
+	return p.caps
+}
+
 func (p *capabilityTestProvider) Name() string { return "capability-test" }
 
 func (p *capabilityTestProvider) ListModels(context.Context) ([]ModelInfo, error) {
@@ -85,6 +97,23 @@ func TestCapabilityOverridesAreTriStateAndPreserveOptionalInterfaces(t *testing.
 	}
 	if !base.closed {
 		t.Fatal("capability wrapper did not preserve Close")
+	}
+}
+
+func TestCapabilitiesForPrefersSelectedModel(t *testing.T) {
+	p := &modelCapabilityTestProvider{
+		capabilityTestProvider: capabilityTestProvider{caps: Capabilities{
+			NativeTools: CapabilitySupported,
+		}},
+		modelCaps: map[string]Capabilities{
+			"text-only": {NativeTools: CapabilityUnsupported},
+		},
+	}
+	if got := CapabilitiesFor(p, "text-only").NativeTools; got != CapabilityUnsupported {
+		t.Errorf("text-only NativeTools = %s, want unsupported model capability", got)
+	}
+	if got := CapabilitiesFor(p, "other").NativeTools; got != CapabilitySupported {
+		t.Errorf("other NativeTools = %s, want provider fallback", got)
 	}
 }
 
