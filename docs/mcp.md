@@ -101,6 +101,12 @@ cancellable executor. Each MCP call is bounded by that server's `timeout`
 (default 30s). Press Esc or Ctrl+C to cancel an in-flight batch, the same as
 an in-flight streaming response.
 
+Calls in a model-emitted batch execute sequentially in the order the model
+provided. Some MCP servers serialize session state or explicitly disallow
+parallel calls, so parallel execution could violate their expectations. This
+is a deliberate correctness and compatibility tradeoff: model-inference
+latency generally dominates the small number of tool calls in a turn.
+
 MCP results are labeled as untrusted external data, enclosed in matching
 collision-checked begin/end markers, and share the workspace tools' output
 cap (`tools.max_file_kb`,
