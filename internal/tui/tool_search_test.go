@@ -158,7 +158,7 @@ func TestNewHumanTurnClearsToolDisclosure(t *testing.T) {
 	}
 }
 
-func TestDisconnectedDisclosedToolDisappears(t *testing.T) {
+func TestDisconnectedToolDisappearsFromSearchCatalog(t *testing.T) {
 	m := configureDiscoveryModel(t, 10, nil)
 	name := "mcp__jira__create_issue"
 	m.discloseTools([]string{name})
@@ -168,7 +168,7 @@ func TestDisconnectedDisclosedToolDisappears(t *testing.T) {
 	if _, ok := specByName(m.activeToolSpecs(), name); ok {
 		t.Fatal("disconnected disclosed MCP tool remained visible")
 	}
-	for _, spec := range m.hiddenToolSpecs() {
+	for _, spec := range m.searchableMCPToolSpecs() {
 		if spec.Name == name {
 			t.Fatal("disconnected MCP tool remained searchable")
 		}
