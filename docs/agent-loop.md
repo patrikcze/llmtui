@@ -70,22 +70,27 @@ grants network access on its own.
 
 ## Lifecycle
 
-Each run follows six explicit stages:
+Each run establishes a contract, then follows the execution stages:
 
 1. **Trigger** — a user message or `/agent resume` creates or resumes a stable
    run ID with hard budgets and cancellation state.
-2. **Rules load** — the existing prompt composer deterministically assembles the
+2. **Task contract** — a bounded, fresh-context, tool-free control request
+   decomposes the immutable user request into stable acceptance criteria. The
+   controller pins IDs (`c1`, `c2`, …) before an executor request or tool call
+   is possible. If essential information is missing, the run stops for user
+   input before execution.
+3. **Rules load** — the existing prompt composer deterministically assembles the
    system prompt, template, active skills, bounded history, user memory, RAG,
    provider capabilities, tools, verified cycle memory, and current objective.
-3. **Executor** — the active provider streams one bounded objective through the
+4. **Executor** — the active provider streams one bounded objective through the
    existing model/tool loop. A cycle can contain several related tool calls,
    but it cannot recursively start another run.
-4. **Verifier** — a separate, tool-free provider request receives only the
+5. **Verifier** — a separate, tool-free provider request receives only the
    original task, current objective, acceptance criteria, and bounded observable
    results. It never receives the executor conversation or hidden reasoning.
-5. **Memory write** — a concise cycle summary records verdict, failed/remaining
+6. **Memory write** — a concise cycle summary records verdict, failed/remaining
    criteria, artifact names, and the recommended next objective.
-6. **Stop check** — deterministic policy chooses `done`, `continue`, `retry`,
+7. **Stop check** — deterministic policy chooses `done`, `continue`, `retry`,
    `needs_user_input`, `parked`, `escalated`, `cancelled`, `failed`, or
    `budget_exhausted`.
 
@@ -96,7 +101,9 @@ stop decision is terminal for the run.
 ```mermaid
 stateDiagram-v2
     [*] --> Trigger: start run or resume
-    Trigger --> RulesLoad: NewRun / Resume
+    Trigger --> Contract: establish criteria
+    Contract --> RulesLoad: criteria pinned
+    Contract --> NeedsInput: required information missing
     RulesLoad --> Executor: BeginCycle (compose prompt + directive)
     Executor --> Verifier: CompleteExecution (stream + run tools)
     Verifier --> MemoryWrite: CompleteVerification (fresh-context verdict)
@@ -123,11 +130,16 @@ sequenceDiagram
     autonumber
     participant U as You
     participant C as llmtui controller
+    participant P as Local model (contract)
     participant E as Local model (executor)
     participant T as Tools (sandbox)
     participant V as Local model (verifier)
 
     U->>C: task ("/agent on" already set)
+    Note over C,P: Fresh context — no tools, bounded JSON
+    C->>P: immutable task → acceptance criteria
+    P-->>C: validated criteria or needs_user_input
+    Note over C: pin c1..cN before execution
     Note over C: Cycle N — Rules load
     C->>C: compose system prompt +<br/>objective + criteria + cycle memory
     C->>E: chat request (with tool schemas)
@@ -251,7 +263,7 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | --- | --- |
 | `off` | No evaluation at all. The run completes on the executor's answer, recorded as explicitly unverified. |
 | `deterministic` | Mechanical checks only, never a model request. With no deterministic failure a cycle passes with low confidence. |
-| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, a mechanically complete cycle — at least one tool ran, everything that ran succeeded, every test passed, nothing errored, no pending user-input request — passes on that evidence alone, but **never on a run's first cycle**: cycle 1 always gets a real semantic evaluation so the request is decomposed into criteria at least once, even when it looks mechanically clean. Only cycles that mechanical evidence cannot decide this way get a semantic evaluation. |
+| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved semantic criteria. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
@@ -285,18 +297,12 @@ rejected the same as a missing key; a required array field set to `null` is
 accepted and normalized to an empty slice, since some backends legitimately
 emit `null` for an empty required array under schema enforcement), and any
 key outside that set is rejected as unexpected — there is no partial-credit
-parse where an omitted field is silently zero-valued. On a run's establishing
-verification (its first semantic evaluation, before any acceptance criteria
-are pinned), a `"passed"` verdict is additionally rejected unless the
-envelope either proposes at least one criterion in `proposed_criteria` or
-sets `atomic_task:true` to explicitly declare the task a single indivisible
-check — this closes the case where a sparse but technically-parseable reply
-(`{"verdict":"passed","summary":"ok"}` under the old permissive parser) could
-otherwise complete a run having never been decomposed into checkable
-acceptance criteria at all. Malformed or invalid control data — missing,
-incomplete, ambiguous, oversized, wrongly typed, or failing the
-establishing-pass check above — is classified separately from provider,
-timeout, cancellation, and execution failures.
+parse where an omitted field is silently zero-valued. Contract control data is
+validated with the same bounded, fenced-JSON-tolerant parser: an executable
+contract must contain one to twelve non-empty criteria, while an ambiguous task
+must contain a precise user question and no criteria. Malformed or invalid
+control data is classified separately from provider, timeout, cancellation, and
+execution failures; it parks the run without dispatching the executor.
 
 Malformed control JSON gets one bounded, fresh-context repair attempt before
 counting as a failed verifier attempt: a second verifier-only request, reusing
@@ -330,21 +336,15 @@ the verifier still evaluates their bounded outcome metadata.
 
 ## Acceptance criteria and the evidence ledger
 
-The run's first semantic verification also decomposes the original request
-into up to 8 stable acceptance criteria (an internal safety cap of 12 applies
-regardless of what the prompt requests), pinned on the run with fixed IDs
-(`c1`, `c2`, …) exactly once. Criteria are controller state from then on:
+Before cycle 1, the tool-free task-contract stage decomposes the original
+request into up to 8 stable acceptance criteria (an internal safety cap of 12
+applies regardless of what the prompt requests), pinned on the run with fixed
+IDs (`c1`, `c2`, …) exactly once. Criteria are controller state from then on:
 verifications may only update a pinned criterion's status (`pending`,
 `satisfied`, `failed`, `not_applicable`) by ID — they cannot add, remove, or
 rename criteria, and a run cannot complete while a pinned criterion is
-unresolved, whatever the verifier's prose claims. The establishing cycle can
-resolve some or all of the criteria it just proposed **in that same
-response** — pinning and status updates both apply before the run completes
-that verification, so a single well-evidenced cycle can propose and satisfy
-its own criteria without waiting for a later cycle. `proposed_criteria` must
-be plain strings (never object-shaped, which is reserved for the separate
-status-update array) so a model can't confuse the two. Unresolved criteria
-drive the next objective, and the repeated-failure fingerprint keys on the
+unresolved, whatever the verifier's prose claims. Unresolved criteria drive
+the next objective, and the repeated-failure fingerprint keys on the
 unresolved ID set, so reworded verifier prose can no longer defeat repeat
 detection.
 

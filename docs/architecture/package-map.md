@@ -59,7 +59,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | `internal/contextmgr` | Keeps the conversation inside the model's context window — token estimation, truncation, summarization. Special-cases `local_context` tool output as volatile (keeps a provenance marker, drops the payload). See `docs/context-management.md`. | `contextmgr.go` |
 | `internal/modelprofile` | Per-model-family default tuning (context window, temperature, prompt style, JSON-mode support). Built-ins + config overrides. | `profile.go` |
 | `internal/agent` | Provider- and UI-independent **state machine** for bounded, verified `/agent` runs: stages (trigger → executor → verifier → memory-write), `criteria.go` (acceptance criteria + evidence ledger), `deterministic.go` (infer mechanical criteria for narrow requests), `policy.go` (`Decide()` — budget/stop logic, no side effects), `store.go` (persist runs). See `docs/agent-loop.md` and `docs/architecture/v1-agent-runtime.md`. | `types.go`, `run.go`, `criteria.go`, `deterministic.go`, `policy.go`, `store.go`, `errors.go` |
-| `internal/agentverify` | Adapts `provider` to a *fresh-context* verifier that grades an agent cycle against its criteria and returns structured JSON. Deliberately separate from `agent`, which stays provider-neutral. | `verifier.go` |
+| `internal/agentverify` | Adapts `provider` to fresh-context, tool-free agent control requests: task-contract establishment before cycle 1 and semantic verification after execution. Deliberately separate from `agent`, which stays provider-neutral. | `contract.go`, `verifier.go` |
 
 ---
 

@@ -49,6 +49,10 @@ type agentLoopState struct {
 	ctx             context.Context
 	runCancel       context.CancelFunc
 	execution       agent.ExecutionResult
+	initialImages   []provider.Image
+	contracting     bool
+	contractCancel  context.CancelFunc
+	contractGen     int
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
@@ -81,6 +85,13 @@ type agentVerificationMsg struct {
 	cycle int
 	gen   int
 	out   agentverify.Output
+	err   error
+}
+
+type agentContractMsg struct {
+	runID string
+	gen   int
+	out   agentverify.ContractOutput
 	err   error
 }
 
@@ -196,6 +207,10 @@ func (m *Model) syncAgentDebug() {
 
 func (m *Model) agentVerifying() bool {
 	return m.agentLoop != nil && m.agentLoop.verifying
+}
+
+func (m *Model) agentContracting() bool {
+	return m.agentLoop != nil && m.agentLoop.contracting
 }
 
 func (m *Model) effectiveVerifierModel() string {
@@ -381,20 +396,140 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	run.StartContextCaptured = true
 	run.StartSummary = truncateAgentText(m.summary, maxAgentStartSummaryBytes)
 	run.StartTurns = snapshotAgentStartTurns(m.session.Messages)
-	if err := run.BeginCycle(request, m.agentContextSources(), time.Now()); err != nil {
-		m.errText = err.Error()
-		m.refreshViewport()
-		return nil
-	}
 	m.agentLoop.run = run
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.agentLoop.cycleBoundaries = nil
+	m.agentLoop.initialImages = append([]provider.Image(nil), images...)
 	m.resetAgentContext()
-	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.liveToolCalls = 0
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
-	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(id), run.Limits.MaxCycles)
+	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(id))
+	return tea.Batch(m.startAgentContract(), m.persistAgentRun())
+}
+
+// startAgentContract creates controller-owned acceptance criteria before an
+// executor request can be dispatched. It is deliberately parallel to the
+// existing fresh-context verifier adapter, never the shared executor/tool
+// kernel: there are no tools, session messages, or executor retries here.
+func (m *Model) startAgentContract() tea.Cmd {
+	if !m.agentRunActive() || m.agentContracting() {
+		return nil
+	}
+	run := m.agentLoop.run
+	if run.HasCriteria() {
+		return m.startInitialAgentCycle(run.Request, m.agentLoop.initialImages)
+	}
+	maxTokens := m.cfg.Agent.Verifier.MaxTokens
+	if exceeded, reason := m.agentModelRequestBudgetExceeded("task contract", 0, maxTokens); exceeded {
+		return m.terminateAgentModelRequestBudget(reason)
+	}
+	if err := run.BeginContract(time.Now()); err != nil {
+		if errors.Is(err, agent.ErrBudgetExhausted) {
+			_ = run.Terminate(agent.DecisionBudgetExhausted, err.Error(), time.Now())
+		} else {
+			m.failVerifiedRun(err)
+		}
+		m.errText = "agent task contract: " + err.Error()
+		m.endAgentRun()
+		m.refreshViewport()
+		return m.persistAgentRun()
+	}
+	ctx, cancel := context.WithCancel(m.agentContext())
+	m.agentLoop.contractCancel = cancel
+	m.agentLoop.contracting = true
+	m.agentLoop.contractGen++
+	gen := m.agentLoop.contractGen
+	runID := run.ID
+	model := m.model
+	timeout, _ := time.ParseDuration(m.cfg.Agent.Verifier.Timeout)
+	admit := m.verifierRequestAdmission(run)
+	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(runID))
+	m.syncAgentDebug()
+	m.refreshViewport()
+	return func() tea.Msg {
+		out, err := agentverify.EstablishContract(ctx, m.prov, agentverify.Config{
+			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
+		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput})
+		return agentContractMsg{runID: runID, gen: gen, out: out, err: err}
+	}
+}
+
+func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
+	if m.agentLoop == nil || m.agentLoop.run == nil || msg.runID != m.agentLoop.run.ID || msg.gen != m.agentLoop.contractGen {
+		return m, nil
+	}
+	m.agentLoop.contracting = false
+	if m.agentLoop.contractCancel != nil {
+		m.agentLoop.contractCancel()
+		m.agentLoop.contractCancel = nil
+	}
+	run := m.agentLoop.run
+	if msg.out.Usage != nil {
+		run.RecordUsage(msg.out.Usage.PromptTokens, msg.out.Usage.CompletionTokens, time.Now())
+	}
+	if msg.err != nil {
+		var runErr agent.RunError
+		if !errors.As(msg.err, &runErr) {
+			runErr = agent.NewError(agent.ErrorVerification, "establish task contract", msg.err)
+		}
+		decision := agent.DecisionParked
+		if runErr.Kind == agent.ErrorBudget {
+			decision = agent.DecisionBudgetExhausted
+		}
+		reason := "task contract unavailable: " + runErr.Error()
+		_ = run.Terminate(decision, reason, time.Now())
+		m.errText = "agent " + reason
+		m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), decision)
+		m.syncAgentDebug()
+		m.endAgentRun()
+		m.refreshViewport()
+		return m, m.persistAgentRun()
+	}
+	contract := msg.out.Contract
+	if contract.NeedsUserInput {
+		if err := run.WaitForContractInput(contract.Question, time.Now()); err != nil {
+			m.failVerifiedRun(err)
+			m.endAgentRun()
+			return m, m.persistAgentRun()
+		}
+		m.notice = fmt.Sprintf("agent %s stopped for task-contract input", shortRunID(run.ID))
+		if len(contract.UserOptions) > 0 {
+			m.openAgentQuestionPicker(contract.Question, contract.UserOptions)
+		} else {
+			m.errText = "agent needs task-contract input: " + contract.Question
+		}
+		m.syncAgentDebug()
+		m.endAgentRun()
+		m.refreshViewport()
+		return m, m.persistAgentRun()
+	}
+	if err := run.CompleteContract(contract.Criteria, time.Now()); err != nil {
+		m.failVerifiedRun(err)
+		m.endAgentRun()
+		return m, m.persistAgentRun()
+	}
+	m.syncAgentDebug()
+	persist := m.persistAgentRun()
+	return m, tea.Batch(persist, m.startInitialAgentCycle(run.Request, m.agentLoop.initialImages))
+}
+
+func (m *Model) startInitialAgentCycle(request string, images []provider.Image) tea.Cmd {
+	if !m.agentRunActive() || !m.agentLoop.run.HasCriteria() {
+		return nil
+	}
+	run := m.agentLoop.run
+	if err := run.BeginCycle(request, m.agentContextSources(), time.Now()); err != nil {
+		_ = run.Terminate(agent.DecisionFailed, err.Error(), time.Now())
+		m.errText = "agent: " + err.Error()
+		m.endAgentRun()
+		m.refreshViewport()
+		return m.persistAgentRun()
+	}
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.agentLoop.initialImages = nil
+	m.bypassCache = true
+	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(run.ID), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
 }
 
@@ -424,6 +559,18 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 		return m.startVerifiedRun(input, images)
 	}
 	run := m.agentLoop.run
+	if run.Stage == agent.StageContract {
+		if err := run.Resume("", time.Now()); err != nil {
+			m.errText = "resume agent run: " + err.Error()
+			m.refreshViewport()
+			return nil
+		}
+		run.SetContractInput(input, time.Now())
+		m.agentLoop.initialImages = append([]provider.Image(nil), images...)
+		m.resetAgentContext()
+		m.bypassCache = true
+		return tea.Batch(m.persistAgentRun(), m.startAgentContract())
+	}
 	objective := "Continue the original request using the user's new input: " + input
 	if err := run.Resume(objective, time.Now()); err != nil {
 		m.errText = "resume agent run: " + err.Error()
@@ -673,7 +820,10 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request},
 		Criteria:           run.UnresolvedSemanticCriteria(), Evidence: run.Evidence, PriorCycles: run.Memory,
-		EstablishCriteria: !run.HasCriteria(),
+		// Criteria are now pinned by the pre-execution task contract. Keep the
+		// field for parser compatibility with older persisted verifier replies,
+		// but never ask a post-execution verifier to establish goalposts.
+		EstablishCriteria: false,
 		Execution:         execution,
 		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
@@ -802,6 +952,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		m.refreshViewport()
 		return m, persist
 	}
+	result = satisfyLegacyPassedCriteria(run, result)
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m, m.persistAgentRun()
@@ -843,6 +994,24 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	return m, persist
 }
 
+// satisfyLegacyPassedCriteria keeps older verifier configurations compatible
+// with a contract-first run. New verifier prompts must send per-ID updates;
+// an older valid envelope that says only "passed" is interpreted by the TUI
+// adapter as passing every unresolved semantic criterion it was given. Typed
+// criteria remain exclusively controlled by deterministic runtime evidence.
+func satisfyLegacyPassedCriteria(run *agent.AgentRun, result agent.VerificationResult) agent.VerificationResult {
+	if run == nil || result.Verdict != agent.VerificationPassed || len(result.CriteriaUpdates) != 0 {
+		return result
+	}
+	for _, criterion := range run.UnresolvedSemanticCriteria() {
+		result.CriteriaUpdates = append(result.CriteriaUpdates, agent.CriterionUpdate{
+			ID: criterion.ID, Status: agent.CriterionSatisfied,
+			Note: "semantic verifier passed the pinned contract",
+		})
+	}
+	return result
+}
+
 func (m *Model) persistAgentRun() tea.Cmd {
 	if m.agentLoop == nil || m.agentLoop.store == nil || m.agentLoop.run == nil {
 		return nil
@@ -870,6 +1039,14 @@ func (m *Model) cancelVerifiedRun(reason string) {
 	if m.agentLoop.verifyCancel != nil {
 		m.agentLoop.verifyCancel()
 		m.agentLoop.verifyCancel = nil
+	}
+	if m.agentLoop.contractCancel != nil {
+		m.agentLoop.contractCancel()
+		m.agentLoop.contractCancel = nil
+	}
+	if m.agentLoop.contracting {
+		m.agentLoop.contractGen++
+		m.agentLoop.contracting = false
 	}
 	if m.agentLoop.verifying {
 		m.agentLoop.verifyGen++
@@ -1208,6 +1385,9 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
 	m.agentOn = true
+	if !msg.run.HasCriteria() {
+		return m, tea.Batch(m.persistAgentRun(), m.startAgentContract())
+	}
 	return m, tea.Batch(m.persistAgentRun(), m.startNextAgentCycle(next))
 }
 

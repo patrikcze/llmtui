@@ -27,9 +27,10 @@ type agentScriptStep struct {
 }
 
 type scriptedAgentProvider struct {
-	mu       sync.Mutex
-	steps    []agentScriptStep
-	requests []provider.ChatRequest
+	mu              sync.Mutex
+	steps           []agentScriptStep
+	contractReplies []string
+	requests        []provider.ChatRequest
 }
 
 func (p *scriptedAgentProvider) Name() string { return "scripted-agent" }
@@ -43,6 +44,24 @@ func (p *scriptedAgentProvider) ListModels(context.Context) ([]provider.ModelInf
 func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	p.mu.Lock()
 	p.requests = append(p.requests, req)
+	if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "You establish a task contract") {
+		reply := `{"criteria":["complete the requested task"],"needs_user_input":false,"question":"","user_options":[]}`
+		if len(p.contractReplies) > 0 {
+			reply = p.contractReplies[0]
+			p.contractReplies = p.contractReplies[1:]
+		}
+		p.mu.Unlock()
+		events := make(chan provider.ChatEvent, 2)
+		// A contract request is an independent control request in the production
+		// flow, not one of this test helper's executor/verifier script steps.
+		if len(p.contractReplies) == 0 && strings.Contains(req.Messages[1].Content, "gather data and produce a report") {
+			reply = `{"criteria":["gather data","produce report"],"needs_user_input":false,"question":"","user_options":[]}`
+		}
+		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: reply}
+		events <- provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}}
+		close(events)
+		return events, nil
+	}
 	if len(p.steps) == 0 {
 		p.mu.Unlock()
 		return nil, errors.New("script exhausted")
@@ -119,7 +138,7 @@ func TestAgentProspectiveBudgetRejectsBeforeExecutorDispatch(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionBudgetExhausted {
 		t.Fatalf("status = %s, want %s", m.agentLoop.run.Status, agent.DecisionBudgetExhausted)
 	}
-	if !strings.Contains(m.agentLoop.run.StopReason, "admission rejected executor request") {
+	if !strings.Contains(m.agentLoop.run.StopReason, "admission rejected task contract request") {
 		t.Fatalf("stop reason = %q", m.agentLoop.run.StopReason)
 	}
 }
@@ -185,17 +204,17 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 1 {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 2 {
-		t.Fatalf("provider requests = %d, want executor + verifier", len(prov.requests))
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want contract + executor + verifier", len(prov.requests))
 	}
-	verifyReq := prov.requests[1]
+	verifyReq := prov.requests[2]
 	if len(verifyReq.Messages) != 2 || len(verifyReq.Tools) != 0 || verifyReq.Stream {
 		t.Fatalf("verifier request is not isolated: %+v", verifyReq)
 	}
 	if strings.Contains(verifyReq.Messages[1].Content, "You are a helpful local assistant") {
 		t.Fatal("verifier received executor conversation history")
 	}
-	want := []string{"run_started", "rules_loaded", "objective_selected", "execution_started", "execution_completed", "verification_started", "verification_completed", "memory_written", "run_done"}
+	want := []string{"run_started", "contract_started", "contract_established", "rules_loaded", "objective_selected", "execution_started", "execution_completed", "verification_started", "verification_completed", "memory_written", "run_done"}
 	if len(m.agentLoop.run.Events) != len(want) {
 		t.Fatalf("events = %+v", m.agentLoop.run.Events)
 	}
@@ -206,6 +225,138 @@ func TestVerifiedAgentOneCycleAndFreshVerifier(t *testing.T) {
 	}
 	if m.picker.pickerKind != pickerNone || m.overlayOpen {
 		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.picker.pickerKind, m.overlayOpen)
+	}
+}
+
+func TestVerifiedAgentPinsTaskContractBeforeExecutor(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Completed the requested task."},
+		agentScriptStep{text: verifierJSON("passed", "contract satisfied", "", false, false)},
+	)
+	driveAgentCommands(t, m, m.startVerifiedRun("complete the requested task", nil))
+
+	if len(prov.requests) != 3 {
+		t.Fatalf("requests = %d, want contract, executor, verifier", len(prov.requests))
+	}
+	contractReq, executorReq := prov.requests[0], prov.requests[1]
+	if len(contractReq.Tools) != 0 || contractReq.Stream || !strings.Contains(contractReq.Messages[0].Content, "You establish a task contract") {
+		t.Fatalf("contract request = %+v, want fresh tool-free control request", contractReq)
+	}
+	if !m.agentLoop.run.HasCriteria() || m.agentLoop.run.Criteria[0].ID != "c1" {
+		t.Fatalf("criteria = %+v, want pre-pinned controller criteria", m.agentLoop.run.Criteria)
+	}
+	if !strings.Contains(executorReq.Messages[0].Content, "Current unresolved acceptance criteria") {
+		t.Fatalf("executor request omitted the pinned contract: %+v", executorReq.Messages)
+	}
+	if m.agentLoop.run.Request != "complete the requested task" {
+		t.Fatalf("request = %q, want unchanged original request", m.agentLoop.run.Request)
+	}
+}
+
+func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
+	m := newTestModel(t)
+	prov := &scriptedAgentProvider{contractReplies: []string{"not JSON", "still not JSON"}}
+	m.prov = prov
+	m.model = "test-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Timeout = "1s"
+	m.cfg.Agent.Verifier.MaxTokens = 256
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+	driveAgentCommands(t, m, m.startVerifiedRun("complete the bounded task", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionParked || run.Cycle != 0 || run.HasCriteria() {
+		t.Fatalf("run = %+v, want a parked pre-execution run without criteria", run)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("requests = %d, want one malformed contract request and one repair", len(prov.requests))
+	}
+	for _, req := range prov.requests {
+		if len(req.Tools) != 0 {
+			t.Fatalf("contract request exposed tools: %+v", req.Tools)
+		}
+	}
+}
+
+type blockingContractProvider struct{ started chan struct{} }
+
+func (p *blockingContractProvider) Name() string                      { return "blocking-contract" }
+func (p *blockingContractProvider) HealthCheck(context.Context) error { return nil }
+func (p *blockingContractProvider) ListModels(context.Context) ([]provider.ModelInfo, error) {
+	return []provider.ModelInfo{{ID: "test-model"}}, nil
+}
+func (p *blockingContractProvider) Chat(ctx context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	close(p.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAgentCancelStopsTaskContractBeforeExecutor(t *testing.T) {
+	m := newTestModel(t)
+	prov := &blockingContractProvider{started: make(chan struct{})}
+	m.prov = prov
+	m.model = "test-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Timeout = "5s"
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+
+	run, err := agent.NewRun("cancel-contract", "cancel during task contract", m.agentLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.resetAgentContext()
+	t.Cleanup(m.releaseAgentContext)
+	contractCmd := m.startAgentContract()
+	if contractCmd == nil {
+		t.Fatal("start run did not schedule the task-contract command")
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- contractCmd() }()
+	select {
+	case <-prov.started:
+	case <-time.After(time.Second):
+		t.Fatal("task-contract request did not start")
+	}
+	if !m.agentContracting() || m.agentLoop.run.Cycle != 0 {
+		t.Fatalf("contract state = contracting:%t cycle:%d", m.agentContracting(), m.agentLoop.run.Cycle)
+	}
+	if cancel := cmdAgent(m, "cancel"); cancel != nil {
+		_ = cancel()
+	}
+	select {
+	case msg := <-result:
+		m.Update(msg) // stale generation must not revive the cancelled run.
+	case <-time.After(time.Second):
+		t.Fatal("task-contract request did not unblock after cancellation")
+	}
+	if m.agentLoop.run.Status != agent.DecisionCancelled || len(m.agentLoop.run.Criteria) != 0 {
+		t.Fatalf("run = %+v, want cancelled before criteria or executor work", m.agentLoop.run)
+	}
+}
+
+func TestAgentResumeWithoutCriteriaEstablishesContractBeforeFreshCycle(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Completed after a safe resume."},
+		agentScriptStep{text: verifierJSON("passed", "criteria satisfied", "", false, false)},
+	)
+	run, err := agent.NewRun("resume-without-contract", "complete the resumed task", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Terminate(agent.DecisionParked, "interrupted before criteria were available", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, cmd := m.handleAgentResume(agentResumeMsg{run: run})
+	driveAgentCommands(t, m, cmd)
+
+	if m.agentLoop.run.Status != agent.DecisionDone || !m.agentLoop.run.HasCriteria() || m.agentLoop.run.Cycle != 1 {
+		t.Fatalf("resumed run = %+v", m.agentLoop.run)
+	}
+	if len(prov.requests) != 3 || !strings.Contains(prov.requests[0].Messages[0].Content, "You establish a task contract") {
+		t.Fatalf("requests = %+v, want contract before fresh executor cycle", prov.requests)
 	}
 }
 
@@ -330,13 +481,13 @@ func TestVerifiedAgentVerifierModelSelectionCompatibility(t *testing.T) {
 			if m.agentLoop.run.Status != agent.DecisionDone {
 				t.Fatalf("run status = %s, want done", m.agentLoop.run.Status)
 			}
-			if len(prov.requests) != 2 {
-				t.Fatalf("requests = %d, want executor + verifier", len(prov.requests))
+			if len(prov.requests) != 3 {
+				t.Fatalf("requests = %d, want contract + executor + verifier", len(prov.requests))
 			}
-			if got := prov.requests[0].Model; got != "openai/gpt-oss-20b" {
+			if got := prov.requests[1].Model; got != "openai/gpt-oss-20b" {
 				t.Fatalf("executor model = %q, want openai/gpt-oss-20b", got)
 			}
-			verifyReq := prov.requests[1]
+			verifyReq := prov.requests[2]
 			if verifyReq.Model != tt.wantModel {
 				t.Fatalf("verifier model = %q, want %q", verifyReq.Model, tt.wantModel)
 			}
@@ -379,10 +530,10 @@ func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 4 {
-		t.Fatalf("provider requests = %d, want executor/verifier twice", len(prov.requests))
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want contract + executor/verifier twice", len(prov.requests))
 	}
-	first := prov.requests[0]
+	first := prov.requests[1]
 	var firstContext strings.Builder
 	for _, message := range first.Messages {
 		firstContext.WriteString(message.Content)
@@ -398,7 +549,7 @@ func TestVerifiedAgentRetryExcludesPriorRunContext(t *testing.T) {
 			t.Fatalf("new run lost conversational history %q:\n%s", conversational, firstContext.String())
 		}
 	}
-	retry := prov.requests[2]
+	retry := prov.requests[3]
 	var context strings.Builder
 	for _, message := range retry.Messages {
 		context.WriteString(message.Content)
@@ -500,10 +651,10 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 	}
 	// Cycle 1: tool call + tool continuation + verifier = 3 requests.
 	// Cycle 2: executor + verifier = 2 requests.
-	if len(prov.requests) != 5 {
-		t.Fatalf("provider requests = %d, want 5", len(prov.requests))
+	if len(prov.requests) != 6 {
+		t.Fatalf("provider requests = %d, want 6", len(prov.requests))
 	}
-	cycle2Request := prov.requests[3]
+	cycle2Request := prov.requests[4]
 	var hasToolMessage, hasToolCallMessage bool
 	var got strings.Builder
 	for _, message := range cycle2Request.Messages {
@@ -560,10 +711,10 @@ func TestVerifiedAgentVerificationCarriesAvailableToolNames(t *testing.T) {
 
 	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
 
-	if len(prov.requests) != 2 {
-		t.Fatalf("provider requests = %d, want executor + verifier", len(prov.requests))
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want contract + executor + verifier", len(prov.requests))
 	}
-	verifyReq := prov.requests[1]
+	verifyReq := prov.requests[2]
 	if len(verifyReq.Messages) != 2 {
 		t.Fatalf("verifier request = %+v", verifyReq)
 	}
@@ -635,13 +786,13 @@ func TestRetryAfterAgentRunGoesThroughAgentLoop(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("retried run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 4 {
-		t.Fatalf("provider requests = %d, want executor+verifier for each of two runs", len(prov.requests))
+	if len(prov.requests) != 6 {
+		t.Fatalf("provider requests = %d, want contract+executor+verifier for each of two runs", len(prov.requests))
 	}
 	// The retried run's executor request must carry agentDirective's bounded
 	// objective text — proof it went through startVerifiedRun/BeginCycle
 	// rather than a bare dispatch that never attaches one.
-	executorReq := prov.requests[2]
+	executorReq := prov.requests[4]
 	if len(executorReq.Messages) == 0 || !strings.Contains(executorReq.Messages[0].Content, "Current bounded objective") {
 		t.Fatalf("retried executor request missing agent directive: %+v", executorReq.Messages)
 	}
@@ -661,8 +812,8 @@ func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.ToolCalls != 1 {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want executor + tool continuation + verifier", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want contract + executor + tool continuation + verifier", len(prov.requests))
 	}
 	cycle := m.agentLoop.run.LatestCycle()
 	if cycle.Execution == nil || len(cycle.Execution.ToolCalls) != 1 || !cycle.Execution.ToolCalls[0].Succeeded {
@@ -694,8 +845,8 @@ func TestVerifiedAgentTruncatedExecutorReplyForcesRetry(t *testing.T) {
 	if first.Verification == nil || first.Verification.Verdict != agent.VerificationFailed || !first.Verification.Retryable {
 		t.Fatalf("first cycle verification = %+v, want deterministic failed/retryable despite the verifier saying passed", first.Verification)
 	}
-	if len(prov.requests) != 4 {
-		t.Fatalf("provider requests = %d, want executor+verifier for two cycles", len(prov.requests))
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want contract+executor+verifier for two cycles", len(prov.requests))
 	}
 }
 
@@ -715,7 +866,7 @@ func TestVerifiedAgentFailureChangesRetryObjective(t *testing.T) {
 	if got := m.agentLoop.run.Cycles[1].Objective; got != next {
 		t.Fatalf("retry objective = %q, want %q", got, next)
 	}
-	if len(prov.requests) != 4 || !strings.Contains(prov.requests[2].Messages[0].Content, next) {
+	if len(prov.requests) != 5 || !strings.Contains(prov.requests[3].Messages[0].Content, next) {
 		t.Fatal("changed retry objective was not loaded into the next executor context")
 	}
 }
@@ -775,8 +926,8 @@ func TestVerifiedAgentVerifierParseFailureRepeatedStops(t *testing.T) {
 	// outer verifier attempt, then two more for the SECOND (and, with the
 	// default MaxAttempts=2, final) outer attempt — one executor request
 	// plus two independent malformed+repair pairs.
-	if len(prov.requests) != 5 {
-		t.Fatalf("provider requests = %d, want 5 (executor + 2x(malformed+repair))", len(prov.requests))
+	if len(prov.requests) != 6 {
+		t.Fatalf("provider requests = %d, want 6 (contract + executor + 2x(malformed+repair))", len(prov.requests))
 	}
 }
 
@@ -804,8 +955,8 @@ func TestVerifiedAgentVerifierParseFailureThenValidSucceedsWithoutExecutorRepeat
 		t.Fatalf("cycles = %+v, want exactly one executor cycle", m.agentLoop.run.Cycles)
 	}
 	// executor(1) + attempt1(malformed+repair, 2) + attempt2(malformed+repair, 2) + attempt3(valid, 1) = 6.
-	if len(prov.requests) != 6 {
-		t.Fatalf("provider requests = %d, want 6", len(prov.requests))
+	if len(prov.requests) != 7 {
+		t.Fatalf("provider requests = %d, want 7", len(prov.requests))
 	}
 }
 
@@ -829,8 +980,8 @@ func TestVerifiedAgentVerifierTimeoutExhaustsToVerificationUnavailable(t *testin
 	if len(m.agentLoop.run.Cycles) != 1 {
 		t.Fatalf("cycles = %+v, want exactly one", m.agentLoop.run.Cycles)
 	}
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want 3 (executor + 2 verifier attempts)", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want 4 (contract + executor + 2 verifier attempts)", len(prov.requests))
 	}
 }
 
@@ -849,8 +1000,8 @@ func TestVerifiedAgentVerifierProviderErrorExhaustsToVerificationUnavailable(t *
 	if len(m.agentLoop.run.Cycles) != 1 {
 		t.Fatalf("cycles = %+v, want exactly one", m.agentLoop.run.Cycles)
 	}
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want 3 (executor + 2 verifier attempts)", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want 4 (contract + executor + 2 verifier attempts)", len(prov.requests))
 	}
 }
 
@@ -871,7 +1022,10 @@ func (p *executorThenBlockingProvider) HealthCheck(context.Context) error { retu
 func (p *executorThenBlockingProvider) ListModels(context.Context) ([]provider.ModelInfo, error) {
 	return []provider.ModelInfo{{ID: "test-model"}}, nil
 }
-func (p *executorThenBlockingProvider) Chat(ctx context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+func (p *executorThenBlockingProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if isTaskContractRequest(req) {
+		return testContractEvents(), nil
+	}
 	p.mu.Lock()
 	p.calls++
 	call := p.calls
@@ -1046,10 +1200,10 @@ func TestVerifiedAgentRepairsVerifierFormatWithoutRepeatingExecutor(t *testing.T
 	if m.agentLoop.run.Status != agent.DecisionDone || len(m.agentLoop.run.Cycles) != 1 {
 		t.Fatalf("run = %+v, want one completed cycle", m.agentLoop.run)
 	}
-	if len(prov.requests) != 3 {
-		t.Fatalf("requests = %d, want executor plus initial and repaired verifier requests", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests = %d, want contract plus executor and repaired verifier requests", len(prov.requests))
 	}
-	if !strings.Contains(prov.requests[2].Messages[0].Content, "FORMAT REPAIR") {
+	if !strings.Contains(prov.requests[3].Messages[0].Content, "FORMAT REPAIR") {
 		t.Fatalf("third request is not the verifier format repair: %+v", prov.requests[2])
 	}
 }
@@ -1263,10 +1417,25 @@ func (p *blockingAgentProvider) HealthCheck(context.Context) error { return nil 
 func (p *blockingAgentProvider) ListModels(context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
-func (p *blockingAgentProvider) Chat(ctx context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+func (p *blockingAgentProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if isTaskContractRequest(req) {
+		return testContractEvents(), nil
+	}
 	close(p.started)
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func isTaskContractRequest(req provider.ChatRequest) bool {
+	return len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "You establish a task contract")
+}
+
+func testContractEvents() <-chan provider.ChatEvent {
+	events := make(chan provider.ChatEvent, 2)
+	events <- provider.ChatEvent{Type: provider.EventDelta, Delta: `{"criteria":["complete the requested task"],"needs_user_input":false,"question":"","user_options":[]}`}
+	events <- provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}}
+	close(events)
+	return events
 }
 
 func TestAgentLifecycleCommandIsNonBlockingAndCancellationResponsive(t *testing.T) {
@@ -1281,8 +1450,10 @@ func TestAgentLifecycleCommandIsNonBlockingAndCancellationResponsive(t *testing.
 	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
 		t.Fatalf("starting an agent run blocked the UI for %s", elapsed)
 	}
+	contractMsg := cmd()
+	_, executorCmd := m.Update(contractMsg)
 	result := make(chan tea.Msg, 1)
-	go func() { result <- cmd() }()
+	go func() { result <- executorCmd() }()
 	select {
 	case <-prov.started:
 	case <-time.After(time.Second):
@@ -1405,8 +1576,8 @@ func TestVerifiedAgentTruncatedToolCallIsNotExecuted(t *testing.T) {
 	if m.agentLoop.run.Status == agent.DecisionDone {
 		t.Fatal("run must not report done from a truncated tool call")
 	}
-	if len(prov.requests) != 1 {
-		t.Fatalf("provider requests = %d, want exactly 1 (the run should stop, not retry blindly)", len(prov.requests))
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider requests = %d, want contract + one executor request (the run should stop, not retry blindly)", len(prov.requests))
 	}
 }
 
@@ -1414,7 +1585,8 @@ func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
 	m := newTestModel(t)
 	m.prov = &blockingAgentProvider{started: make(chan struct{})}
 	m.agentOn = true
-	_ = m.startVerifiedRun("cancel this run", nil)
+	contractMsg := m.startVerifiedRun("cancel this run", nil)()
+	_, _ = m.Update(contractMsg)
 	if !m.thinking {
 		t.Fatal("agent executor did not enter streaming state")
 	}
@@ -1463,8 +1635,8 @@ func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *te
 	// Tool call + tool continuation + semantic verifier: the first-cycle
 	// guard must force the verifier request even though execution alone
 	// was already mechanically complete.
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want executor+continuation+verifier on cycle 1", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want contract+executor+continuation+verifier on cycle 1", len(prov.requests))
 	}
 	verification := m.agentLoop.run.LatestCycle().Verification
 	if verification == nil || verification.Verdict != agent.VerificationPassed {
@@ -1615,6 +1787,7 @@ func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifierAfterFirstCycle(t *tes
 		agentScriptStep{text: "partial write attempt", truncated: true},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
 		agentScriptStep{text: "Listed the workspace and completed the objective."},
+		agentScriptStep{text: verifierJSON("passed", "workspace inspected", "", false, false)},
 	)
 	m.cfg.Agent.Verifier.Mode = "adaptive"
 	m.toolsOn = true
@@ -1626,17 +1799,17 @@ func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifierAfterFirstCycle(t *tes
 		t.Fatalf("run = %+v, want a deterministic-failure cycle 1 then a mechanically complete cycle 2", m.agentLoop.run)
 	}
 	// Cycle 1: executor only (truncated, deterministic failure, no verifier).
-	// Cycle 2: executor + tool continuation, mechanically complete, no
-	// verifier call — the fast path still applies once cycle 1 is behind us.
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want executor(x1)+executor+continuation, no verifier call", len(prov.requests))
+	// Contract-first runs retain a semantic criterion, so cycle 2 gets its
+	// verifier after the executor and continuation.
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want contract+executor(x1)+executor+continuation+verifier", len(prov.requests))
 	}
 	second := m.agentLoop.run.Cycles[1]
 	if second.Verification == nil || second.Verification.Verdict != agent.VerificationPassed {
 		t.Fatalf("second cycle verification = %+v", second.Verification)
 	}
-	if m.agentLoop.run.HasCriteria() {
-		t.Fatalf("criteria = %+v, want none pinned: neither cycle ever called the semantic verifier", m.agentLoop.run.Criteria)
+	if !m.agentLoop.run.HasCriteria() || m.agentLoop.run.Criteria[0].Status != agent.CriterionSatisfied {
+		t.Fatalf("criteria = %+v, want the contract criterion satisfied", m.agentLoop.run.Criteria)
 	}
 }
 
@@ -1661,8 +1834,8 @@ func TestAdaptiveDeterministicFailureSkipsSemanticVerifier(t *testing.T) {
 	}
 	// Cycle 1: executor only (deterministic failure, no verifier).
 	// Cycle 2: executor + semantic verifier for the prose-only answer.
-	if len(prov.requests) != 3 {
-		t.Fatalf("provider requests = %d, want 3 (no verifier call for the truncated cycle)", len(prov.requests))
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider requests = %d, want 4 (contract; no verifier call for the truncated cycle)", len(prov.requests))
 	}
 }
 
@@ -1694,8 +1867,8 @@ func TestAdaptiveProseAnswerVerifiedAndCriteriaPersistAcrossCycles(t *testing.T)
 	if run.Status != agent.DecisionDone || run.Cycle != 2 {
 		t.Fatalf("run = %+v", run)
 	}
-	if len(prov.requests) != 4 {
-		t.Fatalf("provider requests = %d, want executor+verifier per cycle for prose-only answers", len(prov.requests))
+	if len(prov.requests) != 5 {
+		t.Fatalf("provider requests = %d, want contract+executor+verifier per cycle for prose-only answers", len(prov.requests))
 	}
 	if len(run.Criteria) != 2 || run.Criteria[0].ID != "c1" || run.Criteria[1].ID != "c2" {
 		t.Fatalf("criteria = %+v, want the pinned set stable across cycles", run.Criteria)
@@ -1707,7 +1880,7 @@ func TestAdaptiveProseAnswerVerifiedAndCriteriaPersistAcrossCycles(t *testing.T)
 	}
 	// The second verification request must carry the pinned criteria and the
 	// cumulative ledger, proving the verifier sees cross-cycle state.
-	secondVerify := prov.requests[3].Messages[1].Content
+	secondVerify := prov.requests[4].Messages[1].Content
 	for _, want := range []string{"gather data", "produce report", `"EstablishCriteria":false`} {
 		if !strings.Contains(secondVerify, want) {
 			t.Fatalf("second verification evidence missing %q: %s", want, secondVerify)
@@ -1727,8 +1900,8 @@ func TestVerifierModeOffSkipsAllVerification(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	if len(prov.requests) != 1 {
-		t.Fatalf("provider requests = %d, want executor only", len(prov.requests))
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider requests = %d, want contract + executor only", len(prov.requests))
 	}
 	verification := m.agentLoop.run.Cycles[0].Verification
 	if verification == nil || !strings.Contains(verification.Summary, "not verified") {

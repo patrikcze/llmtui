@@ -97,6 +97,44 @@ func TestVerifyAdmissionStopsBeforeProviderAndBeforeRepair(t *testing.T) {
 	})
 }
 
+func TestEstablishContractUsesFreshToolFreeContextAndRepairsMalformedOutput(t *testing.T) {
+	client := &recordingClient{replies: []string{
+		`{"criteria":"not an array","needs_user_input":false,"question":"","user_options":[]}`,
+		`{"criteria":["write the requested report"],"needs_user_input":false,"question":"","user_options":[]}`,
+	}}
+	out, err := EstablishContract(context.Background(), client, Config{Model: "local", Timeout: time.Second}, ContractInput{Task: "write a report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Contract.Criteria) != 1 || out.Contract.Criteria[0] != "write the requested report" || out.Contract.NeedsUserInput {
+		t.Fatalf("contract = %+v", out.Contract)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want initial request plus one bounded repair", len(client.requests))
+	}
+	for i, req := range client.requests {
+		if len(req.Messages) != 2 || len(req.Tools) != 0 || req.Stream || req.Temperature != 0 || req.Reasoning != "off" {
+			t.Fatalf("request %d is not an isolated tool-free control request: %+v", i, req)
+		}
+	}
+	if !strings.Contains(client.requests[1].Messages[0].Content, "FORMAT REPAIR") {
+		t.Fatal("repair request omitted the bounded format-repair instruction")
+	}
+}
+
+func TestParseContractRejectsExecutableEmptyCriteriaAndPreservesUserInputBoundary(t *testing.T) {
+	if _, err := ParseContract(`{"criteria":[],"needs_user_input":false,"question":"","user_options":[]}`); !errors.Is(err, agent.ErrMalformedControl) {
+		t.Fatalf("empty executable contract error = %v, want malformed control", err)
+	}
+	contract, err := ParseContract(`{"criteria":[],"needs_user_input":true,"question":"Which target environment?","user_options":["staging","production"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contract.NeedsUserInput || contract.Question != "Which target environment?" || len(contract.UserOptions) != 2 {
+		t.Fatalf("contract = %+v", contract)
+	}
+}
+
 // validReply builds a complete verifier envelope: all 15 fields
 // verifierJSONSchema declares required, plus atomic_task, all present. Tests
 // that need to exercise a specific field's value should start from this and
