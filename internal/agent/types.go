@@ -15,7 +15,10 @@ const (
 type Stage string
 
 const (
-	StageTrigger     Stage = "trigger"
+	StageTrigger Stage = "trigger"
+	// StageContract is the bounded, tool-free controller phase that pins
+	// acceptance criteria before the first executor cycle may begin.
+	StageContract    Stage = "contract"
 	StageRulesLoad   Stage = "rules_load"
 	StageExecutor    Stage = "executor"
 	StageVerifier    Stage = "verifier"
@@ -222,15 +225,19 @@ type ContextTurn struct {
 
 // AgentRun is the serializable state of one bounded user request.
 type AgentRun struct {
-	Version          int           `json:"version"`
-	ID               string        `json:"id"`
-	CreatedAt        time.Time     `json:"created_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
-	Cycle            int           `json:"cycle"`
-	Stage            Stage         `json:"stage"`
-	Status           Decision      `json:"status"`
-	StopReason       string        `json:"stop_reason,omitempty"`
-	Request          string        `json:"request"`
+	Version    int       `json:"version"`
+	ID         string    `json:"id"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Cycle      int       `json:"cycle"`
+	Stage      Stage     `json:"stage"`
+	Status     Decision  `json:"status"`
+	StopReason string    `json:"stop_reason,omitempty"`
+	Request    string    `json:"request"`
+	// ContractInput is user-supplied clarification retained only when a
+	// pre-execution contract needed it. Request remains the immutable original
+	// goal; this field is supplemental input, never a rewritten request.
+	ContractInput    string        `json:"contract_input,omitempty"`
 	Objective        string        `json:"objective,omitempty"`
 	Limits           Limits        `json:"limits"`
 	ToolCalls        int           `json:"tool_calls"`

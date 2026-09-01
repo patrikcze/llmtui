@@ -50,6 +50,64 @@ func validateLimits(l Limits) error {
 	return nil
 }
 
+// BeginContract enters the bounded, tool-free task-contract phase. A run with
+// pinned criteria already has a controller-owned contract and must proceed to
+// the executor through BeginCycle instead.
+func (r *AgentRun) BeginContract(now time.Time) error {
+	if r == nil || r.Status != DecisionRunning || (r.Stage != StageTrigger && r.Stage != StageStopCheck) || r.HasCriteria() {
+		return r.transitionError(StageContract)
+	}
+	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
+	}
+	r.Stage = StageContract
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "contract_started", "tool-free task contract started")
+	return nil
+}
+
+// CompleteContract pins the sole controller-owned task contract before any
+// executor request can start. Empty or malformed control data cannot fall
+// through to execution.
+func (r *AgentRun) CompleteContract(criteria []string, now time.Time) error {
+	if r == nil || r.Status != DecisionRunning || r.Stage != StageContract {
+		return r.transitionError(StageContract)
+	}
+	r.PinCriteria(criteria)
+	if !r.HasCriteria() {
+		return fmt.Errorf("%w: task contract has no acceptance criteria", ErrMalformedControl)
+	}
+	r.Stage = StageTrigger
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "contract_established", fmt.Sprintf("pinned %d acceptance criteria", len(r.Criteria)))
+	return nil
+}
+
+// WaitForContractInput pauses before execution when required user information
+// is missing. No provider, tool, or partial executor state is resumed.
+func (r *AgentRun) WaitForContractInput(reason string, now time.Time) error {
+	if r == nil || r.Status != DecisionRunning || r.Stage != StageContract {
+		return r.transitionError(StageContract)
+	}
+	r.Status = DecisionNeedsUserInput
+	r.StopReason = truncate(strings.TrimSpace(reason), 1024)
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "run_needs_user_input", r.StopReason)
+	return nil
+}
+
+// SetContractInput records supplemental user clarification without changing
+// the immutable original request. It is bounded with the rest of persisted
+// control state and is redacted by the store on disk.
+func (r *AgentRun) SetContractInput(input string, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.ContractInput = truncate(strings.TrimSpace(input), 4096)
+	r.UpdatedAt = now.UTC()
+	r.addEvent(now, "contract_input_received", "user supplied contract clarification")
+}
+
 // BeginCycle records deterministic context provenance and enters the executor.
 func (r *AgentRun) BeginCycle(objective string, sources []string, now time.Time) error {
 	if r == nil || r.Status != DecisionRunning || (r.Stage != StageTrigger && r.Stage != StageStopCheck) {

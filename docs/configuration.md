@@ -189,17 +189,18 @@ See [memory.md](memory.md) for storage, ranking, promotion, and trust behavior.
 
 ### `agent`
 
-Optional bounded multi-cycle execution with independent verification. Disabled
-by default; `/agent on` toggles it for the current session. Agent mode does not
-enable tools or change approvals. See [agent-loop.md](agent-loop.md) for the
-lifecycle, stop policy, persistence, cancellation, and local-model behavior.
+Optional bounded multi-cycle execution with a pre-execution task contract and
+independent verification. Disabled by default; `/agent on` toggles it for the
+current session. Agent mode does not enable tools or change approvals. See
+[agent-loop.md](agent-loop.md) for the lifecycle, stop policy, persistence,
+cancellation, and local-model behavior.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Start verified runs for user messages (`/agent on|off` overrides for the session) |
 | `max_cycles` | `8` | Maximum executor/verifier cycles per run |
 | `max_tool_calls` | `32` | Hard total tool calls across all cycles |
-| `max_tokens` | `100000` | Executor plus verifier token budget when usage is available |
+| `max_tokens` | `100000` | Task-contract, executor, and verifier token budget when usage is available |
 | `max_elapsed` | `30m` | Wall-clock run limit |
 | `max_repeated_failures` | `3` | Identical verification failures before stopping |
 | `persist` | `true` | Atomically store bounded resumable run state; forced off by `privacy.store_prompts: false` |
@@ -209,8 +210,8 @@ lifecycle, stop policy, persistence, cancellation, and local-model behavior.
 | `verifier.enabled` | `true` | Legacy toggle; when `verifier.mode` is empty, `true` derives `adaptive` and `false` derives `deterministic` |
 | `verifier.mode` | empty | Verification policy: `off`, `deterministic`, `adaptive` (deterministic evidence first, semantic evaluation only when it cannot decide), or `always` (semantic evaluation every cycle) |
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |
-| `verifier.max_tokens` | `1024` | Evaluator response cap; raise it if the verifier itself gets cut off mid-JSON on a slower/weaker model |
-| `verifier.timeout` | `120s` | Whole evaluator-request deadline |
+| `verifier.max_tokens` | `1024` | Tool-free control-response cap shared by task-contract and evaluator requests; raise it if a weaker model gets cut off mid-JSON |
+| `verifier.timeout` | `120s` | Whole task-contract or evaluator-request deadline |
 | `verifier.max_attempts` | `2` | Verifier-inference attempts per cycle (a provider error, timeout, or exhausted internal format repair) before the cycle is parked as `verification_unavailable` instead of restarting the executor — see [agent-loop.md](agent-loop.md#verification) |
 | `enforce_budgets_live` | `true` | Check `max_tool_calls`/`max_tokens` on every tool round using the run's true running totals, not only when a cycle completes. Set `false` to fall back to the cycle-boundary-only check if this causes an unexpected early stop — see [agent-loop.md](agent-loop.md#stop-conditions-and-budgets) |
 

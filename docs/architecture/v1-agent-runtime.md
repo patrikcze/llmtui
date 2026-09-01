@@ -26,7 +26,8 @@ The runtime and Agent controller use this common state vocabulary:
 | State | Ordinary tool chat | `/agent on` |
 | --- | --- | --- |
 | Idle | no request in flight | no active run |
-| Preparing | `prepareRequest`/composition | same, plus `agentDirective()` injection |
+| Contracting | n/a | fresh, tool-free request pins criteria before cycle 1 |
+| Preparing | `prepareRequest`/composition | same, plus `agentDirective()` injection after the contract |
 | Model streaming | `startRequest` | same |
 | Waiting for approval | `pendingCalls` non-empty | same |
 | Executing tools | `runToolPlan` | same |

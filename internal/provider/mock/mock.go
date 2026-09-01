@@ -51,6 +51,21 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	for _, m := range req.Messages {
 		promptTokens += provider.EstimateTokens(m.Content)
 	}
+	isTaskContract := req.ResponseConstraint != nil && req.ResponseConstraint.Name == "llmtui_task_contract"
+	if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "You establish a task contract") {
+		isTaskContract = true
+	}
+	if isTaskContract {
+		go func() {
+			defer close(events)
+			const contract = `{"criteria":["complete the user's requested task"],"needs_user_input":false,"question":"","user_options":[]}`
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: contract})
+			provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: &provider.Usage{
+				PromptTokens: promptTokens, CompletionTokens: provider.EstimateTokens(contract), TotalTokens: promptTokens + provider.EstimateTokens(contract), Estimated: true,
+			}})
+		}()
+		return events, nil
+	}
 
 	go func() {
 		defer close(events)

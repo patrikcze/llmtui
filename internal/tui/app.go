@@ -855,6 +855,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentVerificationMsg:
 		return m.handleAgentVerification(msg)
 
+	case agentContractMsg:
+		return m.handleAgentContract(msg)
+
 	case agentPersistedMsg:
 		if msg.err != nil && m.agentLoop != nil && msg.runID == m.agentRunID() {
 			m.agentLoop.persistErr = msg.err
@@ -1783,7 +1786,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	m.ctrlCAt = time.Now()
 	var agentSave tea.Cmd
 	switch {
-	case m.agentVerifying():
+	case m.agentVerifying() || m.agentContracting():
 		m.cancelVerifiedRun("verification cancelled by the user")
 		m.endAgentRun()
 		agentSave = m.persistAgentRun()
