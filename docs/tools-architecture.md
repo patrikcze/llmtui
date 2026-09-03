@@ -202,7 +202,9 @@ Three built-ins are controlled before ordinary Runner execution:
 - `tool_search` searches the authoritative eligible catalog deterministically.
     It adds selected full schemas to a bounded task-local disclosure set, so the
     next inference can invoke them through the normal execution and approval
-    path.
+    path. Multiple search calls may share a batch only when every call is a
+    valid `tool_search`; validation and mixed-batch rejection are atomic, then
+    all correlated results produce exactly one continuation inference.
 
 `eligibleToolSpecs` owns the complete current catalog. `modelVisibleToolSpecs`
 applies the threshold and disclosure set. `activeToolSpecs` exposes that exact
@@ -210,6 +212,20 @@ visible snapshot only for native providers, which keeps provider requests,
 cache keys, context estimates, debug hashes, and the HTTP registry aligned.
 Fenced fallback receives the same visible dynamic MCP metadata in prompt form.
 Neither protocol can execute a guessed hidden MCP name.
+
+Embedded inference validates native names against the exact request snapshot
+before the TUI sees a call. Its typed “not offered” error lets the controller
+recognize one exact eligible-but-hidden MCP name and perform a one-shot fresh
+inference with that schema visible; it does not turn the failed generation into
+an executable call. Unknown, fuzzy, disconnected, and already-visible names
+remain ordinary provider errors. Fenced calls instead reach the shared
+controller guard and get a correlated discovery instruction.
+
+MCP `isError` results keep a concise error classification separate from the
+complete sanitized and untrusted-framed output. The model receives both, the
+default transcript summary shows the actionable first line, and `/tools output`
+shows the complete stored detail. The no-progress digest includes both fields,
+so changed diagnostic detail counts as changed evidence.
 
 ---
 

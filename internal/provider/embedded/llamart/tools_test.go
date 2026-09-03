@@ -2,12 +2,33 @@ package llamart
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/embedded"
 )
+
+func TestToolOutputRouterReturnsTypedUnofferedToolError(t *testing.T) {
+	router := newToolOutputRouter(
+		embedded.ToolFormatStandard,
+		[]provider.ToolSpec{weatherToolSpec()},
+	)
+	router.Push(`<tool_call>{"name":"mcp__playwright__browser_type","arguments":{"target":"ref=e42"}}</tool_call>`)
+
+	_, _, err := router.Finish()
+	var unoffered *provider.ToolNotOfferedError
+	if !errors.As(err, &unoffered) {
+		t.Fatalf("Finish error = %T %v, want *provider.ToolNotOfferedError", err, err)
+	}
+	if unoffered.RequestedName != "mcp__playwright__browser_type" {
+		t.Fatalf("requested = %q", unoffered.RequestedName)
+	}
+	if len(unoffered.OfferedNames) != 1 || unoffered.OfferedNames[0] != "weather" {
+		t.Fatalf("offered = %v", unoffered.OfferedNames)
+	}
+}
 
 func weatherToolSpec() provider.ToolSpec {
 	return provider.ToolSpec{

@@ -303,6 +303,16 @@ task may retain them; a new human request clears them. Disabled, disconnected,
 or unregistered tools are never searchable, and disconnecting an already
 disclosed server removes its schemas immediately. Search results include
 `total_matches` and explicitly identify a bounded shortlist as truncated.
+Several searches may share one search-only batch; all are validated first and
+one invalid search rejects the batch atomically. Discovery mixed with an
+executable call is always rejected.
+
+For a moderate stable catalog and a small model that cannot reliably perform
+discovery, raising `threshold` above the total eligible tool count keeps every
+schema visible (for example, `48`). This uses more context and affects all MCP
+servers; keep the default for large catalogs. It changes visibility only:
+per-server `approve: auto` separately skips human confirmation and should be
+used only for a fully trusted server and all of its advertised side effects.
 
 ### `tools.web`
 

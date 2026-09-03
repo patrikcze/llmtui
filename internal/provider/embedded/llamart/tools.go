@@ -376,7 +376,10 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		name := strings.TrimSpace(call.Function.Name)
 		spec, ok := offered[name]
 		if !ok {
-			return nil, fmt.Errorf("model requested unknown tool %q; offered tools: %s", name, offeredToolNames(tools))
+			return nil, &provider.ToolNotOfferedError{
+				RequestedName: name,
+				OfferedNames:  offeredToolNames(tools),
+			}
 		}
 		schema, err := decodeJSONObject(spec.Parameters)
 		if err != nil {
@@ -502,12 +505,12 @@ func propertySchema(schema map[string]any, key string) map[string]any {
 	return property
 }
 
-func offeredToolNames(tools []provider.ToolSpec) string {
+func offeredToolNames(tools []provider.ToolSpec) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		names = append(names, tool.Name)
 	}
-	return strings.Join(names, ", ")
+	return names
 }
 
 func decodeJSONObject(raw []byte) (map[string]any, error) {

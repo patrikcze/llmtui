@@ -87,6 +87,7 @@ func TestTurnRuntimeResetStartsFreshTurn(t *testing.T) {
 	runtime.toolDepth = 4
 	runtime.emptyContinuationRetried = true
 	runtime.malformedToolCallRetried = true
+	runtime.hasHiddenToolRecovery = true
 	runtime.pendingCalls = []tools.Call{{Tool: tools.ToolWriteFile}}
 	runtime.complete(turnOutcomeExecutionFailure)
 
@@ -94,8 +95,14 @@ func TestTurnRuntimeResetStartsFreshTurn(t *testing.T) {
 	if runtime.state != turnIdle || runtime.lastOutcome != turnOutcomeNone {
 		t.Fatalf("reset transition = %s/%s", runtime.state, runtime.lastOutcome)
 	}
-	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried {
-		t.Fatalf("retry state not reset: depth=%d empty=%t malformed=%t", runtime.toolDepth, runtime.emptyContinuationRetried, runtime.malformedToolCallRetried)
+	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried || runtime.hasHiddenToolRecovery {
+		t.Fatalf(
+			"retry state not reset: depth=%d empty=%t malformed=%t hidden=%t",
+			runtime.toolDepth,
+			runtime.emptyContinuationRetried,
+			runtime.malformedToolCallRetried,
+			runtime.hasHiddenToolRecovery,
+		)
 	}
 	if len(runtime.pendingCalls) != 0 || runtime.progress == nil || runtime.progress.threshold != 2 {
 		t.Fatalf("reset pending/progress = %d/%+v", len(runtime.pendingCalls), runtime.progress)
@@ -109,6 +116,7 @@ func TestTurnRuntimeCycleResetPreservesRunProgress(t *testing.T) {
 	runtime.toolDepth = 3
 	runtime.emptyContinuationRetried = true
 	runtime.malformedToolCallRetried = true
+	runtime.hasHiddenToolRecovery = true
 	progress := runtime.progress
 
 	runtime.resetCycle()
@@ -116,8 +124,14 @@ func TestTurnRuntimeCycleResetPreservesRunProgress(t *testing.T) {
 	if runtime.progress != progress {
 		t.Fatal("cycle reset replaced the run-wide progress ledger")
 	}
-	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried {
-		t.Fatalf("cycle state not reset: depth=%d empty=%t malformed=%t", runtime.toolDepth, runtime.emptyContinuationRetried, runtime.malformedToolCallRetried)
+	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried || runtime.hasHiddenToolRecovery {
+		t.Fatalf(
+			"cycle state not reset: depth=%d empty=%t malformed=%t hidden=%t",
+			runtime.toolDepth,
+			runtime.emptyContinuationRetried,
+			runtime.malformedToolCallRetried,
+			runtime.hasHiddenToolRecovery,
+		)
 	}
 }
 
@@ -132,6 +146,9 @@ func TestTurnRuntimeContinuationRetriesAreOneShot(t *testing.T) {
 	}
 	if !runtime.claimMalformedToolRetry() || runtime.claimMalformedToolRetry() {
 		t.Fatal("malformed tool retry was not bounded to one attempt")
+	}
+	if !runtime.claimHiddenToolRecovery() || runtime.claimHiddenToolRecovery() {
+		t.Fatal("hidden tool recovery was not bounded to one attempt")
 	}
 }
 

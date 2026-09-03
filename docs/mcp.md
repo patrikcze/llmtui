@@ -81,6 +81,15 @@ visible with a compact names-only MCP directory in prompt context.
 Use the directory for inventory and search a likely exact name with
 `max_results: 1` to avoid loading unrelated schemas.
 
+A model may emit several `tool_search` calls in one batch. llmtui validates
+all of them before doing any search, preserves their call IDs and order, and
+performs one continuation inference after returning every result. If one
+search is invalid, the whole search-only batch fails without disclosure. A
+batch that mixes discovery with any executable call is rejected atomically:
+new schemas cannot become callable partway through the batch that found them.
+Search remains local and read-only; it never calls an MCP server or grants
+approval.
+
 Each tool is exposed to the model as `mcp__<server>__<tool>` (e.g.
 `mcp__jiraWorklog__session_start`), so tools from different servers can
 never collide by name. Because `__` is the server/tool separator, a server
@@ -111,7 +120,10 @@ MCP results are labeled as untrusted external data, enclosed in matching
 collision-checked begin/end markers, and share the workspace tools' output
 cap (`tools.max_file_kb`,
 default 512 KB): an oversized reply is truncated with a marker rather than
-flooding the model's context.
+flooding the model's context. An MCP `isError: true` result remains an errored
+tool result. The model and saved session receive the complete sanitized,
+framed detail, while compact terminal rendering shows the first actionable
+error line. `/tools output` toggles the complete detail for human inspection.
 
 **Small-model name mangling.** Some smaller local models reproduce
 `mcp__server__tool` names imperfectly (e.g. collapsing the double
@@ -126,10 +138,38 @@ stronger tool-calling model.
 Visible MCP tools are sent in the same native `tools` array as workspace tools.
 Request composition snapshots that exact array once; the provider request,
 cache fingerprint, context estimate, and `/debug last` tool hash all refer to
-that same snapshot. `tool_search` searches only currently connected, enabled,
-undisclosed tools. A returned name receives its complete schema on the next
+that same snapshot. `tool_search` searches the full currently connected and
+enabled MCP catalog, including already-disclosed tools, so repeated inventory
+queries remain stable. A returned name receives its complete schema on the next
 inference, but invoking it still follows the server's normal approval policy.
 Guessing a hidden or unregistered name never executes it.
+
+For the embedded native provider, an exact call to a connected, eligible but
+currently hidden MCP name is a typed generation error before the call reaches
+the TUI executor. llmtui may recover once per turn by disclosing only that
+exact registered schema and asking the model for a fresh inference. The failed
+call is not executed or added as a tool call, fuzzy/unknown/disconnected names
+do not recover, and any newly generated call still passes the ordinary exact
+approval check. Fenced fallback already reaches the controller and receives
+the normal “use `tool_search`” rejection instead.
+
+Disclosures reset when the next human message begins; conversation messages
+and earlier correlated tool calls/results do not. `/retry` performs a fresh
+inference with the current visible schema set—it does not replay a failed MCP
+call or silently change its arguments. Disconnect and disable still remove
+affected schemas immediately.
+
+For a moderate, stable server catalog and a small model that struggles with
+discovery, set `tools.discovery.threshold` above the total eligible tool count
+(native + web + MCP), for example `48`, to offer all schemas directly. This
+spends more context and applies globally, so the default bounded discovery is
+better for large or changing catalogs. `approve: auto` is unrelated to
+visibility: it removes the human confirmation for that server's calls and
+should be used only when every advertised side effect is trusted.
+
+The provider/execution identity is always `mcp__<server>__<tool>`. The shorter
+`server: tool` spelling is display-only; it never changes routing, approval,
+history identity, or typo handling.
 
 When the optional [HTTP tool registry](tool-registry.md) is enabled, its next
 snapshot reads this same model-visible array. A successful `/mcp connect`

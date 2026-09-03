@@ -2154,6 +2154,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case provider.EventError:
+		if name, ok := m.hiddenMCPToolRecoveryName(msg.event.Err); ok && m.claimHiddenToolRecovery() {
+			m.discloseTools([]string{name})
+			m.discardFailedStreamForRecovery()
+			m.notice = fmt.Sprintf("model requested hidden MCP tool %q — retrying with its schema", name)
+			m.refreshViewport()
+			return m, m.continueChat()
+		}
 		// A cancellation caused by the idle watchdog surfaces here as
 		// context.Canceled; report it as a stall, not a raw cancel.
 		if m.streamCanceledByIdle() {
@@ -2164,6 +2171,26 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, m.persistAgentRun()
 	}
 	return m, nil
+}
+
+// discardFailedStreamForRecovery finalizes a provider generation whose tool
+// call was rejected before it became an executable call. The failed attempt
+// contributes no assistant/tool message; the original user turn and all prior
+// correlated tool history remain intact for a fresh inference.
+func (m *Model) discardFailedStreamForRecovery() {
+	m.thinking = false
+	m.streamBuf.Reset()
+	m.reasoningBuf.Reset()
+	m.reasoningStart = time.Time{}
+	m.reasoningEnd = time.Time{}
+	m.filteredReasoningLen = 0
+	m.reasoningLen = 0
+	m.progressText = ""
+	m.thinkFilter = nil
+	m.streamToolCalls = nil
+	m.streamContinuation = nil
+	stream, _ := m.turnRuntime.finishStream(turnOutcomeToolContinuation)
+	drainProviderStream(stream)
 }
 
 // streamCanceledByIdle reports whether the current stream's context was
