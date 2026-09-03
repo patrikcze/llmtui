@@ -424,9 +424,9 @@ what it already has — the turn never dead-ends in an error.
   directory the model can act on and the approval mode.
 - Tool activity renders compactly, Claude-Code style: one line per action
   (`⚒ run: ls -la`) and one line per result (`⎿ 24 lines of output`);
-  errors stay visible in full. `/tools output` toggles the complete output
-  for inspection. The model always receives the full text — collapsing is
-  display only.
+  errors show a concise actionable first line. `/tools output` toggles the
+  complete output for inspection. The model always receives the complete
+  sanitized text — collapsing is display only.
 - **File writes show a diff**, Claude-Code style: `Create(file)` lists the
   new content, `Update(file)` shows added/removed counts and a
   line-numbered `+`/`-` diff against the previous content (green/red, with
@@ -460,9 +460,16 @@ visible alongside a compact MCP directory containing server names, tool counts,
 and bounded tool names only. This keeps capability awareness in the prompt
 without carrying every description and JSON schema. `tool_search` discloses
 matching full schemas for the current human task, up to a bounded result count;
-the next inference receives each selected schema. A new human task clears full
-schema disclosures but retains the compact live directory. Disconnecting a
-server removes it immediately. Hidden or guessed MCP names cannot execute.
+the next inference receives each selected schema. Several search calls may be
+batched only when every call is `tool_search`; mixed discovery/action batches
+are rejected. A new human task clears full schema disclosures but retains the
+compact live directory and conversation history. The embedded native provider
+can recover once from an exact eligible-but-hidden name by retrying inference
+with that schema—it never executes the failed call. Disconnecting a server
+removes it immediately. Unknown, fuzzy, disconnected, or guessed names cannot
+execute. Raise the global threshold above the total eligible tool count when a
+moderate stable catalog should always be visible to a weaker model; this costs
+context and does not bypass MCP approval.
 
 ## Web tools
 
