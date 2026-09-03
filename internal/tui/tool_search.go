@@ -114,26 +114,40 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		m.refreshViewport()
 		return nil, true
 	}
-	if len(calls) != 1 || searchCount != 1 {
-		return m.rejectWholeBatch(calls, errors.New("tool_search must be the only call in its batch; no calls in this batch were executed")), true
+	if searchCount != len(calls) {
+		err := errors.New("a discovery batch may contain only tool_search calls; no calls in this batch were executed")
+		return m.rejectWholeBatch(calls, err), true
 	}
-	call := calls[0]
-	if call.InputErr == "" {
-		if err := tools.ValidateToolSearchCall(&call); err != nil {
-			call.InputErr = err.Error()
+	invalidIndex := -1
+	invalidReason := ""
+	for index := range calls {
+		if calls[index].InputErr == "" {
+			if err := tools.ValidateToolSearchCall(&calls[index]); err != nil {
+				calls[index].InputErr = err.Error()
+			}
+		}
+		if calls[index].InputErr != "" && invalidIndex < 0 {
+			invalidIndex = index
+			invalidReason = calls[index].InputErr
 		}
 	}
-	if call.InputErr != "" {
-		return m.rejectWholeBatch([]tools.Call{call}, fmt.Errorf("invalid arguments for tool_search: %s", call.InputErr)), true
+	if invalidIndex >= 0 {
+		return m.rejectWholeBatch(
+			calls,
+			fmt.Errorf("invalid arguments for tool_search call %d: %s; no calls in this batch were executed", invalidIndex+1, invalidReason),
+		), true
 	}
+	plan := newToolBatchPlan(calls)
 	if m.cfg.Tools.NoProgress.Enabled {
-		plan, terminal := m.progress.planBatch([]tools.Call{call})
-		if plan.blockedCount() == 1 {
-			return m.handleBlockedProgress([]tools.Call{call}, progressBlockReason(plan), terminal), true
+		var terminal bool
+		plan, terminal = m.progress.planBatch(calls)
+		if plan.blockedCount() == len(calls) {
+			return m.handleBlockedProgress(calls, progressBlockReason(plan), terminal), true
 		}
 	}
-	if exceeded, reason := m.agentHardBudgetExceeded(1); exceeded {
-		return m.terminateAgentBudget([]tools.Call{call}, reason), true
+	runnable := plan.runnableCalls()
+	if exceeded, reason := m.agentHardBudgetExceeded(len(runnable)); exceeded {
+		return m.terminateAgentBudget(calls, reason), true
 	}
 
 	searchable := m.searchableMCPToolSpecs()
@@ -144,6 +158,34 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 			Name: spec.Name, Description: spec.Description, Source: "mcp:" + server,
 		})
 	}
+	executed := make([]tools.Result, 0, len(runnable))
+	disclosedNames := make([]string, 0)
+	for _, call := range runnable {
+		result, names := m.runToolSearch(call, candidates)
+		executed = append(executed, result)
+		disclosedNames = append(disclosedNames, names...)
+	}
+	m.discloseTools(disclosedNames)
+	results, observed := plan.mergeResults(executed)
+	m.advanceToolRound()
+	m.toolOK += len(observed)
+	m.toolErr += len(results) - len(observed)
+	m.recordAgentToolResultsCount(results, false, len(observed))
+	if m.cfg.Tools.NoProgress.Enabled {
+		m.progress.observeResults(observed)
+	}
+	m.notice = fmt.Sprintf("tool search disclosed %d matching tool(s)", len(m.disclosedToolOrder))
+	if blocked := len(results) - len(observed); blocked > 0 {
+		m.notice = fmt.Sprintf(
+			"tool search disclosed %d matching tool(s), blocked %d repeat(s)",
+			len(m.disclosedToolOrder),
+			blocked,
+		)
+	}
+	return m.sendToolResults(results), true
+}
+
+func (m *Model) runToolSearch(call tools.Call, candidates []tools.ToolSearchCandidate) (tools.Result, []string) {
 	limit := min(call.Max, m.toolDiscoveryMaxResults())
 	matches, totalMatches := tools.SearchToolsWithTotal(call.SearchQuery, limit, candidates)
 	if matches == nil {
@@ -153,7 +195,6 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 	for index, match := range matches {
 		names[index] = match.Name
 	}
-	m.discloseTools(names)
 	truncated := totalMatches > len(matches)
 	hint := "Returned matches are now callable by exact name; normal approval policy still applies."
 	if truncated {
@@ -165,15 +206,32 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		Query: call.SearchQuery, Matches: matches, TotalMatches: totalMatches,
 		Truncated: truncated, Hint: hint,
 	})
-	result := tools.Result{Call: call, Output: string(payload)}
-	m.advanceToolRound()
-	m.toolOK++
-	m.recordAgentToolResultsCount([]tools.Result{result}, false, 1)
-	if m.cfg.Tools.NoProgress.Enabled {
-		m.progress.observeResults([]tools.Result{result})
+	return tools.Result{Call: call, Output: string(payload)}, names
+}
+
+func (m *Model) hiddenMCPToolRecoveryName(err error) (string, bool) {
+	if !m.useNativeTools() {
+		return "", false
 	}
-	m.notice = fmt.Sprintf("tool search disclosed %d matching tool(s)", len(matches))
-	return m.sendToolResults([]tools.Result{result}), true
+	var unoffered *provider.ToolNotOfferedError
+	if !errors.As(err, &unoffered) {
+		return "", false
+	}
+	name := unoffered.RequestedName
+	if _, _, ok := tools.SplitMCPToolName(name); !ok {
+		return "", false
+	}
+	for _, spec := range m.modelVisibleToolSpecs() {
+		if spec.Name == name {
+			return "", false
+		}
+	}
+	for _, spec := range m.eligibleToolSpecs() {
+		if spec.Name == name {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func (m *Model) rejectUnavailableMCPBatch(calls []tools.Call) (tea.Cmd, bool) {

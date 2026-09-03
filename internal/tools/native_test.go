@@ -221,6 +221,7 @@ func TestSplitMCPToolName(t *testing.T) {
 		wantOK     bool
 	}{
 		{"valid", "mcp__jiraWorklog__session_start", "jiraWorklog", "session_start", true},
+		{"playwright style", "mcp__playwright__browser_type", "playwright", "browser_type", true},
 		{"tool name itself contains underscores", "mcp__jiraWorklog__jira_get_issue", "jiraWorklog", "jira_get_issue", true},
 		{"no prefix", "session_start", "", "", false},
 		{"empty tool part", "mcp__jiraWorklog__", "", "", false},

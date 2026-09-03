@@ -65,6 +65,7 @@ type turnRuntime struct {
 	toolDepth                int
 	emptyContinuationRetried bool
 	malformedToolCallRetried bool
+	hasHiddenToolRecovery    bool
 	pendingCalls             []tools.Call
 	pendingToolPlan          *toolBatchPlan
 	pendingBudget            bool
@@ -105,6 +106,7 @@ func (r *turnRuntime) resetCycle() {
 	r.toolDepth = 0
 	r.emptyContinuationRetried = false
 	r.malformedToolCallRetried = false
+	r.hasHiddenToolRecovery = false
 	if !r.busy() {
 		r.transition(turnIdle, turnOutcomeNone)
 	}
@@ -128,6 +130,14 @@ func (r *turnRuntime) claimMalformedToolRetry() bool {
 
 func (r *turnRuntime) clearMalformedToolRetry() {
 	r.malformedToolCallRetried = false
+}
+
+func (r *turnRuntime) claimHiddenToolRecovery() bool {
+	if r.hasHiddenToolRecovery {
+		return false
+	}
+	r.hasHiddenToolRecovery = true
+	return true
 }
 
 func (r *turnRuntime) claimEmptyContinuationRetry() bool {
