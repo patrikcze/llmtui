@@ -167,6 +167,19 @@ func TestProgressLedgerDoesNotBlockWhenEvidenceChanges(t *testing.T) {
 	}
 }
 
+func TestProgressDigestIncludesDetailedErrorOutput(t *testing.T) {
+	call := tools.Call{MCPServer: "playwright", MCPTool: "browser_type", MCPArgs: `{"target":"wrong"}`}
+	first := tools.Result{Call: call, Err: errors.New("mcp server reported an error: invalid target"), Output: "snapshot expected ref=e42"}
+	changed := tools.Result{Call: call, Err: errors.New("mcp server reported an error: invalid target"), Output: "snapshot expected ref=e99"}
+	if progressDigest(first) == progressDigest(changed) {
+		t.Fatal("different MCP error detail produced the same progress digest")
+	}
+	identical := tools.Result{Call: call, Err: errors.New("mcp server reported an error: invalid target"), Output: "snapshot expected ref=e42"}
+	if progressDigest(first) != progressDigest(identical) {
+		t.Fatal("identical MCP failure produced an unstable progress digest")
+	}
+}
+
 func differentEachTime(i int) string {
 	out := "result set #"
 	for j := 0; j <= i; j++ {

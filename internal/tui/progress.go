@@ -289,6 +289,8 @@ func progressDigest(r tools.Result) string {
 	if r.Err != nil {
 		h.Write([]byte("err:"))
 		h.Write([]byte(r.Err.Error()))
+		h.Write([]byte("\x00detail:"))
+		h.Write([]byte(r.Output))
 	} else {
 		h.Write([]byte("ok:"))
 		h.Write([]byte(r.Output))

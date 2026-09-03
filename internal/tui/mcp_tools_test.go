@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,6 +180,76 @@ func TestExecuteMCPCallServerReportsIsError(t *testing.T) {
 	res := executeMCPCall(context.Background(), reg, c, 0)
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "issue key not found") {
 		t.Errorf("err = %v, want it to surface the server's error content", res.Err)
+	}
+	if !strings.Contains(res.Output, "issue key not found") {
+		t.Errorf("output = %q, want complete framed server detail", res.Output)
+	}
+	if strings.Contains(res.Err.Error(), "LLMTUI_UNTRUSTED") {
+		t.Errorf("concise error duplicated framed payload: %v", res.Err)
+	}
+}
+
+func TestPlaywrightStyleSchemaReferenceAndErrorSurviveUnchanged(t *testing.T) {
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"target":{"type":"string","description":"Exact target reference from the page snapshot"},
+			"text":{"type":"string"}
+		},
+		"required":["target","text"],
+		"additionalProperties":false
+	}`)
+	const snapshot = `- combobox "Search products" [ref=e42]`
+	const failure = "Element target is invalid\n" +
+		"Expected an exact ref from the latest snapshot, such as ref=e42\n" +
+		"Observe a new snapshot before retrying."
+	reg := newConnectedMCPRegistry(t, "playwright", []mcp.Tool{
+		{Server: "playwright", Name: "browser_type", Description: "Type text into an element", Schema: schema},
+		{
+			Server: "playwright", Name: "browser_snapshot",
+			Description: "Capture accessibility snapshot", Schema: json.RawMessage(`{"type":"object"}`),
+		},
+	}, func(name string, input json.RawMessage) (mcp.Result, error) {
+		switch name {
+		case "browser_snapshot":
+			return mcp.Result{Content: snapshot}, nil
+		case "browser_type":
+			return mcp.Result{Content: failure, IsError: true}, nil
+		default:
+			return mcp.Result{}, fmt.Errorf("unexpected tool %q", name)
+		}
+	})
+
+	specs := mcpToolSpecs(reg)
+	typeSpec, ok := specByName(specs, "mcp__playwright__browser_type")
+	if !ok || string(typeSpec.Parameters) != string(schema) {
+		t.Fatalf("provider schema = %s, want %s", typeSpec.Parameters, schema)
+	}
+	snapshotResult := executeMCPCall(context.Background(), reg, tools.Call{
+		MCPServer: "playwright", MCPTool: "browser_snapshot", MCPArgs: `{}`,
+	}, 0)
+	if snapshotResult.Err != nil || !strings.Contains(snapshotResult.Output, "ref=e42") {
+		t.Fatalf("snapshot result = %+v", snapshotResult)
+	}
+	errorResult := executeMCPCall(context.Background(), reg, tools.Call{
+		MCPServer: "playwright", MCPTool: "browser_type", MCPArgs: `{"target":"combobox Search products","text":"Mac Mini"}`,
+	}, 0)
+	if errorResult.Err == nil || errorResult.Err.Error() != "mcp server reported an error: Element target is invalid" {
+		t.Fatalf("concise error = %v", errorResult.Err)
+	}
+	modelVisible := tools.NativeResults([]tools.Result{errorResult})[0].Content
+	for _, want := range []string{
+		"error: mcp server reported an error: Element target is invalid",
+		"ref=e42",
+		"Observe a new snapshot before retrying.",
+	} {
+		if !strings.Contains(modelVisible, want) {
+			t.Fatalf("model-visible error missing %q:\n%s", want, modelVisible)
+		}
+	}
+	summary := tools.SummarizeOutput(modelVisible)
+	if !strings.Contains(summary, "Element target is invalid") || strings.Contains(summary, "untrusted MCP result") {
+		t.Fatalf("collapsed summary = %q", summary)
 	}
 }
 

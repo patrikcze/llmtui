@@ -408,7 +408,7 @@ func TestHiddenNativeMCPRecoveryRequiresExactEligibleNameAndIsBounded(t *testing
 	m := configureDiscoveryModel(t, 10, nil)
 	m.hasHiddenToolRecovery = true
 	m.session.AddUser("continue")
-	m.turnRuntime.transition(turnModelStreaming, turnOutcomeNone)
+	m.transition(turnModelStreaming, turnOutcomeNone)
 	m.thinking = true
 	_, cmd := m.handleStreamEvent(streamEventMsg{gen: m.streamGen, ok: true, event: provider.ChatEvent{
 		Type: provider.EventError,

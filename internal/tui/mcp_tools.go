@@ -126,9 +126,25 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 		untrusted.Frame("mcp_result", server+"/"+tool, content),
 	)
 	if out.IsError {
-		res.Err = fmt.Errorf("%s", res.Output)
+		res.Err = errors.New(mcpErrorSummary(content))
 	}
 	return res
+}
+
+func mcpErrorSummary(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		const maxRunes = 200
+		runes := []rune(line)
+		if len(runes) > maxRunes {
+			line = string(runes[:maxRunes]) + "…"
+		}
+		return "mcp server reported an error: " + line
+	}
+	return "mcp server reported an error with no text detail"
 }
 
 // annotateUnknownTool adds only a small set of likely MCP corrections. It
