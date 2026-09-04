@@ -102,7 +102,7 @@ Embedded-only provider keys:
 | `mmproj_path` | empty | Optional matching multimodal-projector GGUF; enables vision and fixes this provider to the configured pair |
 | `library_path` | automatic | Advanced override for a trusted llama.cpp library directory; otherwise resolution checks `YZMA_LIB`, the release archive, the managed runtime, then a matching stamped legacy directory |
 | `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context unless an extrapolating `rope_scaling_type` is explicitly selected |
-| `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only |
+| `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only; positive = exact count. The **only** GPU control — no `tensor_split`/`split_mode`/`main_gpu`/device selection; multi-GPU uses llama.cpp's default split, constrained by `CUDA_VISIBLE_DEVICES` etc. at launch |
 | `threads` | `0` | Automatic CPU thread selection |
 | `batch_size` | `512` | Prompt-decode batch size |
 | `chat_template` | GGUF metadata | Inline Jinja template override |
@@ -132,7 +132,9 @@ Embedded-only provider keys:
 | `sampling.stop` | `[]` | Case-sensitive stop strings |
 
 See [embedded.md](embedded.md) for installation, platform support, examples,
-vision pairing, image limits, native tools/reasoning, and limitations.
+vision pairing, image limits, native tools/reasoning, and limitations, and
+[embedded-cuda-linux.md](embedded-cuda-linux.md) for the validated Linux
+NVIDIA CUDA / multi-GPU procedure.
 
 RoPE/YaRN and DRY are embedded-runtime controls. Ollama, LM Studio, vLLM,
 llama.cpp server, and other OpenAI-compatible backends own equivalent model

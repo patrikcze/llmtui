@@ -69,6 +69,16 @@ and an explicit category selection; the picker defaults to skip.
     must be owner-controlled and not group/world writable; invalid managed
     tiers are skipped with their reason. Never point the trusted
     `library_path`/`YZMA_LIB` overrides at an untrusted directory.
+  - A hand-built accelerator runtime (e.g. NVIDIA CUDA on Linux — see
+    [embedded-cuda-linux.md](embedded-cuda-linux.md)) is selected the same
+    way and is **not** hash-verified against the embedded manifest: llmtui
+    only probes that the expected `libllama`/`libggml*` files exist and warns
+    on a version-stamp mismatch. Build it from the pinned llama.cpp revision,
+    install NVIDIA driver/CUDA packages only from NVIDIA's official
+    repositories, and keep the runtime in an owner-controlled directory. If
+    you expose a companion `llama-server` for headless image input, bind it
+    to `127.0.0.1` and reach it over an SSH tunnel — never bind an
+    unauthenticated model API to a routable address.
   - Installation stages under the destination parent, fully verifies the
     result, and publishes it with an atomic rename. An unknown or invalid
     existing destination is never deleted automatically. Uninstall removes
