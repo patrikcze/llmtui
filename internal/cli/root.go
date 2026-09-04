@@ -71,6 +71,7 @@ func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.
 		newHistoryCmd(r),
 		newStatsCmd(r),
 		newVersionCmd(version, commit, date),
+		newSelfCmd(version, commit, date),
 	)
 
 	return cmd
