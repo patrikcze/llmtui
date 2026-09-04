@@ -17,14 +17,25 @@ threads without adding application `import "C"` code.
 | --- | --- | --- |
 | macOS arm64 (Apple Silicon) | Native CI and packaged runtime | Metal or CPU |
 | macOS amd64 | Packaged runtime | CPU |
-| Linux amd64 | Native CPU CI and packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
-| Linux arm64 | Packaged runtime | CPU; custom Vulkan runtime via `library_path` |
-| Windows amd64 | Packaged runtime | CPU; custom CUDA/Vulkan runtime via `library_path` |
+| Linux amd64 | Native CPU CI and packaged runtime | CPU packaged; pinned Vulkan pack via `runtime install --backend vulkan`; NVIDIA CUDA via a self-built `library_path` runtime (manually validated once — see below) |
+| Linux arm64 | Packaged runtime | CPU packaged; pinned Vulkan pack via `runtime install --backend vulkan` |
+| Windows amd64 | Packaged runtime | CPU packaged; pinned Vulkan pack via `runtime install --backend vulkan` |
 | Android arm64 (Termux) | Not supported — no upstream llama.cpp release | — |
 
-The normal Ollama and OpenAI-compatible providers remain portable regardless
-of embedded-runtime support on the host. See [android.md](android.md) for
-Termux/Android specifics.
+"Packaged" / "CI" mean project-supported and exercised in automation.
+"Manually validated once" means one lab deployment was verified and recorded,
+not that it is CI-tested or vendor-certified. The normal Ollama and
+OpenAI-compatible providers remain portable regardless of embedded-runtime
+support on the host. See [android.md](android.md) for Termux/Android specifics.
+
+**Linux + NVIDIA CUDA:** `llmtui runtime install` never installs a CUDA
+runtime. Running the embedded provider on NVIDIA GPUs (including GPUs passed
+through to a VM) needs a manually compiled llama.cpp runtime selected with
+`library_path`. The full procedure — VMware ESXi passthrough, the NVIDIA
+driver, building the pinned revision with `-DGGML_CUDA=ON`, dynamic-linker
+setup, multi-GPU behaviour and troubleshooting — is in
+[embedded-cuda-linux.md](embedded-cuda-linux.md), based on a validated Rocky
+Linux / NVIDIA A16 deployment.
 
 ## Install the native runtime
 
@@ -38,11 +49,12 @@ For a bare binary or source build, run:
 llmtui runtime install
 ```
 
-This explicit command downloads the official `b10066` asset for the current
-platform, verifies its exact byte size and pinned SHA-256 before parsing it,
-extracts only the embedded allowlist, recreates trusted library aliases, fully
-verifies the result, and atomically installs it under the platform user-data
-directory as `llmtui/runtime/b10066`. It never downloads a model.
+This explicit command downloads the official pinned asset for the current
+platform (the tag in `internal/runtime/pin.json`, currently `b10549`),
+verifies its exact byte size and pinned SHA-256 before parsing it, extracts
+only the embedded allowlist, recreates trusted library aliases, fully verifies
+the result, and atomically installs it under the platform user-data directory
+as `llmtui/runtime/<tag>`. It never downloads a model.
 
 Management commands:
 
@@ -76,22 +88,34 @@ llmtui runtime install --backend vulkan
 ```
 
 The host Vulkan loader and GPU driver still come from the operating system or
-GPU vendor. To use another accelerator build, compile the compatible llama.cpp
-revision as shared libraries and select it with `library_path` or `YZMA_LIB`:
+GPU vendor. To use another accelerator build (NVIDIA CUDA, ROCm, SYCL, …),
+compile the pinned llama.cpp revision as shared libraries and select it with
+`library_path` or `YZMA_LIB`:
 
 ```bash
+# PIN = the llama_tag from internal/runtime/pin.json in your llmtui source
+# tree; `llmtui doctor` also prints the tag llmtui expects. Currently b10549.
+PIN=b10549
 git clone https://github.com/ggml-org/llama.cpp.git
-cd llama.cpp
-git checkout b10066
-cmake -B build -DBUILD_SHARED_LIBS=ON
-cmake --build build --config Release -j
+cd llama.cpp && git checkout "$PIN"
+cmake -B build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release   # + your backend, e.g. -DGGML_CUDA=ON
+cmake --build build -j
 ```
 
-CUDA pack installation is not available: upstream publishes no Linux CUDA
-artifact, and the Windows CUDA runtime is hundreds of megabytes with separate
-redistribution requirements. `runtime install --backend cuda` fails explicitly
-rather than downloading an unpinned or incomplete asset. Keep yzma, the
-llama.cpp revision, and llmtui's pin aligned.
+For the complete, validated NVIDIA CUDA / multi-GPU procedure on Linux
+(including the exact CMake flags, `lib` vs `lib64`, `ldconfig`, and a
+troubleshooting matrix) see
+[embedded-cuda-linux.md](embedded-cuda-linux.md).
+
+**No CUDA pack is published.** `runtime install --backend cuda` fails on
+purpose: upstream ships no pinned Linux CUDA artifact, and the Windows CUDA
+runtime is hundreds of megabytes with separate redistribution requirements.
+(The `--backend` flag still lists `cuda` as an accepted value; there is simply
+no CUDA entry in `pin.json` for it to resolve, so it errors rather than
+downloading an unpinned or incomplete asset.) Keep yzma, the llama.cpp
+revision, and llmtui's pin aligned — the pin is the single source of truth
+(`internal/runtime/pin.json`: currently yzma `v1.24.0`, llama.cpp `b10549`,
+compatible builds `b10545`–`b10549`).
 
 Linux additionally needs `libffi.so.8` from the distribution's `libffi8`
 package. The dependency is initialized lazily: when it is missing, only the
@@ -264,6 +288,33 @@ llmtui chat --provider embedded --model /models/model.gguf \
 The environment equivalents are `LLMTUI_CONTEXT_SIZE` and
 `LLMTUI_GPU_LAYERS`.
 
+## Multiple GPUs and acceleration backends
+
+The embedded provider exposes exactly one GPU control: `gpu_layers`
+(`-1` offloads every layer — mapped internally to "all layers" — `0` is
+CPU-only, a positive integer is an explicit layer count). It does **not**
+expose `tensor_split`, `split_mode`, `main_gpu`, or device selection.
+
+With an accelerated runtime (CUDA/Vulkan/Metal/ROCm) the linked llama.cpp
+enumerates the visible devices and applies **its own default** multi-device
+split; llmtui does not override it. To constrain which devices are used, set
+the backend's standard environment variable before launch, e.g. for NVIDIA:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 llmtui chat --provider embedded
+```
+
+VRAM is per device. Several passed-through GPUs (for example the four
+processors of an NVIDIA A16) are **distinct CUDA devices** — their capacities
+add up in aggregate, but a single indivisible buffer or layer must still fit
+on one device. A model small enough to fit on one GPU may load entirely there.
+Verify real placement with `nvidia-smi`; inside the TUI, `/debug` reports
+`native backends: N registered, M devices` once a model is loaded.
+
+Metal (macOS Apple Silicon) and the pinned Vulkan pack are the
+project-packaged accelerators. NVIDIA CUDA on Linux needs a self-built
+runtime — see [embedded-cuda-linux.md](embedded-cuda-linux.md).
+
 ## Vision, tools, and reasoning
 
 GPT-OSS is a special native protocol path. The embedded runtime identifies it
@@ -420,11 +471,31 @@ default). Raise `context_size` or set a smaller
 `context.reserve_response_tokens` value appropriate for the model and desired
 answer length.
 
+### NVIDIA CUDA on Linux
+
+Building the pinned llama.cpp revision with CUDA, pointing llmtui at it,
+`lib` vs `lib64`, `ldconfig`, Secure Boot / DKMS, VMware passthrough MMIO, and
+a full symptom→cause→fix matrix are covered in
+[embedded-cuda-linux.md](embedded-cuda-linux.md).
+
+### Pasting an image over SSH does not work
+
+`Ctrl+V` reads the clipboard of the machine **running** llmtui. Over SSH on a
+headless host there is no graphical clipboard, so it fails even with
+`wl-paste` / `xclip` installed — the real cause is the absence of `DISPLAY` /
+`WAYLAND_DISPLAY`, not the missing tool the error names. There is no
+file-path image-attachment command today. For vision on a remote GPU host,
+run `llama-server` bound to `127.0.0.1`, forward it over SSH, and run llmtui
+locally as an `openai_compatible` client (see
+[embedded-cuda-linux.md](embedded-cuda-linux.md#10-headless--ssh-image-limitation)).
+
 ### Symbol-resolution or ABI errors
 
-Remove the incompatible runtime and fetch the pinned build. Do not mix yzma
-v1.19.0 with old llama.cpp libraries; this release requires `b9979` or newer
-and is acceptance-tested with `b10066`.
+Remove the incompatible runtime and install the pinned build. yzma and
+llama.cpp share a narrow compatible window: use only the tag/range in
+`internal/runtime/pin.json` (currently yzma `v1.24.0`, llama.cpp `b10549`,
+compatible builds `b10545`–`b10549`). Never pair a new binary with an old
+hand-built runtime, or vice versa.
 
 ## Design and licensing
 

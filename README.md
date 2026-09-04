@@ -148,6 +148,13 @@ vision; recognized embedded models also use native structured tools and
 `/think on|off|auto`. See [docs/embedded.md](docs/embedded.md) for a Gemma 4
 example, CPU/Metal choices, image limits, security notes, and troubleshooting.
 
+`runtime install` ships a CPU runtime (plus an optional pinned Vulkan pack on
+Linux/Windows amd64/arm64). Running the embedded provider on **NVIDIA CUDA**
+needs a self-built llama.cpp runtime; the full procedure — VMware ESXi GPU
+passthrough, the NVIDIA driver, building the pinned revision, and multi-GPU
+notes — is in [docs/embedded-cuda-linux.md](docs/embedded-cuda-linux.md),
+based on a validated Rocky Linux / NVIDIA A16 deployment.
+
 ### With any OpenAI-compatible server (vLLM, llama.cpp, Unsloth, …)
 
 ```bash

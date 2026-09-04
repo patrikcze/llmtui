@@ -2,6 +2,73 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-09-04 addendum: Linux NVIDIA CUDA and multi-GPU validation
+
+Status: **Accepted (validation record)**. This addendum records a manually
+validated deployment and updates stale version/support text. It changes no
+design decision.
+
+### Pin (supersedes all earlier version numbers in this ADR)
+
+`internal/runtime/pin.json` is authoritative. As of this addendum:
+
+- yzma `v1.24.0` (`go.mod`).
+- llama.cpp tag `b10549`, commit `b2e5e9b28b2484fbf94b543432ece638996a8b97`.
+- Compatible build range `b10545`–`b10549`.
+
+Every earlier "`yzma v1.19.0`", "`b10066`", "commit `86a9c79…`" and
+"`b9979`+" reference elsewhere in this document is historical and is
+superseded by the values above.
+
+### What this addendum supersedes
+
+- **"Non-goals (first increment)"** listed *CUDA validation* as out of scope.
+  CUDA inference has now been exercised end to end (details below). It remains
+  a **manually validated, non-CI, non-vendor-certified** path — the design
+  non-goal is lifted, a support guarantee is not added.
+- **"Supported platforms (first release)"** marks Linux amd64/arm64 and
+  Windows amd64 as *"Compiles but untested"*. Linux amd64 CPU inference is now
+  CI-tested (per the 2026-08-19 addendum) and Linux amd64 CUDA inference has
+  been manually validated. The other cells stand.
+- **"Native build strategy" / "Upstream pinning"** still reference
+  `scripts/fetch-llama-runtime.sh` as the fetch mechanism. That script now
+  only prints a deprecation notice and delegates to `llmtui runtime install`;
+  the 2026-08-19 addendum is the current description.
+
+### Validated deployment
+
+| Layer | Validated configuration |
+| --- | --- |
+| Hypervisor | VMware ESXi; GPUs assigned via **VMDirectPath I/O** (raw passthrough). No NVIDIA vGPU profile, no vGPU Manager. |
+| Guest | Rocky Linux 10.x x86_64, EFI firmware, full guest-memory reservation, `pciPassthru.use64bitMMIO=TRUE` with a 64-bit MMIO window rounded up to cover the firmware's reported BAR requirement. |
+| GPU | NVIDIA A16 — a board of **four independent 16 GB GPU processors**; four processors passed through as four distinct CUDA devices (~60 GiB aggregate, **not** one contiguous device). Compute capability 8.6. |
+| NVIDIA stack | Open DKMS kernel module; driver 610.57.04; CUDA toolkit 13.3 (`nvcc` 13.3.73); host GCC 14.3.1. Reference versions, not minimums. |
+| Runtime | llama.cpp built from the pinned tag with `-DBUILD_SHARED_LIBS=ON -DGGML_CUDA=ON`, installed to `/opt/llmtui/llama-<tag>-cuda/lib64`, registered via `/etc/ld.so.conf.d` + `ldconfig`, selected with `providers.<name>.library_path`. |
+| Model | `gpt-oss-20b` `Q4_K_S` GGUF; layers split across the selected GPUs; ~34 tok/s observed on two A16 processors (uncontrolled). |
+
+The selected design was unchanged by this exercise:
+
+```text
+embedded provider → llamart → yzma → dynamically loaded llama.cpp/ggml
+  libraries → CUDA backend → multiple passed-through NVIDIA GPU devices
+```
+
+No sidecar, hidden HTTP server, application `import "C"`, or build-tag
+bifurcation was introduced. The GPU layer split is llama.cpp's own default:
+llmtui exposes only `gpu_layers` (`-1` → all layers), not `tensor_split`,
+`split_mode`, `main_gpu`, or device selection; device visibility is
+constrained with `CUDA_VISIBLE_DEVICES` at launch.
+
+### Packaging unchanged
+
+`llmtui runtime install` still ships **no CUDA runtime**; `--backend cuda`
+still errors (no CUDA entry in `pin.json`). CUDA is an administrator-provided
+`library_path` runtime and carries the documented trusted-override caveat: it
+is probed for the expected `libllama`/`libggml*` files and a version-stamp
+mismatch warns, but its files are not hashed against the embedded manifest.
+
+The full operator procedure is `docs/embedded-cuda-linux.md`.
+
 ## 2026-08-19 addendum: verified runtime distribution
 
 Status: **Accepted and implemented**. This addendum supersedes the original
@@ -122,9 +189,17 @@ constructed by a `switch pc.Type` in `internal/app/factory.go` from
 watchdog, a native-tool fallback (`toolsRejectedError` → prompt-based tool
 protocol), a response cache keyed by request-shaping fields
 (`internal/cache`), and drains abandoned streams so producer goroutines exit.
-Release builds cover five platforms in a native GitHub Actions matrix. macOS
-uses `CGO_ENABLED=1` so Metal's native threads run with Go's real cgo runtime;
-Linux and Windows remain `CGO_ENABLED=0`.
+Release builds cover the desktop platforms in a native GitHub Actions matrix
+(plus a runtime-less Android archive). macOS uses `CGO_ENABLED=1` so Metal's
+native threads run with Go's real cgo runtime; Linux and Windows remain
+`CGO_ENABLED=0`.
+
+The embedded runtime is pinned once in `internal/runtime/pin.json` (yzma
+`v1.24.0`, llama.cpp `b10549`, compatible builds `b10545`–`b10549`). Packaged
+acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
+amd64/arm64); NVIDIA CUDA on Linux is a manually validated
+administrator-supplied `library_path` runtime (2026-09-04 addendum,
+`docs/embedded-cuda-linux.md`).
 
 ## Problem statement
 
