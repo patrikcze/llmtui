@@ -124,6 +124,24 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Assert release-naming contract (llmtui self update depends on this)
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            "llmtui-${GITHUB_REF_NAME}-darwin-amd64.tar.gz" \
+            "llmtui-${GITHUB_REF_NAME}-darwin-arm64.tar.gz" \
+            "llmtui-${GITHUB_REF_NAME}-linux-amd64.tar.gz" \
+            "llmtui-${GITHUB_REF_NAME}-linux-arm64.tar.gz" \
+            "llmtui-${GITHUB_REF_NAME}-windows-amd64.zip"; do
+            if [ ! -f "dist/$name" ]; then
+              echo "::error::expected release asset missing: $name (see docs/self-management.md)"
+              missing=1
+            fi
+          done
+          exit $missing
+
       - name: Generate checksums
         run: cd dist && find . -maxdepth 1 -type f ! -name checksums.txt -print | LC_ALL=C sort | xargs shasum -a 256 > checksums.txt
 

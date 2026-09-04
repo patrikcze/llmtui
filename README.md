@@ -91,6 +91,28 @@ cd llmtui
 go build -o llmtui ./cmd/llmtui
 ```
 
+Or download a release archive from
+[GitHub Releases](https://github.com/patrikcze/llmtui/releases), unpack it, and
+let llmtui install and update itself:
+
+```bash
+./llmtui self install            # ~/.local/bin/llmtui + ~/.local/lib/llmtui/runtime
+./llmtui self install --system   # /usr/local/bin/llmtui  (run from an elevated shell)
+llmtui self check                # is a newer release available?
+llmtui self update               # download, verify SHA-256, and replace in place
+```
+
+`self update` only ever installs official GitHub Releases of
+`patrikcze/llmtui`. The platform archive is verified against the release's
+`checksums.txt` **before** it is unpacked, extraction is confined to a private
+staging directory, and the working binary is replaced only after the new one
+has been downloaded, verified, extracted and validated — a failure at any step
+leaves the current installation untouched. The binary and its bundled
+llama.cpp runtime are always updated together. Supported platforms: darwin
+(amd64/arm64), linux (amd64/arm64), windows (amd64). Development/source builds
+cannot be ordered against releases — `self check` says so and `self install`
+still works. See [docs/self-management.md](docs/self-management.md).
+
 ## Quick start
 
 If no backend is running, `llmtui` automatically falls back to a built-in
@@ -234,6 +256,10 @@ The full reference for every section lives in
 | `llmtui history` | List saved chat sessions |
 | `llmtui stats` | All-time token usage per day with sparkline |
 | `llmtui version` | Version info |
+| `llmtui self check` | Check GitHub Releases for a newer llmtui (read-only) |
+| `llmtui self update` | Download, verify (SHA-256) and install the latest release |
+| `llmtui self install [--system]` | Install the running binary into a managed location |
+| `llmtui self path` | Show which llmtui executable is running (offline) |
 
 ## Keyboard shortcuts
 
