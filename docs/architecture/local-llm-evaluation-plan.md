@@ -10,7 +10,7 @@ are not llmtui measurements.
 
 | Research | What it supports | Current llmtui evidence and next step |
 | --- | --- | --- |
-| [Action-class diagnostic](https://arxiv.org/abs/2609.00949) | Measure action choice separately from execution success; prompt effects vary by model. | `internal/agent/errors.go` already separates malformed responses, argument validation, execution, denial, cancellation and timeout. `internal/tui/agent_loop_test.go` has a scripted provider, but no per-scenario gold action labels or confusion matrix. Add these in a later test-only PR. |
+| [Action-class diagnostic](https://arxiv.org/abs/2609.00949) | Measure action choice separately from execution success; prompt effects vary by model. | `internal/agent/errors.go` already separates malformed responses, argument validation, execution, denial, cancellation and timeout. Slice 2 (`internal/tui/agent_action_class_test.go`) adds per-scenario gold action labels (`TOOL_CALL`/`ASK`/`CONFIRM`/`REFUSE`/`OTHER`), an observed class derived from controller behaviour, and a separate execution-outcome dimension. A gold/observed confusion matrix against real models is Slice 3. |
 | [CAST](https://arxiv.org/abs/2608.30147) | Critic errors and refinement cost need measurement. | `internal/agent/deterministic.go`, `internal/agentverify/verifier.go`, and the TUI verifier attempt budget already provide deterministic checks and bounded verification. Measure false rejection before adjusting policy or selecting a critic. |
 | [ContextLeak](https://arxiv.org/abs/2608.27800) | Tool names and descriptions can induce context disclosure. | `internal/tui/mcp_tools.go` labels metadata as untrusted and tools retain approval policies. Labels alone do not prove resistance to injection. Start with a fake-server disclosure/approval regression, not a claim that prompt framing prevents exfiltration. |
 | [AsyncTool](https://arxiv.org/abs/2605.27995v3) | Delayed results expose dependency and state-tracking failures. | Current batches return ordered results; cancellation generations reject stale messages. `docs/context-management.md` documents compaction boundaries around correlated results. Test these invariants before considering concurrent tool scheduling. |
@@ -40,7 +40,19 @@ persisted schema, prompt, or approval behavior is needed. Existing stale-result
 handling remains in place. This slice corrects error evidence; it does not
 implement semantic action classification or establish model quality.
 
-## Slice 2: label scripted action scenarios (separate test-only PR)
+## Slice 2: label scripted action scenarios (this PR)
+
+Implemented in `internal/tui/agent_action_class_test.go`: a test-only harness
+over the existing scripted provider. Each fixture carries a scenario ID, an
+explicit gold `wantAction` (`TOOL_CALL`/`ASK`/`CONFIRM`/`REFUSE`/`OTHER`) and a
+gold `wantOutcome` (`succeeded`/`invalid_arguments`/`execution_failed`/
+`denied`/`none`). `observeAgentAction` drives the run, resolves at most one
+pending approval and one `ask_user` per fixture, and classifies the **first**
+decisive controller action from a raw mechanic — a non-`ask_user` tool call, an
+`ask_user` pause, a workspace-write approval gate, or no call at all — then maps
+that mechanic to a class, trusting the gold label only where the mechanic is
+consistent with it. No production classifier, prompt, config, or schema
+changes. The fixtures below are the starting set.
 
 Extend the existing scripted provider harness with scenario ID, expected action,
 observed action, and expected execution outcome. Begin with these fixtures:
