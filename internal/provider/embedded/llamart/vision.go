@@ -27,7 +27,7 @@ const (
 )
 
 type visionNative struct {
-	bitmapInit       func(mtmd.Context, *byte, uint64, bool) mtmd.BitmapWrapper
+	bitmapInit       func(mtmd.Context, *byte, uint64, bool, mtmd.InitOpt) mtmd.BitmapWrapper
 	bitmapFree       func(mtmd.Bitmap)
 	chunksInit       func() mtmd.InputChunks
 	chunksFree       func(mtmd.InputChunks)
@@ -156,7 +156,13 @@ func (r *Runtime) evaluateVisionPrompt(
 	}()
 	for index := range images {
 		data := images[index].Data
-		wrapper := r.vision.bitmapInit(r.mctx, &data[0], uint64(len(data)), false)
+		// yzma v1.26 added an InitOpt argument that only configures video
+		// decoding (fps target, ffmpeg dir, timestamp interval). llmtui
+		// only ever passes still PNG/JPEG buffers, and every InitOpt field
+		// documents its zero value as the default behaviour, so the zero
+		// value is used directly — mtmd.InitOptDefault() would otherwise
+		// force a native FFI call into this otherwise mock-friendly path.
+		wrapper := r.vision.bitmapInit(r.mctx, &data[0], uint64(len(data)), false, mtmd.InitOpt{})
 		goruntime.KeepAlive(data)
 		if wrapper.Bitmap == 0 {
 			return result, fmt.Errorf("preprocess image %d: mtmd could not create a bitmap", index+1)

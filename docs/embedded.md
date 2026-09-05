@@ -50,7 +50,7 @@ llmtui runtime install
 ```
 
 This explicit command downloads the official pinned asset for the current
-platform (the tag in `internal/runtime/pin.json`, currently `b10549`),
+platform (the build in `internal/runtime/pin.json`, currently `b10809`),
 verifies its exact byte size and pinned SHA-256 before parsing it, extracts
 only the embedded allowlist, recreates trusted library aliases, fully verifies
 the result, and atomically installs it under the platform user-data directory
@@ -94,8 +94,9 @@ compile the pinned llama.cpp revision as shared libraries and select it with
 
 ```bash
 # PIN = the llama_tag from internal/runtime/pin.json in your llmtui source
-# tree; `llmtui doctor` also prints the tag llmtui expects. Currently b10549.
-PIN=b10549
+# tree; `llmtui doctor` also prints the build llmtui expects. Currently b10809
+# (the nightly build that upstream's v0.4.0 release points at).
+PIN=b10809
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp && git checkout "$PIN"
 cmake -B build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release   # + your backend, e.g. -DGGML_CUDA=ON
@@ -114,8 +115,8 @@ runtime is hundreds of megabytes with separate redistribution requirements.
 no CUDA entry in `pin.json` for it to resolve, so it errors rather than
 downloading an unpinned or incomplete asset.) Keep yzma, the llama.cpp
 revision, and llmtui's pin aligned — the pin is the single source of truth
-(`internal/runtime/pin.json`: currently yzma `v1.24.0`, llama.cpp `b10549`,
-compatible builds `b10545`–`b10549`).
+(`internal/runtime/pin.json`: currently yzma `v1.26.1` and llama.cpp build
+`b10809`, i.e. the build behind upstream's `v0.4.0` tagged release).
 
 Linux additionally needs `libffi.so.8` from the distribution's `libffi8`
 package. The dependency is initialized lazily: when it is missing, only the
@@ -493,8 +494,8 @@ locally as an `openai_compatible` client (see
 
 Remove the incompatible runtime and install the pinned build. yzma and
 llama.cpp share a narrow compatible window: use only the tag/range in
-`internal/runtime/pin.json` (currently yzma `v1.24.0`, llama.cpp `b10549`,
-compatible builds `b10545`–`b10549`). Never pair a new binary with an old
+`internal/runtime/pin.json` (currently yzma `v1.26.1`, llama.cpp build
+`b10809` = upstream's `v0.4.0` release). Never pair a new binary with an old
 hand-built runtime, or vice versa.
 
 ## Design and licensing

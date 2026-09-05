@@ -16,7 +16,7 @@ require (
 	github.com/doug/termtex v0.0.0-20260626010055-e3e21f41b38e
 	github.com/ebitengine/purego v0.10.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
-	github.com/hybridgroup/yzma v1.24.0
+	github.com/hybridgroup/yzma v1.26.1
 	github.com/jupiterrider/ffi v0.7.0
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/spf13/cobra v1.10.2
