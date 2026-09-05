@@ -104,9 +104,10 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	if err != nil {
 		switch {
 		case errors.Is(callCtx.Err(), context.DeadlineExceeded):
-			res.Err = fmt.Errorf("mcp %s.%s timed out after %s", c.MCPServer, c.MCPTool, timeout)
+			res.Err = fmt.Errorf("mcp %s.%s timed out after %s: %w",
+				c.MCPServer, c.MCPTool, timeout, callCtx.Err())
 		case errors.Is(ctx.Err(), context.Canceled):
-			res.Err = fmt.Errorf("mcp %s.%s cancelled by the user", c.MCPServer, c.MCPTool)
+			res.Err = fmt.Errorf("mcp %s.%s cancelled by the user: %w", c.MCPServer, c.MCPTool, ctx.Err())
 		default:
 			res.Err = err
 		}
