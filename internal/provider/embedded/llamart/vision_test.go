@@ -183,7 +183,7 @@ func TestEvaluateVisionPromptErrorsStillCleanUp(t *testing.T) {
 func TestEvaluateVisionPromptBitmapFailureDoesNotLeak(t *testing.T) {
 	chunksInitialized := 0
 	native := fakeVisionNative(nil, nil, func() {}, func() {}, func() {})
-	native.bitmapInit = func(mtmd.Context, *byte, uint64, bool) mtmd.BitmapWrapper { return mtmd.BitmapWrapper{} }
+	native.bitmapInit = func(mtmd.Context, *byte, uint64, bool, mtmd.InitOpt) mtmd.BitmapWrapper { return mtmd.BitmapWrapper{} }
 	native.chunksInit = func() mtmd.InputChunks { chunksInitialized++; return 1 }
 	runtime := &Runtime{mctx: 1, vision: native}
 	_, err := runtime.evaluateVisionPrompt(context.Background(), "x", []provider.Image{{Data: []byte{1}}}, 1, nil)
@@ -214,7 +214,7 @@ func TestEvaluateVisionPromptCancellationBoundaries(t *testing.T) {
 		cancel()
 		bitmapCalls := 0
 		native := fakeVisionNative(nil, nil, func() {}, func() {}, func() {})
-		native.bitmapInit = func(mtmd.Context, *byte, uint64, bool) mtmd.BitmapWrapper {
+		native.bitmapInit = func(mtmd.Context, *byte, uint64, bool, mtmd.InitOpt) mtmd.BitmapWrapper {
 			bitmapCalls++
 			return mtmd.BitmapWrapper{Bitmap: 1}
 		}
@@ -293,7 +293,7 @@ func TestPreparePromptClearsImageContamination(t *testing.T) {
 
 func fakeVisionNative(tokens []uint64, positions []llama.Pos, freeBitmap, freeChunks, clear func()) visionNative {
 	return visionNative{
-		bitmapInit: func(mtmd.Context, *byte, uint64, bool) mtmd.BitmapWrapper {
+		bitmapInit: func(mtmd.Context, *byte, uint64, bool, mtmd.InitOpt) mtmd.BitmapWrapper {
 			return mtmd.BitmapWrapper{Bitmap: 1}
 		},
 		bitmapFree: func(mtmd.Bitmap) { freeBitmap() },
