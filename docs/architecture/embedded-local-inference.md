@@ -2,6 +2,46 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-09-05 addendum: runtime pin → llama.cpp v0.4.0 / yzma v1.26.1
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
+every earlier pin value in this document, including the 2026-09-04 addendum's.
+
+- yzma `v1.24.0` → **`v1.26.1`** (`go.mod`). yzma 1.25 added support for
+  llama.cpp's new semver-tagged releases; 1.26 added WebAssembly builds and
+  SHA-256 digest-manifest verification. One binding change reached llmtui:
+  `mtmd.BitmapInitFromBuf` gained a trailing `InitOpt` (video-decode options)
+  argument. `internal/provider/embedded/llamart/vision.go` passes the zero
+  value (`mtmd.InitOpt{}`) — every field's zero value is its documented
+  default and llmtui only ever passes still images, so this avoids a native
+  FFI call on an otherwise mock-friendly path. No behaviour change.
+- llama.cpp `b10549` → **`b10809`**, commit
+  `5266f24da75dc449bd56cbed7addb9c8e4a6a73e`. Upstream now publishes semver
+  release tags (`v0.4.0`, …) whose only asset is a pointer to a nightly
+  `bNNNNN` build; the binaries still live under the `bNNNNN` tag. `pin.json`
+  records `b10809` (the build behind `v0.4.0`) and keeps the existing
+  `ggml-org/llama.cpp` asset URLs. yzma's own `DefaultVersion` pins the same
+  `v0.4.0` → `b10809` pair, verified against the yzma digest manifest
+  (`sha256:b95e8680…`); every archive SHA-256 in the new `pin.json` was
+  checked against that manifest before the per-file hashes were computed.
+- `compatible_range` is now `b10809`–`b10809`: with semver-tagged releases the
+  compatible target is a single exact build, not a range. The field is
+  metadata only; nothing enforces it at runtime.
+- New upstream libraries in the b10809 archives (`libllama-common`, the
+  `*-impl` tool libraries) are **not** bundled — `libllama`/`libmtmd` do not
+  depend on them (verified via `otool -L` / `DT_NEEDED`). The bundled file
+  set and alias families are unchanged from b10549; only soversions and
+  hashes move (`libggml*.0.20.2` → `.0.23.0`, `libllama*.0.1.2` → `.0.4.0`,
+  `libmtmd*.0.1.2` → `.0.4.0`).
+
+Validation: `go test ./...` and `go vet` clean on the bumped module;
+`llmtui runtime install` downloads, size/SHA-256-verifies, extracts and
+full-verifies the b10809 darwin-arm64 runtime; the opt-in `llamart`
+integration suite (`TestRuntimeIntegration`, provider end-to-end, KV reuse,
+cancellation) passes against it with a real GGUF on CPU/Metal. The CI native
+lane (linux/amd64 + darwin/arm64 CPU) is the gate for the platforms not
+exercised locally; vision was not re-run locally (no projector model).
+
 ## 2026-09-04 addendum: Linux NVIDIA CUDA and multi-GPU validation
 
 Status: **Accepted (validation record)**. This addendum records a manually
@@ -18,7 +58,8 @@ design decision.
 
 Every earlier "`yzma v1.19.0`", "`b10066`", "commit `86a9c79…`" and
 "`b9979`+" reference elsewhere in this document is historical and is
-superseded by the values above.
+superseded by the values above. (The 2026-09-05 addendum supersedes these in
+turn.)
 
 ### What this addendum supersedes
 
@@ -194,8 +235,9 @@ Release builds cover the desktop platforms in a native GitHub Actions matrix
 native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
-The embedded runtime is pinned once in `internal/runtime/pin.json` (yzma
-`v1.24.0`, llama.cpp `b10549`, compatible builds `b10545`–`b10549`). Packaged
+The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
+yzma `v1.26.1`, llama.cpp build `b10809` — the build behind upstream's
+`v0.4.0` tagged release; see the 2026-09-05 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
