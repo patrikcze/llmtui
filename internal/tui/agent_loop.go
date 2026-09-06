@@ -788,6 +788,16 @@ func (m *Model) startAgentVerification() tea.Cmd {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
 		}
 	}
+	// Criteria resolved from controller-observed evidence do not need a
+	// semantic verifier, regardless of verification mode. Sending a verifier
+	// that intentionally cannot see raw read_file output merely invites it to
+	// replay an already-proven atomic action.
+	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+		return syntheticResult(agent.VerificationResult{
+			Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
+			Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
+		})
+	}
 	switch mode {
 	case config.VerifierModeOff:
 		return syntheticResult(agent.VerificationResult{
@@ -804,12 +814,6 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// semantic verdict anyway — skip the inference entirely.
 		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
 			return syntheticResult(deterministic)
-		}
-		if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
-			return syntheticResult(agent.VerificationResult{
-				Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
-				Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
-			})
 		}
 		if run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 {
 			for _, criterion := range run.UnresolvedCriteria() {

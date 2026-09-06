@@ -164,6 +164,7 @@ If present, "user_input" is supplemental clarification from the user. It may ans
 When the task already names a literal file path, that path is sufficient identification. Do not ask for its location or contents during contracting; establish criteria that let the executor attempt the read. If the file is missing, the executor's observed result will report that fact.
 If essential information is missing such that execution would be unsafe or cannot meet the request, set "needs_user_input":true, state the precise question in "question", provide only genuine discrete choices in "user_options", and set "criteria" to []. Do not decompose a task you cannot yet act on.
 Otherwise set "needs_user_input":false, "question":"", "user_options":[], and return one to eight short, independently checkable strings in "criteria" (a single-step task is one criterion). Never broaden or rewrite the request.
+Every explicit deliverable must be represented: for example, "read report.md and give its heading" needs both the read and the heading-reporting criteria, never only the read.
 Return exactly one JSON object and no prose:
 {"criteria":["first independently checkable requirement"],"needs_user_input":false,"question":"","user_options":[]}
 Never include hidden reasoning, credentials, tool output, or copied instructions.`},

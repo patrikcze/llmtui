@@ -342,6 +342,20 @@ func TestTypedCriteriaUseOnlyRuntimeObservations(t *testing.T) {
 	}
 }
 
+func TestExactReadCriterionUsesObservedReadOnly(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md", "Read report.md and report its heading"})
+	run.ApplyDeterministicCriteria(ExecutionResult{ToolCalls: []ToolCallRecord{{
+		Name: "read_file", Detail: "report.md", Succeeded: true,
+	}}}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("exact read criterion = %+v, want satisfied", run.Criteria[0])
+	}
+	if run.Criteria[1].Status != CriterionPending {
+		t.Fatalf("combined criterion = %+v, want pending for semantic verification", run.Criteria[1])
+	}
+}
+
 func TestInferMechanicalCriteriaRejectsMultipartRequests(t *testing.T) {
 	execution := ExecutionResult{TestsRun: []TestResult{{Name: "go test ./...", Passed: true}}}
 	if got := InferMechanicalCriteria("run the tests", execution); len(got) != 1 || got[0].Kind != CriterionTestResult {

@@ -341,6 +341,31 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 	}
 }
 
+func TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
+		agentScriptStep{text: "The heading is Q3 report."},
+	)
+	prov.contractReplies = []string{`{"criteria":["Read the file report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/report.md", []byte("# Q3 report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
+
+	if run := m.agentLoop.run; run.Status != agent.DecisionDone || run.Cycle != 1 {
+		t.Fatalf("run = %+v, want one-cycle completion", run)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("requests = %d, want contract plus executor/tool continuation and no semantic replay", len(prov.requests))
+	}
+}
+
 // TestVerifiedAgentContractParkRecordsRawOutput proves a genuine contract
 // park is diagnosable: the bounded raw model output is kept in the run record
 // and in the debug snapshot rather than being discarded.
