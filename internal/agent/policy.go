@@ -49,6 +49,15 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 	if run.RepeatedFailures >= run.Limits.MaxRepeatedFailures {
 		return StopResult{Decision: DecisionFailed, Reason: fmt.Sprintf("same failure repeated %d times", run.RepeatedFailures)}
 	}
+	// A verifier may be unable to inspect deliberately redacted raw tool
+	// output while still marking every controller-owned criterion satisfied.
+	// That is an inconclusive verifier *explanation*, not unfinished work.
+	// Retrying here would repeat completed actions or manufacture a question
+	// for the user. Explicit input and deterministic failures were handled
+	// above and continue to take priority.
+	if verify.Verdict == VerificationInconclusive && run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+		return StopResult{Decision: DecisionDone, Reason: "all pinned acceptance criteria satisfied"}
+	}
 
 	switch verify.Verdict {
 	case VerificationPassed:

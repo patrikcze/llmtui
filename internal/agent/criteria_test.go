@@ -120,6 +120,26 @@ func TestVerifierCannotEndRunWithUnresolvedPinnedCriteria(t *testing.T) {
 	}
 }
 
+// An inconclusive verifier may lack access to redacted raw tool output even
+// though its own per-criterion updates confirm every controller-owned
+// requirement. That mismatch must finish the run: retrying would replay
+// completed work or solicit irrelevant user input.
+func TestInconclusiveVerifierCannotRetryResolvedPinnedCriteria(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"read report.md and report its heading"})
+
+	stop := completeCycle(t, run, now, "read report.md", VerificationResult{
+		Verdict:         VerificationInconclusive,
+		Summary:         "raw file content is redacted from verification",
+		Retryable:       true,
+		RecommendedNext: "ask the user to provide report.md",
+		CriteriaUpdates: []CriterionUpdate{{ID: "c1", Status: CriterionSatisfied}},
+	})
+	if stop.Decision != DecisionDone {
+		t.Fatalf("decision = %q, want done after every pinned criterion is satisfied", stop.Decision)
+	}
+}
+
 func TestCriteriaFailureKeyIsPhrasingImmune(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxRepeatedFailures = 2
