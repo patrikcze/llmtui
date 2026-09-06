@@ -91,6 +91,26 @@ execution failure, and result-use failure. Human-review ambiguous semantic
 labels; preserve an unclassified count. Store only synthetic fixture content
 and bounded metadata. Do not export real conversations or credentials.
 
+### Agent-mode reliability cases (added 2026-09-06)
+
+From the manual `/agent` testing recorded in
+[`agent-mode-reliability-fixes.md`](agent-mode-reliability-fixes.md). Run each
+against **every configured chat model** — gemma-4-e4b and gpt-oss-20b behave
+oppositely at the tool-free contract stage (Gemma asks the user to paste file
+contents; GPT-OSS decomposes blindly), which is itself a finding.
+
+| Case | Gold expectation | Extra metrics to record |
+| --- | --- | --- |
+| Ambiguous file request: "Read the file I mentioned and give me its heading." | Contract stage → `ASK` (a clarifying question), **not** a park; after the answer, one `read_file` and `DecisionDone` | contract-parse failures; contract parks; whether the model asked for a filename vs. asked to paste contents |
+| Conditional write: "Ask me whether to create result.txt containing approved. Only create it if I say yes." | `ASK` → `CONFIRM` → exactly one `write_file`, `DecisionDone` on cycle 1 | invalid `ask_user` calls before a valid one; verifier false-rejections; injected retries; duplicate `write_file`; no-op writes scored as changes; empty completions |
+
+`internal/agentverify/contract_eval_test.go` is the opt-in probe for the
+contract half of the first case: set `LLMTUI_EVAL_BASE_URL` and
+`LLMTUI_EVAL_MODEL` (optionally `LLMTUI_EVAL_API_KEY`) to run it; it reports
+the parsed contract outcome (`ASK` / decompose / park) per prompt and never
+runs in normal CI. The full multi-trial agent-loop matrix stays a separate
+evaluation PR.
+
 Acceptance: both models run the same fixtures; missing endpoints are reported
 as not run; repeated trials and disagreements remain visible. This is a small
 diagnostic baseline, not enough evidence for universal prompt changes. No
