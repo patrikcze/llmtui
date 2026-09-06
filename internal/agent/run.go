@@ -383,6 +383,19 @@ func (r *AgentRun) addEvent(now time.Time, kind, detail string) {
 	}
 }
 
+// NoteDiagnostic appends one bounded observability event without changing the
+// run's status or stage. It exists so the controller can persist a decisive
+// piece of evidence (e.g. the raw model control output that caused a contract
+// park) into the run record for later inspection. detail is truncated to the
+// standard 512-byte event bound and must carry no credential, tool output, or
+// hidden reasoning — the same contract as every other Event.
+func (r *AgentRun) NoteDiagnostic(now time.Time, kind, detail string) {
+	if r == nil || strings.TrimSpace(detail) == "" {
+		return
+	}
+	r.addEvent(now, kind, detail)
+}
+
 func (r *AgentRun) updateFailureCount(v VerificationResult) {
 	if v.Verdict == VerificationPassed {
 		r.FailureKey = ""

@@ -279,6 +279,90 @@ func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentContractClarificationSurfacesInsteadOfParking covers the
+// deterministic /agent park observed with gemma-4-e4b on "read the file I
+// mentioned…": the tool-free contract model correctly wants clarification but
+// also returns a provisional `criteria` decomposition. The run must ask the
+// user which file — not park with an internal error — and must not run any
+// tool before the answer arrives. Supplying the answer re-establishes the
+// contract and the run proceeds.
+func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
+		agentScriptStep{text: "report.md heading is Q3 report."},
+		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
+	)
+	prov.contractReplies = []string{
+		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`,
+		`{"criteria":["read report.md","report its heading"],"needs_user_input":false,"question":"","user_options":[]}`,
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/report.md", []byte("# Q3 report\nRevenue up 12%.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || run.Cycle != 0 || run.HasCriteria() {
+		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at contract/cycle 0",
+			run.Status, run.Stage, run.Cycle, len(run.Criteria))
+	}
+	if !strings.Contains(m.errText, "Which file did you mean?") {
+		t.Fatalf("errText = %q, want the model's clarifying question", m.errText)
+	}
+	if run.ToolCalls != 0 {
+		t.Fatalf("tool calls = %d before clarification, want 0", run.ToolCalls)
+	}
+
+	runID := run.ID
+	m.input.SetValue("report.md")
+	driveAgentCommands(t, m, m.send())
+
+	if m.agentLoop.run.ID != runID || m.agentLoop.run.Status != agent.DecisionDone {
+		t.Fatalf("after answer: run = %+v, want the same run completed", m.agentLoop.run)
+	}
+	if m.agentLoop.run.ContractInput != "report.md" {
+		t.Fatalf("ContractInput = %q, want the user's answer", m.agentLoop.run.ContractInput)
+	}
+}
+
+// TestVerifiedAgentContractParkRecordsRawOutput proves a genuine contract
+// park is diagnosable: the bounded raw model output is kept in the run record
+// and in the debug snapshot rather than being discarded.
+func TestVerifiedAgentContractParkRecordsRawOutput(t *testing.T) {
+	m := newTestModel(t)
+	prov := &scriptedAgentProvider{contractReplies: []string{`{"unexpected":"shape"}`, `{"still":"wrong"}`}}
+	m.prov = prov
+	m.model = "test-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Timeout = "1s"
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+	driveAgentCommands(t, m, m.startVerifiedRun("do the bounded task", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionParked {
+		t.Fatalf("status = %s, want parked", run.Status)
+	}
+	var raw *agent.Event
+	for i := range run.Events {
+		if run.Events[i].Kind == "contract_raw_output" {
+			raw = &run.Events[i]
+		}
+	}
+	if raw == nil || !strings.Contains(raw.Detail, "wrong") {
+		t.Fatalf("no contract_raw_output event carrying the model output; events = %+v", run.Events)
+	}
+	if !strings.Contains(m.lastDebug.AgentContractRaw, "wrong") {
+		t.Fatalf("lastDebug.AgentContractRaw = %q, want the raw contract output", m.lastDebug.AgentContractRaw)
+	}
+}
+
 type blockingContractProvider struct{ started chan struct{} }
 
 func (p *blockingContractProvider) Name() string                      { return "blocking-contract" }

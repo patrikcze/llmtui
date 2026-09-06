@@ -63,6 +63,10 @@ type debugInfo struct {
 	AgentStage    string
 	AgentStatus   string
 	AgentVerdict  string
+	// AgentContractRaw is the bounded raw model output from the most recent
+	// task-contract request, kept so a contract park is diagnosable in
+	// `/debug last` rather than only showing an opaque error string.
+	AgentContractRaw string
 	// MemoryHits is the merged, ranked hit list from the unified
 	// memoryindex.Retriever built in compositionBase (both KindUserPreference
 	// and KindSourceChunk hits). It is observability only — /debug last shows
