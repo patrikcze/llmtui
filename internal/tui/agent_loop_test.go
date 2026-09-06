@@ -293,7 +293,7 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
 	)
 	prov.contractReplies = []string{
-		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`,
+		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":["file_name_1","file_name_2","file_name_3"]}`,
 		`{"criteria":["read report.md","report its heading"],"needs_user_input":false,"question":"","user_options":[]}`,
 	}
 	root := t.TempDir()
@@ -314,6 +314,9 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 	}
 	if !strings.Contains(m.errText, "Which file did you mean?") {
 		t.Fatalf("errText = %q, want the model's clarifying question", m.errText)
+	}
+	if m.overlayOpen || m.picker.pickerKind == pickerAgentQuestion {
+		t.Fatalf("contract clarification opened an option picker for ungrounded choices: %+v", m.picker)
 	}
 	if run.ToolCalls != 0 {
 		t.Fatalf("tool calls = %d before clarification, want 0", run.ToolCalls)
@@ -1365,6 +1368,9 @@ func TestVerifiedAgentRecoveredAskUserFailuresDoNotForceRetry(t *testing.T) {
 	}
 	if cycle.Verification.Verdict != agent.VerificationPassed {
 		t.Fatalf("verdict = %s, want passed", cycle.Verification.Verdict)
+	}
+	if got := cycle.Execution.ToolCalls[2].Summary; got != "user answer received" {
+		t.Fatalf("ask_user summary = %q, want a controller-observed user answer", got)
 	}
 	// The verifier's evidence must not be dominated by the recovered failures.
 	if len(cycle.Execution.Errors) != 0 {

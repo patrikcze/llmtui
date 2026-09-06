@@ -518,11 +518,13 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 			return m, m.persistAgentRun()
 		}
 		m.notice = fmt.Sprintf("agent %s stopped for task-contract input", shortRunID(run.ID))
-		if len(contract.UserOptions) > 0 {
-			m.openAgentQuestionPicker(contract.Question, contract.UserOptions)
-		} else {
-			m.errText = "agent needs task-contract input: " + contract.Question
-		}
+		// A task contract has no conversation, workspace, tools, or prior
+		// executor evidence. Its user_options therefore cannot be grounded in
+		// facts the controller observed; showing model-invented placeholders
+		// such as "file_name_1" as selectable answers would make a guess look
+		// authoritative. Contract input is always free text. Executor and
+		// verifier questions may still offer their evidenced discrete choices.
+		m.errText = "agent needs task-contract input: " + contract.Question
 		m.syncAgentDebug()
 		m.endAgentRun()
 		m.refreshViewport()
@@ -1176,9 +1178,13 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err != nil {
 			kind = classifyToolError(result, denied)
 		}
+		summary := map[bool]string{true: "completed", false: "failed"}[result.Err == nil]
+		if result.Err == nil && result.Call.Tool == tools.ToolAskUser {
+			summary = "user answer received"
+		}
 		record := agent.ToolCallRecord{
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
-			ErrorKind: kind, Summary: map[bool]string{true: "completed", false: "failed"}[result.Err == nil],
+			ErrorKind: kind, Summary: summary,
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
 		if result.Err != nil {

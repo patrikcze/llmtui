@@ -158,6 +158,27 @@ func TestParseContractSalvagesClarificationWithProvisionalCriteria(t *testing.T)
 	}
 }
 
+func TestParseNonEstablishingVerifierDefaultsUnusedCriterionFields(t *testing.T) {
+	raw := `{"verdict":"passed","summary":"the read succeeded","recommended_next":"","retryable":false,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}]}`
+	result, err := Parse(raw, false)
+	if err != nil {
+		t.Fatalf("non-establishing verifier response with omitted empty criterion fields: %v", err)
+	}
+	if result.AtomicTask || len(result.ProposedCriteria) != 0 {
+		t.Fatalf("unused criterion fields = %+v, want defaults", result)
+	}
+	if len(result.CriteriaUpdates) != 1 || result.CriteriaUpdates[0].Status != agent.CriterionSatisfied {
+		t.Fatalf("criteria updates = %+v", result.CriteriaUpdates)
+	}
+}
+
+func TestVerifierPromptExplainsSuccessfulAskUserEvidence(t *testing.T) {
+	prompt := verifierMessages(`{"Execution":{"tool_calls":[{"name":"ask_user","succeeded":true}]}}`, false)[0].Content
+	if !strings.Contains(prompt, "successful\nask_user record proves") || !strings.Contains(prompt, "answer content is\nintentionally redacted") {
+		t.Fatalf("verifier prompt does not explain the ask_user evidence contract: %q", prompt)
+	}
+}
+
 // TestParseContractToleratesEnvelopeShapeNoise covers the second deterministic
 // /agent park observed with an embedded gemma-4-e4b: the contract model
 // returns valid criteria but also a stray field ("criteria_for_selection"),
@@ -812,15 +833,17 @@ func buildEnvelope(overrides map[string]string, omit ...string) string {
 	return b.String()
 }
 
-// TestParseRejectsEachMissingRequiredField is the table-driven guard for
-// verifierJSONSchema's minimal "required" list: omitting any required key
-// must fail Parse, and the error must name that field so
-// the repair-prompt round-trip has something concrete to act on.
+// TestParseRejectsEachMissingRequiredField is the table-driven guard for the
+// verifier fields required in each mode: later cycles require their decision
+// fields, while establishing requests additionally require criterion fields.
+// A missing required key must fail Parse and name the field so the repair
+// prompt has something concrete to correct.
 func TestParseRejectsEachMissingRequiredField(t *testing.T) {
 	for _, field := range verifierRequiredFieldOrder {
 		t.Run(field, func(t *testing.T) {
 			raw := buildEnvelope(nil, field)
-			_, err := Parse(raw, false)
+			establishing := field == "proposed_criteria" || field == "atomic_task"
+			_, err := Parse(raw, establishing)
 			if !errors.Is(err, agent.ErrMalformedControl) {
 				t.Fatalf("Parse() with %q omitted: err = %v, want malformed control", field, err)
 			}

@@ -293,6 +293,9 @@ func CollectEvidence(cycle int, execution ExecutionResult) []EvidenceItem {
 	}
 	for _, name := range successOrder {
 		summary := name + " succeeded"
+		if name == "ask_user" {
+			summary = "ask_user succeeded and a user answer was received"
+		}
 		if n := successCount[name]; n > 1 {
 			summary = fmt.Sprintf("%s succeeded (%d calls)", name, n)
 		}

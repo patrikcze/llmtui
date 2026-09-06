@@ -260,6 +260,11 @@ func verifierMessages(evidence string, establishing bool) []provider.Message {
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: `You are an independent verifier. Evaluate only the supplied observable evidence.
 Do not assume work succeeded. Tool, build, test, permission, timeout, and safety failures are authoritative.
+The Execution.ToolCalls ledger is controller-observed evidence, not executor prose. In particular, a successful
+ask_user record proves that the question was delivered and a correlated user answer was received; answer content is
+intentionally redacted. If a later side-effecting call succeeded after that record, do not claim the evidence shows
+no question or that the side effect was necessarily unconditional. If the redacted answer's semantics are essential,
+ask for user input rather than recommending a repeat of an already-successful side effect.
 Decide "retryable" from your own judgment of this evidence. Set retryable=false only when the task is fundamentally
 impossible (a denied permission, a safety block, or a missing capability); a deliverable that is merely
 incomplete or not yet synthesized is normally still retryable.
@@ -330,13 +335,19 @@ indivisible check. The combination passed + proposed_criteria:[] + atomic_task:f
 	return messages
 }
 
-// verifierRequiredFields is the minimal controller contract emitted by new
-// verifiers. The parser separately accepts the former 16-field envelope for
-// persisted configurations and older providers.
+// verifierRequiredFields are the fields needed to decide a later-cycle
+// verification. The parser separately accepts the former 16-field envelope
+// for persisted configurations and older providers.
 var verifierRequiredFields = []string{
 	"verdict", "summary", "recommended_next", "retryable", "needs_user_input",
-	"criteria", "proposed_criteria", "atomic_task",
+	"criteria",
 }
+
+// verifierEstablishingRequiredFields are meaningful only while a verifier is
+// establishing criteria. Contract-first runs never establish criteria here,
+// so a local model omitting these empty defaults must not make an otherwise
+// valid verdict unavailable.
+var verifierEstablishingRequiredFields = []string{"proposed_criteria", "atomic_task"}
 
 var verifierLegacyOptionalFields = []string{
 	"user_options", "evidence", "failed_criteria", "remaining_criteria", "confidence",
@@ -344,8 +355,11 @@ var verifierLegacyOptionalFields = []string{
 }
 
 var verifierAllowedFieldSet = func() map[string]struct{} {
-	set := make(map[string]struct{}, len(verifierRequiredFields))
+	set := make(map[string]struct{}, len(verifierRequiredFields)+len(verifierEstablishingRequiredFields))
 	for _, key := range verifierRequiredFields {
+		set[key] = struct{}{}
+	}
+	for _, key := range verifierEstablishingRequiredFields {
 		set[key] = struct{}{}
 	}
 	for _, key := range verifierLegacyOptionalFields {
@@ -381,6 +395,13 @@ func Parse(raw string, establishing bool) (agent.VerificationResult, error) {
 	for _, key := range verifierRequiredFields {
 		if _, ok := fields[key]; !ok {
 			missing = append(missing, key)
+		}
+	}
+	if establishing {
+		for _, key := range verifierEstablishingRequiredFields {
+			if _, ok := fields[key]; !ok {
+				missing = append(missing, key)
+			}
 		}
 	}
 	if len(missing) > 0 {
@@ -428,11 +449,15 @@ func Parse(raw string, establishing bool) (agent.VerificationResult, error) {
 	if result.CriteriaUpdates, err = decodeCriterionUpdates(fields, "criteria"); err != nil {
 		return agent.VerificationResult{}, wrap(err)
 	}
-	if result.ProposedCriteria, err = decodeStringArray(fields, "proposed_criteria"); err != nil {
-		return agent.VerificationResult{}, wrap(err)
+	if _, ok := fields["proposed_criteria"]; ok {
+		if result.ProposedCriteria, err = decodeStringArray(fields, "proposed_criteria"); err != nil {
+			return agent.VerificationResult{}, wrap(err)
+		}
 	}
-	if result.AtomicTask, err = decodeRequiredBool(fields, "atomic_task"); err != nil {
-		return agent.VerificationResult{}, wrap(err)
+	if _, ok := fields["atomic_task"]; ok {
+		if result.AtomicTask, err = decodeRequiredBool(fields, "atomic_task"); err != nil {
+			return agent.VerificationResult{}, wrap(err)
+		}
 	}
 	result.Confidence = 0.5
 	if raw, ok := fields["evidence"]; ok {
