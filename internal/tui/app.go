@@ -2686,6 +2686,11 @@ func (m *Model) refreshViewport() {
 		b.WriteString("\n")
 		b.WriteString(m.theme.UserLabel.Render(terminaltext.Sanitize(m.pendingAsk.call.Question)))
 		b.WriteString("\n\n")
+	} else if question := m.agentContractInputQuestion(); question != "" && !m.overlayOpen {
+		b.WriteString(m.theme.Badge.Render("? agent needs your input"))
+		b.WriteString("\n")
+		b.WriteString(m.theme.UserLabel.Render(terminaltext.Sanitize(question)))
+		b.WriteString("\n\n")
 	}
 
 	// Approval prompt: list exactly what the model wants to do before any

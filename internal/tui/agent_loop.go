@@ -243,6 +243,21 @@ func (m *Model) agentNeedsUserInput() bool {
 	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
 }
 
+// agentContractInputQuestion returns the ordinary free-text question that
+// paused task-contract establishment. Contract input has no grounded choice
+// list, so it is rendered above the composer like an ask_user free-text
+// pause instead of being presented as an error or a picker.
+func (m *Model) agentContractInputQuestion() string {
+	if m.agentLoop == nil || m.agentLoop.run == nil {
+		return ""
+	}
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract {
+		return ""
+	}
+	return strings.TrimSpace(run.StopReason)
+}
+
 // agentCycleHasSuccessfulTool reports whether the current cycle's execution
 // already recorded at least one successful tool call — evidence that an
 // empty closing completion should be verified, not treated as a run failure.
@@ -524,7 +539,7 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		// such as "file_name_1" as selectable answers would make a guess look
 		// authoritative. Contract input is always free text. Executor and
 		// verifier questions may still offer their evidenced discrete choices.
-		m.errText = "agent needs task-contract input: " + contract.Question
+		m.errText = ""
 		m.syncAgentDebug()
 		m.endAgentRun()
 		m.refreshViewport()
@@ -1180,7 +1195,7 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		}
 		summary := map[bool]string{true: "completed", false: "failed"}[result.Err == nil]
 		if result.Err == nil && result.Call.Tool == tools.ToolAskUser {
-			summary = "user answer received"
+			summary = askUserEvidenceSummary(result.Output)
 		}
 		record := agent.ToolCallRecord{
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
@@ -1210,6 +1225,22 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		m.agentLoop.execution.NeedsUserInput = true
 	}
 	m.agentLoop.execution.NewEvidence = true
+}
+
+// askUserEvidenceSummary keeps a narrowly useful fact for verification
+// without retaining the user's response. An affirmative answer can prove a
+// task's "only if I say yes" condition; all other answers remain opaque.
+func askUserEvidenceSummary(output string) string {
+	var response struct {
+		Answer string `json:"answer"`
+	}
+	if json.Unmarshal([]byte(output), &response) == nil {
+		switch strings.ToLower(strings.TrimSpace(response.Answer)) {
+		case "y", "yes", "confirm", "confirmed", "approve", "approved", "proceed", "continue":
+			return "user confirmed"
+		}
+	}
+	return "user answer received"
 }
 
 func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {

@@ -174,7 +174,8 @@ func TestParseNonEstablishingVerifierDefaultsUnusedCriterionFields(t *testing.T)
 
 func TestVerifierPromptExplainsSuccessfulAskUserEvidence(t *testing.T) {
 	prompt := verifierMessages(`{"Execution":{"tool_calls":[{"name":"ask_user","succeeded":true}]}}`, false)[0].Content
-	if !strings.Contains(prompt, "successful\nask_user record proves") || !strings.Contains(prompt, "answer content is\nintentionally redacted") {
+	if !strings.Contains(prompt, "successful ask_user proves a correlated answer") || !strings.Contains(prompt, "user confirmed") ||
+		!strings.Contains(prompt, "grants_authorization:false") {
 		t.Fatalf("verifier prompt does not explain the ask_user evidence contract: %q", prompt)
 	}
 }

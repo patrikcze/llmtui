@@ -312,8 +312,15 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at contract/cycle 0",
 			run.Status, run.Stage, run.Cycle, len(run.Criteria))
 	}
-	if !strings.Contains(m.errText, "Which file did you mean?") {
-		t.Fatalf("errText = %q, want the model's clarifying question", m.errText)
+	if m.errText != "" {
+		t.Fatalf("errText = %q, want contract input rendered as a question instead of an error", m.errText)
+	}
+	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
+		t.Fatalf("contract input question = %q, want the model's clarifying question", got)
+	}
+	m.refreshViewport()
+	if got := m.viewport.View(); !strings.Contains(got, "agent needs your input") || !strings.Contains(got, "Which file did you mean?") {
+		t.Fatalf("contract input was not rendered above the composer: %q", got)
 	}
 	if m.overlayOpen || m.picker.pickerKind == pickerAgentQuestion {
 		t.Fatalf("contract clarification opened an option picker for ungrounded choices: %+v", m.picker)
@@ -1369,8 +1376,8 @@ func TestVerifiedAgentRecoveredAskUserFailuresDoNotForceRetry(t *testing.T) {
 	if cycle.Verification.Verdict != agent.VerificationPassed {
 		t.Fatalf("verdict = %s, want passed", cycle.Verification.Verdict)
 	}
-	if got := cycle.Execution.ToolCalls[2].Summary; got != "user answer received" {
-		t.Fatalf("ask_user summary = %q, want a controller-observed user answer", got)
+	if got := cycle.Execution.ToolCalls[2].Summary; got != "user confirmed" {
+		t.Fatalf("ask_user summary = %q, want a controller-observed affirmative answer", got)
 	}
 	// The verifier's evidence must not be dominated by the recovered failures.
 	if len(cycle.Execution.Errors) != 0 {

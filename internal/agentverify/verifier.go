@@ -260,11 +260,10 @@ func verifierMessages(evidence string, establishing bool) []provider.Message {
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: `You are an independent verifier. Evaluate only the supplied observable evidence.
 Do not assume work succeeded. Tool, build, test, permission, timeout, and safety failures are authoritative.
-The Execution.ToolCalls ledger is controller-observed evidence, not executor prose. In particular, a successful
-ask_user record proves that the question was delivered and a correlated user answer was received; answer content is
-intentionally redacted. If a later side-effecting call succeeded after that record, do not claim the evidence shows
-no question or that the side effect was necessarily unconditional. If the redacted answer's semantics are essential,
-ask for user input rather than recommending a repeat of an already-successful side effect.
+ToolCalls are controller-observed evidence, not executor prose. A successful ask_user proves a correlated answer;
+its "user confirmed" summary proves an affirmative answer, while text is redacted. A following successful write_file
+or edit_file fulfills an ask-before-write condition. grants_authorization:false only means ask_user did not bypass
+application approval. Do not reject or repeat work solely because the answer text is redacted.
 Decide "retryable" from your own judgment of this evidence. Set retryable=false only when the task is fundamentally
 impossible (a denied permission, a safety block, or a missing capability); a deliverable that is merely
 incomplete or not yet synthesized is normally still retryable.

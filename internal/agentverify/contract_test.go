@@ -11,3 +11,10 @@ func TestContractPromptUsesSuppliedClarification(t *testing.T) {
 		t.Fatalf("contract prompt must direct the model to use a supplied clarification: %+v", messages)
 	}
 }
+
+func TestContractPromptTreatsNamedFileAsSufficientInput(t *testing.T) {
+	messages := contractMessages(`{"task":"Read absent.md and summarize it."}`)
+	if len(messages) == 0 || !strings.Contains(messages[0].Content, "literal file path") {
+		t.Fatalf("contract prompt must tell the model to attempt a named file: %+v", messages)
+	}
+}
