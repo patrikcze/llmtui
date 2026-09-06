@@ -135,6 +135,44 @@ func TestParseContractRejectsExecutableEmptyCriteriaAndPreservesUserInputBoundar
 	}
 }
 
+// TestParseContractSalvagesClarificationWithProvisionalCriteria covers the
+// deterministic /agent park observed with gemma-4-e4b: the contract stage is
+// tool-free, so a small model asked to "read the file I mentioned" correctly
+// wants clarification but also fills `criteria` with a guess about the missing
+// information ("read the mentioned file", "report its heading"). The old rule
+// parked the run on that near-miss; the run is about to ask the user for the
+// real answer, so the provisional criteria are discarded, not fatal.
+func TestParseContractSalvagesClarificationWithProvisionalCriteria(t *testing.T) {
+	contract, err := ParseContract(`{"criteria":["read the mentioned file","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`)
+	if err != nil {
+		t.Fatalf("clarification with stray criteria should parse, got %v", err)
+	}
+	if !contract.NeedsUserInput {
+		t.Fatalf("NeedsUserInput = false, want true")
+	}
+	if contract.Question != "Which file did you mean?" {
+		t.Fatalf("Question = %q", contract.Question)
+	}
+	if len(contract.Criteria) != 0 {
+		t.Fatalf("Criteria = %v, want the provisional decomposition discarded", contract.Criteria)
+	}
+}
+
+// TestParseContractStillParksClarificationWithNoQuestion keeps the genuinely
+// useless case (needs_user_input with no usable question) malformed, so it
+// still gets the single repair and then parks rather than resuming with an
+// empty prompt.
+func TestParseContractStillParksClarificationWithNoQuestion(t *testing.T) {
+	for _, raw := range []string{
+		`{"criteria":[],"needs_user_input":true,"question":"","user_options":[]}`,
+		`{"criteria":["a"],"needs_user_input":true,"question":"   ","user_options":[]}`,
+	} {
+		if _, err := ParseContract(raw); !errors.Is(err, agent.ErrMalformedControl) {
+			t.Fatalf("ParseContract(%s) err = %v, want malformed control", raw, err)
+		}
+	}
+}
+
 // validReply builds a complete verifier envelope: all 15 fields
 // verifierJSONSchema declares required, plus atomic_task, all present. Tests
 // that need to exercise a specific field's value should start from this and

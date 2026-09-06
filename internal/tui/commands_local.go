@@ -801,6 +801,9 @@ func (m *Model) debugOverlay() string {
 		m.kv(&b, "agent run", fmt.Sprintf("%s · cycle %d · %s/%s · verdict %s",
 			shortRunID(d.AgentRunID), d.AgentCycle, d.AgentStage, d.AgentStatus, orNone(d.AgentVerdict)))
 	}
+	if d.AgentContractRaw != "" {
+		m.kv(&b, "contract raw", terminaltext.Sanitize(normalizeWhitespace(d.AgentContractRaw)))
+	}
 	if d.Duration > 0 {
 		m.kv(&b, "duration", d.Duration.Round(10*time.Millisecond).String())
 	}

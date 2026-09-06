@@ -468,6 +468,12 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 	if msg.out.Usage != nil {
 		run.RecordUsage(msg.out.Usage.PromptTokens, msg.out.Usage.CompletionTokens, time.Now())
 	}
+	// The bounded raw contract output is model-generated control JSON (no
+	// reasoning, no tool output — see contract.go). Keep it for `/debug` so a
+	// contract park is diagnosable instead of just an opaque error string.
+	if raw := strings.TrimSpace(msg.out.Raw); raw != "" {
+		m.lastDebug.AgentContractRaw = truncateAgentText(raw, 2048)
+	}
 	if msg.err != nil {
 		var runErr agent.RunError
 		if !errors.As(msg.err, &runErr) {
@@ -476,6 +482,9 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		decision := agent.DecisionParked
 		if runErr.Kind == agent.ErrorBudget {
 			decision = agent.DecisionBudgetExhausted
+		}
+		if raw := strings.TrimSpace(msg.out.Raw); raw != "" {
+			run.NoteDiagnostic(time.Now(), "contract_raw_output", raw)
 		}
 		reason := "task contract unavailable: " + runErr.Error()
 		_ = run.Terminate(decision, reason, time.Now())
