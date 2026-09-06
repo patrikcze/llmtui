@@ -784,6 +784,9 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	if strings.ContainsAny(cmdline, "\n\r") {
 		return "", fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first")
 	}
+	if commandReferencesOutsideWorkspace(cmdline, r.root) {
+		return "", fmt.Errorf("run_command blocked: command references a path outside the workspace")
+	}
 
 	timeout := r.CommandTimeout
 	if timeout <= 0 {

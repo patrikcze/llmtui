@@ -120,6 +120,26 @@ func TestVerifierCannotEndRunWithUnresolvedPinnedCriteria(t *testing.T) {
 	}
 }
 
+// An inconclusive verifier may lack access to redacted raw tool output even
+// though its own per-criterion updates confirm every controller-owned
+// requirement. That mismatch must finish the run: retrying would replay
+// completed work or solicit irrelevant user input.
+func TestInconclusiveVerifierCannotRetryResolvedPinnedCriteria(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"read report.md and report its heading"})
+
+	stop := completeCycle(t, run, now, "read report.md", VerificationResult{
+		Verdict:         VerificationInconclusive,
+		Summary:         "raw file content is redacted from verification",
+		Retryable:       true,
+		RecommendedNext: "ask the user to provide report.md",
+		CriteriaUpdates: []CriterionUpdate{{ID: "c1", Status: CriterionSatisfied}},
+	})
+	if stop.Decision != DecisionDone {
+		t.Fatalf("decision = %q, want done after every pinned criterion is satisfied", stop.Decision)
+	}
+}
+
 func TestCriteriaFailureKeyIsPhrasingImmune(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxRepeatedFailures = 2
@@ -319,6 +339,20 @@ func TestTypedCriteriaUseOnlyRuntimeObservations(t *testing.T) {
 	semantic := run.UnresolvedSemanticCriteria()
 	if len(semantic) != 1 || semantic[0].Text != "meaning is correct" {
 		t.Fatalf("semantic criteria = %+v", semantic)
+	}
+}
+
+func TestExactReadCriterionUsesObservedReadOnly(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md", "Read report.md and report its heading"})
+	run.ApplyDeterministicCriteria(ExecutionResult{ToolCalls: []ToolCallRecord{{
+		Name: "read_file", Detail: "report.md", Succeeded: true,
+	}}}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("exact read criterion = %+v, want satisfied", run.Criteria[0])
+	}
+	if run.Criteria[1].Status != CriterionPending {
+		t.Fatalf("combined criterion = %+v, want pending for semantic verification", run.Criteria[1])
 	}
 }
 

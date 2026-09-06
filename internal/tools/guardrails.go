@@ -433,6 +433,28 @@ func looksLikePathEscape(f, root string) bool {
 	return abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(filepath.Separator))
 }
 
+// commandReferencesOutsideWorkspace checks the command arguments that can
+// name files. Unlike ClassifyCommand, it is an execution boundary: an
+// explicit approval or global auto-approve setting must not let the shell
+// target an absolute, home-relative, or parent-escaping path outside the
+// runner's workspace.
+func commandReferencesOutsideWorkspace(body, root string) bool {
+	fields := strings.Fields(strings.TrimSpace(body))
+	if len(fields) < 2 {
+		return false
+	}
+	for _, field := range fields[1:] {
+		field = strings.Trim(field, "\"'")
+		for _, value := range flagPathCandidates(field) {
+			value = strings.Trim(value, "\"'")
+			if looksLikePathEscape(value, root) || pathResolvesOutsideWorkspace(value, root) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isAbsoluteCommandPath(value string) bool {
 	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
 		return true

@@ -84,7 +84,7 @@ func TestCollectEvidenceNamesSuccessfulTools(t *testing.T) {
 	if len(namedSuccess) != 2 {
 		t.Fatalf("named success items = %v, want one per distinct tool", namedSuccess)
 	}
-	if namedSuccess[0] != "ask_user succeeded" || namedSuccess[1] != "write_file succeeded (2 calls)" {
+	if namedSuccess[0] != "ask_user succeeded and a user answer was received" || namedSuccess[1] != "write_file succeeded (2 calls)" {
 		t.Fatalf("summaries = %v", namedSuccess)
 	}
 	// The earlier failure is still visible so the recovery arc reads.

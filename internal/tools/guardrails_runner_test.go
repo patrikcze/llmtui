@@ -148,6 +148,19 @@ func TestRunnerCommandApprovalUsesClassifier(t *testing.T) {
 	}
 }
 
+func TestRunnerBlocksOutsideWorkspaceCommandEvenAfterApproval(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	for _, command := range []string{
+		"rm /etc/passwd",
+		"rm ../outside.txt",
+		`rm "/etc/passwd"`,
+	} {
+		if _, err := r.runCommand(command); err == nil || !strings.Contains(err.Error(), "outside the workspace") {
+			t.Errorf("runCommand(%q) error = %v, want outside-workspace block", command, err)
+		}
+	}
+}
+
 func TestRunnerSymlinkEscapeTogglable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")

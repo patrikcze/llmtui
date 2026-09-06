@@ -293,7 +293,7 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
 	)
 	prov.contractReplies = []string{
-		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`,
+		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":["file_name_1","file_name_2","file_name_3"]}`,
 		`{"criteria":["read report.md","report its heading"],"needs_user_input":false,"question":"","user_options":[]}`,
 	}
 	root := t.TempDir()
@@ -312,8 +312,18 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at contract/cycle 0",
 			run.Status, run.Stage, run.Cycle, len(run.Criteria))
 	}
-	if !strings.Contains(m.errText, "Which file did you mean?") {
-		t.Fatalf("errText = %q, want the model's clarifying question", m.errText)
+	if m.errText != "" {
+		t.Fatalf("errText = %q, want contract input rendered as a question instead of an error", m.errText)
+	}
+	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
+		t.Fatalf("contract input question = %q, want the model's clarifying question", got)
+	}
+	m.refreshViewport()
+	if got := m.viewport.View(); !strings.Contains(got, "agent needs your input") || !strings.Contains(got, "Which file did you mean?") {
+		t.Fatalf("contract input was not rendered above the composer: %q", got)
+	}
+	if m.overlayOpen || m.picker.pickerKind == pickerAgentQuestion {
+		t.Fatalf("contract clarification opened an option picker for ungrounded choices: %+v", m.picker)
 	}
 	if run.ToolCalls != 0 {
 		t.Fatalf("tool calls = %d before clarification, want 0", run.ToolCalls)
@@ -328,6 +338,31 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 	}
 	if m.agentLoop.run.ContractInput != "report.md" {
 		t.Fatalf("ContractInput = %q, want the user's answer", m.agentLoop.run.ContractInput)
+	}
+}
+
+func TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
+		agentScriptStep{text: "The heading is Q3 report."},
+	)
+	prov.contractReplies = []string{`{"criteria":["Read the file report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/report.md", []byte("# Q3 report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
+
+	if run := m.agentLoop.run; run.Status != agent.DecisionDone || run.Cycle != 1 {
+		t.Fatalf("run = %+v, want one-cycle completion", run)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("requests = %d, want contract plus executor/tool continuation and no semantic replay", len(prov.requests))
 	}
 }
 
@@ -905,6 +940,38 @@ func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentEmptyCompletionAfterToolWorkIsVerifiedNotFailed covers the
+// embedded-gemma smoke-test finding: the executor wrote a file, then sampled
+// straight to EOS with no closing summary. That empty completion (even after
+// its one retry) must not hard-fail the run — the cycle has real tool
+// evidence, so verification judges it.
+func TestVerifiedAgentEmptyCompletionAfterToolWorkIsVerifiedNotFailed(t *testing.T) {
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "w1", Name: tools.ToolWriteFile, Arguments: `{"path":"out.txt","content":"approved"}`}}},
+		agentScriptStep{}, // empty completion after the tool result
+		agentScriptStep{}, // still empty after the one retry
+		agentScriptStep{text: verifierJSON("passed", "the file was written", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("create out.txt containing approved", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %s, want done — an empty completion after real tool work should be verified, not fail the run", run.Status)
+	}
+	cycle := run.LatestCycle()
+	if cycle.Execution == nil || len(cycle.Execution.ToolCalls) != 1 || !cycle.Execution.ToolCalls[0].Succeeded {
+		t.Fatalf("execution = %+v, want the successful write recorded", cycle.Execution)
+	}
+	if cycle.Verification == nil || cycle.Verification.Verdict != agent.VerificationPassed {
+		t.Fatalf("verification = %+v, want it to have run", cycle.Verification)
+	}
+}
+
 // TestVerifiedAgentTruncatedExecutorReplyForcesRetry guards the wiring that
 // treats a truncated executor turn as deterministic evidence: even when the
 // verifier's own (possibly fooled) read of a garbled/incomplete reply claims
@@ -1333,6 +1400,9 @@ func TestVerifiedAgentRecoveredAskUserFailuresDoNotForceRetry(t *testing.T) {
 	}
 	if cycle.Verification.Verdict != agent.VerificationPassed {
 		t.Fatalf("verdict = %s, want passed", cycle.Verification.Verdict)
+	}
+	if got := cycle.Execution.ToolCalls[2].Summary; got != "user confirmed" {
+		t.Fatalf("ask_user summary = %q, want a controller-observed affirmative answer", got)
 	}
 	// The verifier's evidence must not be dominated by the recovered failures.
 	if len(cycle.Execution.Errors) != 0 {

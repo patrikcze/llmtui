@@ -214,6 +214,17 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 		return criterion.Target == "" || criterion.Target == "*" || strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(criterion.Target))
 	}
 	switch criterion.Kind {
+	case CriterionSemantic:
+		// A contract model occasionally emits only "Read the file X" for a
+		// larger request. That exact, atomic criterion is mechanically proven
+		// by a successful read_file call; leaving it to a verifier that cannot
+		// inspect redacted contents causes the same read to be retried forever.
+		// Combined criteria remain semantic and still require verification.
+		for _, call := range execution.ToolCalls {
+			if call.Name == "read_file" && call.Succeeded && isExactReadCriterion(criterion.Text, call.Detail) {
+				return true, true, "observed read_file success"
+			}
+		}
 	case CriterionCommandExit:
 		for _, call := range execution.ToolCalls {
 			if call.Name == "run_command" && match(call.Detail) {
@@ -238,6 +249,21 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 		}
 	}
 	return false, false, ""
+}
+
+func isExactReadCriterion(text, path string) bool {
+	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
+	path = strings.ToLower(strings.TrimSpace(path))
+	if path == "" || !strings.HasPrefix(text, "read ") {
+		return false
+	}
+	text = strings.TrimSpace(strings.TrimPrefix(text, "read "))
+	for _, prefix := range []string{"the ", "file ", "named "} {
+		if strings.HasPrefix(text, prefix) {
+			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+		}
+	}
+	return text == path
 }
 
 // unresolvedCriteriaKey is a phrasing-immune fingerprint of the unresolved
@@ -293,6 +319,9 @@ func CollectEvidence(cycle int, execution ExecutionResult) []EvidenceItem {
 	}
 	for _, name := range successOrder {
 		summary := name + " succeeded"
+		if name == "ask_user" {
+			summary = "ask_user succeeded and a user answer was received"
+		}
 		if n := successCount[name]; n > 1 {
 			summary = fmt.Sprintf("%s succeeded (%d calls)", name, n)
 		}

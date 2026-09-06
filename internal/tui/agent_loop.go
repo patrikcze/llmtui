@@ -243,6 +243,36 @@ func (m *Model) agentNeedsUserInput() bool {
 	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
 }
 
+// agentContractInputQuestion returns the ordinary free-text question that
+// paused task-contract establishment. Contract input has no grounded choice
+// list, so it is rendered above the composer like an ask_user free-text
+// pause instead of being presented as an error or a picker.
+func (m *Model) agentContractInputQuestion() string {
+	if m.agentLoop == nil || m.agentLoop.run == nil {
+		return ""
+	}
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract {
+		return ""
+	}
+	return strings.TrimSpace(run.StopReason)
+}
+
+// agentCycleHasSuccessfulTool reports whether the current cycle's execution
+// already recorded at least one successful tool call — evidence that an
+// empty closing completion should be verified, not treated as a run failure.
+func (m *Model) agentCycleHasSuccessfulTool() bool {
+	if m.agentLoop == nil {
+		return false
+	}
+	for _, call := range m.agentLoop.execution.ToolCalls {
+		if call.Succeeded {
+			return true
+		}
+	}
+	return false
+}
+
 // openAgentQuestionPicker is the shared human-choice overlay used by both
 // verifier-detected questions and explicit ask_user calls.
 func (m *Model) openAgentQuestionPicker(question string, options []string) {
@@ -503,11 +533,13 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 			return m, m.persistAgentRun()
 		}
 		m.notice = fmt.Sprintf("agent %s stopped for task-contract input", shortRunID(run.ID))
-		if len(contract.UserOptions) > 0 {
-			m.openAgentQuestionPicker(contract.Question, contract.UserOptions)
-		} else {
-			m.errText = "agent needs task-contract input: " + contract.Question
-		}
+		// A task contract has no conversation, workspace, tools, or prior
+		// executor evidence. Its user_options therefore cannot be grounded in
+		// facts the controller observed; showing model-invented placeholders
+		// such as "file_name_1" as selectable answers would make a guess look
+		// authoritative. Contract input is always free text. Executor and
+		// verifier questions may still offer their evidenced discrete choices.
+		m.errText = ""
 		m.syncAgentDebug()
 		m.endAgentRun()
 		m.refreshViewport()
@@ -756,6 +788,16 @@ func (m *Model) startAgentVerification() tea.Cmd {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
 		}
 	}
+	// Criteria resolved from controller-observed evidence do not need a
+	// semantic verifier, regardless of verification mode. Sending a verifier
+	// that intentionally cannot see raw read_file output merely invites it to
+	// replay an already-proven atomic action.
+	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+		return syntheticResult(agent.VerificationResult{
+			Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
+			Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
+		})
+	}
 	switch mode {
 	case config.VerifierModeOff:
 		return syntheticResult(agent.VerificationResult{
@@ -772,12 +814,6 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// semantic verdict anyway — skip the inference entirely.
 		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
 			return syntheticResult(deterministic)
-		}
-		if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
-			return syntheticResult(agent.VerificationResult{
-				Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
-				Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
-			})
 		}
 		if run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 {
 			for _, criterion := range run.UnresolvedCriteria() {
@@ -1161,9 +1197,13 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err != nil {
 			kind = classifyToolError(result, denied)
 		}
+		summary := map[bool]string{true: "completed", false: "failed"}[result.Err == nil]
+		if result.Err == nil && result.Call.Tool == tools.ToolAskUser {
+			summary = askUserEvidenceSummary(result.Output)
+		}
 		record := agent.ToolCallRecord{
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
-			ErrorKind: kind, Summary: map[bool]string{true: "completed", false: "failed"}[result.Err == nil],
+			ErrorKind: kind, Summary: summary,
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
 		if result.Err != nil {
@@ -1189,6 +1229,22 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		m.agentLoop.execution.NeedsUserInput = true
 	}
 	m.agentLoop.execution.NewEvidence = true
+}
+
+// askUserEvidenceSummary keeps a narrowly useful fact for verification
+// without retaining the user's response. An affirmative answer can prove a
+// task's "only if I say yes" condition; all other answers remain opaque.
+func askUserEvidenceSummary(output string) string {
+	var response struct {
+		Answer string `json:"answer"`
+	}
+	if json.Unmarshal([]byte(output), &response) == nil {
+		switch strings.ToLower(strings.TrimSpace(response.Answer)) {
+		case "y", "yes", "confirm", "confirmed", "approve", "approved", "proceed", "continue":
+			return "user confirmed"
+		}
+	}
+	return "user answer received"
 }
 
 func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {
