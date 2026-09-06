@@ -107,11 +107,20 @@ func deterministicVerdict(verdict VerificationVerdict, summary string, retryable
 // but semantically wrong answer can pass this gate — that is the documented
 // adaptive trade-off; `agent.verifier.mode: always` restores full rigor.
 func MechanicallyComplete(execution ExecutionResult) bool {
-	if len(execution.ToolCalls) == 0 || len(execution.Errors) > 0 || execution.NeedsUserInput {
+	if len(execution.ToolCalls) == 0 || execution.NeedsUserInput {
 		return false
 	}
+	last := lastToolOutcome(execution)
+	for _, runErr := range execution.Errors {
+		if !recoveredToolError(runErr, last) {
+			return false
+		}
+	}
 	for _, tool := range execution.ToolCalls {
-		if !tool.Succeeded {
+		// A failed call whose tool's final call succeeded was recovered
+		// within the cycle — the same exemption EvaluateDeterministic makes
+		// for the trailing call.
+		if !tool.Succeeded && !last[tool.Name] {
 			return false
 		}
 	}

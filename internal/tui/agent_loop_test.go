@@ -1292,6 +1292,86 @@ func TestVerifiedAgentRepairsVerifierFormatWithoutRepeatingExecutor(t *testing.T
 	}
 }
 
+// TestVerifiedAgentRecoveredAskUserFailuresDoNotForceRetry covers the
+// result.txt loop from docs/architecture/agent-mode-reliability-fixes.md: two
+// malformed ask_user calls, one valid ask_user, an answered confirmation, and
+// a write — the cycle must verify passed on the first attempt (no injected
+// retry, no duplicate write) because the recovered ErrorToolValidation
+// entries no longer read to the verifier as a failed cycle.
+func TestVerifiedAgentRecoveredAskUserFailuresDoNotForceRetry(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-bad-1", Name: tools.ToolAskUser, Arguments: `{}`}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-bad-2", Name: tools.ToolAskUser, Arguments: `{}`}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-ok", Name: tools.ToolAskUser, Arguments: `{"question":"Create result.txt containing approved?"}`}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-1", Name: tools.ToolWriteFile, Arguments: `{"path":"result.txt","content":"approved"}`}}},
+		agentScriptStep{text: "Created result.txt containing approved, as you confirmed."},
+		agentScriptStep{text: verifierJSON("passed", "confirmed and wrote the file", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Ask me whether to create result.txt containing approved. Only create it if I say yes.", nil))
+
+	if m.pendingAsk == nil {
+		t.Fatalf("run did not pause on the valid ask_user; status=%s", m.agentLoop.run.Status)
+	}
+	m.input.SetValue("yes")
+	driveAgentCommands(t, m, m.send())
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %s, want done on the first cycle", run.Status)
+	}
+	if run.Cycle != 1 {
+		t.Fatalf("cycle = %d, want 1 (no injected retry)", run.Cycle)
+	}
+	cycle := run.LatestCycle()
+	if got := len(cycle.Execution.ChangedFiles); got != 1 || cycle.Execution.ChangedFiles[0] != "result.txt" {
+		t.Fatalf("ChangedFiles = %v, want [result.txt] exactly once", cycle.Execution.ChangedFiles)
+	}
+	if cycle.Verification.Verdict != agent.VerificationPassed {
+		t.Fatalf("verdict = %s, want passed", cycle.Verification.Verdict)
+	}
+	// The verifier's evidence must not be dominated by the recovered failures.
+	if len(cycle.Execution.Errors) != 0 {
+		t.Fatalf("execution errors = %+v, want the recovered ask_user failures pruned", cycle.Execution.Errors)
+	}
+	_ = prov
+}
+
+// TestVerifiedAgentNoOpWriteIsNotScoredAsAChange proves a write that replaces
+// a file with its own content is not recorded as progress.
+func TestVerifiedAgentNoOpWriteIsNotScoredAsAChange(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/keep.txt", []byte("unchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "w1", Name: tools.ToolWriteFile, Arguments: `{"path":"keep.txt","content":"unchanged\n"}`}}},
+		agentScriptStep{text: "keep.txt already contained that exact content."},
+		agentScriptStep{text: verifierJSON("passed", "content already present", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("ensure keep.txt contains unchanged", nil))
+
+	cycle := m.agentLoop.run.LatestCycle()
+	if cycle == nil || cycle.Execution == nil {
+		t.Fatal("no completed cycle")
+	}
+	if len(cycle.Execution.ToolCalls) != 1 || !cycle.Execution.ToolCalls[0].Succeeded {
+		t.Fatalf("tool calls = %+v, want one succeeded write", cycle.Execution.ToolCalls)
+	}
+	if len(cycle.Execution.ChangedFiles) != 0 {
+		t.Fatalf("ChangedFiles = %v, want none for a no-op write", cycle.Execution.ChangedFiles)
+	}
+}
+
 func TestVerifiedAgentPermissionDenialStopsForUser(t *testing.T) {
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-1", Name: tools.ToolWriteFile, Arguments: `{"path":"x.txt","content":"x"}`}}},

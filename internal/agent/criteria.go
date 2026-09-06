@@ -269,13 +269,21 @@ func (r *AgentRun) AppendEvidence(items []EvidenceItem) {
 
 // CollectEvidence derives structured ledger entries from one cycle's
 // observable execution: one entry per test, per failed tool call, per
-// changed file, per typed error, plus one aggregate for successful calls.
+// changed file, per typed error, plus one entry per distinct successful tool
+// name. Naming the successful tools (rather than a single "N succeeded"
+// aggregate) lets the cross-cycle ledger show a recover-and-proceed
+// sequence — e.g. that a valid ask_user and a confirmed write_file followed
+// earlier invalid ask_user calls.
 func CollectEvidence(cycle int, execution ExecutionResult) []EvidenceItem {
 	var items []EvidenceItem
-	succeeded := 0
+	successCount := map[string]int{}
+	var successOrder []string
 	for _, call := range execution.ToolCalls {
 		if call.Succeeded {
-			succeeded++
+			if successCount[call.Name] == 0 {
+				successOrder = append(successOrder, call.Name)
+			}
+			successCount[call.Name]++
 			continue
 		}
 		items = append(items, EvidenceItem{
@@ -283,10 +291,13 @@ func CollectEvidence(cycle int, execution ExecutionResult) []EvidenceItem {
 			Summary: string(call.ErrorKind), Success: false,
 		})
 	}
-	if succeeded > 0 {
+	for _, name := range successOrder {
+		summary := name + " succeeded"
+		if n := successCount[name]; n > 1 {
+			summary = fmt.Sprintf("%s succeeded (%d calls)", name, n)
+		}
 		items = append(items, EvidenceItem{
-			Cycle: cycle, Kind: EvidenceTool, Source: "tool_calls",
-			Summary: fmt.Sprintf("%d tool call(s) succeeded", succeeded), Success: true,
+			Cycle: cycle, Kind: EvidenceTool, Source: name, Summary: summary, Success: true,
 		})
 	}
 	for _, test := range execution.TestsRun {

@@ -722,6 +722,11 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	if strings.TrimSpace(execution.Summary) == "" {
 		execution.Summary = "executor produced no visible summary"
 	}
+	// A tool call the executor recovered from within this cycle (a malformed
+	// ask_user call it then re-issued correctly) must not read to the
+	// semantic verifier as a failed cycle. The failed ToolCallRecord entries
+	// stay; only their derived typed errors are dropped.
+	agent.PruneRecoveredToolErrors(&execution)
 	if err := run.CompleteExecution(execution, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m.persistAgentRun()
@@ -1164,7 +1169,12 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err != nil {
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewError(kind, result.Call.Tool, result.Err))
 		}
-		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) && strings.TrimSpace(result.Call.Path) != "" {
+		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) &&
+			strings.TrimSpace(result.Call.Path) != "" && !tools.IsNoChangeDiff(result.Diff) {
+			// A write that replaced a file with its own current content
+			// succeeds but changes nothing — do not score it as progress, or
+			// a pointless retry that re-writes the same bytes reads as new
+			// evidence.
 			m.agentLoop.execution.ChangedFiles = append(m.agentLoop.execution.ChangedFiles, result.Call.Path)
 			m.agentLoop.execution.Artifacts = append(m.agentLoop.execution.Artifacts, result.Call.Path)
 		}
