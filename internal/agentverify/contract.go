@@ -179,7 +179,19 @@ FORMAT REPAIR: Return exactly the documented JSON object. "criteria" and "user_o
 
 // ParseContract validates bounded model control data before it may pin run
 // criteria. It accepts the same fenced-JSON / harmless-prose envelope as the
-// verifier, but never guesses missing fields or normalizes an empty contract.
+// verifier.
+//
+// It is deliberately lenient about the *shape* of the envelope — small local
+// models (observed: an embedded gemma-4-e4b Q4) routinely omit an empty
+// field or add a stray one. Only `needs_user_input` is truly required (it is
+// the discriminator for what the whole envelope means); the other fields
+// default when absent and are type-checked when present; unknown fields are
+// ignored. This is safe: contract content cannot grant tools, permissions,
+// network access, or instruction precedence regardless of what a confused
+// model puts here, so a renamed or extra field is noise, not a reason to
+// park the run. The parser is still strict about the *semantics* below
+// (a clarification needs a real question; an executable contract needs at
+// least one non-empty criterion and no question/options).
 func ParseContract(raw string) (Contract, error) {
 	wrap := func(err error) error {
 		return agent.NewError(agent.ErrorMalformedResponse, "parse task contract", err)
@@ -192,34 +204,30 @@ func ParseContract(raw string) (Contract, error) {
 	if err := json.Unmarshal([]byte(object), &fields); err != nil {
 		return Contract{}, wrap(fmt.Errorf("%w: %v", agent.ErrMalformedControl, err))
 	}
-	required := []string{"criteria", "needs_user_input", "question", "user_options"}
-	for _, key := range required {
-		if _, ok := fields[key]; !ok {
-			return Contract{}, wrap(fmt.Errorf("%w: missing required field %q", agent.ErrMalformedControl, key))
-		}
-	}
-	for key := range fields {
-		switch key {
-		case "criteria", "needs_user_input", "question", "user_options":
-		default:
-			return Contract{}, wrap(fmt.Errorf("%w: unexpected field %q", agent.ErrMalformedControl, key))
-		}
-	}
-	criteria, err := decodeStringArray(fields, "criteria")
-	if err != nil {
-		return Contract{}, wrap(err)
+	if _, ok := fields["needs_user_input"]; !ok {
+		return Contract{}, wrap(fmt.Errorf("%w: missing required field %q", agent.ErrMalformedControl, "needs_user_input"))
 	}
 	needsInput, err := decodeRequiredBool(fields, "needs_user_input")
 	if err != nil {
 		return Contract{}, wrap(err)
 	}
-	question, err := decodeRequiredString(fields, "question")
-	if err != nil {
-		return Contract{}, wrap(err)
+	criteria := []string{}
+	if _, ok := fields["criteria"]; ok {
+		if criteria, err = decodeStringArray(fields, "criteria"); err != nil {
+			return Contract{}, wrap(err)
+		}
 	}
-	options, err := decodeStringArray(fields, "user_options")
-	if err != nil {
-		return Contract{}, wrap(err)
+	question := ""
+	if _, ok := fields["question"]; ok {
+		if question, err = decodeNullableString(fields, "question"); err != nil {
+			return Contract{}, wrap(err)
+		}
+	}
+	options := []string{}
+	if _, ok := fields["user_options"]; ok {
+		if options, err = decodeStringArray(fields, "user_options"); err != nil {
+			return Contract{}, wrap(err)
+		}
 	}
 	if len(options) > 16 {
 		return Contract{}, wrap(fmt.Errorf("%w: user_options exceeds maximum 16", agent.ErrMalformedControl))

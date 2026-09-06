@@ -905,6 +905,38 @@ func TestVerifiedAgentToolExecutionThenVerifierSuccess(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentEmptyCompletionAfterToolWorkIsVerifiedNotFailed covers the
+// embedded-gemma smoke-test finding: the executor wrote a file, then sampled
+// straight to EOS with no closing summary. That empty completion (even after
+// its one retry) must not hard-fail the run — the cycle has real tool
+// evidence, so verification judges it.
+func TestVerifiedAgentEmptyCompletionAfterToolWorkIsVerifiedNotFailed(t *testing.T) {
+	m, _ := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "w1", Name: tools.ToolWriteFile, Arguments: `{"path":"out.txt","content":"approved"}`}}},
+		agentScriptStep{}, // empty completion after the tool result
+		agentScriptStep{}, // still empty after the one retry
+		agentScriptStep{text: verifierJSON("passed", "the file was written", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("create out.txt containing approved", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %s, want done — an empty completion after real tool work should be verified, not fail the run", run.Status)
+	}
+	cycle := run.LatestCycle()
+	if cycle.Execution == nil || len(cycle.Execution.ToolCalls) != 1 || !cycle.Execution.ToolCalls[0].Succeeded {
+		t.Fatalf("execution = %+v, want the successful write recorded", cycle.Execution)
+	}
+	if cycle.Verification == nil || cycle.Verification.Verdict != agent.VerificationPassed {
+		t.Fatalf("verification = %+v, want it to have run", cycle.Verification)
+	}
+}
+
 // TestVerifiedAgentTruncatedExecutorReplyForcesRetry guards the wiring that
 // treats a truncated executor turn as deterministic evidence: even when the
 // verifier's own (possibly fooled) read of a garbled/incomplete reply claims

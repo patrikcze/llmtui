@@ -2111,6 +2111,20 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			if msg.event.Usage != nil {
 				completionTokens = msg.event.Usage.CompletionTokens
 			}
+			// In an /agent run where the executor already did real tool work
+			// this cycle, an empty closing completion is not a run failure —
+			// some small local models sample straight to EOS after a tool
+			// result that has nothing interesting to summarise (e.g. a
+			// write_file that reported "no changes"). Let verification judge
+			// the cycle from its observable evidence, exactly as for any other
+			// executor turn; a genuinely incomplete cycle still fails there.
+			if m.agentRunActive() && m.agentCycleHasSuccessfulTool() {
+				m.clearEmptyContinuationRetry()
+				m.notice = "executor stopped without a summary after its tool calls — verifying the cycle"
+				m.complete(turnOutcomeFinalAnswer)
+				m.refreshViewport()
+				return m, m.startAgentVerification()
+			}
 			m.errText = fmt.Sprintf(
 				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t).",
 				completionTokens, roundReasoningChars, msg.event.Truncated)

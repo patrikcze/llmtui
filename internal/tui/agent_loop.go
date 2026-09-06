@@ -243,6 +243,21 @@ func (m *Model) agentNeedsUserInput() bool {
 	return m.agentLoop != nil && m.agentLoop.run != nil && m.agentLoop.run.Status == agent.DecisionNeedsUserInput
 }
 
+// agentCycleHasSuccessfulTool reports whether the current cycle's execution
+// already recorded at least one successful tool call — evidence that an
+// empty closing completion should be verified, not treated as a run failure.
+func (m *Model) agentCycleHasSuccessfulTool() bool {
+	if m.agentLoop == nil {
+		return false
+	}
+	for _, call := range m.agentLoop.execution.ToolCalls {
+		if call.Succeeded {
+			return true
+		}
+	}
+	return false
+}
+
 // openAgentQuestionPicker is the shared human-choice overlay used by both
 // verifier-detected questions and explicit ask_user calls.
 func (m *Model) openAgentQuestionPicker(question string, options []string) {
