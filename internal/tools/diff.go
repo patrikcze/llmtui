@@ -21,6 +21,19 @@ const (
 	diffContext = 2
 )
 
+// noChangeDiffMarker is the trailing text RenderWriteDiff produces when a
+// write replaced a file with byte-identical content. Kept next to the
+// renderer so the two never drift.
+const noChangeDiffMarker = "— no changes"
+
+// IsNoChangeDiff reports whether a write_file/edit_file result diff describes
+// a write that changed nothing (the model wrote a file's current content
+// back). Callers that score real progress — the agent evidence ledger — use
+// it so a no-op write is not counted as a changed file.
+func IsNoChangeDiff(diff string) bool {
+	return strings.HasSuffix(strings.TrimSpace(diff), noChangeDiffMarker)
+}
+
 // RenderWriteDiff builds the display diff for one write_file execution.
 func RenderWriteDiff(path, oldContent, newContent string, existed bool) string {
 	newLines := splitLines(newContent)
@@ -50,7 +63,7 @@ func RenderWriteDiff(path, oldContent, newContent string, existed bool) string {
 		}
 	}
 	if added == 0 && removed == 0 {
-		return fmt.Sprintf("Update(%s) — no changes", path)
+		return fmt.Sprintf("Update(%s) %s", path, noChangeDiffMarker)
 	}
 
 	// Keep only changed lines plus a little context; elide the rest.

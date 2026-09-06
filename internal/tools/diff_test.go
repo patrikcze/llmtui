@@ -60,6 +60,29 @@ func TestRenderWriteDiffNoChanges(t *testing.T) {
 	if got != "Update(f.txt) — no changes" {
 		t.Errorf("got %q", got)
 	}
+	if !IsNoChangeDiff(got) {
+		t.Errorf("IsNoChangeDiff(%q) = false", got)
+	}
+}
+
+func TestIsNoChangeDiff(t *testing.T) {
+	for _, d := range []string{
+		"Update(x.txt) — no changes",
+		"  Update(dir/x.txt) — no changes  ",
+	} {
+		if !IsNoChangeDiff(d) {
+			t.Errorf("IsNoChangeDiff(%q) = false, want true", d)
+		}
+	}
+	for _, d := range []string{
+		"",
+		"Create(x.txt) — 1 line(s)",
+		"Update(x.txt) — added 1 line(s), removed 0 line(s)",
+	} {
+		if IsNoChangeDiff(d) {
+			t.Errorf("IsNoChangeDiff(%q) = true, want false", d)
+		}
+	}
 }
 
 func TestWriteFileProducesDiff(t *testing.T) {
