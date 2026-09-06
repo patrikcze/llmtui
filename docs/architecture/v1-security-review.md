@@ -1,5 +1,7 @@
 # v1 Security Review
 
+> Part of the v1.0.0 stabilisation planning set. The current architecture reference is [`README.md`](README.md); this document is retained as an audit trail and is cited by code comments.
+
 This document does not repeat a from-scratch threat model. A full security
 review already exists at `security-review/` (baseline commit `ed2ea82`,
 2026-07-19: `EXECUTIVE_SUMMARY.md`, `SECURITY_FINDINGS.md`,

@@ -1,5 +1,7 @@
 # v1 Test Matrix
 
+> Part of the v1.0.0 stabilisation planning set. The current architecture reference is [`README.md`](README.md); this document is retained as an audit trail and is cited by code comments.
+
 Maps master-prompt §9's required test coverage against what exists at
 baseline `0458b5f`, so implementation work has a concrete gap list instead
 of a vague "add more tests" instruction. Existing test names are cited

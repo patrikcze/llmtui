@@ -1,5 +1,7 @@
 # v1 Agent Runtime — Implemented Design
 
+> Consolidated overview: [`README.md`](README.md). This document holds the full detail for its topic.
+
 > The explicit `tui.turnRuntime`, progress ledger, dedicated `no_progress`
 > outcome, ordinary-mode truncation guard, and live budget enforcement
 > described below are implemented. Historical “new”/“gap” wording is

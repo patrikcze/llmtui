@@ -1,5 +1,7 @@
 # v1 Architecture Audit
 
+> Part of the v1.0.0 stabilisation planning set. The current architecture reference is [`README.md`](README.md); this document is retained as an audit trail and is cited by code comments.
+
 Status: Phase 1 evidence baseline for the v1.0.0 stabilization release.
 Baseline commit: `0458b5f` (branch `feat/v1-agent-runtime`, forked from `master`).
 Scope: this document is evidence-first. Every claim below is grounded in a

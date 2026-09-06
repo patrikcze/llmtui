@@ -1,5 +1,7 @@
 # v1 Migration Plan
 
+> Part of the v1.0.0 stabilisation planning set. The current architecture reference is [`README.md`](README.md); this document is retained as an audit trail and is cited by code comments.
+
 > **Status update**: the progress ledger, live budget enforcement, the
 > `golang.org/x/text` dependency bump, independent config toggles for both
 > new mechanisms, the ordinary-tool-loop truncation fix, and the dedicated

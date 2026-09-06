@@ -1,5 +1,7 @@
 # v1 Provider Capability Model
 
+> Consolidated overview: [`README.md`](README.md). This document holds the full detail for its topic.
+
 ## Implemented state
 
 `internal/provider/capabilities.go` now distinguishes transport-wide booleans

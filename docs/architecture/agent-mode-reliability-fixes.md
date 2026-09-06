@@ -1,5 +1,8 @@
 # Agent-mode reliability: contract park + recovered-failure loop
 
+Status: **Resolved** — implemented in PRs #59–#62 (merged 2026-09-06). Retained
+as the investigation record. Current architecture: [`README.md`](README.md).
+
 Reviewed 6 September 2026 against `master` at `51d955e`.
 
 ## What was observed

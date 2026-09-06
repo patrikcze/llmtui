@@ -40,11 +40,14 @@ Not runnable in a plain checkout:
 
 ## Architecture
 
-Full package-by-package map, dependency shape, and the "why do `skill` /
-`memory` / `runtime` appear in several folders" cross-check:
-**`docs/architecture/package-map.md`**. ADRs: `docs/architecture/decisions/`.
-Per-topic docs live in `docs/` (18 files) — check there before inferring
-behavior from source.
+Consolidated current-state reference: **`docs/architecture/README.md`**. The
+full package-by-package map, dependency shape, and the "why do `skill` /
+`memory` / `runtime` appear in several folders" cross-check are in
+`docs/architecture/package-map.md`. ADRs: `docs/architecture/decisions/`. The
+`docs/architecture/v1-*.md` files are the v1.0.0 planning/audit set — their
+designs shipped and code comments cite them, but `README.md` is authoritative.
+Per-topic docs live in `docs/` — check there before inferring behavior from
+source.
 
 Five things that are easy to get wrong:
 

@@ -651,9 +651,11 @@ internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme
 ```
 
-A layer-by-layer tour of every package, with a cross-check for apparent
-duplication, is in [docs/architecture/package-map.md](docs/architecture/package-map.md).
-Design principles and layout are described in
+The consolidated architecture reference is
+[docs/architecture/README.md](docs/architecture/README.md); a layer-by-layer
+tour of every package, with a cross-check for apparent duplication, is in
+[docs/architecture/package-map.md](docs/architecture/package-map.md). Design
+principles and layout are described in
 [docs/tui-design.md](docs/tui-design.md).
 
 ## License

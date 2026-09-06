@@ -1,5 +1,7 @@
 # v1 State, Cache, and Storage Boundaries
 
+> Consolidated overview: [`README.md`](README.md). This document holds the full detail for its topic.
+
 ## 1. Source-of-truth table (confirmed, `v1-audit.md` §3 origin)
 
 | Concern | Owner | Notes |
