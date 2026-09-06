@@ -85,7 +85,7 @@ func TestParseRequestMailSearch(t *testing.T) {
 	if got := args.ReceivedAfter.UTC(); !got.Equal(time.Date(2026, 9, 3, 22, 0, 0, 0, time.UTC)) {
 		t.Errorf("ReceivedAfter = %v, want 2026-09-03T22:00:00Z", got)
 	}
-	if got := args.Page.Size(Limits{}); got != 25 {
+	if got := args.Size(Limits{}); got != 25 {
 		t.Errorf("page size = %d, want 25", got)
 	}
 }

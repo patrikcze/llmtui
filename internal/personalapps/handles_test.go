@@ -233,7 +233,8 @@ func TestRegistryInvalidateAndReset(t *testing.T) {
 }
 
 func TestFingerprintIsStableAndUnambiguous(t *testing.T) {
-	if Fingerprint("a", "b") != Fingerprint("a", "b") {
+	parts := []string{"a", "b"}
+	if Fingerprint(parts...) != Fingerprint("a", "b") {
 		t.Fatal("Fingerprint is not deterministic")
 	}
 	if Fingerprint("a", "b") == Fingerprint("ab") {

@@ -79,7 +79,7 @@ func (ts *Timestamp) UnmarshalJSON(b []byte) error {
 
 // MarshalJSON writes the instant back in RFC3339.
 func (ts Timestamp) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + ts.Time.Format(time.RFC3339) + `"`), nil
+	return []byte(`"` + ts.Format(time.RFC3339) + `"`), nil
 }
 
 // DateOnly is a calendar date with no instant attached, used for all-day
