@@ -117,6 +117,20 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			approval: "no (discovery only)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolSearch, Body: "search tools"}}},
 		},
+		{
+			name:     ToolPersonalApps,
+			approval: "no for reads once connected; always ask for change_apply, bound to one exact plan and never covered by /tools auto",
+			checks: []approvalCheck{
+				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"status"}`}},
+				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_search","arguments":{}}`}},
+				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"change_prepare","arguments":{}}`}},
+				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"change_apply","arguments":{"plan_id":"plan_1"}}`}, want: true},
+				// Malformed/unrecognized input must never default to "no
+				// approval needed" — NeedsApproval only special-cases a
+				// confirmed metadata/read/navigate effect.
+				{call: Call{Tool: ToolPersonalApps, Body: "not json"}, want: true},
+			},
+		},
 	}
 
 	registry := DefaultRegistry()

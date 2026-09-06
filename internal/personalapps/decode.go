@@ -174,3 +174,41 @@ func jsonString(b []byte) (string, error) {
 	}
 	return s, nil
 }
+
+// PeekOperation extracts the operation field from a raw payload for display
+// purposes only — an approval prompt or a one-line call summary that needs
+// to know roughly what a call does before it can run ParseRequest's full
+// validation. It never rejects malformed input; a payload that fails to
+// parse or names an unknown operation returns "". Nothing here may be used
+// to decide whether a call executes or what it is allowed to do — that
+// remains ParseRequest and Service.Execute's job alone.
+func PeekOperation(raw []byte) Operation {
+	var env envelope
+	if json.Unmarshal(raw, &env) != nil {
+		return ""
+	}
+	op := Operation(strings.TrimSpace(env.Operation))
+	if !op.Valid() {
+		return ""
+	}
+	return op
+}
+
+// PeekPlanID extracts the plan_id argument from a raw change_apply payload
+// for display purposes only, with the same non-authoritative caveat as
+// PeekOperation. It returns "" for anything else, including a well-formed
+// payload whose operation is not change_apply.
+func PeekPlanID(raw []byte) string {
+	if PeekOperation(raw) != OpChangeApply {
+		return ""
+	}
+	var env envelope
+	if json.Unmarshal(raw, &env) != nil {
+		return ""
+	}
+	var args ChangeApplyArgs
+	if json.Unmarshal(env.Arguments, &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.PlanID)
+}

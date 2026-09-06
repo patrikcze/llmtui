@@ -28,6 +28,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/procutil"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
@@ -59,6 +60,12 @@ const (
 	// workspace file. It shares write_file's guardrails and approval class and
 	// adds a stale-content precondition; it never creates a file.
 	ToolEditFile = "edit_file"
+	// ToolPersonalApps is the optional Apple Mail/Calendar integration. The
+	// block body (fenced) or function arguments (native) are one JSON
+	// envelope {"operation":"...","arguments":{...}} that internal/personalapps
+	// decodes and validates in full; Runner does no parsing of its own beyond
+	// a size check. See personal_apps.go.
+	ToolPersonalApps = "personal_apps"
 )
 
 // read_file optional line-range bounds. DefaultReadLimit applies when a range
@@ -202,6 +209,8 @@ func Parse(reply string) []Call {
 					decodeReadFileBody(&call)
 				case ToolEditFile:
 					decodeEditFileBody(&call)
+				case ToolPersonalApps:
+					decodePersonalAppsBody(&call)
 				}
 				if server, tool, ok := SplitMCPToolName(call.Tool); ok {
 					call.MCPServer, call.MCPTool = server, tool
@@ -261,6 +270,22 @@ type Runner struct {
 	// LocalContext collects bounded machine/workspace facts without network
 	// access. Tests replace it with a fixture collector.
 	LocalContext LocalContextCollector
+
+	// PersonalApps enables the personal_apps tool (optional Apple
+	// Mail/Calendar integration) when non-nil, mirroring Web. The Runner
+	// itself decides nothing about scope, connection, or approval — every
+	// one of those decisions lives in the Service and is re-checked there
+	// on every call, so this field only wires the entry point.
+	PersonalApps PersonalAppsService
+}
+
+// PersonalAppsService is what the runner needs from
+// internal/personalapps.Service: parse and execute one raw request against
+// its own configured scope, limits, and adapters. The interface exists so
+// tests can stub it without constructing a real Service, and so this
+// package never imports personalapps.Options or its adapter interfaces.
+type PersonalAppsService interface {
+	ExecuteRaw(ctx context.Context, raw []byte) personalapps.Result
 }
 
 // SkillLoader activates one skill for the current agent run. Implemented by
@@ -398,6 +423,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.localContext(ctx, c)
 	case ToolSearch:
 		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
+	case ToolPersonalApps:
+		res.Output, res.Err = r.personalApps(ctx, c)
 	default:
 		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
@@ -943,6 +970,14 @@ func (r *Runner) NeedsApproval(c Call) bool {
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:
 		return r.Guardrails.ClassifyCommand(c.Body, r.root).Verdict != VerdictAuto
+	case ToolPersonalApps:
+		// Reads are gated by the human's earlier explicit /personal-apps
+		// connect, exactly like a connected MCP server's tools; a mutation
+		// (change_apply) always needs approval and is additionally forced
+		// past the /tools auto shortcut and any standing capability grant
+		// in internal/tui's callNeedsApproval, since this is a
+		// personal-data feature auto mode was never meant to cover.
+		return personalapps.PeekOperation([]byte(c.Body)).Effect() == personalapps.EffectMutate
 	default:
 		return true
 	}
@@ -1138,6 +1173,8 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("glob %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
 	case ToolGrep:
 		return fmt.Sprintf("grep %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+	case ToolPersonalApps:
+		return describePersonalAppsCall(c)
 	default:
 		if c.Path == "" {
 			return c.Tool

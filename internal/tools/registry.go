@@ -15,6 +15,11 @@ const (
 	SafetyCommand        SafetyClass = "command"
 	SafetyNetwork        SafetyClass = "network"
 	SafetyExternalMCP    SafetyClass = "external_mcp"
+	// SafetyPersonalApps is its own class rather than SafetyNetwork or
+	// SafetyWorkspaceWrite: one tool call can be a bounded metadata read or
+	// an exact-plan-bound mutation of personal mail/calendar data depending
+	// on its operation, and neither existing class fits either shape.
+	SafetyPersonalApps SafetyClass = "personal_apps"
 )
 
 // CapabilityInfo describes one agent capability: today the built-in and web
@@ -100,7 +105,8 @@ var safetyForBuiltin = map[string]SafetyClass{
 	ToolSearch:       SafetyReadOnly,
 	// skill_load only changes prompt state inside the app: no file, command,
 	// or network effect, and no permission grant.
-	ToolSkillLoad: SafetyReadOnly,
+	ToolSkillLoad:    SafetyReadOnly,
+	ToolPersonalApps: SafetyPersonalApps,
 }
 
 // approvalForTool is the static approval policy per tool.
@@ -118,6 +124,7 @@ var approvalForTool = map[string]string{
 	ToolAskUser:      "no (never authorizes another tool)",
 	ToolLocalContext: "ask for clipboard; otherwise no",
 	ToolSearch:       "no (discovery only)",
+	ToolPersonalApps: "no for reads once connected; always ask for change_apply, bound to one exact plan and never covered by /tools auto",
 }
 
 // DefaultRegistry catalogs the built-in workspace tools and the web tools,
@@ -151,6 +158,16 @@ func DefaultRegistry() *Registry {
 			Name:        s.Name,
 			Description: s.Description,
 			Source:      "skills",
+			Safety:      safetyForBuiltin[s.Name],
+			Approval:    approvalForTool[s.Name],
+			Parameters:  s.Parameters,
+		})
+	}
+	for _, s := range PersonalAppsSpecs() {
+		_ = r.Register(CapabilityInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      "personal_apps",
 			Safety:      safetyForBuiltin[s.Name],
 			Approval:    approvalForTool[s.Name],
 			Parameters:  s.Parameters,
