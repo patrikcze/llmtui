@@ -486,6 +486,25 @@ func (m *Model) rebuildFromConfig() {
 					Timeout:    limits.ReadTimeout,
 				})
 			}
+			// Mutators are gated on mutations.enabled specifically, on top of
+			// each adapter's own gate: enabling Mail/Calendar reads must never
+			// by itself turn on the ability to write. personalapps.NewMutator
+			// returns nil when both halves are nil, so change_apply still
+			// reports ErrUnsupportedPlatform exactly as it did before any
+			// mutator existed, rather than a non-nil Mutator that fails every
+			// call.
+			var mailMutator, calendarMutator personalapps.Mutator
+			if pcfg.Mutations.Enabled {
+				if pcfg.Mail.Enabled {
+					mailMutator = personalapps.NewMailMutator(personalapps.MailBackendOptions{Timeout: limits.MutationTimeout})
+				}
+				if pcfg.Calendar.Enabled {
+					calendarMutator = personalapps.NewCalendarMutator(personalapps.CalendarBackendOptions{
+						HelperPath: pcfg.Calendar.HelperPath,
+						Timeout:    limits.MutationTimeout,
+					})
+				}
+			}
 			journal, journalErr := personalAppsJournalFromConfig(pcfg.Mutations)
 			if journalErr != nil {
 				m.errText = "personal_apps: " + journalErr.Error()
@@ -495,6 +514,7 @@ func (m *Model) rebuildFromConfig() {
 					Limits:      limits,
 					Mail:        mailBackend,
 					Calendar:    calendarBackend,
+					Mutator:     personalapps.NewMutator(mailMutator, calendarMutator),
 					Journal:     journal,
 					Approvals:   m.personalAppsApprovals,
 					PrivacyGate: m.enterPersonalAppsPrivateSession,

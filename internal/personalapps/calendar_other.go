@@ -14,3 +14,7 @@ type CalendarBackendOptions struct {
 // NewCalendarBackend returns nil outside macOS. This keeps normal chat and
 // source builds fully functional when the optional native companion is absent.
 func NewCalendarBackend(CalendarBackendOptions) CalendarBackend { return nil }
+
+// NewCalendarMutator returns nil outside macOS, for the same reason
+// NewCalendarBackend does.
+func NewCalendarMutator(CalendarBackendOptions) Mutator { return nil }

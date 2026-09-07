@@ -387,10 +387,23 @@ Mail has a real adapter on darwin builds (`mail_search`, `mail_read`,
 embedded JXA script over `osascript`. Calendar reads use the separately
 installed EventKit companion when `calendar.helper_path` is configured;
 otherwise every `calendar_*` operation reports `unsupported_operation`.
-Mutation adapters are still deliberately absent, but Slice 5 already records
-an approved mutation's semantic identity in a user-level write-ahead journal
-before any future adapter can run it. That journal prevents an interrupted or
-unknown effect from being retried automatically across sessions or workspaces.
+
+Mutations also have real adapters now — Mail's `mail_move`/`mail_set_read`/
+`mail_set_flag`/`mail_save_draft` over the same JXA bridge, Calendar's
+`calendar_create_event`/`calendar_update_event` over the same EventKit
+companion — gated on `mutations.enabled` on top of each adapter's own gate.
+Every mutation re-reads its target immediately before applying and compares
+it against the state observed when it was last read (an approval bound to
+stale state is refused, not silently applied to whatever the item has
+become), and Slice 5's write-ahead journal records an approved mutation's
+identity before it runs, so an interrupted or unknown effect is never
+retried automatically across sessions or workspaces. `set_read`/`set_flag`
+are simple property assignments; `move`, `save_draft` and the two calendar
+mutations have not yet been exercised against a real Mail/Calendar (the
+calendar side is a Swift EventKit companion, and it does compile/type-check
+against the real framework — see `native/personal-apps-calendar/main.swift`
+— which the JXA move/save_draft paths have no equivalent static check for).
+Treat these four as unverified until tested on a disposable account.
 
 `mail.allowed_accounts` takes each account's **native identifier**, not its
 display name — Apple Mail account objects have a stable UUID
@@ -412,7 +425,7 @@ address one reliably.
 | `calendar.enabled` | `false` | Enable the EventKit Calendar adapter; it remains inert until explicitly connected |
 | `calendar.allowed_calendars` | `[]` | Native calendar identifiers in scope; empty means no calendar is authorized |
 | `calendar.helper_path` | `""` | Absolute path to the separately installed EventKit companion. Empty means calendar reads remain unsupported; llmtui never searches `PATH`, downloads, or compiles it at runtime. See `native/personal-apps-calendar/README.md` for a source-build helper. |
-| `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval. No mutation adapter exists yet, so this currently has no observable effect |
+| `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply` and wire the Mail/Calendar mutation adapters (gated further by `mail.enabled`/`calendar.enabled`); every apply still needs a fresh human approval bound to one exact plan |
 | `mutations.ledger_path` | user config dir + `/llmtui/personal-apps` | Absolute user-level journal directory; `~` is accepted. It stores only digests and outcome categories, never mail/calendar content, addresses, raw arguments, or model call IDs. |
 | `limits.*` | see below | Bounds passed straight to the domain package's own defaults (`read_timeout` 15s, `mutation_timeout` 30s, `page_size` 25, `max_page_size` 100, `max_messages_per_read` 10, `max_body_bytes` 32768, `max_result_bytes` 131072, `max_scan_candidates` 1000, `max_calendar_days` 31, `max_changes_per_plan` 25) |
 

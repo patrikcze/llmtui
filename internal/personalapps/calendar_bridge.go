@@ -34,13 +34,50 @@ func newEventKitCalendarBackend(runner calendarBridgeRunner) *eventKitCalendarBa
 }
 
 type calendarBridgeRequest struct {
-	Version     int                     `json:"version"`
-	RequestID   string                  `json:"request_id"`
-	Operation   string                  `json:"operation"`
-	CalendarIDs []string                `json:"calendar_ids,omitempty"`
-	Event       *calendarBridgeEventRef `json:"event,omitempty"`
-	Start       string                  `json:"start,omitempty"`
-	End         string                  `json:"end,omitempty"`
+	Version     int                        `json:"version"`
+	RequestID   string                     `json:"request_id"`
+	Operation   string                     `json:"operation"`
+	CalendarIDs []string                   `json:"calendar_ids,omitempty"`
+	Event       *calendarBridgeEventRef    `json:"event,omitempty"`
+	Start       string                     `json:"start,omitempty"`
+	End         string                     `json:"end,omitempty"`
+	CreateEvent *calendarBridgeCreateEvent `json:"create_event,omitempty"`
+	UpdateEvent *calendarBridgeUpdateEvent `json:"update_event,omitempty"`
+}
+
+// calendarBridgeCreateEvent creates one ordinary personal event. Exactly
+// one of (Start, End) or (AllDayStart, AllDayEnd) is set — the companion
+// rejects a request carrying neither or both, the same rule
+// CalendarCreateEventChange.validate already enforces on the request that
+// produced this change.
+type calendarBridgeCreateEvent struct {
+	CalendarID  string `json:"calendar_id"`
+	Title       string `json:"title"`
+	Notes       string `json:"notes,omitempty"`
+	Location    string `json:"location,omitempty"`
+	Timezone    string `json:"timezone,omitempty"`
+	Start       string `json:"start,omitempty"`
+	End         string `json:"end,omitempty"`
+	AllDayStart string `json:"all_day_start,omitempty"`
+	AllDayEnd   string `json:"all_day_end,omitempty"`
+}
+
+// calendarBridgeUpdateEvent patches explicitly named fields of one event.
+// A nil-vs-empty distinction matters for Title/Notes/Location: only a
+// present field is changed, so these are pointers even though the wire
+// value is a plain string once present.
+type calendarBridgeUpdateEvent struct {
+	EventID         string  `json:"event_id"`
+	CalendarID      string  `json:"calendar_id"`
+	ExpectedVersion string  `json:"expected_version"`
+	Timezone        string  `json:"timezone,omitempty"`
+	Title           *string `json:"title,omitempty"`
+	Notes           *string `json:"notes,omitempty"`
+	Location        *string `json:"location,omitempty"`
+	Start           string  `json:"start,omitempty"`
+	End             string  `json:"end,omitempty"`
+	AllDayStart     string  `json:"all_day_start,omitempty"`
+	AllDayEnd       string  `json:"all_day_end,omitempty"`
 }
 
 type calendarBridgeEventRef struct {
