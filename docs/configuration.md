@@ -380,18 +380,37 @@ mail|calendar` before the model can call any read operation. Mutations
 require `mutations.enabled` and, per attempt, a human approval bound to one
 exact prepared plan — never covered by `/tools auto` or a standing "always
 allow" grant. See the personal-apps integration plan under
-`.claude/tasks/plans/` for the full design; the Mail/Calendar adapters
-themselves have not shipped yet, so a connected session currently has
-metadata visibility only.
+`.claude/tasks/plans/` for the full design.
+
+Mail has a real adapter on darwin builds (`mail_search`, `mail_read`,
+`mail_accounts`, `mail_mailboxes`), talking to Apple Mail through a fixed,
+embedded JXA script over `osascript`. Calendar has no adapter yet — a
+connected Calendar session currently has metadata visibility only, and every
+`calendar_*` operation reports `unsupported_operation` until a later slice
+adds an EventKit companion. Mail mutations (`change_prepare`/`change_apply`
+for moves, flags and drafts) also have no adapter yet regardless of
+`mutations.enabled`.
+
+`mail.allowed_accounts` takes each account's **native identifier**, not its
+display name — Apple Mail account objects have a stable UUID
+(`00000000-0000-0000-0000-000000000000`-shaped) distinct from the
+human-readable name shown in Mail.app, and that UUID is what scope matching
+compares against. There is currently no command that prints it; the most
+direct way to find it today is a one-off read-only script, for example:
+`osascript -l JavaScript -e 'Application("Mail").accounts().map(a => a.name() + " => " + a.id())'`.
+Mailbox scoping (`allowed_mailboxes`, when added to config) will similarly
+use the resolved path Mail reports, not a name you type in — Mail allows two
+sibling mailboxes with the identical display name, so names alone cannot
+address one reliably.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Master switch; registers the `personal_apps` tool when true |
 | `mail.enabled` | `false` | Enable the Mail adapter |
-| `mail.allowed_accounts` | `[]` | Native mail account identifiers in scope; empty means no mail account is authorized |
-| `calendar.enabled` | `false` | Enable the Calendar adapter |
+| `mail.allowed_accounts` | `[]` | Native mail account UUIDs in scope (see above); empty means no mail account is authorized |
+| `calendar.enabled` | `false` | Enable the Calendar adapter (no adapter exists yet; this only affects `/personal-apps status`) |
 | `calendar.allowed_calendars` | `[]` | Native calendar identifiers in scope; empty means no calendar is authorized |
-| `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval |
+| `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval. No mutation adapter exists yet, so this currently has no observable effect |
 | `limits.*` | see below | Bounds passed straight to the domain package's own defaults (`read_timeout` 15s, `mutation_timeout` 30s, `page_size` 25, `max_page_size` 100, `max_messages_per_read` 10, `max_body_bytes` 32768, `max_result_bytes` 131072, `max_scan_candidates` 1000, `max_calendar_days` 31, `max_changes_per_plan` 25) |
 
 ### `tool_registry`
