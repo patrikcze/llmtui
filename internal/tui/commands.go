@@ -174,7 +174,7 @@ func slashCommands() []slashCommand {
 		{name: "personal-apps", usage: "/personal-apps [status|connect mail|calendar|disconnect mail|calendar]", desc: "optional Apple Mail/Calendar integration (off by default; connect is a human decision, never the model's)", category: "Personal apps", blockWhileThinking: true, run: cmdPersonalApps},
 
 		// --- Diagnostics ---
-		{name: "doctor", usage: "/doctor [provider [name]|mcp]", desc: "provider, model, and MCP diagnostics", category: "Diagnostics", run: cmdDoctor},
+		{name: "doctor", usage: "/doctor [provider [name]|mcp|personal-apps]", desc: "provider, model, MCP, and personal-app diagnostics", category: "Diagnostics", run: cmdDoctor},
 		{name: "debug", usage: "/debug [on|off|last]", desc: "debug drawer for the last request", category: "Diagnostics", run: cmdDebug},
 		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", run: cmdKeys},
 		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", run: cmdConfig},

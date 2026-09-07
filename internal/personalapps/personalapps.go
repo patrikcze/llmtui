@@ -20,11 +20,13 @@
 // before it reaches a prompt. This package deliberately does not do that
 // framing itself: it does not know which of its results are display-bound.
 //
-// Scope of the current implementation: read-only native transport (JXA for
-// Mail and an explicitly configured EventKit companion for Calendar),
-// request/plan contracts, validation, normalization, identity, temporal logic
-// and policy. The durable operation ledger and mutation adapters remain later
-// slices; see docs/architecture and the personal-apps plan for sequencing.
+// Scope of the current implementation: native transports (JXA for Mail and
+// an explicitly configured EventKit companion for Calendar), request/plan
+// contracts, validation, normalization, identity, temporal logic, policy,
+// durable mutation recovery, and approved mutations with readback. Calendar
+// companion configuration can be inspected passively, but constructing a
+// Service or diagnostic must never prompt for macOS access; the person must
+// explicitly connect an adapter before a real operation can launch it.
 package personalapps
 
 import "time"

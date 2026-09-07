@@ -69,6 +69,30 @@ func TestPersonalAppsEnabledWiresServiceAndTool(t *testing.T) {
 	}
 }
 
+func TestDoctorPersonalAppsExplainsMissingCalendarHelperWithoutLaunchingIt(t *testing.T) {
+	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
+		c.Calendar.Enabled = true
+		c.Calendar.AllowedCalendars = []string{"cal-1"}
+		c.Calendar.HelperPath = ""
+	})
+	if cmd := cmdDoctor(m, "personal-apps"); cmd != nil {
+		t.Fatal("passive personal-apps doctor unexpectedly returned an async command")
+	}
+	if !m.overlayOpen {
+		t.Fatal("/doctor personal-apps did not open an overlay")
+	}
+	overlay := m.personalAppsDoctorOverlay()
+	for _, want := range []string{
+		"doctor — personal apps",
+		"calendar.helper_path is not configured",
+		"This check is passive",
+	} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("doctor overlay missing %q:\n%s", want, overlay)
+		}
+	}
+}
+
 func TestPersonalAppsEmptyAllowlistGrantsNoAccountByDefault(t *testing.T) {
 	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
 		c.Mail.AllowedAccounts = nil

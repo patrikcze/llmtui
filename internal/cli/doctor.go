@@ -53,6 +53,11 @@ func newDoctorCmd(r *Root) *cobra.Command {
 				}
 			}
 
+			fmt.Fprintln(out, "\npersonal apps")
+			for _, line := range personalAppsDoctorLines(r.cfg.PersonalApps) {
+				fmt.Fprintln(out, line)
+			}
+
 			fmt.Fprintln(out, "\nproviders")
 			names := make([]string, 0, len(r.cfg.Providers))
 			for name := range r.cfg.Providers {

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/personalapps"
 )
 
 func writeDoctorConfig(t *testing.T, extra string) string {
@@ -102,5 +105,26 @@ func TestDoctorReportsInvalidPluginManifest(t *testing.T) {
 
 	if !strings.Contains(out, "1 plugin(s) have an invalid manifest") {
 		t.Errorf("doctor output missing invalid-manifest warning:\n%s", out)
+	}
+}
+
+func TestDoctorReportsMissingCalendarHelperWithoutLaunchingIt(t *testing.T) {
+	lines := personalAppsDoctorLinesFor("darwin", config.PersonalAppsConfig{
+		Enabled:  true,
+		Mail:     config.PersonalAppsMailConfig{Enabled: true, AllowedAccounts: []string{"acct-1"}},
+		Calendar: config.PersonalAppsCalendarConfig{Enabled: true, AllowedCalendars: []string{"cal-1"}, HelperPath: "/does/not/exist"},
+	}, func(string) personalapps.CalendarHelperStatus {
+		return personalapps.CalendarHelperStatus{Code: "missing_helper", Message: "the configured calendar helper does not exist"}
+	})
+	out := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"personal apps",
+		"personal apps enabled",
+		"Calendar: the configured calendar helper does not exist",
+		"Calendar permission is not probed by doctor",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output missing %q:\n%s", want, out)
+		}
 	}
 }

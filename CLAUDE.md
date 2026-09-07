@@ -73,6 +73,11 @@ Five things that are easy to get wrong:
 5. **The raw user message is never rewritten.** Memory, RAG, skills, summaries
    and model hints are separate labeled sections in `internal/prompt/compose.go`;
    the user's text goes in last, verbatim. See `docs/prompt-composition.md`.
+6. **Personal apps are explicit macOS capabilities.** Mail and Calendar stay
+   off until separately configured and connected by the person at the
+   keyboard. Calendar needs an absolute, explicitly installed EventKit helper
+   path; startup and `doctor` must never build, download, launch, or request
+   permission from that helper. See `docs/personal-apps.md`.
 
 ## Conventions
 

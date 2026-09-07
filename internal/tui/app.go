@@ -190,10 +190,11 @@ type Model struct {
 	// regardless of what the TUI does, but the TUI still owns the human
 	// connect/disconnect commands and the change_apply approval gate.
 	personalApps *personalapps.Service
-	// personalAppsApprovals is a non-durable, in-process ApprovalChecker: a
-	// human approving a change_apply prompt records it here, bound to that
-	// exact plan digest. It is replaced by a durable, shared ledger in a
-	// later slice; see internal/personalapps.ApprovalLedger's doc comment.
+	// personalAppsApprovals is the in-process ApprovalChecker: a human
+	// approving a change_apply prompt records it here, bound to that exact
+	// plan digest. The separate durable mutation ledger records effect intent
+	// and outcome across sessions; approval itself intentionally remains a
+	// fresh, live human decision for each plan.
 	personalAppsApprovals *personalapps.ApprovalLedger
 	// personalAppsPrivate is sticky for the life of the session once any
 	// personal_apps read has occurred: it disables response cache read/write
