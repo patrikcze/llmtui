@@ -193,6 +193,16 @@ func personalAppsConnect(m *Model, target string) tea.Cmd {
 	if err != nil {
 		return m.fail(err.Error())
 	}
+	if adapter == personalapps.AdapterCalendar {
+		// Connecting is the consent boundary for Calendar. Refuse before
+		// recording consent when the configured companion cannot be used, so
+		// the next tool call does not fail with the less useful generic
+		// "adapter is not connected" message.
+		status := personalapps.CheckCalendarHelper(m.cfg.PersonalApps.Calendar.HelperPath)
+		if !status.Ready {
+			return m.fail("connect calendar: " + status.Message)
+		}
+	}
 	if err := m.personalApps.Connect(adapter); err != nil {
 		return m.fail(fmt.Sprintf("connect %s: %s", adapter, personalAppsErrorText(err)))
 	}

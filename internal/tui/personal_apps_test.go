@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -82,14 +83,36 @@ func TestDoctorPersonalAppsExplainsMissingCalendarHelperWithoutLaunchingIt(t *te
 		t.Fatal("/doctor personal-apps did not open an overlay")
 	}
 	overlay := m.personalAppsDoctorOverlay()
+	wantCalendarDiagnostic := "Calendar requires macOS and the EventKit companion"
+	if runtime.GOOS == "darwin" {
+		wantCalendarDiagnostic = "calendar.helper_path is not configured"
+	}
 	for _, want := range []string{
 		"doctor — personal apps",
-		"calendar.helper_path is not configured",
+		wantCalendarDiagnostic,
 		"This check is passive",
 	} {
 		if !strings.Contains(overlay, want) {
 			t.Errorf("doctor overlay missing %q:\n%s", want, overlay)
 		}
+	}
+}
+
+func TestCmdPersonalAppsConnectCalendarRequiresReadyHelper(t *testing.T) {
+	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
+		c.Calendar.Enabled = true
+		c.Calendar.AllowedCalendars = []string{"cal-1"}
+		c.Calendar.HelperPath = ""
+	})
+
+	if cmd := cmdPersonalApps(m, "connect calendar"); cmd != nil {
+		t.Fatalf("connect calendar returned an async command: %v", cmd())
+	}
+	if m.personalApps.Connection().CalendarConnected {
+		t.Fatal("Calendar connected although its helper was not ready")
+	}
+	if m.errText == "" {
+		t.Fatal("connect calendar did not explain why Calendar is unavailable")
 	}
 }
 
