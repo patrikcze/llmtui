@@ -237,6 +237,35 @@ func TestChangeApplyReportsUnknownOutcomes(t *testing.T) {
 	}
 }
 
+func TestChangeApplyDoesNotRetryUnknownEffectFromPersistentLedger(t *testing.T) {
+	f := mutableFixture(t, func(o *Options) {
+		o.Mutator = &fakeMutator{err: &Error{Code: CodeBridgeProtocolError, Message: "the helper stopped responding"}}
+		o.Journal = NewMutationLedger(t.TempDir())
+	})
+	mutator := f.svc.opts.Mutator.(*fakeMutator)
+	first := f.movePlan(t)
+	f.appr.planID, f.appr.digest = first.PlanID, first.Digest
+	if res := f.apply(t, first.PlanID); res.Status != StatusOutcomeUnknown {
+		t.Fatalf("first apply status = %q, want %q", res.Status, StatusOutcomeUnknown)
+	}
+	if mutator.calls != 1 {
+		t.Fatalf("first mutator calls = %d, want 1", mutator.calls)
+	}
+
+	// A fresh plan and new human approval still cannot make an interrupted
+	// effect retry itself. Fresh observations that change the effect identity
+	// are required before an intentional repeat can be represented.
+	second := f.movePlan(t)
+	f.appr.planID, f.appr.digest = second.PlanID, second.Digest
+	res := f.apply(t, second.PlanID)
+	if res.Status != StatusOutcomeUnknown {
+		t.Fatalf("second apply status = %q, want %q", res.Status, StatusOutcomeUnknown)
+	}
+	if mutator.calls != 1 {
+		t.Fatalf("uncertain effect ran again; mutator calls = %d, want 1", mutator.calls)
+	}
+}
+
 // A denial that proves nothing happened is reported as not applied, not as
 // an unknown outcome that blocks a legitimate later attempt.
 func TestChangeApplyKnownRefusalIsNotUnknown(t *testing.T) {

@@ -118,18 +118,70 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			checks:   []approvalCheck{{call: Call{Tool: ToolSearch, Body: "search tools"}}},
 		},
 		{
-			name:     ToolPersonalApps,
-			approval: "no for reads once connected; always ask for change_apply, bound to one exact plan and never covered by /tools auto",
+			name:     "status",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"status","arguments":{}}`}}},
+		},
+		{
+			name:     "mail_accounts",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_accounts","arguments":{}}`}}},
+		},
+		{
+			name:     "mail_mailboxes",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_mailboxes","arguments":{"account_id":"acct_1"}}`}}},
+		},
+		{
+			name:     "mail_search",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_search","arguments":{}}`}}},
+		},
+		{
+			name:     "mail_read",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_read","arguments":{"message_ids":["msg_1"]}}`}}},
+		},
+		{
+			name:     "calendar_list",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"calendar_list","arguments":{}}`}}},
+		},
+		{
+			name:     "calendar_events",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"calendar_events","arguments":{}}`}}},
+		},
+		{
+			name:     "calendar_event",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"calendar_event","arguments":{}}`}}},
+		},
+		{
+			name:     "calendar_free_slots",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"calendar_free_slots","arguments":{}}`}}},
+		},
+		{
+			name:     "change_prepare",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"change_prepare","arguments":{}}`}}},
+		},
+		{
+			name:     "change_apply",
+			approval: "always ask, bound to one exact approved plan — never covered by /tools auto",
 			checks: []approvalCheck{
-				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"status"}`}},
-				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"mail_search","arguments":{}}`}},
-				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"change_prepare","arguments":{}}`}},
 				{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"change_apply","arguments":{"plan_id":"plan_1"}}`}, want: true},
 				// Malformed/unrecognized input must never default to "no
 				// approval needed" — NeedsApproval only special-cases a
 				// confirmed metadata/read/navigate effect.
 				{call: Call{Tool: ToolPersonalApps, Body: "not json"}, want: true},
 			},
+		},
+		{
+			name:     "open_item",
+			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"open_item","arguments":{"item_id":"msg_1"}}`}}},
 		},
 	}
 

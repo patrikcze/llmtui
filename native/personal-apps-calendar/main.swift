@@ -12,12 +12,48 @@ private struct Request: Decodable {
     let event: EventReference?
     let start: String?
     let end: String?
+    let create_event: CreateEventRequest?
+    let update_event: UpdateEventRequest?
 }
 
 private struct EventReference: Decodable {
     let calendar_id: String
     let event_id: String
     let occurrence: String?
+}
+
+// CreateEventRequest mirrors CalendarCreateEventChange: exactly one of
+// (start, end) or (all_day_start, all_day_end) is expected — the Go side
+// enforces that shape before this ever reaches the companion, but
+// createEvent below still checks it directly rather than trusting the
+// pairing.
+private struct CreateEventRequest: Decodable {
+    let calendar_id: String
+    let title: String
+    let notes: String?
+    let location: String?
+    let timezone: String?
+    let start: String?
+    let end: String?
+    let all_day_start: String?
+    let all_day_end: String?
+}
+
+// UpdateEventRequest mirrors CalendarUpdateEventChange: title/notes/
+// location are Optional so an absent field leaves the stored value
+// untouched, never cleared.
+private struct UpdateEventRequest: Decodable {
+    let event_id: String
+    let calendar_id: String
+    let expected_version: String
+    let timezone: String?
+    let title: String?
+    let notes: String?
+    let location: String?
+    let start: String?
+    let end: String?
+    let all_day_start: String?
+    let all_day_end: String?
 }
 
 private struct Response: Encodable {
@@ -151,10 +187,117 @@ private struct PersonalAppsCalendar {
                 throw BridgeFailure.notFound("event no longer matches its calendar")
             }
             response.event = value
+        case "create_event":
+            guard let create = request.create_event else {
+                throw BridgeFailure.invalidRequest("create_event requires create_event")
+            }
+            response.event = try createEvent(create, store: store)
+        case "update_event":
+            guard let update = request.update_event else {
+                throw BridgeFailure.invalidRequest("update_event requires update_event")
+            }
+            response.event = try updateEvent(update, store: store)
         default:
             throw BridgeFailure.unsupported("unknown operation")
         }
         return response
+    }
+
+    // createEvent makes one ordinary, non-recurring, attendee-free personal
+    // event. It never invites anyone — this bridge has no attendee field at
+    // all — and refuses a calendar that does not accept writes rather than
+    // letting EventKit's save silently no-op or throw a less specific error.
+    private static func createEvent(_ req: CreateEventRequest, store: EKEventStore) throws -> Event {
+        guard let calendar = store.calendar(withIdentifier: req.calendar_id) else {
+            throw BridgeFailure.notFound("calendar no longer exists")
+        }
+        guard calendar.allowsContentModifications else {
+            throw BridgeFailure.unsupported("calendar does not accept writes")
+        }
+        let ev = EKEvent(eventStore: store)
+        ev.calendar = calendar
+        ev.title = req.title
+        ev.notes = req.notes
+        ev.location = req.location
+        if let tz = req.timezone, !tz.isEmpty {
+            guard let zone = TimeZone(identifier: tz) else {
+                throw BridgeFailure.invalidRequest("unknown timezone")
+            }
+            ev.timeZone = zone
+        }
+        try applyInterval(to: ev, start: req.start, end: req.end, allDayStart: req.all_day_start, allDayEnd: req.all_day_end)
+        try save(ev, store: store)
+        guard let value = event(ev) else {
+            throw BridgeFailure.unavailable("event saved but could not be read back")
+        }
+        return value
+    }
+
+    // updateEvent patches only the fields the request explicitly named,
+    // preserving everything else — never a whole-event replacement. It
+    // refuses a recurring or attendee-bearing event unconditionally: the Go
+    // side already checked this against its own fresh read before sending
+    // the request, but the check is repeated here directly against
+    // EventKit's own current state, not trusted from the caller.
+    private static func updateEvent(_ req: UpdateEventRequest, store: EKEventStore) throws -> Event {
+        guard let ev = store.event(withIdentifier: req.event_id), ev.calendar.calendarIdentifier == req.calendar_id else {
+            throw BridgeFailure.notFound("event no longer exists")
+        }
+        guard ev.calendar.allowsContentModifications else {
+            throw BridgeFailure.unsupported("calendar does not accept writes")
+        }
+        guard !ev.hasRecurrenceRules else {
+            throw BridgeFailure.unsupported("recurring events cannot be updated")
+        }
+        guard ev.attendees?.isEmpty ?? true else {
+            throw BridgeFailure.unsupported("events with attendees cannot be updated")
+        }
+        if let title = req.title { ev.title = title }
+        if let notes = req.notes { ev.notes = notes }
+        if let location = req.location { ev.location = location }
+        if let tz = req.timezone, !tz.isEmpty {
+            guard let zone = TimeZone(identifier: tz) else {
+                throw BridgeFailure.invalidRequest("unknown timezone")
+            }
+            ev.timeZone = zone
+        }
+        if req.start != nil || req.end != nil || req.all_day_start != nil || req.all_day_end != nil {
+            try applyInterval(to: ev, start: req.start, end: req.end, allDayStart: req.all_day_start, allDayEnd: req.all_day_end)
+        }
+        try save(ev, store: store)
+        guard let value = event(ev) else {
+            throw BridgeFailure.unavailable("event updated but could not be read back")
+        }
+        return value
+    }
+
+    private static func applyInterval(to ev: EKEvent, start: String?, end: String?, allDayStart: String?, allDayEnd: String?) throws {
+        if let allDayStart, let allDayEnd {
+            guard let s = parseDateOnly(allDayStart), let e = parseDateOnly(allDayEnd), s < e else {
+                throw BridgeFailure.invalidRequest("invalid all-day interval")
+            }
+            ev.isAllDay = true
+            ev.startDate = s
+            ev.endDate = e
+            return
+        }
+        if let start, let end {
+            guard let s = parseDate(start), let e = parseDate(end), s < e else {
+                throw BridgeFailure.invalidRequest("invalid interval")
+            }
+            ev.startDate = s
+            ev.endDate = e
+            return
+        }
+        throw BridgeFailure.invalidRequest("an event requires either a timed or an all-day interval")
+    }
+
+    private static func save(_ ev: EKEvent, store: EKEventStore) throws {
+        do {
+            try store.save(ev, span: .thisEvent, commit: true)
+        } catch {
+            throw BridgeFailure.unavailable("could not save the event")
+        }
     }
 
     private static func ensureFullAccess(_ store: EKEventStore) throws {
@@ -231,6 +374,20 @@ private struct PersonalAppsCalendar {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: value)
+    }
+
+    // parseDateOnly interprets a "YYYY-MM-DD" date as UTC midnight — an
+    // all-day EventKit event's startDate/endDate carry no timezone of their
+    // own (isAllDay dates are calendar-day boundaries, not instants), so
+    // there is no "correct" zone to pick here beyond a stable, documented
+    // one. This is unverified against a real all-day event; see the
+    // implementation plan's Slice 6 note.
+    private static func parseDateOnly(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.calendar = Foundation.Calendar(identifier: .gregorian)
+        return formatter.date(from: value)
     }
 
     private static func write(_ response: Response) throws {

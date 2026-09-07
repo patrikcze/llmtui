@@ -39,6 +39,24 @@ func NewCalendarBackend(opts CalendarBackendOptions) CalendarBackend {
 	return newEventKitCalendarBackend(&eventKitRunner{path: opts.HelperPath, timeout: timeout})
 }
 
+// NewCalendarMutator returns a Mutator that applies Calendar changes
+// (create_event, update_event) through the same signed EventKit companion
+// NewCalendarBackend uses, over its own eventKitRunner. Constructing it
+// performs no I/O and starts no process; the helper launches only for an
+// authorized calendar operation after Calendar has been explicitly
+// connected. Deliberately independent of NewCalendarBackend so a deployment
+// can wire reads without ever wiring the ability to write.
+func NewCalendarMutator(opts CalendarBackendOptions) Mutator {
+	if opts.HelperPath == "" || !filepath.IsAbs(opts.HelperPath) {
+		return nil
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultCalendarBridgeTimeout
+	}
+	return newEventKitCalendarMutator(newEventKitCalendarBackend(&eventKitRunner{path: opts.HelperPath, timeout: timeout}))
+}
+
 // eventKitRunner invokes only the configured absolute companion executable.
 // It uses a length-framed stdin/stdout protocol, never a shell, arguments
 // derived from model input, a socket, or environment payloads.

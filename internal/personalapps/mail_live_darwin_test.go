@@ -221,6 +221,87 @@ func TestLiveMailBridgeThroughService(t *testing.T) {
 	}
 }
 
+// TestLiveMailBridgeSearchScansFromTheCorrectEnd guards a real regression
+// found via live use: opSearch's bounded scan assumed mailbox.messages()
+// always places the newest message at the high index and walked from there
+// downward. For at least one real Gmail/IMAP account that assumption was
+// backwards — index 0 held the newest message — so a limit-bounded
+// "newest first" search silently returned the *oldest* messages it found
+// near the wrong end instead of an error, discovered only because the
+// dates displayed were months old. detectNewestAtIndexZero (in the script)
+// now checks per mailbox instead of assuming a fixed direction; this proves
+// it end-to-end against live data rather than a fake, since the bug lived
+// entirely in scan-direction logic a fake response can't exercise.
+//
+// The check: a small "newest first" page and a small "oldest first" page
+// from the same mailbox must not overlap in time — every message in the
+// newest page must be at least as recent as every message in the oldest
+// page. A mailbox scan starting from the wrong end would violate this
+// immediately for any mailbox with more history than the two page sizes
+// combined.
+func TestLiveMailBridgeSearchScansFromTheCorrectEnd(t *testing.T) {
+	if os.Getenv("LLMTUI_TEST_LIVE_MAIL") != "1" {
+		t.Skip("set LLMTUI_TEST_LIVE_MAIL=1 to run against a real, already-authorized Mail.app")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	backend := NewMailBackend(MailBackendOptions{Timeout: 20 * time.Second})
+	accounts, err := backend.Accounts(ctx)
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	var inbox *ResourceRef
+	for _, acct := range accounts {
+		boxes, err := backend.Mailboxes(ctx, acct.Ref, ResourceRef{})
+		if err != nil {
+			continue
+		}
+		for i := range boxes {
+			if strings.EqualFold(boxes[i].DisplayName, "inbox") && boxes[i].TotalCount > 20 {
+				inbox = &boxes[i].Ref
+				break
+			}
+		}
+		if inbox != nil {
+			break
+		}
+	}
+	if inbox == nil {
+		t.Skip("no account has an Inbox with enough history to distinguish scan direction")
+	}
+
+	newest, err := backend.Search(ctx, MailQuery{Mailboxes: []ResourceRef{*inbox}, Limit: 3, MaxCandidates: 200, Newest: true})
+	if err != nil {
+		t.Fatalf("Search (newest): %v", err)
+	}
+	oldest, err := backend.Search(ctx, MailQuery{Mailboxes: []ResourceRef{*inbox}, Limit: 3, MaxCandidates: 200, Newest: false})
+	if err != nil {
+		t.Fatalf("Search (oldest): %v", err)
+	}
+	if len(newest.Messages) == 0 || len(oldest.Messages) == 0 {
+		t.Skip("inbox returned no messages for one direction; nothing to compare")
+	}
+
+	oldestOfNewest := newest.Messages[0].Received
+	for _, m := range newest.Messages {
+		if m.Received.Before(oldestOfNewest) {
+			oldestOfNewest = m.Received
+		}
+	}
+	newestOfOldest := oldest.Messages[0].Received
+	for _, m := range oldest.Messages {
+		if m.Received.After(newestOfOldest) {
+			newestOfOldest = m.Received
+		}
+	}
+	t.Logf("newest-first page: %d messages, oldest of them %s", len(newest.Messages), oldestOfNewest)
+	t.Logf("oldest-first page: %d messages, newest of them %s", len(oldest.Messages), newestOfOldest)
+	if oldestOfNewest.Before(newestOfOldest) {
+		t.Fatalf("newest-first search returned messages older than the oldest-first search — the scan is reading from the wrong end of the mailbox (oldest-of-newest=%s, newest-of-oldest=%s)", oldestOfNewest, newestOfOldest)
+	}
+}
+
 // decodeInto round-trips Result.Data through JSON exactly like the real
 // personal_apps tool boundary does, instead of type-asserting the in-process
 // any value directly.

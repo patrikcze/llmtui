@@ -3,12 +3,15 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
@@ -24,6 +27,60 @@ func personalAppsScopeFromConfig(c config.PersonalAppsConfig) personalapps.Scope
 		AllowedCalendars: append([]string(nil), c.Calendar.AllowedCalendars...),
 		MutationsEnabled: c.Mutations.Enabled,
 	}
+}
+
+// personalAppsJournalFromConfig creates the user-level mutation journal
+// without touching the filesystem. Unlike normal history, the journal must
+// survive a workspace change: it is the recovery barrier for an external
+// effect whose outcome was interrupted or uncertain.
+func personalAppsJournalFromConfig(c config.PersonalAppsMutationConfig) (personalapps.Journal, error) {
+	if !c.Enabled {
+		return nil, nil
+	}
+	dir := strings.TrimSpace(c.LedgerPath)
+	if dir == "" {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve personal-apps ledger directory: %w", err)
+		}
+		dir = filepath.Join(configDir, "llmtui", "personal-apps")
+	} else {
+		var err error
+		dir, err = history.ExpandHome(dir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve personal-apps ledger directory: %w", err)
+		}
+	}
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("personal-apps ledger path must be absolute")
+	}
+	return personalapps.NewMutationLedger(dir), nil
+}
+
+// blockDependentPersonalAppsApply prevents a model from making preparation
+// and application interdependent in one tool response. The approval UI must
+// show a plan that already exists, not a speculative plan another call in the
+// same batch might create. Reads and prepares in that batch remain runnable;
+// only apply calls are rejected with an actionable result.
+func blockDependentPersonalAppsApply(plan *toolBatchPlan) bool {
+	hasPrepare := false
+	for _, call := range plan.calls {
+		if call.Tool == tools.ToolPersonalApps && personalapps.PeekOperation([]byte(call.Body)) == personalapps.OpChangePrepare {
+			hasPrepare = true
+			break
+		}
+	}
+	if !hasPrepare {
+		return false
+	}
+	blocked := false
+	for i, call := range plan.calls {
+		if call.Tool == tools.ToolPersonalApps && personalapps.PeekOperation([]byte(call.Body)) == personalapps.OpChangeApply {
+			plan.block(i, "change_apply cannot share a tool batch with change_prepare; wait for the returned plan and a separate human approval")
+			blocked = true
+		}
+	}
+	return blocked
 }
 
 // personalAppsLimitsFromConfig maps configuration onto personalapps.Limits.

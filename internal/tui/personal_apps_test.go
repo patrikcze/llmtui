@@ -39,8 +39,8 @@ func TestPersonalAppsDisabledLeavesToolAbsent(t *testing.T) {
 		t.Fatal("Runner.PersonalApps was wired although the feature is disabled")
 	}
 	for _, spec := range m.eligibleToolSpecs() {
-		if spec.Name == tools.ToolPersonalApps {
-			t.Fatal("personal_apps appears in eligibleToolSpecs while disabled")
+		if personalapps.Operation(spec.Name).Valid() {
+			t.Fatalf("personal_apps operation %q appears in eligibleToolSpecs while disabled", spec.Name)
 		}
 	}
 	m.errText = ""
@@ -58,14 +58,14 @@ func TestPersonalAppsEnabledWiresServiceAndTool(t *testing.T) {
 	if m.toolRunner.PersonalApps == nil {
 		t.Fatal("Runner.PersonalApps was not wired")
 	}
-	found := false
+	found := 0
 	for _, spec := range m.eligibleToolSpecs() {
-		if spec.Name == tools.ToolPersonalApps {
-			found = true
+		if personalapps.Operation(spec.Name).Valid() {
+			found++
 		}
 	}
-	if !found {
-		t.Fatal("personal_apps is missing from eligibleToolSpecs although the Service is wired")
+	if want := len(personalapps.Operations()); found != want {
+		t.Fatalf("eligibleToolSpecs has %d personal_apps operations, want all %d", found, want)
 	}
 }
 

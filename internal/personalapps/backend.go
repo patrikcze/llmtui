@@ -57,16 +57,36 @@ type Mutator interface {
 }
 
 // Journal records durable intent before an external side effect and the
-// observed outcome after it. The service refuses to mutate anything when no
-// journal is configured or when a write to it fails: an unrecorded mutation
+// observed outcome after it. Its identity is a resolved change, rather than a
+// model call or a short-lived plan handle, so recovery still recognizes the
+// same effect in a later session. The service refuses to mutate anything when
+// no journal is configured or when a write to it fails: an unrecorded mutation
 // is one that cannot be recognized after a crash, which is how a duplicate
-// send happens.
+// effect happens.
 type Journal interface {
-	// RecordIntent stores the intent to execute a plan and returns an error
-	// if it could not be persisted durably.
-	RecordIntent(ctx context.Context, plan Plan) error
-	// RecordOutcome stores the observed result of a plan.
-	RecordOutcome(ctx context.Context, plan Plan, outcomes []ItemOutcome) error
+	// Begin stores intent for one resolved effect before it runs. A state
+	// other than MutationNew means a prior process already recorded this
+	// effect and it must not be automatically attempted again.
+	Begin(ctx context.Context, change ResolvedChange) (MutationDecision, error)
+	// Complete stores the observed result of one resolved effect.
+	Complete(ctx context.Context, change ResolvedChange, outcomes []ItemOutcome) error
+}
+
+// MutationState is the durable state of one semantic mutation identity.
+type MutationState string
+
+const (
+	MutationNew                MutationState = "new"
+	MutationIntentRecorded     MutationState = "intent_recorded"
+	MutationVerifiedApplied    MutationState = "verified_applied"
+	MutationVerifiedNotApplied MutationState = "verified_not_applied"
+	MutationOutcomeUnknown     MutationState = "outcome_unknown"
+)
+
+// MutationDecision tells the service whether an effect may run. Only a new
+// identity may be applied; all persisted states are replay protection.
+type MutationDecision struct {
+	State MutationState
 }
 
 // BackendAccount is one mail account as the adapter sees it.

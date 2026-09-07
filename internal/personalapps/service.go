@@ -891,17 +891,16 @@ func (s *Service) changeApply(ctx context.Context, args ChangeApplyArgs, scope S
 		resolved = append(resolved, rc)
 	}
 
-	// Durable intent goes down before the first side effect. Without it a
-	// crash mid-apply leaves nothing to recognize the operation by.
+	// Each resolved effect gets its own durable intent immediately before it
+	// runs. Without that record a crash mid-apply leaves nothing to recognize
+	// the operation by in another session.
 	if s.opts.Journal == nil {
 		return s.fail(OpChangeApply, &Error{Code: CodeJournalUnavailable, Message: "no operation ledger is configured; refusing to mutate"})
 	}
-	if err := s.opts.Journal.RecordIntent(ctx, plan); err != nil {
-		return s.fail(OpChangeApply, wrap(&Error{Code: CodeJournalUnavailable, Message: "the operation ledger could not record this change"}, err))
-	}
 
 	// The plan is consumed before execution: one preparation applies at
-	// most once, whatever happens next.
+	// most once, whatever happens next. Intent is still recorded before each
+	// side effect below.
 	if _, err := s.plans.Consume(plan.ID); err != nil {
 		return s.fail(OpChangeApply, err)
 	}
@@ -913,34 +912,59 @@ func (s *Service) changeApply(ctx context.Context, args ChangeApplyArgs, scope S
 			outcomes = append(outcomes, remainingNotApplied(rc)...)
 			continue
 		}
-		got, err := s.opts.Mutator.Apply(ctx, rc)
+		decision, err := s.opts.Journal.Begin(ctx, rc)
 		if err != nil {
-			// An error is not evidence that nothing happened. Anything
-			// short of a readback is recorded as unknown.
+			if len(outcomes) == 0 {
+				return s.fail(OpChangeApply, wrap(&Error{Code: CodeJournalUnavailable, Message: "the operation ledger could not record this change"}, err))
+			}
 			outcomes = append(outcomes, ItemOutcome{
-				Outcome: outcomeForError(err),
-				Code:    CodeOf(err),
-				Detail:  messageOf(err),
+				Outcome: OutcomeUnknown,
+				Code:    CodeJournalUnavailable,
+				Detail:  "the operation ledger could not record the next change",
 			})
 			stopped = true
 			continue
 		}
+		if decision.State != MutationNew {
+			outcome := OutcomeNotApplied
+			code := CodePreconditionFailed
+			detail := "a matching approved mutation is already recorded and will not be retried automatically"
+			if decision.State == MutationIntentRecorded || decision.State == MutationOutcomeUnknown {
+				outcome = OutcomeUnknown
+				code = CodeOutcomeUnknown
+				detail = "a matching mutation has an uncertain recorded outcome and must not be retried automatically"
+			}
+			outcomes = append(outcomes, ItemOutcome{Outcome: outcome, Code: code, Detail: detail})
+			stopped = true
+			continue
+		}
+		got, err := s.opts.Mutator.Apply(ctx, rc)
+		if err != nil {
+			// An error is not evidence that nothing happened. Anything
+			// short of a readback is recorded as unknown.
+			got = []ItemOutcome{{
+				Outcome: outcomeForError(err),
+				Code:    CodeOf(err),
+				Detail:  messageOf(err),
+			}}
+		}
 		outcomes = append(outcomes, got...)
+		if err := s.opts.Journal.Complete(ctx, rc, got); err != nil {
+			// The change may well have happened; an intent without an outcome
+			// remains a cross-session retry barrier.
+			outcomes = append(outcomes, ItemOutcome{
+				Outcome: OutcomeUnknown,
+				Code:    CodeJournalUnavailable,
+				Detail:  "the outcome could not be recorded durably",
+			})
+			stopped = true
+			continue
+		}
 		for _, o := range got {
 			if o.Outcome.Uncertain() {
 				stopped = true
 			}
 		}
-	}
-
-	if err := s.opts.Journal.RecordOutcome(ctx, plan, outcomes); err != nil {
-		// The change may well have happened; failing to record that is
-		// itself an uncertain state.
-		outcomes = append(outcomes, ItemOutcome{
-			Outcome: OutcomeUnknown,
-			Code:    CodeJournalUnavailable,
-			Detail:  "the outcome could not be recorded durably",
-		})
 	}
 
 	view := ApplyView{PlanID: plan.ID, Digest: plan.Digest, Outcomes: outcomes}

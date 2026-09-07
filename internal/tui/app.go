@@ -486,19 +486,45 @@ func (m *Model) rebuildFromConfig() {
 					Timeout:    limits.ReadTimeout,
 				})
 			}
-			svc, err := personalapps.New(personalapps.Options{
-				Scope:       personalAppsScopeFromConfig(pcfg),
-				Limits:      limits,
-				Mail:        mailBackend,
-				Calendar:    calendarBackend,
-				Approvals:   m.personalAppsApprovals,
-				PrivacyGate: m.enterPersonalAppsPrivateSession,
-			})
-			if err != nil {
-				m.errText = "personal_apps: " + err.Error()
+			// Mutators are gated on mutations.enabled specifically, on top of
+			// each adapter's own gate: enabling Mail/Calendar reads must never
+			// by itself turn on the ability to write. personalapps.NewMutator
+			// returns nil when both halves are nil, so change_apply still
+			// reports ErrUnsupportedPlatform exactly as it did before any
+			// mutator existed, rather than a non-nil Mutator that fails every
+			// call.
+			var mailMutator, calendarMutator personalapps.Mutator
+			if pcfg.Mutations.Enabled {
+				if pcfg.Mail.Enabled {
+					mailMutator = personalapps.NewMailMutator(personalapps.MailBackendOptions{Timeout: limits.MutationTimeout})
+				}
+				if pcfg.Calendar.Enabled {
+					calendarMutator = personalapps.NewCalendarMutator(personalapps.CalendarBackendOptions{
+						HelperPath: pcfg.Calendar.HelperPath,
+						Timeout:    limits.MutationTimeout,
+					})
+				}
+			}
+			journal, journalErr := personalAppsJournalFromConfig(pcfg.Mutations)
+			if journalErr != nil {
+				m.errText = "personal_apps: " + journalErr.Error()
 			} else {
-				m.personalApps = svc
-				m.toolRunner.PersonalApps = svc
+				svc, err := personalapps.New(personalapps.Options{
+					Scope:       personalAppsScopeFromConfig(pcfg),
+					Limits:      limits,
+					Mail:        mailBackend,
+					Calendar:    calendarBackend,
+					Mutator:     personalapps.NewMutator(mailMutator, calendarMutator),
+					Journal:     journal,
+					Approvals:   m.personalAppsApprovals,
+					PrivacyGate: m.enterPersonalAppsPrivateSession,
+				})
+				if err != nil {
+					m.errText = "personal_apps: " + err.Error()
+				} else {
+					m.personalApps = svc
+					m.toolRunner.PersonalApps = svc
+				}
 			}
 		}
 	}
@@ -1357,10 +1383,16 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		return cmd
 	}
 	plan := newToolBatchPlan(calls)
+	personalAppsDependencyBlocked := blockDependentPersonalAppsApply(&plan)
 	if m.cfg.Tools.NoProgress.Enabled {
-		var terminal bool
-		plan, terminal = m.progress.planBatch(calls)
-		if plan.blockedCount() == len(calls) {
+		progressPlan, terminal := m.progress.planBatch(calls)
+		for i, reason := range plan.blocked {
+			if reason != "" {
+				progressPlan.block(i, reason)
+			}
+		}
+		plan = progressPlan
+		if !personalAppsDependencyBlocked && plan.blockedCount() == len(calls) {
 			return m.handleBlockedProgress(calls, progressBlockReason(plan), terminal)
 		}
 	}

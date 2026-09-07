@@ -189,6 +189,25 @@ func TestMailSearchRejectsForeignHandleKinds(t *testing.T) {
 	}
 }
 
+// TestMalformedHandleErrorEchoesTheReceivedValue guards a diagnosability
+// fix: the previous error text ("account_ids contains an entry that is not
+// a host-issued acct handle") named the problem's shape but never the
+// actual string received, so there was no way to tell — from the
+// error alone — whether a model retyped a handle with a typo, echoed a
+// stale value, or sent something structurally unrelated. The value is safe
+// to echo: a handle carries no account name, mailbox path or content, only
+// a kind prefix and random bytes.
+func TestMalformedHandleErrorEchoesTheReceivedValue(t *testing.T) {
+	raw := `{"operation":"mail_search","arguments":{"account_ids":["acct_not-actually-hex"]}}`
+	_, err := parse(t, raw)
+	if err == nil {
+		t.Fatal("expected a malformed-handle error")
+	}
+	if !strings.Contains(err.Error(), "acct_not-actually-hex") {
+		t.Fatalf("error %q does not echo the received value", err.Error())
+	}
+}
+
 func TestMailSearchNormalizesHandleLists(t *testing.T) {
 	h := newHandles(t)
 	raw := `{"operation":"mail_search","arguments":{"mailbox_ids":["` + string(h.mailbox2) + `","` +

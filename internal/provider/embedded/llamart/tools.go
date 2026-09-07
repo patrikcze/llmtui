@@ -469,6 +469,11 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 		return nil, errors.New("expected true or false")
 	case "object", "array":
 		if !json.Valid([]byte(raw)) {
+			if typeName == "array" {
+				if v, ok := repairScalarAsArray(raw, schema); ok {
+					return v, nil
+				}
+			}
 			return nil, fmt.Errorf("expected a JSON %s", typeName)
 		}
 		var value any
@@ -482,6 +487,9 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 				return nil, errors.New("expected a JSON object")
 			}
 		} else if _, ok := value.([]any); !ok {
+			if v, ok := repairScalarAsArray(raw, schema); ok {
+				return v, nil
+			}
 			return nil, errors.New("expected a JSON array")
 		}
 		return value, nil
@@ -497,6 +505,174 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 		}
 		return raw, nil
 	}
+}
+
+// repairScalarAsArray handles a common small-model tool-calling mistake:
+// emitting one bare or JSON-quoted scalar for an array-typed argument
+// instead of wrapping it in []. Reproduced live with Gemma 4 E4B via
+// mail_search's account_ids/mailbox_ids (both string arrays) — the model
+// consistently omitted the brackets for a single id.
+//
+// It only fires when raw is exactly one value of the array's own declared
+// element type (schema["items"]) — never for an untyped, array-of-array or
+// array-of-object schema, where wrapping could silently accept something
+// the caller never intended. It never widens what a well-formed multi-item
+// array argument would already do: a raw value that itself decodes as a
+// JSON array never reaches this function (see normalizeArgument's two call
+// sites), so a model that got the shape right is never second-guessed.
+func repairScalarAsArray(raw string, schema map[string]any) (any, bool) {
+	items, _ := schema["items"].(map[string]any)
+	itemType, _ := items["type"].(string)
+	switch strings.ToLower(itemType) {
+	case "string", "integer", "number", "boolean":
+	default:
+		return nil, false
+	}
+	// A model that does try to wrap a value in [] often still reaches this
+	// function, not with a clean JSON array, but with the whole bracketed
+	// expression as one raw string, Gemma quote tokens and all —
+	// "[<|\"|>box_1<|\"|>]" — because github.com/hybridgroup/yzma's Gemma
+	// text-call parser (parseGemmaArgs) recognizes Gemma-quote-wrapped
+	// values, JSON-double-quoted values and nested {...} objects, but has
+	// no case for "[" at all; its bare-value fallback just reads straight
+	// through to the next top-level comma/brace. That is a gap in that
+	// dependency, not something to patch here — this recovers the model's
+	// actual intent from the same delimiter vocabulary yzma itself already
+	// recognizes, entirely on this side.
+	if elems, ok := splitGemmaBracketedArray(raw); ok {
+		out := make([]any, 0, len(elems))
+		for _, elem := range elems {
+			v, err := normalizeArgument(elem, items)
+			if err != nil {
+				return nil, false
+			}
+			out = append(out, v)
+		}
+		return out, true
+	}
+	if json.Valid([]byte(raw)) {
+		var decoded any
+		d := json.NewDecoder(strings.NewReader(raw))
+		d.UseNumber()
+		if err := d.Decode(&decoded); err != nil {
+			return nil, false
+		}
+		if _, isArray := decoded.([]any); isArray {
+			// Already a well-formed array; nothing to repair.
+			return nil, false
+		}
+		if v, ok := wrapIfMatchesItemType(decoded, itemType); ok {
+			return v, true
+		}
+		return nil, false
+	}
+	// raw is not valid JSON on its own (e.g. an unquoted bareword like a
+	// handle) — try it as one raw scalar of the item's type, with the same
+	// strict coercion a genuine single-value argument of that type gets.
+	value, err := normalizeArgument(raw, items)
+	if err != nil {
+		return nil, false
+	}
+	return []any{value}, true
+}
+
+// gemmaQuoteTokens mirrors, deliberately, the exact delimiter set
+// github.com/hybridgroup/yzma/pkg/message's parseGemmaArgs recognizes
+// (longest first, matching that package's own ordering) — this only ever
+// needs to undo what that parser's bare-value fallback left intact, never
+// to recognize a delimiter yzma itself would not have.
+var gemmaQuoteTokens = []string{"<|\"|>", "<\">", "<|>"}
+
+// splitGemmaBracketedArray recognizes raw as a "[elem, elem, ...]" array
+// attempt whose elements are Gemma-quote-token-delimited or bare — the one
+// shape yzma's Gemma parser leaves completely unparsed, brackets and quote
+// tokens intact, as a single string. It splits on top-level commas only
+// (never one inside a quote-token pair) and strips each element's own
+// quote-token or JSON-double-quote wrapping. ok is false for anything that
+// is not clearly this shape — no leading "[whatever]" text is ever misread
+// as an array by accident — including an empty "[]", which has nothing to
+// repair.
+func splitGemmaBracketedArray(raw string) ([]string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return nil, false
+	}
+	inner := trimmed[1 : len(trimmed)-1]
+	if strings.TrimSpace(inner) == "" {
+		return nil, false
+	}
+
+	var pieces []string
+	start := 0
+	i := 0
+	for i < len(inner) {
+		matchedToken := false
+		for _, tok := range gemmaQuoteTokens {
+			if !strings.HasPrefix(inner[i:], tok) {
+				continue
+			}
+			closeIdx := strings.Index(inner[i+len(tok):], tok)
+			if closeIdx == -1 {
+				// An unterminated quote token inside the brackets means
+				// this isn't the clean shape this function repairs.
+				return nil, false
+			}
+			i += len(tok) + closeIdx + len(tok)
+			matchedToken = true
+			break
+		}
+		if matchedToken {
+			continue
+		}
+		if inner[i] == ',' {
+			pieces = append(pieces, inner[start:i])
+			i++
+			start = i
+			continue
+		}
+		i++
+	}
+	pieces = append(pieces, inner[start:])
+
+	out := make([]string, 0, len(pieces))
+	for _, p := range pieces {
+		out = append(out, stripGemmaQuoteWrapping(p))
+	}
+	return out, true
+}
+
+// stripGemmaQuoteWrapping removes one layer of Gemma-quote-token or
+// standard JSON double-quote wrapping from s, or returns s unchanged (a
+// bare, unquoted value — also valid inside a Gemma array attempt).
+func stripGemmaQuoteWrapping(s string) string {
+	s = strings.TrimSpace(s)
+	for _, tok := range gemmaQuoteTokens {
+		if strings.HasPrefix(s, tok) && strings.HasSuffix(s, tok) && len(s) >= 2*len(tok) {
+			return s[len(tok) : len(s)-len(tok)]
+		}
+	}
+	if len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+func wrapIfMatchesItemType(value any, itemType string) (any, bool) {
+	switch strings.ToLower(itemType) {
+	case "string":
+		if _, ok := value.(string); ok {
+			return []any{value}, true
+		}
+	case "integer", "number":
+		if _, ok := value.(json.Number); ok {
+			return []any{value}, true
+		}
+	case "boolean":
+		if _, ok := value.(bool); ok {
+			return []any{value}, true
+		}
+	}
+	return nil, false
 }
 
 func propertySchema(schema map[string]any, key string) map[string]any {
