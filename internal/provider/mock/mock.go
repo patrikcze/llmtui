@@ -45,7 +45,11 @@ const demoReply = "Hello! I'm the **built-in demo model**. No local LLM server w
 
 // Chat streams a canned Markdown response word by word.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	events := make(chan provider.ChatEvent)
+	// Keep one terminal event slot available when the caller cancels before
+	// it starts receiving. Cancellation is observable to the caller rather
+	// than racing with TryEmit on an unbuffered channel; normal streaming still
+	// applies backpressure after that one event.
+	events := make(chan provider.ChatEvent, 1)
 
 	promptTokens := 0
 	for _, m := range req.Messages {
