@@ -133,26 +133,71 @@ func TestParsePersonalAppsCallRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-func TestCallsFromNativePersonalAppsPassesArgumentsThrough(t *testing.T) {
-	raw := `{"operation":"change_apply","arguments":{"plan_id":"plan_1"}}`
-	calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: ToolPersonalApps, Arguments: raw}})
-	if len(calls) != 1 {
-		t.Fatalf("CallsFromNative() returned %d calls, want 1", len(calls))
+// TestCallsFromNativePersonalAppsSynthesizesEnvelope covers the actual bug
+// report this schema shape was built to fix: a native call for one
+// personal_apps operation (e.g. "mail_read", called with a flat
+// {"message_ids":[...]} argument object, exactly as every other native tool
+// in the catalog is called) must produce a Call whose Tool is still the
+// single ToolPersonalApps identity and whose Body is the combined
+// {"operation","arguments"} envelope internal/personalapps.ParseRequest
+// requires — reassembled from the operation name, never from guessing at
+// the shape of what the model sent.
+func TestCallsFromNativePersonalAppsSynthesizesEnvelope(t *testing.T) {
+	calls := CallsFromNative([]provider.ToolCall{
+		{ID: "c1", Name: "mail_read", Arguments: `{"message_ids":["msg_1"]}`},
+		{ID: "c2", Name: "status", Arguments: ""},
+	})
+	if len(calls) != 2 {
+		t.Fatalf("CallsFromNative() returned %d calls, want 2", len(calls))
 	}
-	if calls[0].Body != raw {
-		t.Fatalf("Body = %q, want the native arguments passed through verbatim: %q", calls[0].Body, raw)
+	if calls[0].Tool != ToolPersonalApps {
+		t.Fatalf("calls[0].Tool = %q, want %q", calls[0].Tool, ToolPersonalApps)
+	}
+	wantBody := `{"operation":"mail_read","arguments":{"message_ids":["msg_1"]}}`
+	if calls[0].Body != wantBody {
+		t.Fatalf("Body = %q, want %q", calls[0].Body, wantBody)
 	}
 	if calls[0].InputErr != "" {
 		t.Fatalf("unexpected InputErr: %s", calls[0].InputErr)
+	}
+	// Empty native arguments (no fields needed, e.g. "status") must still
+	// produce a well-formed envelope with an empty arguments object, not an
+	// empty/missing "arguments" that ParseRequest would choke on.
+	if calls[1].Tool != ToolPersonalApps {
+		t.Fatalf("calls[1].Tool = %q, want %q", calls[1].Tool, ToolPersonalApps)
+	}
+	wantEmpty := `{"operation":"status","arguments":{}}`
+	if calls[1].Body != wantEmpty {
+		t.Fatalf("Body = %q, want %q", calls[1].Body, wantEmpty)
 	}
 }
 
 func TestCallsFromNativePersonalAppsRejectsOversizedArguments(t *testing.T) {
 	huge := strings.Repeat("a", MaxPersonalAppsPayloadBytes+1)
-	raw := `{"operation":"mail_search","arguments":{"subject":"` + huge + `"}}`
-	calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: ToolPersonalApps, Arguments: raw}})
+	raw := `{"subject":"` + huge + `"}`
+	calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: "mail_search", Arguments: raw}})
 	if calls[0].InputErr == "" {
 		t.Fatal("CallsFromNative accepted arguments over the size limit")
+	}
+	if calls[0].Body != "" {
+		t.Fatalf("expected no Body for a rejected call, got %q", calls[0].Body)
+	}
+}
+
+func TestCallsFromNativePersonalAppsRejectsMalformedArguments(t *testing.T) {
+	calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: "mail_search", Arguments: `not json`}})
+	if calls[0].InputErr == "" {
+		t.Fatal("CallsFromNative accepted non-JSON arguments")
+	}
+}
+
+func TestCallsFromNativeUnknownNameIsNotTreatedAsPersonalApps(t *testing.T) {
+	// A name that merely resembles an operation string but is not one of
+	// the twelve must fall through to ordinary (non-personal_apps) native
+	// handling, not be swallowed here.
+	calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: "mail_delete", Arguments: `{}`}})
+	if calls[0].Tool == ToolPersonalApps {
+		t.Fatalf("unknown name %q was misrouted to personal_apps", "mail_delete")
 	}
 }
 
@@ -170,95 +215,97 @@ func TestDescribePersonalAppsCall(t *testing.T) {
 	}
 }
 
-func TestPersonalAppsSpecsEnumMatchesOperationVocabulary(t *testing.T) {
+// TestPersonalAppsSpecsOneToolPerOperation guards the shape this whole
+// schema redesign depends on: one native tool per operation, named exactly
+// the operation string (so CallsFromNative's dispatch — checking
+// personalapps.Operation(tc.Name).Valid() — always finds them), matching
+// personalapps.Operations() exactly so the advertised set can never drift
+// from the package's actual closed vocabulary.
+func TestPersonalAppsSpecsOneToolPerOperation(t *testing.T) {
 	specs := PersonalAppsSpecs()
-	if len(specs) != 1 {
-		t.Fatalf("PersonalAppsSpecs() returned %d specs, want 1", len(specs))
-	}
-	var schema struct {
-		Properties struct {
-			Operation struct {
-				Enum []string `json:"enum"`
-			} `json:"operation"`
-		} `json:"properties"`
-		Required             []string `json:"required"`
-		AdditionalProperties bool     `json:"additionalProperties"`
-	}
-	if err := json.Unmarshal(specs[0].Parameters, &schema); err != nil {
-		t.Fatalf("Parameters is not valid JSON: %v", err)
-	}
-	if schema.AdditionalProperties {
-		t.Fatal("personal_apps schema allows additional top-level properties")
-	}
-	if len(schema.Required) != 1 || schema.Required[0] != "operation" {
-		t.Fatalf("required = %v, want just [\"operation\"]", schema.Required)
-	}
 	want := personalapps.Operations()
-	if len(schema.Properties.Operation.Enum) != len(want) {
-		t.Fatalf("schema enum has %d operations, personalapps.Operations() has %d", len(schema.Properties.Operation.Enum), len(want))
+	if len(specs) != len(want) {
+		t.Fatalf("PersonalAppsSpecs() returned %d specs, want %d", len(specs), len(want))
 	}
 	for i, op := range want {
-		if schema.Properties.Operation.Enum[i] != string(op) {
-			t.Errorf("schema enum[%d] = %q, want %q", i, schema.Properties.Operation.Enum[i], op)
+		if specs[i].Name != string(op) {
+			t.Errorf("specs[%d].Name = %q, want %q", i, specs[i].Name, op)
+		}
+		if specs[i].Description == "" {
+			t.Errorf("specs[%d] (%s) has an empty description", i, op)
 		}
 	}
 }
 
-// TestPersonalAppsArgumentsSchemaNamesRealFields guards against the schema
-// silently regressing to an opaque object with no property names, which is
-// exactly what let a native tool-calling model invent an "account_id" field
-// for mail_read (a mail_mailboxes-only field) instead of the "message_ids"
-// mail_read actually takes: with no properties to read, it had nothing but
-// English prose to go on. It does not need to enumerate every field —
-// personalAppsArgumentsSchema is trusted for that — only that the schema
-// text a model actually sees still names the fields this exact failure mode
-// depends on.
-func TestPersonalAppsArgumentsSchemaNamesRealFields(t *testing.T) {
-	specs := PersonalAppsSpecs()
-	if len(specs) != 1 {
-		t.Fatalf("PersonalAppsSpecs() returned %d specs, want 1", len(specs))
-	}
-	var schema struct {
-		Properties struct {
-			Arguments struct {
-				Type                 string         `json:"type"`
-				Properties           map[string]any `json:"properties"`
-				AdditionalProperties bool           `json:"additionalProperties"`
-			} `json:"arguments"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(specs[0].Parameters, &schema); err != nil {
-		t.Fatalf("Parameters is not valid JSON: %v", err)
-	}
-	args := schema.Properties.Arguments
-	if args.Type != "object" {
-		t.Fatalf("arguments.type = %q, want object", args.Type)
-	}
-	if args.AdditionalProperties {
-		t.Fatal("arguments schema allows additional properties")
-	}
-	for _, field := range []string{
-		"message_ids", "account_id", "account_ids", "mailbox_ids", "parent_id",
-		"calendar_ids", "event_id", "item_id", "plan_id", "changes",
-	} {
-		if _, ok := args.Properties[field]; !ok {
-			t.Errorf("arguments schema is missing property %q", field)
+// personalAppsSchemaOf finds one operation's schema among PersonalAppsSpecs
+// and decodes it, failing the test if the operation is missing.
+func personalAppsSchemaOf(t *testing.T, op string) struct {
+	Type                 string         `json:"type"`
+	Properties           map[string]any `json:"properties"`
+	Required             []string       `json:"required"`
+	AdditionalProperties bool           `json:"additionalProperties"`
+} {
+	t.Helper()
+	for _, s := range PersonalAppsSpecs() {
+		if s.Name != op {
+			continue
 		}
+		var schema struct {
+			Type                 string         `json:"type"`
+			Properties           map[string]any `json:"properties"`
+			Required             []string       `json:"required"`
+			AdditionalProperties bool           `json:"additionalProperties"`
+		}
+		if err := json.Unmarshal(s.Parameters, &schema); err != nil {
+			t.Fatalf("%s Parameters is not valid JSON: %v", op, err)
+		}
+		return schema
 	}
-	// The specific bug reported: mail_read must never look like it accepts
-	// account_id — that field belongs to mail_mailboxes only. The schema
-	// itself can't express per-operation exclusivity (that's what
-	// PersonalAppsInstructions' explicit "never borrow a field name from a
-	// different operation" rule and each field's own description are for),
-	// but a regression that dropped the field-level descriptions entirely
-	// would silently reopen this exact failure mode.
-	msgIDsDesc, _ := args.Properties["message_ids"].(map[string]any)["description"].(string)
-	if !strings.Contains(msgIDsDesc, "mail_read") {
-		t.Errorf("message_ids description does not mention mail_read: %q", msgIDsDesc)
+	t.Fatalf("PersonalAppsSpecs() has no entry named %q", op)
+	panic("unreachable")
+}
+
+// TestPersonalAppsSchemasNameRealFieldsPerOperation guards against the
+// schema silently regressing toward an opaque object with no property
+// names (what let a native tool-calling model invent an "account_id" field
+// for mail_read instead of the "message_ids" it actually takes), and
+// specifically against the reported failure mode itself: mail_read's schema
+// must not even look like it accepts account_id, and mail_mailboxes' schema
+// must require it.
+func TestPersonalAppsSchemasNameRealFieldsPerOperation(t *testing.T) {
+	mailRead := personalAppsSchemaOf(t, "mail_read")
+	if mailRead.AdditionalProperties {
+		t.Error("mail_read schema allows additional properties")
 	}
-	accountIDDesc, _ := args.Properties["account_id"].(map[string]any)["description"].(string)
-	if !strings.Contains(accountIDDesc, "mail_mailboxes") {
-		t.Errorf("account_id description does not mention mail_mailboxes: %q", accountIDDesc)
+	if _, ok := mailRead.Properties["message_ids"]; !ok {
+		t.Error("mail_read schema is missing message_ids")
+	}
+	if _, ok := mailRead.Properties["account_id"]; ok {
+		t.Error("mail_read schema exposes account_id — that field belongs to mail_mailboxes only, and its presence here is exactly the reported bug")
+	}
+	if len(mailRead.Required) != 1 || mailRead.Required[0] != "message_ids" {
+		t.Errorf("mail_read required = %v, want [\"message_ids\"]", mailRead.Required)
+	}
+
+	mailMailboxes := personalAppsSchemaOf(t, "mail_mailboxes")
+	if _, ok := mailMailboxes.Properties["account_id"]; !ok {
+		t.Error("mail_mailboxes schema is missing account_id")
+	}
+	if len(mailMailboxes.Required) != 1 || mailMailboxes.Required[0] != "account_id" {
+		t.Errorf("mail_mailboxes required = %v, want [\"account_id\"]", mailMailboxes.Required)
+	}
+
+	status := personalAppsSchemaOf(t, "status")
+	if len(status.Properties) != 0 || len(status.Required) != 0 {
+		t.Errorf("status schema = %+v, want no properties and nothing required", status)
+	}
+
+	changeApply := personalAppsSchemaOf(t, "change_apply")
+	if _, ok := changeApply.Properties["plan_id"]; !ok {
+		t.Error("change_apply schema is missing plan_id")
+	}
+	if _, ok := changeApply.Properties["changes"]; ok {
+		t.Error("change_apply schema exposes changes — that field belongs to change_prepare only")
 	}
 }
 

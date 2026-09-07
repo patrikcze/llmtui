@@ -3,6 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/patrikcze/llmtui/internal/personalapps"
 )
 
 // SafetyClass groups capabilities by what they can affect; the TUI and the
@@ -105,8 +107,11 @@ var safetyForBuiltin = map[string]SafetyClass{
 	ToolSearch:       SafetyReadOnly,
 	// skill_load only changes prompt state inside the app: no file, command,
 	// or network effect, and no permission grant.
-	ToolSkillLoad:    SafetyReadOnly,
-	ToolPersonalApps: SafetyPersonalApps,
+	ToolSkillLoad: SafetyReadOnly,
+	// personal_apps's twelve native tools (one per operation, see
+	// PersonalAppsSpecs) are registered directly with SafetyPersonalApps in
+	// DefaultRegistry below, not through this map — their Name is the
+	// operation string (e.g. "mail_search"), not ToolPersonalApps.
 }
 
 // approvalForTool is the static approval policy per tool.
@@ -124,7 +129,9 @@ var approvalForTool = map[string]string{
 	ToolAskUser:      "no (never authorizes another tool)",
 	ToolLocalContext: "ask for clipboard; otherwise no",
 	ToolSearch:       "no (discovery only)",
-	ToolPersonalApps: "no for reads once connected; always ask for change_apply, bound to one exact plan and never covered by /tools auto",
+	// personal_apps: see personalAppsApprovalText below, used directly in
+	// DefaultRegistry — this map is keyed by native tool Name, and
+	// personal_apps now registers one entry per operation.
 }
 
 // DefaultRegistry catalogs the built-in workspace tools and the web tools,
@@ -168,10 +175,23 @@ func DefaultRegistry() *Registry {
 			Name:        s.Name,
 			Description: s.Description,
 			Source:      "personal_apps",
-			Safety:      safetyForBuiltin[s.Name],
-			Approval:    approvalForTool[s.Name],
+			Safety:      SafetyPersonalApps,
+			Approval:    personalAppsApprovalText(personalapps.Operation(s.Name)),
 			Parameters:  s.Parameters,
 		})
 	}
 	return r
+}
+
+// personalAppsApprovalText gives each personal_apps native tool its own
+// approval-policy description for the registry/tool_search display. Actual
+// enforcement is Runner.NeedsApproval and internal/tui's
+// callNeedsApproval, both keyed on Call.Tool == ToolPersonalApps regardless
+// of which of the twelve native names a call dispatched through — this only
+// affects what a human sees listed for each one.
+func personalAppsApprovalText(op personalapps.Operation) string {
+	if op == personalapps.OpChangeApply {
+		return "always ask, bound to one exact approved plan — never covered by /tools auto"
+	}
+	return "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)"
 }
