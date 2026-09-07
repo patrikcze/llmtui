@@ -20,11 +20,11 @@
 // before it reaches a prompt. This package deliberately does not do that
 // framing itself: it does not know which of its results are display-bound.
 //
-// Scope of the current implementation: request/plan contracts, validation,
-// normalization, identity, temporal logic and policy. Native transport (JXA
-// for Mail, an EventKit companion for Calendar), the durable operation
-// ledger, and the TUI approval surface are separate later slices; see
-// docs/architecture and the personal-apps plan for the sequencing.
+// Scope of the current implementation: read-only native transport (JXA for
+// Mail and an explicitly configured EventKit companion for Calendar),
+// request/plan contracts, validation, normalization, identity, temporal logic
+// and policy. The durable operation ledger and mutation adapters remain later
+// slices; see docs/architecture and the personal-apps plan for sequencing.
 package personalapps
 
 import "time"

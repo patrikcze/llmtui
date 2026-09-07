@@ -117,6 +117,19 @@ func TestCmdPersonalAppsConnectDisconnect(t *testing.T) {
 	}
 }
 
+func TestCalendarRequiresAnExplicitCompanion(t *testing.T) {
+	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
+		c.Mail.Enabled = false
+		c.Calendar.Enabled = true
+		c.Calendar.AllowedCalendars = []string{"cal-1"}
+	})
+	m.errText = ""
+	cmdPersonalApps(m, "connect calendar")
+	if m.errText == "" {
+		t.Fatal("calendar connected without an explicitly configured EventKit companion")
+	}
+}
+
 func TestCmdPersonalAppsStatusNamesNoAccountOrCalendar(t *testing.T) {
 	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
 		c.Mail.AllowedAccounts = []string{"very-secret-account-id"}

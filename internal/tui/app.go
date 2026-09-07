@@ -462,10 +462,8 @@ func (m *Model) rebuildFromConfig() {
 		// rebuilt fresh from config like the runner and web client above.
 		// Rebuilding drops any live connection/prepared-plan state — the
 		// same tradeoff every other subsystem here already accepts on a
-		// config reload. Note this is Slice 3 of the plan: Mail has a real
-		// darwin adapter now (search/read only), but Calendar still has none
-		// — Calendar stays nil and every calendar_* operation reports
-		// StatusUnsupported until Slice 4's EventKit companion lands.
+		// config reload. Both adapters remain inert at construction time;
+		// Calendar needs an explicitly configured EventKit companion path.
 		m.personalApps = nil
 		m.toolRunner.PersonalApps = nil
 		if pcfg := cfg.PersonalApps; pcfg.Enabled {
@@ -481,10 +479,18 @@ func (m *Model) rebuildFromConfig() {
 				// launches the Mail bridge.
 				mailBackend = personalapps.NewMailBackend(personalapps.MailBackendOptions{Timeout: limits.ReadTimeout})
 			}
+			var calendarBackend personalapps.CalendarBackend
+			if pcfg.Calendar.Enabled {
+				calendarBackend = personalapps.NewCalendarBackend(personalapps.CalendarBackendOptions{
+					HelperPath: pcfg.Calendar.HelperPath,
+					Timeout:    limits.ReadTimeout,
+				})
+			}
 			svc, err := personalapps.New(personalapps.Options{
 				Scope:       personalAppsScopeFromConfig(pcfg),
 				Limits:      limits,
 				Mail:        mailBackend,
+				Calendar:    calendarBackend,
 				Approvals:   m.personalAppsApprovals,
 				PrivacyGate: m.enterPersonalAppsPrivateSession,
 			})

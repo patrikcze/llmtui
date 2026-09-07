@@ -408,8 +408,9 @@ address one reliably.
 | `enabled` | `false` | Master switch; registers the `personal_apps` tool when true |
 | `mail.enabled` | `false` | Enable the Mail adapter |
 | `mail.allowed_accounts` | `[]` | Native mail account UUIDs in scope (see above); empty means no mail account is authorized |
-| `calendar.enabled` | `false` | Enable the Calendar adapter (no adapter exists yet; this only affects `/personal-apps status`) |
+| `calendar.enabled` | `false` | Enable the EventKit Calendar adapter; it remains inert until explicitly connected |
 | `calendar.allowed_calendars` | `[]` | Native calendar identifiers in scope; empty means no calendar is authorized |
+| `calendar.helper_path` | `""` | Absolute path to the separately installed EventKit companion. Empty means Calendar cannot connect; llmtui never searches `PATH`, downloads, or compiles it at runtime. See `native/personal-apps-calendar/README.md` for a source-build helper. |
 | `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval. No mutation adapter exists yet, so this currently has no observable effect |
 | `limits.*` | see below | Bounds passed straight to the domain package's own defaults (`read_timeout` 15s, `mutation_timeout` 30s, `page_size` 25, `max_page_size` 100, `max_messages_per_read` 10, `max_body_bytes` 32768, `max_result_bytes` 131072, `max_scan_candidates` 1000, `max_calendar_days` 31, `max_changes_per_plan` 25) |
 
