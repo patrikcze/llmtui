@@ -145,16 +145,10 @@ func (s *Service) Connect(a Adapter) error {
 		if !s.scope.MailEnabled {
 			return ErrDisabled
 		}
-		if s.opts.Mail == nil {
-			return ErrUnsupportedPlatform
-		}
 		s.conn.MailConnected = true
 	case AdapterCalendar:
 		if !s.scope.CalendarEnabled {
 			return ErrDisabled
-		}
-		if s.opts.Calendar == nil {
-			return ErrUnsupportedPlatform
 		}
 		s.conn.CalendarConnected = true
 	default:
