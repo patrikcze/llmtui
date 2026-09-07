@@ -51,6 +51,20 @@ func NewMailBackend(opts MailBackendOptions) MailBackend {
 	return newJXAMailBackend(&osascriptRunner{timeout: timeout, script: mailBridgeScript})
 }
 
+// NewMailMutator returns a Mutator that applies Mail changes (move,
+// set_read, set_flag, save_draft) through the same embedded JXA bridge
+// script as NewMailBackend, over its own osascriptRunner. Constructing it
+// performs no I/O, launches no process and requests no permission — the
+// first real call does. It is deliberately independent of NewMailBackend so
+// a deployment can wire reads without ever wiring the ability to write.
+func NewMailMutator(opts MailBackendOptions) Mutator {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultBridgeTimeout
+	}
+	return newJXAMailMutator(newJXAMailBackend(&osascriptRunner{timeout: timeout, script: mailBridgeScript}))
+}
+
 // osascriptRunner invokes a fixed script through the absolute system
 // interpreter without a shell, exactly as the architecture specifies:
 // script source in argv carries no request data, containment and

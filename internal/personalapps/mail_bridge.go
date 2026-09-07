@@ -51,12 +51,17 @@ func newJXAMailBackend(runner bridgeRunner) *jxaMailBackend {
 // to a model.
 
 type bridgeRequest struct {
-	Version    int                  `json:"version"`
-	Op         string               `json:"op"`
-	AccountID  string               `json:"account_id,omitempty"`
-	ParentPath []string             `json:"parent_path,omitempty"`
-	Search     *bridgeSearchRequest `json:"search,omitempty"`
-	Messages   *bridgeReadRequest   `json:"messages,omitempty"`
+	Version    int                     `json:"version"`
+	Op         string                  `json:"op"`
+	AccountID  string                  `json:"account_id,omitempty"`
+	ParentPath []string                `json:"parent_path,omitempty"`
+	Search     *bridgeSearchRequest    `json:"search,omitempty"`
+	Messages   *bridgeReadRequest      `json:"messages,omitempty"`
+	Metadata   *bridgeMetadataRequest  `json:"metadata,omitempty"`
+	Move       *bridgeMoveRequest      `json:"move,omitempty"`
+	SetRead    *bridgeSetReadRequest   `json:"set_read,omitempty"`
+	SetFlag    *bridgeSetFlagRequest   `json:"set_flag,omitempty"`
+	SaveDraft  *bridgeSaveDraftRequest `json:"save_draft,omitempty"`
 }
 
 type bridgeScope struct {
@@ -149,14 +154,65 @@ type bridgePage struct {
 	Resume   *bridgeResume   `json:"resume,omitempty"`
 }
 
+// bridgeMetadataRequest re-reads current metadata for explicitly selected
+// messages, with no content fetch — used to check a mutation's precondition
+// immediately before applying it, without the side effects (or cost) of
+// reading a body.
+type bridgeMetadataRequest struct {
+	Refs []bridgeMessageRef `json:"refs"`
+}
+
+// bridgeMoveRequest moves messages within one account. Cross-account moves
+// are rejected by the script itself as defense in depth — Service.
+// checkChangeShape already refuses them before a mutator is ever called.
+type bridgeMoveRequest struct {
+	Refs        []bridgeMessageRef `json:"refs"`
+	Destination bridgeScope        `json:"destination"`
+}
+
+type bridgeSetReadRequest struct {
+	Refs []bridgeMessageRef `json:"refs"`
+	Read bool               `json:"read"`
+}
+
+type bridgeSetFlagRequest struct {
+	Refs    []bridgeMessageRef `json:"refs"`
+	Flagged bool               `json:"flagged"`
+}
+
+type bridgeSaveDraftRequest struct {
+	SenderAccountID string            `json:"sender_account_id"`
+	InReplyTo       *bridgeMessageRef `json:"in_reply_to,omitempty"`
+	To              []string          `json:"to,omitempty"`
+	Cc              []string          `json:"cc,omitempty"`
+	Bcc             []string          `json:"bcc,omitempty"`
+	Subject         string            `json:"subject,omitempty"`
+	Body            string            `json:"body"`
+	IncludeQuote    bool              `json:"include_quote,omitempty"`
+}
+
+// bridgeMutationItem is one item's outcome from a batch metadata/move/
+// set_read/set_flag call, correlated back to the request by Index. After
+// carries the item's observed state once the op has run — the current
+// state for a metadata read, the post-mutation state for a mutation —
+// never a value the script merely intended to produce.
+type bridgeMutationItem struct {
+	Index   int            `json:"index"`
+	OK      bool           `json:"ok"`
+	Code    string         `json:"code,omitempty"`
+	Message string         `json:"message,omitempty"`
+	After   *bridgeMessage `json:"after,omitempty"`
+}
+
 type bridgeResponse struct {
-	Version   int             `json:"version"`
-	Op        string          `json:"op"`
-	Error     *bridgeError    `json:"error,omitempty"`
-	Accounts  []bridgeAccount `json:"accounts,omitempty"`
-	Mailboxes []bridgeMailbox `json:"mailboxes,omitempty"`
-	Page      *bridgePage     `json:"page,omitempty"`
-	Messages  []bridgeMessage `json:"messages,omitempty"`
+	Version   int                  `json:"version"`
+	Op        string               `json:"op"`
+	Error     *bridgeError         `json:"error,omitempty"`
+	Accounts  []bridgeAccount      `json:"accounts,omitempty"`
+	Mailboxes []bridgeMailbox      `json:"mailboxes,omitempty"`
+	Page      *bridgePage          `json:"page,omitempty"`
+	Messages  []bridgeMessage      `json:"messages,omitempty"`
+	Results   []bridgeMutationItem `json:"results,omitempty"`
 }
 
 // --- MailBackend -------------------------------------------------------
@@ -302,14 +358,7 @@ func (b *jxaMailBackend) Messages(ctx context.Context, refs []ResourceRef, maxBo
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	req := bridgeReadRequest{MaxBodyChars: maxBodyBytes}
-	for _, ref := range refs {
-		req.Refs = append(req.Refs, bridgeMessageRef{
-			AccountID: ref.AccountID,
-			Path:      append([]string(nil), ref.ContainerPath...),
-			NativeID:  ref.NativeID,
-		})
-	}
+	req := bridgeReadRequest{MaxBodyChars: maxBodyBytes, Refs: refsToBridgeMessageRefs(refs)}
 	resp, err := b.call(ctx, bridgeRequest{Op: "messages", Messages: &req})
 	if err != nil {
 		return nil, err
@@ -323,6 +372,38 @@ func (b *jxaMailBackend) Messages(ctx context.Context, refs []ResourceRef, maxBo
 		out = append(out, bm)
 	}
 	return out, nil
+}
+
+// metadata re-reads current metadata (no content) for explicitly selected
+// messages, in the same order as refs. It is used to check a mutation's
+// precondition immediately before applying it. A message not found at its
+// recorded location comes back as a non-OK item, not a whole-batch error —
+// one stale target must not block verifying its siblings.
+func (b *jxaMailBackend) metadata(ctx context.Context, refs []ResourceRef) ([]bridgeMutationItem, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	req := bridgeMetadataRequest{Refs: refsToBridgeMessageRefs(refs)}
+	resp, err := b.call(ctx, bridgeRequest{Op: "metadata", Metadata: &req})
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Results) != len(refs) {
+		return nil, Errorf(CodeBridgeProtocolError, "mail bridge metadata returned %d results for %d requested", len(resp.Results), len(refs))
+	}
+	return resp.Results, nil
+}
+
+func refsToBridgeMessageRefs(refs []ResourceRef) []bridgeMessageRef {
+	out := make([]bridgeMessageRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, bridgeMessageRef{
+			AccountID: ref.AccountID,
+			Path:      append([]string(nil), ref.ContainerPath...),
+			NativeID:  ref.NativeID,
+		})
+	}
+	return out
 }
 
 func decodeBridgeMessage(m bridgeMessage) (BackendMessage, error) {

@@ -17,3 +17,7 @@ type MailBackendOptions struct {
 // ErrUnsupportedPlatform for every mail operation, exactly as it does today
 // before any real adapter exists.
 func NewMailBackend(MailBackendOptions) MailBackend { return nil }
+
+// NewMailMutator returns nil on every platform but macOS, for the same
+// reason NewMailBackend does — see its doc comment.
+func NewMailMutator(MailBackendOptions) Mutator { return nil }
