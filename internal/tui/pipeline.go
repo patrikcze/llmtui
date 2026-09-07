@@ -377,7 +377,13 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			if m.skillLoadAvailable() {
 				instructions += "\n" + tools.SkillInstructions
 			}
+			if m.personalApps != nil {
+				instructions += "\n" + tools.PersonalAppsFencedForm
+			}
 			instructions += m.fencedDynamicToolInstructions()
+		}
+		if m.personalApps != nil {
+			instructions += "\n\n" + tools.PersonalAppsInstructions
 		}
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
@@ -1119,7 +1125,12 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	defer m.syncAgentDebug()
 	m.lastUserMsg = raw
 	m.lastImages = images
-	skipCache := m.bypassCache
+	// personalAppsPrivate forces the same "bypass" path an explicit
+	// m.bypassCache does: no cache read here, and cacheStatus below becomes
+	// "bypass" so the later write in finishStream is skipped too. See
+	// personalAppsPrivate's doc comment on Model for what a private session
+	// covers.
+	skipCache := m.bypassCache || m.personalAppsPrivate.Load()
 	m.bypassCache = false
 
 	prepared, prepareErr := m.prepareRequest(raw, images, false)
@@ -1263,6 +1274,9 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 	}
 	if m.skillLoadAvailable() {
 		specs = append(specs, tools.SkillSpecs()...)
+	}
+	if m.personalApps != nil {
+		specs = append(specs, tools.PersonalAppsSpecs()...)
 	}
 	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
 	return specs

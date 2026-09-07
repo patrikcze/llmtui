@@ -129,6 +129,17 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		return c.Tool, strings.TrimSpace(c.ContextKind), ""
 	case tools.ToolSkillLoad:
 		return "", "", ""
+	case tools.ToolPersonalApps:
+		// The default (tool, "", "") would let one "always" grant cover
+		// every future personal_apps call, of any operation, forever — the
+		// exact blanket grant the plan explicitly rules out for this tool.
+		// This scopes a grant to the exact request body instead. In
+		// practice it is moot for a mutation: callNeedsApproval forces
+		// approval for every change_apply regardless of any grant here, and
+		// a plan is consumed after one apply, so there is never a second
+		// call this variant could even match.
+		sum := sha256.Sum256([]byte(c.Body))
+		return c.Tool, "", hex.EncodeToString(sum[:])
 	default:
 		return c.Tool, "", ""
 	}
@@ -147,6 +158,8 @@ func approvalScopeDescription(c tools.Call) string {
 		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolRunCommand:
 		return "this exact command"
+	case tools.ToolPersonalApps:
+		return "this exact personal_apps request"
 	default:
 		return c.Tool
 	}

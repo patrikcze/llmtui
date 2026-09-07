@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/memory"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/modelprofile"
+	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/rag"
@@ -181,6 +183,30 @@ type Model struct {
 	toolErr              int         // failed or denied tool calls (exit summary)
 	webOn                bool        // web tools (web_search/web_fetch) enabled
 	webClient            *web.Client // shared web client; nil if the runner is unavailable
+
+	// Optional Apple Mail/Calendar integration (disabled by default; see
+	// personal_apps.go). personalApps is nil unless personal_apps.enabled is
+	// configured; the Service enforces its own scope/connection/approval
+	// regardless of what the TUI does, but the TUI still owns the human
+	// connect/disconnect commands and the change_apply approval gate.
+	personalApps *personalapps.Service
+	// personalAppsApprovals is a non-durable, in-process ApprovalChecker: a
+	// human approving a change_apply prompt records it here, bound to that
+	// exact plan digest. It is replaced by a durable, shared ledger in a
+	// later slice; see internal/personalapps.ApprovalLedger's doc comment.
+	personalAppsApprovals *personalapps.ApprovalLedger
+	// personalAppsPrivate is sticky for the life of the session once any
+	// personal_apps read has occurred: it disables response cache read/write
+	// and session/episode auto-save (see saveSession and dispatch's
+	// skipCache). Disconnecting an adapter does not clear it — content
+	// already in the conversation does not become safe to persist because
+	// the app was disconnected afterward.
+	//
+	// It is an atomic.Bool rather than a plain bool because the Service's
+	// PrivacyGate callback runs on whatever goroutine executes the tool
+	// batch (see tools.Runner.ExecuteContext), not the Bubble Tea Update
+	// goroutine every other Model field assumes.
+	personalAppsPrivate atomic.Bool
 
 	// Optional local RAG (disabled by default).
 	ragOn      bool         // retrieval enabled for the current session
@@ -430,6 +456,34 @@ func (m *Model) rebuildFromConfig() {
 		m.webOn = wcfg.Enabled
 		if m.webOn {
 			m.toolRunner.Web = m.webClient
+		}
+
+		// Optional Apple Mail/Calendar integration: off by default, and
+		// rebuilt fresh from config like the runner and web client above.
+		// Rebuilding drops any live connection/prepared-plan state — the
+		// same tradeoff every other subsystem here already accepts on a
+		// config reload. Note this is Slice 2 of the plan: no real Mail or
+		// Calendar adapter exists yet, so a connected session has metadata
+		// visibility but Mail/Calendar are nil and every corresponding
+		// operation reports StatusUnsupported until Slice 3/4 land.
+		m.personalApps = nil
+		m.toolRunner.PersonalApps = nil
+		if pcfg := cfg.PersonalApps; pcfg.Enabled {
+			if m.personalAppsApprovals == nil {
+				m.personalAppsApprovals = personalapps.NewApprovalLedger(nil)
+			}
+			svc, err := personalapps.New(personalapps.Options{
+				Scope:       personalAppsScopeFromConfig(pcfg),
+				Limits:      personalAppsLimitsFromConfig(pcfg.Limits),
+				Approvals:   m.personalAppsApprovals,
+				PrivacyGate: m.enterPersonalAppsPrivateSession,
+			})
+			if err != nil {
+				m.errText = "personal_apps: " + err.Error()
+			} else {
+				m.personalApps = svc
+				m.toolRunner.PersonalApps = svc
+			}
 		}
 	}
 
@@ -1244,6 +1298,16 @@ func (m *Model) maybeRunTools() tea.Cmd {
 // runs. The explicit global auto setting remains available, while approval
 // menu grants are time-limited to one exact capability and target.
 func (m *Model) callNeedsApproval(c tools.Call) bool {
+	// A personal_apps mutation (change_apply) always asks, ahead of both a
+	// standing capability grant and /tools auto: this is a personal-data
+	// feature those generic bypasses were never meant to cover, and the
+	// human approval must bind to the one exact plan the model is trying to
+	// apply, not to "personal_apps" as a capability. Everything else about
+	// personal_apps (status, reads, change_prepare) follows the ordinary
+	// policy below, exactly like a connected MCP server's tools.
+	if c.Tool == tools.ToolPersonalApps && personalapps.PeekOperation([]byte(c.Body)).Effect() == personalapps.EffectMutate {
+		return true
+	}
 	if m.approvalPolicy.Allows(c, time.Now()) {
 		return false
 	}
@@ -1438,6 +1502,7 @@ func (m *Model) denyPendingTools() tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
 	m.clearPendingTools()
+	m.denyPersonalAppsCalls(calls)
 	m.advanceToolRound()
 	m.complete(turnOutcomeToolContinuation)
 	denied := tools.DeniedResults(calls)
@@ -1603,6 +1668,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		calls := append([]tools.Call{}, m.pendingCalls...)
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
+		m.approvePersonalAppsCalls(calls)
 		return m.runToolPlan(plan)
 	case approvalAlways:
 		var granted []string
@@ -1616,6 +1682,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		calls := append([]tools.Call{}, m.pendingCalls...)
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
+		m.approvePersonalAppsCalls(calls)
 		if len(granted) == 0 {
 			m.notice = "◈ workspace skill approved for this session"
 		} else {
@@ -1754,6 +1821,9 @@ func (m *Model) hasUserContent() bool {
 func (m *Model) saveSession(captureEpisode bool) (string, error) {
 	if m.historyDir == "" {
 		return "", fmt.Errorf("history saving is disabled (chat.save_history)")
+	}
+	if m.personalAppsPrivate.Load() {
+		return "", fmt.Errorf("session saving is disabled for this conversation: personal Mail/Calendar content was read (private session)")
 	}
 	record := m.sessionRecord()
 	if captureEpisode {
@@ -2809,6 +2879,14 @@ func (m *Model) renderApprovalPrompt() string {
 			b.WriteString("\n")
 			b.WriteString(text.Render(fmt.Sprintf("    %s (replace %d bytes with %d)", terminaltext.Sanitize(c.Path), len(c.OldText), len(c.NewText))))
 			b.WriteString("\n")
+		case tools.ToolPersonalApps:
+			header, lines := m.personalAppsApprovalLines(c)
+			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + terminaltext.Sanitize(header)))
+			b.WriteString("\n")
+			for _, line := range lines {
+				b.WriteString(text.Render("    " + terminaltext.Sanitize(line)))
+				b.WriteString("\n")
+			}
 		default:
 			b.WriteString(m.theme.BadgeWarn.Render("⚒ " + terminaltext.Sanitize(c.Describe())))
 			b.WriteString("\n")

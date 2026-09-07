@@ -370,6 +370,30 @@ over stdio only on an explicit `/mcp connect`. Documented in
 | `servers.<name>.approve` | `ask` | `ask` or `auto` for the server's tool calls |
 | `servers.<name>.timeout` | `30s` | Per-call timeout |
 
+### `personal_apps`
+
+Optional Apple Mail/Calendar integration on macOS, off by default. Enabling
+it in config grants nothing by itself: an empty account/calendar allowlist
+authorizes no content, and a human still has to run `/personal-apps connect
+mail|calendar` before the model can call any read operation. Mutations
+(moving mail, saving a draft, creating or updating an event) additionally
+require `mutations.enabled` and, per attempt, a human approval bound to one
+exact prepared plan — never covered by `/tools auto` or a standing "always
+allow" grant. See the personal-apps integration plan under
+`.claude/tasks/plans/` for the full design; the Mail/Calendar adapters
+themselves have not shipped yet, so a connected session currently has
+metadata visibility only.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch; registers the `personal_apps` tool when true |
+| `mail.enabled` | `false` | Enable the Mail adapter |
+| `mail.allowed_accounts` | `[]` | Native mail account identifiers in scope; empty means no mail account is authorized |
+| `calendar.enabled` | `false` | Enable the Calendar adapter |
+| `calendar.allowed_calendars` | `[]` | Native calendar identifiers in scope; empty means no calendar is authorized |
+| `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval |
+| `limits.*` | see below | Bounds passed straight to the domain package's own defaults (`read_timeout` 15s, `mutation_timeout` 30s, `page_size` 25, `max_page_size` 100, `max_messages_per_read` 10, `max_body_bytes` 32768, `max_result_bytes` 131072, `max_scan_candidates` 1000, `max_calendar_days` 31, `max_changes_per_plan` 25) |
+
 ### `tool_registry`
 
 Optional read-only HTTP discovery for agent hosts and other clients that need

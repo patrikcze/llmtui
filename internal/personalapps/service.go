@@ -273,6 +273,44 @@ func (s *Service) Execute(ctx context.Context, req Request) Result {
 	}
 }
 
+// ExecuteRaw parses raw against this Service's own configured limits and
+// executes it. It is the entry point for a caller (the tools/native
+// protocol layers) that only has the wire bytes: those layers must not
+// reimplement or duplicate this package's decoding rules, so they hand raw
+// bytes here rather than calling ParseRequest themselves.
+//
+// Like Execute, it always returns a Result and never a bare Go error — a
+// request too malformed to name a valid operation still gets a Result with
+// Operation "" and a stable CodeInvalidRequest.
+func (s *Service) ExecuteRaw(ctx context.Context, raw []byte) Result {
+	req, err := ParseRequest(raw, s.limits)
+	if err != nil {
+		return s.fail("", err)
+	}
+	return s.Execute(ctx, req)
+}
+
+// PreparedPlan returns the bounded preview for an already-prepared plan,
+// without consuming it. It exists so a host UI can render the same summary
+// change_prepare returned to the model when it asks the human to approve
+// that plan — the human's approval decision must see the actual plan, not
+// take the model's word for what it prepared.
+func (s *Service) PreparedPlan(id string) (PlanView, error) {
+	plan, err := s.plans.Get(id)
+	if err != nil {
+		return PlanView{}, err
+	}
+	return PlanView{
+		PlanID:           plan.ID,
+		Digest:           plan.Digest,
+		Adapters:         plan.Adapters,
+		ItemCount:        plan.ItemCount,
+		ExpiresAt:        plan.ExpiresAt,
+		Summary:          summarize(plan.Changes()),
+		RequiresApproval: true,
+	}, nil
+}
+
 // enterPrivate marks the session private and lets the host apply its
 // persistence and egress restrictions before any content is read.
 func (s *Service) enterPrivate(ctx context.Context) error {

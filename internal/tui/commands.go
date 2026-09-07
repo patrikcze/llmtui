@@ -170,6 +170,9 @@ func slashCommands() []slashCommand {
 		// --- MCP ---
 		{name: "mcp", usage: "/mcp [status|list|tools|inspect <s>|enable <s>|connect <s>|disconnect <s>|disable <s>]", desc: "optional Model Context Protocol servers over stdio (off by default; connect launches the server)", category: "MCP", blockWhileThinking: true, run: cmdMcp},
 
+		// --- Personal apps ---
+		{name: "personal-apps", usage: "/personal-apps [status|connect mail|calendar|disconnect mail|calendar]", desc: "optional Apple Mail/Calendar integration (off by default; connect is a human decision, never the model's)", category: "Personal apps", blockWhileThinking: true, run: cmdPersonalApps},
+
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]|mcp]", desc: "provider, model, and MCP diagnostics", category: "Diagnostics", run: cmdDoctor},
 		{name: "debug", usage: "/debug [on|off|last]", desc: "debug drawer for the last request", category: "Diagnostics", run: cmdDebug},

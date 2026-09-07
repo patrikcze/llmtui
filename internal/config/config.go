@@ -546,6 +546,58 @@ type ToolRegistryConfig struct {
 	ShutdownTimeout string `mapstructure:"shutdown_timeout" yaml:"shutdown_timeout"`
 }
 
+// PersonalAppsConfig configures the optional Apple Mail/Calendar
+// integration (internal/personalapps). Every enable flag defaults to false
+// and every allowlist defaults empty: an empty allowlist authorizes nothing,
+// so turning the feature on by itself grants no account or calendar access.
+// See docs/architecture (personal-apps plan) for the full contract this
+// mirrors.
+type PersonalAppsConfig struct {
+	Enabled   bool                       `mapstructure:"enabled" yaml:"enabled"`
+	Mail      PersonalAppsMailConfig     `mapstructure:"mail" yaml:"mail"`
+	Calendar  PersonalAppsCalendarConfig `mapstructure:"calendar" yaml:"calendar"`
+	Mutations PersonalAppsMutationConfig `mapstructure:"mutations" yaml:"mutations"`
+	Limits    PersonalAppsLimitsConfig   `mapstructure:"limits" yaml:"limits"`
+}
+
+// PersonalAppsMailConfig scopes Mail access. AllowedAccounts holds native
+// account identifiers as reported by mail_accounts, not display names.
+type PersonalAppsMailConfig struct {
+	Enabled         bool     `mapstructure:"enabled" yaml:"enabled"`
+	AllowedAccounts []string `mapstructure:"allowed_accounts" yaml:"allowed_accounts"`
+}
+
+// PersonalAppsCalendarConfig scopes Calendar access.
+type PersonalAppsCalendarConfig struct {
+	Enabled          bool     `mapstructure:"enabled" yaml:"enabled"`
+	AllowedCalendars []string `mapstructure:"allowed_calendars" yaml:"allowed_calendars"`
+}
+
+// PersonalAppsMutationConfig gates change_prepare/change_apply. Send and
+// invitation support do not exist yet in the domain package, so there is no
+// corresponding flag here — a config field for a capability that cannot be
+// exercised would just be a second, unenforced way to promise it.
+type PersonalAppsMutationConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+}
+
+// PersonalAppsLimitsConfig mirrors internal/personalapps.Limits. A zero
+// field takes that package's own default (see DefaultLimits) rather than
+// meaning unbounded — this struct never introduces its own zero-means-off
+// convention that would fight the domain package's.
+type PersonalAppsLimitsConfig struct {
+	ReadTimeout        string `mapstructure:"read_timeout" yaml:"read_timeout"`
+	MutationTimeout    string `mapstructure:"mutation_timeout" yaml:"mutation_timeout"`
+	PageSize           int    `mapstructure:"page_size" yaml:"page_size"`
+	MaxPageSize        int    `mapstructure:"max_page_size" yaml:"max_page_size"`
+	MaxMessagesPerRead int    `mapstructure:"max_messages_per_read" yaml:"max_messages_per_read"`
+	MaxBodyBytes       int    `mapstructure:"max_body_bytes" yaml:"max_body_bytes"`
+	MaxResultBytes     int    `mapstructure:"max_result_bytes" yaml:"max_result_bytes"`
+	MaxScanCandidates  int    `mapstructure:"max_scan_candidates" yaml:"max_scan_candidates"`
+	MaxCalendarDays    int    `mapstructure:"max_calendar_days" yaml:"max_calendar_days"`
+	MaxChangesPerPlan  int    `mapstructure:"max_changes_per_plan" yaml:"max_changes_per_plan"`
+}
+
 // Config is the fully merged configuration plus runtime overrides.
 type Config struct {
 	DefaultProvider string                        `mapstructure:"default_provider" yaml:"default_provider"`
@@ -564,6 +616,7 @@ type Config struct {
 	Plugins         PluginsConfig                 `mapstructure:"plugins" yaml:"plugins"`
 	RAG             RAGConfig                     `mapstructure:"rag" yaml:"rag"`
 	MCP             MCPConfig                     `mapstructure:"mcp" yaml:"mcp"`
+	PersonalApps    PersonalAppsConfig            `mapstructure:"personal_apps" yaml:"personal_apps"`
 	ToolRegistry    ToolRegistryConfig            `mapstructure:"tool_registry" yaml:"tool_registry"`
 	Network         NetworkConfig                 `mapstructure:"network" yaml:"network"`
 	Templates       map[string]TemplateConfig     `mapstructure:"templates" yaml:"templates,omitempty"`
@@ -887,6 +940,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.retrieval.strategy", "keyword")
 
 	v.SetDefault("mcp.enabled", false)
+
+	v.SetDefault("personal_apps.enabled", false)
+	v.SetDefault("personal_apps.mail.enabled", false)
+	v.SetDefault("personal_apps.mail.allowed_accounts", []string{})
+	v.SetDefault("personal_apps.calendar.enabled", false)
+	v.SetDefault("personal_apps.calendar.allowed_calendars", []string{})
+	v.SetDefault("personal_apps.mutations.enabled", false)
+	v.SetDefault("personal_apps.limits.read_timeout", "15s")
+	v.SetDefault("personal_apps.limits.mutation_timeout", "30s")
+	v.SetDefault("personal_apps.limits.page_size", 25)
+	v.SetDefault("personal_apps.limits.max_page_size", 100)
+	v.SetDefault("personal_apps.limits.max_messages_per_read", 10)
+	v.SetDefault("personal_apps.limits.max_body_bytes", 32*1024)
+	v.SetDefault("personal_apps.limits.max_result_bytes", 128*1024)
+	v.SetDefault("personal_apps.limits.max_scan_candidates", 1000)
+	v.SetDefault("personal_apps.limits.max_calendar_days", 31)
+	v.SetDefault("personal_apps.limits.max_changes_per_plan", 25)
 
 	v.SetDefault("tool_registry.enabled", false)
 	v.SetDefault("tool_registry.listen", "127.0.0.1:7834")
