@@ -184,6 +184,100 @@ func TestToolOutputRouterGemmaRepairsScalarForArrayArgument(t *testing.T) {
 	}
 }
 
+// TestToolOutputRouterGemmaRepairsBracketedArrayArgument reproduces the
+// live failure that followed the fix above: once told (via a prior tool
+// error) to wrap the value in [], Gemma 4 E4B did so — but
+// github.com/hybridgroup/yzma's Gemma parser has no case for "[" at all,
+// so the whole bracketed expression, quote tokens included, arrived as one
+// unparsed string: "[<|\"|>box_1<|\"|>]". Confirmed by reading
+// parser_gemma.go directly (not guessed): parseGemmaArgs recognizes
+// Gemma-quote-wrapped, JSON-double-quoted and nested {...} values, and
+// falls back to reading straight through to the next top-level comma/brace
+// for anything else — including a leading "[".
+func TestToolOutputRouterGemmaRepairsBracketedArrayArgument(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "mail_search",
+		Parameters: []byte(`{
+			"type":"object",
+			"properties":{"mailbox_ids":{"type":"array","items":{"type":"string"}}}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:mail_search{mailbox_ids:[<|"|>box_9ac61a14534255d6d6822b57<|"|>]}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(calls[0].Arguments), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	ids, ok := arguments["mailbox_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "box_9ac61a14534255d6d6822b57" {
+		t.Fatalf("mailbox_ids = %+v, want [\"box_9ac61a14534255d6d6822b57\"]", arguments["mailbox_ids"])
+	}
+}
+
+func TestSplitGemmaBracketedArray(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+		ok   bool
+	}{
+		{
+			name: "single Gemma-quoted element",
+			raw:  `[<|"|>box_1<|"|>]`,
+			want: []string{"box_1"}, ok: true,
+		},
+		{
+			name: "multiple Gemma-quoted elements",
+			raw:  `[<|"|>box_1<|"|>,<|"|>box_2<|"|>]`,
+			want: []string{"box_1", "box_2"}, ok: true,
+		},
+		{
+			name: "bare unquoted element",
+			raw:  `[box_1]`,
+			want: []string{"box_1"}, ok: true,
+		},
+		{
+			name: "standard JSON-quoted element",
+			raw:  `["box_1"]`,
+			want: []string{"box_1"}, ok: true,
+		},
+		{
+			name: "a comma embedded inside a quote token is not a split point",
+			raw:  `[<|"|>a, b<|"|>]`,
+			want: []string{"a, b"}, ok: true,
+		},
+		{name: "empty array has nothing to repair", raw: `[]`, ok: false},
+		{name: "not bracketed at all", raw: `box_1`, ok: false},
+		{name: "unterminated quote token", raw: `[<|"|>box_1]`, ok: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := splitGemmaBracketedArray(tc.raw)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v (got %v)", ok, tc.ok, got)
+			}
+			if !ok {
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestNormalizeArgumentArrayRepair(t *testing.T) {
 	stringItems := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	intItems := map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}
