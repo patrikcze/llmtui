@@ -469,6 +469,11 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 		return nil, errors.New("expected true or false")
 	case "object", "array":
 		if !json.Valid([]byte(raw)) {
+			if typeName == "array" {
+				if v, ok := repairScalarAsArray(raw, schema); ok {
+					return v, nil
+				}
+			}
 			return nil, fmt.Errorf("expected a JSON %s", typeName)
 		}
 		var value any
@@ -482,6 +487,9 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 				return nil, errors.New("expected a JSON object")
 			}
 		} else if _, ok := value.([]any); !ok {
+			if v, ok := repairScalarAsArray(raw, schema); ok {
+				return v, nil
+			}
 			return nil, errors.New("expected a JSON array")
 		}
 		return value, nil
@@ -497,6 +505,71 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 		}
 		return raw, nil
 	}
+}
+
+// repairScalarAsArray handles a common small-model tool-calling mistake:
+// emitting one bare or JSON-quoted scalar for an array-typed argument
+// instead of wrapping it in []. Reproduced live with Gemma 4 E4B via
+// mail_search's account_ids/mailbox_ids (both string arrays) — the model
+// consistently omitted the brackets for a single id.
+//
+// It only fires when raw is exactly one value of the array's own declared
+// element type (schema["items"]) — never for an untyped, array-of-array or
+// array-of-object schema, where wrapping could silently accept something
+// the caller never intended. It never widens what a well-formed multi-item
+// array argument would already do: a raw value that itself decodes as a
+// JSON array never reaches this function (see normalizeArgument's two call
+// sites), so a model that got the shape right is never second-guessed.
+func repairScalarAsArray(raw string, schema map[string]any) (any, bool) {
+	items, _ := schema["items"].(map[string]any)
+	itemType, _ := items["type"].(string)
+	switch strings.ToLower(itemType) {
+	case "string", "integer", "number", "boolean":
+	default:
+		return nil, false
+	}
+	if json.Valid([]byte(raw)) {
+		var decoded any
+		d := json.NewDecoder(strings.NewReader(raw))
+		d.UseNumber()
+		if err := d.Decode(&decoded); err != nil {
+			return nil, false
+		}
+		if _, isArray := decoded.([]any); isArray {
+			// Already a well-formed array; nothing to repair.
+			return nil, false
+		}
+		if v, ok := wrapIfMatchesItemType(decoded, itemType); ok {
+			return v, true
+		}
+		return nil, false
+	}
+	// raw is not valid JSON on its own (e.g. an unquoted bareword like a
+	// handle) — try it as one raw scalar of the item's type, with the same
+	// strict coercion a genuine single-value argument of that type gets.
+	value, err := normalizeArgument(raw, items)
+	if err != nil {
+		return nil, false
+	}
+	return []any{value}, true
+}
+
+func wrapIfMatchesItemType(value any, itemType string) (any, bool) {
+	switch strings.ToLower(itemType) {
+	case "string":
+		if _, ok := value.(string); ok {
+			return []any{value}, true
+		}
+	case "integer", "number":
+		if _, ok := value.(json.Number); ok {
+			return []any{value}, true
+		}
+	case "boolean":
+		if _, ok := value.(bool); ok {
+			return []any{value}, true
+		}
+	}
+	return nil, false
 }
 
 func propertySchema(schema map[string]any, key string) map[string]any {

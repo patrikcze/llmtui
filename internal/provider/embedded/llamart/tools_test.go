@@ -150,6 +150,86 @@ func TestToolOutputRouterPreservesTypedNestedArguments(t *testing.T) {
 	}
 }
 
+// TestToolOutputRouterGemmaRepairsScalarForArrayArgument reproduces a live
+// failure: Gemma 4 E4B, calling a personal_apps operation whose schema
+// declares a string-array argument (e.g. mail_search's account_ids),
+// consistently omitted the [] brackets around a single id. The Gemma text
+// format has no native array syntax of its own — a bare/quoted scalar is
+// literally what the model has available for "here is one value" — so this
+// is treated as a repair, not a rejection.
+func TestToolOutputRouterGemmaRepairsScalarForArrayArgument(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "mail_search",
+		Parameters: []byte(`{
+			"type":"object",
+			"properties":{"account_ids":{"type":"array","items":{"type":"string"}}}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:mail_search{account_ids:<|"|>acct_1<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(calls[0].Arguments), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	ids, ok := arguments["account_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "acct_1" {
+		t.Fatalf("account_ids = %+v, want [\"acct_1\"]", arguments["account_ids"])
+	}
+}
+
+func TestNormalizeArgumentArrayRepair(t *testing.T) {
+	stringItems := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	intItems := map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}
+	untypedArray := map[string]any{"type": "array"}
+	objectItems := map[string]any{"type": "array", "items": map[string]any{"type": "object"}}
+
+	tests := []struct {
+		name    string
+		raw     string
+		schema  map[string]any
+		want    []any
+		wantErr bool
+	}{
+		{name: "bare scalar repaired", raw: "acct_1", schema: stringItems, want: []any{"acct_1"}},
+		{name: "quoted scalar repaired", raw: `"acct_1"`, schema: stringItems, want: []any{"acct_1"}},
+		{name: "bare integer repaired", raw: "5", schema: intItems, want: []any{json.Number("5")}},
+		{name: "well-formed array is untouched", raw: `["a","b"]`, schema: stringItems, want: []any{"a", "b"}},
+		{name: "untyped array items are not repaired", raw: "acct_1", schema: untypedArray, wantErr: true},
+		{name: "object item type is not repaired", raw: "acct_1", schema: objectItems, wantErr: true},
+		{name: "wrong scalar type is not repaired", raw: "not-a-number", schema: intItems, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeArgument(tc.raw, tc.schema)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeArgument(%q) = %v, want an error", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeArgument(%q): %v", tc.raw, err)
+			}
+			gotArr, ok := got.([]any)
+			if !ok || len(gotArr) != len(tc.want) {
+				t.Fatalf("normalizeArgument(%q) = %#v, want %#v", tc.raw, got, tc.want)
+			}
+			for i := range tc.want {
+				if gotArr[i] != tc.want[i] {
+					t.Errorf("normalizeArgument(%q)[%d] = %#v, want %#v", tc.raw, i, gotArr[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestToolOutputRouterMultipleCallsAndMixedSpeech(t *testing.T) {
 	raw := "I will check both.\n" +
 		`<tool_call>{"name":"weather","arguments":{"city":"Prague"}}</tool_call>` +
