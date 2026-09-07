@@ -536,7 +536,7 @@ func (a ChangeApplyArgs) validate(Limits) error {
 		return Errorf(CodeInvalidRequest, "plan_id is required")
 	}
 	if !validPlanID(a.PlanID) {
-		return Errorf(CodeInvalidRequest, "plan_id is not a host-issued plan identifier")
+		return Errorf(CodeInvalidRequest, "plan_id %q is not a host-issued plan identifier", clip(a.PlanID, 64))
 	}
 	return nil
 }
@@ -554,11 +554,11 @@ func (a OpenItemArgs) validate(Limits) error {
 	switch a.ItemID.Kind() {
 	case KindMessage, KindEvent:
 		if !a.ItemID.WellFormed() {
-			return Errorf(CodeInvalidRequest, "item_id is not a host-issued handle")
+			return Errorf(CodeInvalidRequest, "item_id %q is not a host-issued handle", clip(string(a.ItemID), 64))
 		}
 		return nil
 	default:
-		return Errorf(CodeInvalidRequest, "item_id must be a message or event handle")
+		return Errorf(CodeInvalidRequest, "item_id %q must be a message or event handle", clip(string(a.ItemID), 64))
 	}
 }
 
@@ -601,7 +601,14 @@ func requireHandle(field string, h Handle, kind HandleKind) error {
 		return Errorf(CodeInvalidRequest, "%s is required", field)
 	}
 	if h.Kind() != kind || !h.WellFormed() {
-		return Errorf(CodeInvalidRequest, "%s is not a host-issued %s handle", field, kind)
+		// Echo the exact string received (clipped): this is what lets a
+		// model — or a human reading the transcript — see whether it typo'd
+		// a handle it retyped from memory versus something structurally
+		// different happening (wrong field, stale copy, wrong kind
+		// entirely). Never a security concern: a handle carries no account
+		// name, mailbox path or content, only a kind prefix and random
+		// bytes.
+		return Errorf(CodeInvalidRequest, "%s %q is not a host-issued %s handle", field, clip(string(h), 64), kind)
 	}
 	return nil
 }
@@ -612,7 +619,7 @@ func requireHandles(field string, hs []Handle, kind HandleKind, max int) error {
 	}
 	for _, h := range hs {
 		if h.Kind() != kind || !h.WellFormed() {
-			return Errorf(CodeInvalidRequest, "%s contains an entry that is not a host-issued %s handle", field, kind)
+			return Errorf(CodeInvalidRequest, "%s contains %q, which is not a host-issued %s handle", field, clip(string(h), 64), kind)
 		}
 	}
 	return nil
