@@ -296,6 +296,38 @@ function resolveScope(Mail, scope) {
 // candidates were actually examined, complete is true only when nothing
 // was left unexamined, and resume/reason describe exactly where and why a
 // continuation is possible. It never fetches message content.
+// peekReceivedMillis reads one message's received time as epoch
+// milliseconds, or null if it cannot be read. Used only to detect scan
+// direction, never as part of a result.
+function peekReceivedMillis(msg) {
+  try {
+    var d = msg.dateReceived();
+    return d ? d.getTime() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// detectNewestAtIndexZero reports whether index 0 holds the more recent of
+// a mailbox's two boundary messages. Mail's mailbox.messages() array order
+// is not documented anywhere, and was found empirically (during this
+// feature's own development, against a real Gmail/IMAP account) to place
+// the newest message at index 0 — but nothing guarantees that holds for
+// every account or provider, so opSearch checks this per mailbox rather
+// than assuming a fixed direction. A scan bounded by max_candidates/limit
+// that starts at the wrong end doesn't error — it silently returns the
+// wrong messages, which is the failure this exists to prevent. Unavailable
+// or equal boundary dates fall back to true (index 0 = newest) rather than
+// guessing further; a mailbox with fewer than two messages has no
+// direction to get wrong.
+function detectNewestAtIndexZero(msgs, len) {
+  if (len < 2) return true;
+  var first = peekReceivedMillis(msgs[0]);
+  var last = peekReceivedMillis(msgs[len - 1]);
+  if (first === null || last === null) return true;
+  return first >= last;
+}
+
 function opSearch(Mail, req) {
   var s = req.search;
   var resolvedScopes = [];
@@ -335,8 +367,15 @@ function opSearch(Mail, req) {
       break outer;
     }
     var len = msgs.length;
-    var idx = si === startScope && startIdx >= 0 ? startIdx : len - 1;
-    for (; idx >= 0; idx--) {
+    // Scan toward whichever end of the array actually holds the newest
+    // mail (or the oldest, when the caller asked for oldest-first) —
+    // detected per mailbox, never assumed. See detectNewestAtIndexZero.
+    var newestAtZero = detectNewestAtIndexZero(msgs, len);
+    var ascending = s.newest === newestAtZero;
+    var direction = ascending ? 1 : -1;
+    var boundaryStart = ascending ? 0 : len - 1;
+    var idx = si === startScope && startIdx >= 0 ? startIdx : boundaryStart;
+    for (; idx >= 0 && idx < len; idx += direction) {
       if (scanned >= maxCandidates) {
         reason = 'scan_limit';
         resume = { scope_index: si, message_index: idx };
@@ -354,9 +393,10 @@ function opSearch(Mail, req) {
       if (subjectNeedle && meta.subject.toLowerCase().indexOf(subjectNeedle) === -1) continue;
       results.push(meta);
       if (results.length >= limit) {
-        if (idx > 0) {
+        var next = idx + direction;
+        if (next >= 0 && next < len) {
           reason = 'page_limit';
-          resume = { scope_index: si, message_index: idx - 1 };
+          resume = { scope_index: si, message_index: next };
         } else if (si + 1 < resolvedScopes.length) {
           reason = 'page_limit';
           resume = { scope_index: si + 1, message_index: -1 };
