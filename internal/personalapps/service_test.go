@@ -88,14 +88,14 @@ type fakeJournal struct {
 	outcomeEr error
 }
 
-func (f *fakeJournal) RecordIntent(_ context.Context, plan Plan) error {
-	f.intents = append(f.intents, plan.ID)
+func (f *fakeJournal) Begin(_ context.Context, change ResolvedChange) (MutationDecision, error) {
+	f.intents = append(f.intents, change.PlanID)
 	f.order = append(f.order, "intent")
-	return f.intentEr
+	return MutationDecision{State: MutationNew}, f.intentEr
 }
 
-func (f *fakeJournal) RecordOutcome(_ context.Context, plan Plan, _ []ItemOutcome) error {
-	f.outcomes = append(f.outcomes, plan.ID)
+func (f *fakeJournal) Complete(_ context.Context, change ResolvedChange, _ []ItemOutcome) error {
+	f.outcomes = append(f.outcomes, change.PlanID)
 	f.order = append(f.order, "outcome")
 	return f.outcomeEr
 }

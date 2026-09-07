@@ -384,12 +384,13 @@ allow" grant. See the personal-apps integration plan under
 
 Mail has a real adapter on darwin builds (`mail_search`, `mail_read`,
 `mail_accounts`, `mail_mailboxes`), talking to Apple Mail through a fixed,
-embedded JXA script over `osascript`. Calendar has no adapter yet — a
-connected Calendar session currently has metadata visibility only, and every
-`calendar_*` operation reports `unsupported_operation` until a later slice
-adds an EventKit companion. Mail mutations (`change_prepare`/`change_apply`
-for moves, flags and drafts) also have no adapter yet regardless of
-`mutations.enabled`.
+embedded JXA script over `osascript`. Calendar reads use the separately
+installed EventKit companion when `calendar.helper_path` is configured;
+otherwise every `calendar_*` operation reports `unsupported_operation`.
+Mutation adapters are still deliberately absent, but Slice 5 already records
+an approved mutation's semantic identity in a user-level write-ahead journal
+before any future adapter can run it. That journal prevents an interrupted or
+unknown effect from being retried automatically across sessions or workspaces.
 
 `mail.allowed_accounts` takes each account's **native identifier**, not its
 display name — Apple Mail account objects have a stable UUID
@@ -412,6 +413,7 @@ address one reliably.
 | `calendar.allowed_calendars` | `[]` | Native calendar identifiers in scope; empty means no calendar is authorized |
 | `calendar.helper_path` | `""` | Absolute path to the separately installed EventKit companion. Empty means calendar reads remain unsupported; llmtui never searches `PATH`, downloads, or compiles it at runtime. See `native/personal-apps-calendar/README.md` for a source-build helper. |
 | `mutations.enabled` | `false` | Allow `change_prepare`/`change_apply`; every apply still needs a fresh human approval. No mutation adapter exists yet, so this currently has no observable effect |
+| `mutations.ledger_path` | user config dir + `/llmtui/personal-apps` | Absolute user-level journal directory; `~` is accepted. It stores only digests and outcome categories, never mail/calendar content, addresses, raw arguments, or model call IDs. |
 | `limits.*` | see below | Bounds passed straight to the domain package's own defaults (`read_timeout` 15s, `mutation_timeout` 30s, `page_size` 25, `max_page_size` 100, `max_messages_per_read` 10, `max_body_bytes` 32768, `max_result_bytes` 131072, `max_scan_candidates` 1000, `max_calendar_days` 31, `max_changes_per_plan` 25) |
 
 ### `tool_registry`

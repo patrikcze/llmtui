@@ -560,8 +560,10 @@ type PersonalAppsConfig struct {
 	Limits    PersonalAppsLimitsConfig   `mapstructure:"limits" yaml:"limits"`
 }
 
-// PersonalAppsMailConfig scopes Mail access. AllowedAccounts holds native
-// account identifiers as reported by mail_accounts, not display names.
+// PersonalAppsMailConfig scopes Mail access. AllowedAccounts holds Mail's
+// native account UUIDs, not display names or the opaque handles returned to
+// the model by mail_accounts. See docs/configuration.md for the one-off
+// read-only command that prints the UUIDs.
 type PersonalAppsMailConfig struct {
 	Enabled         bool     `mapstructure:"enabled" yaml:"enabled"`
 	AllowedAccounts []string `mapstructure:"allowed_accounts" yaml:"allowed_accounts"`
@@ -581,7 +583,8 @@ type PersonalAppsCalendarConfig struct {
 // corresponding flag here — a config field for a capability that cannot be
 // exercised would just be a second, unenforced way to promise it.
 type PersonalAppsMutationConfig struct {
-	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	Enabled    bool   `mapstructure:"enabled" yaml:"enabled"`
+	LedgerPath string `mapstructure:"ledger_path" yaml:"ledger_path"`
 }
 
 // PersonalAppsLimitsConfig mirrors internal/personalapps.Limits. A zero

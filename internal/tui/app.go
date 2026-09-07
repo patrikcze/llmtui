@@ -486,19 +486,25 @@ func (m *Model) rebuildFromConfig() {
 					Timeout:    limits.ReadTimeout,
 				})
 			}
-			svc, err := personalapps.New(personalapps.Options{
-				Scope:       personalAppsScopeFromConfig(pcfg),
-				Limits:      limits,
-				Mail:        mailBackend,
-				Calendar:    calendarBackend,
-				Approvals:   m.personalAppsApprovals,
-				PrivacyGate: m.enterPersonalAppsPrivateSession,
-			})
-			if err != nil {
-				m.errText = "personal_apps: " + err.Error()
+			journal, journalErr := personalAppsJournalFromConfig(pcfg.Mutations)
+			if journalErr != nil {
+				m.errText = "personal_apps: " + journalErr.Error()
 			} else {
-				m.personalApps = svc
-				m.toolRunner.PersonalApps = svc
+				svc, err := personalapps.New(personalapps.Options{
+					Scope:       personalAppsScopeFromConfig(pcfg),
+					Limits:      limits,
+					Mail:        mailBackend,
+					Calendar:    calendarBackend,
+					Journal:     journal,
+					Approvals:   m.personalAppsApprovals,
+					PrivacyGate: m.enterPersonalAppsPrivateSession,
+				})
+				if err != nil {
+					m.errText = "personal_apps: " + err.Error()
+				} else {
+					m.personalApps = svc
+					m.toolRunner.PersonalApps = svc
+				}
 			}
 		}
 	}
@@ -1357,10 +1363,16 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		return cmd
 	}
 	plan := newToolBatchPlan(calls)
+	personalAppsDependencyBlocked := blockDependentPersonalAppsApply(&plan)
 	if m.cfg.Tools.NoProgress.Enabled {
-		var terminal bool
-		plan, terminal = m.progress.planBatch(calls)
-		if plan.blockedCount() == len(calls) {
+		progressPlan, terminal := m.progress.planBatch(calls)
+		for i, reason := range plan.blocked {
+			if reason != "" {
+				progressPlan.block(i, reason)
+			}
+		}
+		plan = progressPlan
+		if !personalAppsDependencyBlocked && plan.blockedCount() == len(calls) {
 			return m.handleBlockedProgress(calls, progressBlockReason(plan), terminal)
 		}
 	}
