@@ -435,10 +435,7 @@ func personalAppsParameters() json.RawMessage {
 				"enum":        enum,
 				"description": "One operation from the closed personal_apps vocabulary.",
 			},
-			"arguments": map[string]any{
-				"type":        "object",
-				"description": "Operation-specific arguments. Unknown or foreign fields are rejected; see the operation's own error message for what it needs.",
-			},
+			"arguments": personalAppsArgumentsSchema(),
 		},
 		"required":             []string{"operation"},
 		"additionalProperties": false,
@@ -449,6 +446,80 @@ func personalAppsParameters() json.RawMessage {
 		panic(fmt.Sprintf("build personal_apps schema: %v", err))
 	}
 	return raw
+}
+
+// personalAppsArgumentsSchema declares every field any personal_apps
+// operation accepts, each field's description naming which operation(s) use
+// it. Only one operation's fields matter for a given call — the strict
+// per-operation decoder in internal/personalapps rejects anything foreign at
+// execution time regardless of this schema — but naming every field here
+// (rather than leaving "arguments" an opaque object, as every other tool's
+// schema in this file avoids doing) gives both a model reading the schema
+// text and a backend that grammar-constrains generation from it something
+// concrete to work from, instead of requiring a guess-then-read-the-error
+// loop for every call. A change's own shape (change_prepare's "changes")
+// stays a generic object array: modeling all six change variants here would
+// duplicate internal/personalapps/changes.go; PersonalAppsInstructions
+// covers those field names in text instead.
+func personalAppsArgumentsSchema() map[string]any {
+	str := map[string]any{"type": "string"}
+	strArray := map[string]any{"type": "array", "items": str}
+	boolField := map[string]any{"type": "boolean"}
+	intField := map[string]any{"type": "integer"}
+	field := func(base map[string]any, desc string) map[string]any {
+		out := make(map[string]any, len(base)+1)
+		for k, v := range base {
+			out[k] = v
+		}
+		out["description"] = desc
+		return out
+	}
+	return map[string]any{
+		"type":        "object",
+		"description": "Operation-specific fields — only send the ones the current operation's own description or PersonalAppsInstructions lists for it; anything else is rejected. IDs (account_id, mailbox_id entries, message_id entries, calendar_id entries, event_id, item_id) are opaque handles copied verbatim from a prior result (mail_accounts, mail_mailboxes, mail_search, calendar_list, calendar_events) — never invented or reused from a different field.",
+		"properties": map[string]any{
+			"limit":                   field(intField, "mail_accounts, mail_mailboxes, mail_search: page size, defaults to the configured page size."),
+			"cursor":                  field(str, "mail_accounts, mail_mailboxes, mail_search: continues a previous result's next_cursor."),
+			"account_id":              field(str, "mail_mailboxes: the account to list, an id from a mail_accounts result."),
+			"parent_id":               field(str, "mail_mailboxes: list this mailbox's children instead of the account root, an id from a prior mail_mailboxes result."),
+			"account_ids":             field(strArray, "mail_search: search these accounts' top-level Inbox. Prefer mailbox_ids when you already have one from mail_mailboxes."),
+			"mailbox_ids":             field(strArray, "mail_search: search these specific mailboxes, ids from a mail_mailboxes result."),
+			"received_after":          field(str, "mail_search: RFC3339 timestamp, inclusive lower bound on received time."),
+			"received_before":         field(str, "mail_search: RFC3339 timestamp, exclusive upper bound on received time."),
+			"from":                    field(str, "mail_search: case-insensitive substring match against the sender."),
+			"subject":                 field(str, "mail_search: case-insensitive substring match against the subject."),
+			"unread":                  field(boolField, "mail_search: filter to unread (true) or read (false) messages."),
+			"flagged":                 field(boolField, "mail_search: filter to flagged (true) or unflagged (false) messages."),
+			"sort":                    field(map[string]any{"type": "string", "enum": []string{"received_desc", "received_asc"}}, "mail_search: result order; defaults to received_desc (newest first)."),
+			"message_ids":             field(strArray, "mail_read: the exact messages to read, ids from a mail_search result — never invented."),
+			"max_body_bytes":          field(intField, "mail_read: optionally lowers the configured body cap; it can never raise it."),
+			"calendar_ids":            field(strArray, "calendar_events, calendar_free_slots: the calendars to query, ids from a calendar_list result."),
+			"start":                   field(str, "calendar_events, calendar_free_slots: RFC3339 window start."),
+			"end":                     field(str, "calendar_events, calendar_free_slots: RFC3339 window end."),
+			"timezone":                field(str, "calendar_events, calendar_free_slots: IANA zone the window and results are interpreted in."),
+			"event_id":                field(str, "calendar_event: the single event to read, an id from a calendar_events result."),
+			"duration_minutes":        field(intField, "calendar_free_slots: minimum contiguous free-slot length, in minutes."),
+			"buffer_minutes":          field(intField, "calendar_free_slots: shrink each candidate slot by this many minutes on each side."),
+			"include_all_day_as_busy": field(boolField, "calendar_free_slots: treat all-day events as busy when true."),
+			"working_hours": map[string]any{
+				"type":        "object",
+				"description": `calendar_free_slots, required: {"start":"HH:MM","end":"HH:MM","days":["mon",...]} local clock times; days defaults to Monday-Friday.`,
+				"properties": map[string]any{
+					"start": str,
+					"end":   str,
+					"days":  strArray,
+				},
+			},
+			"item_id": field(str, "open_item: the item to open in its owning app, an id from any prior read result."),
+			"changes": map[string]any{
+				"type":        "array",
+				"description": "change_prepare: one or more change objects — see PersonalAppsInstructions for each change type's exact shape. Never send this together with plan_id in the same call.",
+				"items":       map[string]any{"type": "object"},
+			},
+			"plan_id": field(str, "change_apply: the plan_id a prior change_prepare returned, after a human approved it in a separate turn — never send this together with changes in the same call."),
+		},
+		"additionalProperties": false,
+	}
 }
 
 // MaxPersonalAppsPayloadBytes bounds the raw personal_apps envelope this

@@ -203,3 +203,80 @@ func TestPersonalAppsSpecsEnumMatchesOperationVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// TestPersonalAppsArgumentsSchemaNamesRealFields guards against the schema
+// silently regressing to an opaque object with no property names, which is
+// exactly what let a native tool-calling model invent an "account_id" field
+// for mail_read (a mail_mailboxes-only field) instead of the "message_ids"
+// mail_read actually takes: with no properties to read, it had nothing but
+// English prose to go on. It does not need to enumerate every field —
+// personalAppsArgumentsSchema is trusted for that — only that the schema
+// text a model actually sees still names the fields this exact failure mode
+// depends on.
+func TestPersonalAppsArgumentsSchemaNamesRealFields(t *testing.T) {
+	specs := PersonalAppsSpecs()
+	if len(specs) != 1 {
+		t.Fatalf("PersonalAppsSpecs() returned %d specs, want 1", len(specs))
+	}
+	var schema struct {
+		Properties struct {
+			Arguments struct {
+				Type                 string         `json:"type"`
+				Properties           map[string]any `json:"properties"`
+				AdditionalProperties bool           `json:"additionalProperties"`
+			} `json:"arguments"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(specs[0].Parameters, &schema); err != nil {
+		t.Fatalf("Parameters is not valid JSON: %v", err)
+	}
+	args := schema.Properties.Arguments
+	if args.Type != "object" {
+		t.Fatalf("arguments.type = %q, want object", args.Type)
+	}
+	if args.AdditionalProperties {
+		t.Fatal("arguments schema allows additional properties")
+	}
+	for _, field := range []string{
+		"message_ids", "account_id", "account_ids", "mailbox_ids", "parent_id",
+		"calendar_ids", "event_id", "item_id", "plan_id", "changes",
+	} {
+		if _, ok := args.Properties[field]; !ok {
+			t.Errorf("arguments schema is missing property %q", field)
+		}
+	}
+	// The specific bug reported: mail_read must never look like it accepts
+	// account_id — that field belongs to mail_mailboxes only. The schema
+	// itself can't express per-operation exclusivity (that's what
+	// PersonalAppsInstructions' explicit "never borrow a field name from a
+	// different operation" rule and each field's own description are for),
+	// but a regression that dropped the field-level descriptions entirely
+	// would silently reopen this exact failure mode.
+	msgIDsDesc, _ := args.Properties["message_ids"].(map[string]any)["description"].(string)
+	if !strings.Contains(msgIDsDesc, "mail_read") {
+		t.Errorf("message_ids description does not mention mail_read: %q", msgIDsDesc)
+	}
+	accountIDDesc, _ := args.Properties["account_id"].(map[string]any)["description"].(string)
+	if !strings.Contains(accountIDDesc, "mail_mailboxes") {
+		t.Errorf("account_id description does not mention mail_mailboxes: %q", accountIDDesc)
+	}
+}
+
+// TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes guards the
+// system-prompt text a fenced-protocol model (and every native model, as
+// supplementary guidance) actually reads: the operation sequencing and the
+// six change_prepare variant shapes that the flat arguments schema cannot
+// express on its own.
+func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
+	for _, want := range []string{
+		"mail_accounts", "mail_mailboxes", "mail_search", "mail_read",
+		"calendar_list", "calendar_events", "calendar_free_slots", "calendar_event",
+		"mail_move", "mail_set_read", "mail_set_flag", "mail_save_draft",
+		"calendar_create_event", "calendar_update_event",
+		"never invent",
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
