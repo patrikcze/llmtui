@@ -567,10 +567,13 @@ type PersonalAppsMailConfig struct {
 	AllowedAccounts []string `mapstructure:"allowed_accounts" yaml:"allowed_accounts"`
 }
 
-// PersonalAppsCalendarConfig scopes Calendar access.
+// PersonalAppsCalendarConfig scopes Calendar access. HelperPath must be the
+// absolute path to the separately installed EventKit companion; llmtui never
+// searches PATH, downloads it, or compiles Swift during normal startup.
 type PersonalAppsCalendarConfig struct {
 	Enabled          bool     `mapstructure:"enabled" yaml:"enabled"`
 	AllowedCalendars []string `mapstructure:"allowed_calendars" yaml:"allowed_calendars"`
+	HelperPath       string   `mapstructure:"helper_path" yaml:"helper_path"`
 }
 
 // PersonalAppsMutationConfig gates change_prepare/change_apply. Send and
@@ -946,6 +949,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("personal_apps.mail.allowed_accounts", []string{})
 	v.SetDefault("personal_apps.calendar.enabled", false)
 	v.SetDefault("personal_apps.calendar.allowed_calendars", []string{})
+	v.SetDefault("personal_apps.calendar.helper_path", "")
 	v.SetDefault("personal_apps.mutations.enabled", false)
 	v.SetDefault("personal_apps.limits.read_timeout", "15s")
 	v.SetDefault("personal_apps.limits.mutation_timeout", "30s")
