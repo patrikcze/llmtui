@@ -618,6 +618,10 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 		m.openOverlay(m.doctorMcpOverlay())
 		return nil
 	}
+	if sub == "personal-apps" {
+		m.openOverlay(m.personalAppsDoctorOverlay())
+		return nil
+	}
 	name := m.prov.Name()
 	if sub == "provider" && rest != "" {
 		name = rest

@@ -382,6 +382,9 @@ exact prepared plan — never covered by `/tools auto` or a standing "always
 allow" grant. See the personal-apps integration plan under
 `.claude/tasks/plans/` for the full design.
 
+For setup, Calendar companion installation, passive diagnostics, privacy, and
+the supported mutation boundary, see [personal-apps.md](personal-apps.md).
+
 Mail has a real adapter on darwin builds (`mail_search`, `mail_read`,
 `mail_accounts`, `mail_mailboxes`), talking to Apple Mail through a fixed,
 embedded JXA script over `osascript`. Calendar reads use the separately

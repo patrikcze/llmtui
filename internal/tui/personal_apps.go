@@ -107,6 +107,48 @@ func personalAppsLimitsFromConfig(c config.PersonalAppsLimitsConfig) personalapp
 	return l
 }
 
+// personalAppsDoctorOverlay is intentionally passive: it checks only
+// configuration and the configured helper's filesystem metadata. It never
+// launches an app/helper or requests Calendar permission, so opening doctor
+// cannot cause a surprise TCC prompt.
+func (m *Model) personalAppsDoctorOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("doctor — personal apps") + "\n\n")
+	cfg := m.cfg.PersonalApps
+	lines := make([]string, 0, 6)
+	if !cfg.Enabled {
+		lines = append(lines, "✗ personal apps disabled (personal_apps.enabled)")
+	} else {
+		lines = append(lines, "✓ personal apps enabled")
+		if cfg.Mail.Enabled {
+			lines = append(lines, fmt.Sprintf("✓ Mail enabled with %d allowed account(s)", len(cfg.Mail.AllowedAccounts)))
+		} else {
+			lines = append(lines, "✗ Mail disabled (personal_apps.mail.enabled)")
+		}
+		if cfg.Calendar.Enabled {
+			status := personalapps.CheckCalendarHelper(cfg.Calendar.HelperPath)
+			prefix := "✗ "
+			if status.Ready {
+				prefix = "✓ "
+			}
+			lines = append(lines, prefix+"Calendar: "+status.Message)
+			lines = append(lines, fmt.Sprintf("Calendar scope: %d allowed calendar(s)", len(cfg.Calendar.AllowedCalendars)))
+			lines = append(lines, "Calendar permission is checked only after you explicitly connect and run an operation")
+		} else {
+			lines = append(lines, "✗ Calendar disabled (personal_apps.calendar.enabled)")
+		}
+	}
+	for _, line := range lines {
+		style := m.theme.StatusValue
+		if strings.HasPrefix(line, "✗") {
+			style = m.theme.ErrorText
+		}
+		b.WriteString("  " + style.Render(line) + "\n")
+	}
+	b.WriteString("\n" + m.theme.SystemNote.Render("This check is passive: it does not launch Mail, Calendar, or the companion."))
+	return m.overlayFooter(&b)
+}
+
 // enterPersonalAppsPrivateSession is the Service's PrivacyGate. It runs on
 // whatever goroutine executes the tool batch (see tools.Runner.
 // ExecuteContext), never assume it is the Bubble Tea Update goroutine — the
@@ -150,6 +192,16 @@ func personalAppsConnect(m *Model, target string) tea.Cmd {
 	adapter, err := parsePersonalAppsAdapter(target)
 	if err != nil {
 		return m.fail(err.Error())
+	}
+	if adapter == personalapps.AdapterCalendar {
+		// Connecting is the consent boundary for Calendar. Refuse before
+		// recording consent when the configured companion cannot be used, so
+		// the next tool call does not fail with the less useful generic
+		// "adapter is not connected" message.
+		status := personalapps.CheckCalendarHelper(m.cfg.PersonalApps.Calendar.HelperPath)
+		if !status.Ready {
+			return m.fail("connect calendar: " + status.Message)
+		}
 	}
 	if err := m.personalApps.Connect(adapter); err != nil {
 		return m.fail(fmt.Sprintf("connect %s: %s", adapter, personalAppsErrorText(err)))

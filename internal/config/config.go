@@ -954,6 +954,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("personal_apps.calendar.allowed_calendars", []string{})
 	v.SetDefault("personal_apps.calendar.helper_path", "")
 	v.SetDefault("personal_apps.mutations.enabled", false)
+	v.SetDefault("personal_apps.mutations.ledger_path", "")
 	v.SetDefault("personal_apps.limits.read_timeout", "15s")
 	v.SetDefault("personal_apps.limits.mutation_timeout", "30s")
 	v.SetDefault("personal_apps.limits.page_size", 25)
@@ -1188,6 +1189,24 @@ tools:
     enabled: true
     threshold: 16
     max_results: 5
+
+# Optional Apple Mail/Calendar integration. Off by default. Enabling it grants
+# no data access: use native account/calendar identifiers in the allowlists,
+# then explicitly connect the adapter in chat. Calendar additionally needs an
+# explicitly installed EventKit companion; llmtui never downloads or compiles
+# it on startup. See docs/personal-apps.md.
+personal_apps:
+  enabled: false
+  mail:
+    enabled: false
+    allowed_accounts: []
+  calendar:
+    enabled: false
+    allowed_calendars: []
+    helper_path: "" # absolute executable path inside the EventKit app bundle
+  mutations:
+    enabled: false
+    ledger_path: "" # empty uses the user config directory
 
 # Skills: declarative task-instruction packages (SKILL.md files with YAML
 # front matter) discovered from <user-config>/llmtui/skills/<id>/ and

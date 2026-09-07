@@ -131,7 +131,7 @@ cycle owns context. They never stop work automatically.
 ## Diagnostics
 | Command | Description |
 | --- | --- |
-| `/doctor [provider [name]]` | Provider/model/network diagnostics |
+| `/doctor [provider [name]\|mcp\|personal-apps]` | Provider/model/network diagnostics; `personal-apps` passively checks Mail/Calendar configuration and the EventKit helper without launching it |
 | `/debug [on\|off\|last]` | Debug drawer for the last request |
 | `/keys [raw]` | Interactive key inspector |
 | `/config [path\|show\|reload]` | Configuration (secrets redacted) |
