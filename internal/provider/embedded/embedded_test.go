@@ -444,6 +444,50 @@ func TestChatWithKnownToolFormatUsesTerminalToolCalls(t *testing.T) {
 	}
 }
 
+// TestChatMalformedToolCallIsSoftDoneNotHardError guards the recovery path
+// for a runtime that recognized a tool-call attempt but could not parse it
+// (observed live: Gemma 4 via yzma on a personal_apps change_prepare call).
+// Reported as a hard EventError, the turn dead-ends with no way back; the
+// TUI's existing one-shot-retry / fenced-protocol-fallback recovery — already
+// exercised for the identical failure class on remote backends
+// (openai.looksLikeUnparsedToolCall) — only fires on EventDone with
+// MalformedToolCall set, so the embedded runtime must report it the same way
+// instead of failing the request outright.
+func TestChatMalformedToolCallIsSoftDoneNotHardError(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "gemma-4-tool.gguf")
+	rt := &scriptedRuntime{genErr: &MalformedToolCallError{Format: ToolFormatGemma}}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+	tools := []provider.ToolSpec{{Name: "change_prepare", Parameters: []byte(`{"type":"object"}`)}}
+
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "create the event"}},
+		Tools:    tools,
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	got := drain(events)
+	if len(got) == 0 {
+		t.Fatal("no events received")
+	}
+	for _, ev := range got {
+		if ev.Type == provider.EventError {
+			t.Fatalf("unexpected EventError %v: a malformed tool call must never be a hard error", ev.Err)
+		}
+	}
+	done := got[len(got)-1]
+	if done.Type != provider.EventDone {
+		t.Fatalf("terminal event type = %v, want EventDone", done.Type)
+	}
+	if !done.MalformedToolCall {
+		t.Error("MalformedToolCall = false, want true")
+	}
+	if len(done.ToolCalls) != 0 {
+		t.Errorf("ToolCalls = %+v, want none for a malformed attempt", done.ToolCalls)
+	}
+}
+
 // toolsRejectedErrorLike mirrors internal/tui/pipeline.go's toolsRejectedError
 // predicate (substring "tool" plus "does not support") without importing the
 // tui package, which would create an import cycle risk and pull in

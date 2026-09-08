@@ -367,8 +367,13 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 	t.Run("malformed", func(t *testing.T) {
 		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
 		router.Push(`<tool_call>{"name":"weather","arguments":{"city":"Prague"}`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), "malformed") {
-			t.Fatalf("Finish error = %v", err)
+		_, _, err := router.Finish()
+		var malformed *embedded.MalformedToolCallError
+		// Must be the typed error, not just a string containing "malformed":
+		// Provider.Chat type-switches on it to decide EventDone versus a hard
+		// EventError (see embedded.TestChatMalformedToolCallIsSoftDoneNotHardError).
+		if !errors.As(err, &malformed) {
+			t.Fatalf("Finish error = %T %v, want *embedded.MalformedToolCallError", err, err)
 		}
 	})
 	t.Run("unknown", func(t *testing.T) {
@@ -396,6 +401,24 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
+}
+
+// TestToolOutputRouterRejectsUnrepairedJSONToolBlock covers the third
+// malformed-tool-call throw site (validateUnrepairedJSONToolBlocks, standard
+// and Phi formats): a second <tool_call> block with invalid JSON must fail
+// the whole response even though the first block parsed cleanly, and it must
+// fail with the same typed error as the other two throw sites so
+// Provider.Chat's soft-EventDone translation covers every tool format
+// uniformly, not just Gemma.
+func TestToolOutputRouterRejectsUnrepairedJSONToolBlock(t *testing.T) {
+	router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
+	router.Push(`<tool_call>{"name":"weather","arguments":{"city":"Prague"}}</tool_call>` +
+		`<tool_call>{"name":"weather","arguments":{city:Prague}}</tool_call>`)
+	_, calls, err := router.Finish()
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
+	}
 }
 
 func TestToolOutputRouterGemmaZeroArgumentCallsHonorSchema(t *testing.T) {
@@ -633,11 +656,9 @@ func TestToolOutputRouterGemmaRejectsSwallowedKey(t *testing.T) {
 		`start:<|"|>2026-09-09T00:00:00+02:00, end:<|"|>2026-09-09T23:59:59+02:00<|"|>, ` +
 		`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
 	_, calls, err := router.Finish()
-	if err == nil {
-		t.Fatalf("Finish returned calls %+v, want a malformed tool call error", calls)
-	}
-	if !strings.Contains(err.Error(), "malformed") {
-		t.Fatalf("Finish error = %v, want a malformed tool call error", err)
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
 	}
 }
 
@@ -726,10 +747,8 @@ func TestToolOutputRouterGemmaRejectsImpossibleKey(t *testing.T) {
 	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
 	router.Push(`<|toolcall>call:calendar_events{<|"|>x<|"|>], start:<|"|>2026-09-09T00:00:00+02:00<|"|>}<toolcall|>`)
 	_, calls, err := router.Finish()
-	if err == nil {
-		t.Fatalf("Finish returned calls %+v, want a malformed tool call error", calls)
-	}
-	if !strings.Contains(err.Error(), "malformed") {
-		t.Fatalf("Finish error = %v, want a malformed tool call error", err)
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
 	}
 }

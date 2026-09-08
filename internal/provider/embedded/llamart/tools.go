@@ -218,7 +218,7 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 	}
 	recognized := r.intent || definiteToolIntentIndex(raw, r.format) >= 0
 	if len(parsed) == 0 && recognized {
-		return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
+		return nil, nil, &embedded.MalformedToolCallError{Format: r.format}
 	}
 	if len(parsed) > 0 {
 		if err := validateUnrepairedJSONToolBlocks(raw, r.format); err != nil {
@@ -227,7 +227,7 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		if r.format == embedded.ToolFormatGemma {
 			parsed = repairGemmaBracketSplitArgs(raw, parsed)
 			if gemmaSwallowedKey(parsed) || gemmaImpossibleKey(parsed) {
-				return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
+				return nil, nil, &embedded.MalformedToolCallError{Format: r.format}
 			}
 		}
 	}
@@ -1001,7 +1001,7 @@ func validateUnrepairedJSONToolBlocks(raw string, format embedded.ToolFormat) er
 			content = rest[:end]
 		}
 		if !json.Valid([]byte(strings.TrimSpace(content))) {
-			return fmt.Errorf("model emitted malformed %s tool-call JSON", format)
+			return &embedded.MalformedToolCallError{Format: format}
 		}
 		if end < 0 {
 			return nil

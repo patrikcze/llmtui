@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"math"
@@ -451,6 +452,25 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 			// Cancellation (ours or the runtime's own) must surface as-is
 			// so the TUI treats this as a cancel, not a failure.
 			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: genCtx.Err()})
+			return
+		}
+		var malformed *MalformedToolCallError
+		if errors.As(err, &malformed) {
+			// A recognizable-but-unparseable tool call is the same
+			// backend-parser failure openai/ollama already report as a soft
+			// EventDone rather than a hard error, so the existing one-shot
+			// retry and fenced-protocol fallback (which does not depend on
+			// this runtime's native call-grammar parser) applies here too.
+			provider.Emit(genCtx, events, provider.ChatEvent{
+				Type:              provider.EventDone,
+				Turn:              &provider.AssistantTurn{Completed: true},
+				MalformedToolCall: true,
+				Usage: &provider.Usage{
+					PromptTokens:     result.PromptTokens,
+					CompletionTokens: result.CompletionTokens,
+					TotalTokens:      result.PromptTokens + result.CompletionTokens,
+				},
+			})
 			return
 		}
 		emitError(genCtx, events, fmt.Errorf("embedded provider %q: generation failed: %w", p.name, err))
