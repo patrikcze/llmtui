@@ -446,9 +446,29 @@ func WebSpecs() []provider.ToolSpec {
 // actually valid for its operation — this schema only narrows what a model
 // has to guess before finding that out.
 func PersonalAppsSpecs() []provider.ToolSpec {
-	ops := personalapps.Operations()
+	return personalAppsSpecsFor(personalapps.Operations())
+}
+
+// PersonalAppsSpecsFor returns only the specs a caller may currently invoke,
+// given personalapps.StatusView.Operations. Offering the full catalog
+// regardless of connection state contradicts Scope.AllowedOperations' own
+// contract ("a disabled or disconnected adapter's operations are absent
+// rather than present and failing") and was observed live: with Calendar
+// enabled but never connected, a model called calendar_list, got
+// app_unavailable, and had no way to tell a permanently ungranted adapter
+// from a transient outage. Only PersonalAppsSpecs' full catalog feeds the
+// capability registry, which must classify every operation name whether or
+// not it is callable right now.
+func PersonalAppsSpecsFor(allowed []personalapps.Operation) []provider.ToolSpec {
+	return personalAppsSpecsFor(allowed)
+}
+
+func personalAppsSpecsFor(ops []personalapps.Operation) []provider.ToolSpec {
 	specs := make([]provider.ToolSpec, 0, len(ops))
 	for _, op := range ops {
+		if !op.Valid() {
+			continue
+		}
 		specs = append(specs, provider.ToolSpec{
 			Name:        string(op),
 			Description: personalAppsOperationDescription(op),

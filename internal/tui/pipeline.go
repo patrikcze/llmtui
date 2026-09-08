@@ -1276,7 +1276,7 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 		specs = append(specs, tools.SkillSpecs()...)
 	}
 	if m.personalApps != nil {
-		specs = append(specs, tools.PersonalAppsSpecs()...)
+		specs = append(specs, tools.PersonalAppsSpecsFor(m.personalApps.Status().Operations)...)
 	}
 	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
 	return specs

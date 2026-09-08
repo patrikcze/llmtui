@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,23 +52,68 @@ func TestPersonalAppsDisabledLeavesToolAbsent(t *testing.T) {
 	}
 }
 
-func TestPersonalAppsEnabledWiresServiceAndTool(t *testing.T) {
-	m := personalAppsTestModel(t, nil)
+// TestPersonalAppsEnabledOffersOnlyPermittedOperations pins the contract in
+// Scope.AllowedOperations: a disabled or disconnected adapter's operations
+// are absent from the model-visible catalog rather than present and failing.
+// Before this, every operation was offered regardless of connection state,
+// so a model called calendar_list on a never-connected Calendar, got
+// app_unavailable, and could not tell an ungranted adapter from an outage.
+func TestPersonalAppsEnabledOffersOnlyPermittedOperations(t *testing.T) {
+	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
+		c.Calendar.Enabled = true
+		c.Calendar.AllowedCalendars = []string{"cal-1"}
+	})
 	if m.personalApps == nil {
 		t.Fatal("personalApps was not constructed although personal_apps.enabled is true")
 	}
 	if m.toolRunner.PersonalApps == nil {
 		t.Fatal("Runner.PersonalApps was not wired")
 	}
-	found := 0
+
+	offered := offeredPersonalAppsOperations(m)
+	if !slices.Equal(offered, permittedPersonalAppsOperations(m)) {
+		t.Fatalf("offered %v, want exactly the permitted operations %v",
+			offered, permittedPersonalAppsOperations(m))
+	}
+	if slices.Contains(offered, string(personalapps.OpCalendarList)) {
+		t.Fatalf("offered %v includes calendar_list while Calendar is not connected", offered)
+	}
+
+	if err := m.personalApps.Connect(personalapps.AdapterCalendar); err != nil {
+		t.Fatalf("Connect(calendar): %v", err)
+	}
+	connected := offeredPersonalAppsOperations(m)
+	if !slices.Equal(connected, permittedPersonalAppsOperations(m)) {
+		t.Fatalf("after connecting, offered %v, want exactly the permitted operations %v",
+			connected, permittedPersonalAppsOperations(m))
+	}
+	// Calendar operations become reachable only where the platform supports
+	// them at all, so follow Status rather than asserting a fixed set.
+	if want := slices.Contains(permittedPersonalAppsOperations(m), string(personalapps.OpCalendarList)); want &&
+		!slices.Contains(connected, string(personalapps.OpCalendarList)) {
+		t.Fatalf("after connecting, offered %v omits a permitted calendar_list", connected)
+	}
+}
+
+func offeredPersonalAppsOperations(m *Model) []string {
+	out := make([]string, 0, len(personalapps.Operations()))
 	for _, spec := range m.eligibleToolSpecs() {
 		if personalapps.Operation(spec.Name).Valid() {
-			found++
+			out = append(out, spec.Name)
 		}
 	}
-	if want := len(personalapps.Operations()); found != want {
-		t.Fatalf("eligibleToolSpecs has %d personal_apps operations, want all %d", found, want)
+	slices.Sort(out)
+	return out
+}
+
+func permittedPersonalAppsOperations(m *Model) []string {
+	ops := m.personalApps.Status().Operations
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, string(op))
 	}
+	slices.Sort(out)
+	return out
 }
 
 func TestDoctorPersonalAppsExplainsMissingCalendarHelperWithoutLaunchingIt(t *testing.T) {
