@@ -83,7 +83,7 @@ if ! build_calendar_helper; then
 	exit 1
 fi
 cp "$source_dir/Info.plist" "$bundle/Contents/Info.plist"
-codesign --force --sign "${CODESIGN_IDENTITY:--}" --entitlements "$source_dir/Calendar.entitlements" "$bundle"
+codesign --force --sign "${CODESIGN_IDENTITY:--}" --options runtime --entitlements "$source_dir/Calendar.entitlements" "$bundle"
 codesign --verify --deep --strict "$bundle"
 if ! codesign -d --entitlements - "$bundle" 2>&1 | grep -q 'com.apple.security.personal-information.calendars'; then
 	echo "error: Calendar entitlement was not applied to the helper" >&2

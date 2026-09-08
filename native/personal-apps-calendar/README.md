@@ -28,9 +28,10 @@ Sign the completed bundle, not only the executable produced by `swiftc`.
 Bundle-level signing binds `Info.plist` and its
 `com.patrikcze.llmtui.personalapps.calendar` identifier to the executable so
 macOS Calendar privacy controls can identify the helper consistently. The
-Calendar entitlement is required for macOS to offer the full-access prompt.
-The setup command creates an ad-hoc signature suitable for a local source
-build. Set `CODESIGN_IDENTITY` when a local signing identity is required.
+Calendar entitlement and hardened runtime are required for macOS to offer the
+full-access prompt. The setup command creates an ad-hoc hardened signature
+suitable for a local source build. Set `CODESIGN_IDENTITY` when a local signing
+identity is required.
 
 Verify the entitlement actually landed before going further:
 
