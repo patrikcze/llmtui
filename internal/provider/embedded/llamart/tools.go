@@ -224,6 +224,9 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		if err := validateUnrepairedJSONToolBlocks(raw, r.format); err != nil {
 			return nil, nil, err
 		}
+		if r.format == embedded.ToolFormatGemma && gemmaSwallowedKey(parsed) {
+			return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
+		}
 	}
 	calls, err := normalizeToolCalls(parsed, r.tools)
 	if err != nil {
@@ -245,6 +248,38 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		return nil, calls, nil
 	}
 	return []string{tail}, calls, nil
+}
+
+// gemmaSwallowedKeyRE matches the residue yzma's parseGemmaArgs leaves in a
+// value when the model omits that value's closing quote token: the parser
+// runs past the delimiter and consumes the following `key:<quote>` pair —
+// and every pair after it — into the previous value. Reproduced live with a
+// Gemma 4 MoE finetune at temperature 0.8 emitting calendar_events, where
+// "start" absorbed `, end:<|"|>...` and the call arrived looking structurally
+// valid but silently missing "end".
+//
+// It deliberately requires the quote token after the colon, so a genuine
+// bracketed array of quote-wrapped elements ("[<|\"|>a<|\"|>, <|\"|>b<|\"|>]",
+// which repairScalarAsArray recovers) never matches: there the comma is
+// followed by a quote token directly, never by an identifier and a colon.
+var gemmaSwallowedKeyRE = regexp.MustCompile(`,\s*"?[A-Za-z_][A-Za-z0-9_.-]*"?\s*:\s*(?:<\|"\|>|<">|<\|>)`)
+
+// gemmaSwallowedKey reports whether any parsed argument value absorbed a
+// following key/value pair. Such a call must be rejected as malformed rather
+// than dispatched or diagnosed as a missing required argument: the arguments
+// that vanished are not arguments the model declined to send, and telling it
+// one is "missing" invites the identical retry that the repeated-call guard
+// then blocks. Reporting malformed instead routes it into the existing
+// one-shot retry and fenced-protocol fallback.
+func gemmaSwallowedKey(calls []message.ToolCall) bool {
+	for _, call := range calls {
+		for _, value := range call.Function.Arguments {
+			if gemmaSwallowedKeyRE.MatchString(value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseGemmaZeroArgumentCalls handles valid call:name{} output that yzma's

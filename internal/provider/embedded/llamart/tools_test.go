@@ -604,3 +604,68 @@ func TestPrepareToolMessagesAddsGemmaFollowupToClonedUserTurn(t *testing.T) {
 		t.Fatalf("non-Gemma user turn changed: %+v", standard)
 	}
 }
+
+// TestToolOutputRouterGemmaRejectsSwallowedKey reproduces the live
+// calendar_events failure: a Gemma 4 MoE finetune at temperature 0.8 omitted
+// the closing quote token after "start", so yzma's parseGemmaArgs read past
+// the delimiter and absorbed `, end:<|"|>...` into start's value. The call
+// then reached normalizeToolCalls looking structurally valid but missing
+// "end", which reported a missing required argument — sending the model to
+// retry the identical call until the repeated-call guard killed the turn.
+// A provably corrupt parse must be malformed instead, so the router's
+// existing one-shot retry and fenced-protocol fallback can engage.
+func TestToolOutputRouterGemmaRejectsSwallowedKey(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+		`start:<|"|>2026-09-09T00:00:00+02:00, end:<|"|>2026-09-09T23:59:59+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err == nil {
+		t.Fatalf("Finish returned calls %+v, want a malformed tool call error", calls)
+	}
+	if !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("Finish error = %v, want a malformed tool call error", err)
+	}
+}
+
+// TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements guards the
+// swallowed-key check against the shape closest to it: a bracketed array of
+// quote-wrapped elements also puts a comma next to quote tokens, but that
+// comma is followed by a quote token directly rather than by an identifier
+// and a colon, so the check must not fire.
+//
+// It deliberately asserts only that the call is not rejected as malformed.
+// yzma's parseGemmaArgs has no case for "[", so it already truncates this
+// value at the first top-level comma and loses "cal_2" before llmtui sees
+// it — a separate gap in that dependency, unchanged by the check above.
+func TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"properties":{"calendar_ids":{"type":"array","items":{"type":"string"}}}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>]}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want the call to survive the swallowed-key check", calls)
+	}
+}
