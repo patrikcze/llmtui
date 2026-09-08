@@ -16,7 +16,16 @@ Build it explicitly; llmtui never compiles or downloads it at runtime:
 mkdir -p llmtui-personal-apps-calendar.app/Contents/MacOS
 swiftc -parse-as-library -o llmtui-personal-apps-calendar.app/Contents/MacOS/llmtui-personal-apps-calendar main.swift
 cp Info.plist llmtui-personal-apps-calendar.app/Contents/Info.plist
+codesign --force --sign - --entitlements Calendar.entitlements llmtui-personal-apps-calendar.app
 ```
+
+Sign the completed bundle, not only the executable produced by `swiftc`.
+Bundle-level signing binds `Info.plist` and its
+`com.patrikcze.llmtui.personalapps.calendar` identifier to the executable so
+macOS Calendar privacy controls can identify the helper consistently. The
+Calendar entitlement is required for macOS to offer the full-access prompt.
+The command above creates an ad-hoc signature suitable for a local source
+build.
 
 If `swiftc` reports that the active SDK is unsupported by the compiler,
 Command Line Tools and the selected developer directory are from different
@@ -29,8 +38,27 @@ Run `llmtui doctor` or `/doctor personal-apps` first: both checks are passive
 and report a missing, relative, or non-executable path without launching the
 companion or requesting Calendar access.
 
-This source-build helper is unsigned. A release app bundle needs a separately
-reviewed signing/notarization and archive-inclusion process; llmtui does not
-discover or trust helpers from `PATH`, download one, or compile Swift during
-ordinary startup. The companion requests macOS full Calendar access only when
-an explicitly connected Calendar operation first needs data.
+After installing the signed bundle, explicitly run its setup command once
+through LaunchServices:
+
+```sh
+APP="$HOME/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app"
+open -W -n "$APP" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+```
+
+This is the permission-triggering validation step. Grant Full Calendar Access
+when macOS asks. The command prints each calendar's display title and native
+EventKit `id`; put the intended `id` values, not localized titles such as
+`Domácí`, in `personal_apps.calendar.allowed_calendars`. Then restart llmtui,
+run `/personal-apps connect calendar`, and request events.
+
+LaunchServices matters for this first request: invoking the nested executable
+from a hardened terminal or editor makes that parent application responsible
+for the privacy prompt, and macOS can deny the request before showing one.
+
+This source-build helper is only ad-hoc signed. A release app bundle needs a
+separately reviewed Developer ID signing/notarization and archive-inclusion
+process; llmtui does not discover or trust helpers from `PATH`, download one,
+or compile Swift during ordinary startup. Outside the explicit setup command,
+the companion requests macOS full Calendar access only when an explicitly
+connected Calendar operation first needs data.

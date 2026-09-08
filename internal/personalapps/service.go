@@ -621,6 +621,9 @@ func (s *Service) calendarList(ctx context.Context, args CalendarListArgs, scope
 		}
 		views = append(views, CalendarView{ID: h, Name: c.Title, Source: c.Source, Writable: c.Writable, Shared: c.Shared})
 	}
+	if len(calendars) > 0 && len(views) == 0 {
+		return s.fail(OpCalendarList, Errorf(CodeScopeDenied, "configured calendar identifiers did not match any calendar available in EventKit"))
+	}
 	return s.ok(OpCalendarList, map[string]any{"calendars": views}, pageCoverage(len(calendars), len(views)), "", nil)
 }
 

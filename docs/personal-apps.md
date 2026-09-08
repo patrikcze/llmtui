@@ -40,11 +40,12 @@ To find Mail's native account UUIDs, run this read-only one-off command:
 osascript -l JavaScript -e 'Application("Mail").accounts().map(a => a.name() + " => " + a.id())'
 ```
 
-`calendar_list` returns only calendars already in the allowlist. This release
-does not expose a pre-scope calendar-ID discovery command, so obtain the native
-EventKit identifier during the helper's explicit setup/validation process and
-add only the identifiers you intend to expose. Reload config, then explicitly
-run `/personal-apps connect mail` or `/personal-apps connect calendar`.
+`calendar_list` returns only calendars already in the allowlist. To obtain the
+native EventKit identifiers, explicitly run the installed helper with
+`--list-calendars` as described in its source-build README, then add only the
+printed `id` values you intend to expose. Display titles are not identifiers,
+regardless of language. Reload config, then explicitly run
+`/personal-apps connect mail` or `/personal-apps connect calendar`.
 
 ## Calendar companion
 

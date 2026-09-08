@@ -1,5 +1,6 @@
 import EventKit
 import Foundation
+import Darwin
 
 private let protocolVersion = 1
 private let maxFrameBytes = 1024 * 1024
@@ -110,12 +111,27 @@ private enum BridgeFailure: Error {
 
 @main
 private struct PersonalAppsCalendar {
-    static func main() {
+    static func main() async {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--list-calendars"] {
+            do {
+                try await listCalendarsForSetup()
+            } catch {
+                let diagnostic = "calendar helper setup failed: \(String(describing: error))\n"
+                FileHandle.standardError.write(Data(diagnostic.utf8))
+                Darwin.exit(1)
+            }
+            return
+        }
+        guard arguments.isEmpty else {
+            FileHandle.standardError.write(Data("calendar helper: unsupported argument\n".utf8))
+            Darwin.exit(2)
+        }
         do {
             let request = try readRequest()
             let response: Response
             do {
-                response = try handle(request)
+                response = try await handle(request)
             } catch {
                 response = Response(
                     version: protocolVersion,
@@ -132,6 +148,24 @@ private struct PersonalAppsCalendar {
             let diagnostic = "calendar helper failed: \(String(describing: error))\n"
             FileHandle.standardError.write(Data(diagnostic.utf8))
         }
+    }
+
+    // listCalendarsForSetup is an explicit, human-run setup path. It is not
+    // used by llmtui's framed protocol and does not alter the configured
+    // allowlist; it exposes the native identifiers needed to create one.
+    private static func listCalendarsForSetup() async throws {
+        let store = EKEventStore()
+        try await ensureFullAccess(store)
+        let calendars = store.calendars(for: .event).map(calendar).sorted {
+            if $0.source != $1.source { return $0.source < $1.source }
+            if $0.title != $1.title { return $0.title < $1.title }
+            return $0.id < $1.id
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let body = try encoder.encode(calendars)
+        FileHandle.standardOutput.write(body)
+        FileHandle.standardOutput.write(Data([0x0a]))
     }
 
     private static func helperError(_ error: Error) -> HelperError {
@@ -165,9 +199,9 @@ private struct PersonalAppsCalendar {
         return request
     }
 
-    private static func handle(_ request: Request) throws -> Response {
+    private static func handle(_ request: Request) async throws -> Response {
         let store = EKEventStore()
-        try ensureFullAccess(store)
+        try await ensureFullAccess(store)
         var response = Response(version: protocolVersion, request_id: request.request_id, operation: request.operation)
         switch request.operation {
         case "calendars":
@@ -300,25 +334,18 @@ private struct PersonalAppsCalendar {
         }
     }
 
-    private static func ensureFullAccess(_ store: EKEventStore) throws {
+    private static func ensureFullAccess(_ store: EKEventStore) async throws {
         switch EKEventStore.authorizationStatus(for: .event) {
         case .fullAccess:
             return
         case .notDetermined:
-            let semaphore = DispatchSemaphore(value: 0)
-            var granted = false
-            var requestError: Error?
-            Task {
-                do {
-                    granted = try await store.requestFullAccessToEvents()
-                } catch {
-                    requestError = error
+            do {
+                if try await store.requestFullAccessToEvents() {
+                    return
                 }
-                semaphore.signal()
+            } catch {
+                throw BridgeFailure.permissionDenied(error.localizedDescription)
             }
-            semaphore.wait()
-            if let requestError { throw BridgeFailure.permissionDenied(requestError.localizedDescription) }
-            if granted { return }
             throw BridgeFailure.permissionDenied("full calendar access was not granted")
         case .writeOnly, .denied, .restricted:
             throw BridgeFailure.permissionDenied("full calendar access is required")
