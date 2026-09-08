@@ -112,7 +112,11 @@ private enum BridgeFailure: Error {
 @main
 private struct PersonalAppsCalendar {
     static func main() async {
-        let arguments = Array(CommandLine.arguments.dropFirst())
+        // LaunchServices appends a process-serial-number argument when an
+        // app bundle is opened through `open`. It is launch metadata, not a
+        // helper argument, and must not prevent the explicit setup command
+        // from reaching EventKit.
+        let arguments = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
         if arguments == ["--list-calendars"] {
             do {
                 try await listCalendarsForSetup()
