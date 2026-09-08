@@ -1,3 +1,4 @@
+import AppKit
 import EventKit
 import Foundation
 import Darwin
@@ -119,6 +120,7 @@ private struct PersonalAppsCalendar {
         let arguments = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
         if arguments == ["--list-calendars"] {
             do {
+                prepareForPermissionPrompt()
                 try await listCalendarsForSetup()
             } catch {
                 let diagnostic = "calendar helper setup failed: \(String(describing: error))\n"
@@ -152,6 +154,15 @@ private struct PersonalAppsCalendar {
             let diagnostic = "calendar helper failed: \(String(describing: error))\n"
             FileHandle.standardError.write(Data(diagnostic.utf8))
         }
+    }
+
+    // EventKit presents its full-access prompt through the current macOS GUI
+    // session. The companion is a Dock-less agent, so it initializes an
+    // AppKit application context explicitly before the human-run setup path
+    // requests that prompt.
+    private static func prepareForPermissionPrompt() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
     }
 
     // listCalendarsForSetup is an explicit, human-run setup path. It is not

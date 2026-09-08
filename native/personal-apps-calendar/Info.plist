@@ -10,7 +10,7 @@
   <string>llmtui-personal-apps-calendar</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
-  <key>LSBackgroundOnly</key>
+  <key>LSUIElement</key>
   <true/>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>llmtui reads the calendars you explicitly allow to show your agenda and calculate local free time.</string>
