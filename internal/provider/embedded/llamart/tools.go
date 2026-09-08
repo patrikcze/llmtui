@@ -224,8 +224,11 @@ func (r *toolOutputRouter) Finish() ([]string, []provider.ToolCall, error) {
 		if err := validateUnrepairedJSONToolBlocks(raw, r.format); err != nil {
 			return nil, nil, err
 		}
-		if r.format == embedded.ToolFormatGemma && gemmaSwallowedKey(parsed) {
-			return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
+		if r.format == embedded.ToolFormatGemma {
+			parsed = repairGemmaBracketSplitArgs(raw, parsed)
+			if gemmaSwallowedKey(parsed) || gemmaImpossibleKey(parsed) {
+				return nil, nil, fmt.Errorf("model emitted a recognizable but malformed %s tool call", r.format)
+			}
 		}
 	}
 	calls, err := normalizeToolCalls(parsed, r.tools)
@@ -280,6 +283,240 @@ func gemmaSwallowedKey(calls []message.ToolCall) bool {
 		}
 	}
 	return false
+}
+
+// gemmaArgumentKeyRE matches a key a Gemma call can actually name: the same
+// identifier shape yzma's own key detection accepts, anchored. A parsed key
+// that fails it did not come from the model — it is parser residue.
+var gemmaArgumentKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// gemmaImpossibleKey reports whether any parsed call carries an argument key
+// no model could have emitted. Like gemmaSwallowedKey, such a call must be
+// reported malformed rather than dispatched or diagnosed as a missing
+// argument: the real key the residue absorbed is not one the model declined
+// to send, so "missing" invites the identical retry the repeated-call guard
+// then ends the turn on.
+func gemmaImpossibleKey(calls []message.ToolCall) bool {
+	for _, call := range calls {
+		for key := range call.Function.Arguments {
+			if !gemmaArgumentKeyRE.MatchString(key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// repairGemmaBracketSplitArgs recovers the arguments yzma's parseGemmaArgs
+// loses when a value is a bracketed array with more than one element. That
+// parser has no case for "[" at all, so its bare-value fallback reads to the
+// first top-level comma — which lands inside the array. The remainder of the
+// array, plus the key that follows it, is then read as a single nonsense key,
+// and the following argument silently disappears.
+//
+// Reproduced live on calendar_events against three calendars: the model
+// emitted a correct call:calendar_events{calendar_ids:[<|"|>a<|"|>,
+// <|"|>b<|"|>], start:…, end:…} and llmtui saw "end" as missing, so the model
+// retried the identical call until the repeated-call guard ended the turn.
+//
+// The repair re-parses only the calls yzma provably mangled (detected by
+// gemmaImpossibleKey), from the same raw text, with a scanner that treats
+// "[…]" as one balanced value. Everything yzma parsed cleanly is left exactly
+// as it was. A re-parse that cannot produce well-formed keys is discarded, so
+// the malformed path still catches genuinely corrupt output.
+func repairGemmaBracketSplitArgs(raw string, calls []message.ToolCall) []message.ToolCall {
+	blocks := gemmaArgumentBlocks(raw)
+	if len(blocks) == 0 {
+		return calls
+	}
+	used := make(map[int]bool, len(blocks))
+	repaired := append([]message.ToolCall(nil), calls...)
+	for index, call := range repaired {
+		if !gemmaBracketSplitSuspect(call) {
+			continue
+		}
+		for blockIndex, block := range blocks {
+			if used[blockIndex] || block.name != call.Function.Name {
+				continue
+			}
+			used[blockIndex] = true
+			arguments := parseGemmaBracketAwareArgs(block.arguments)
+			if len(arguments) == 0 {
+				break
+			}
+			repaired[index].Function.Arguments = arguments
+			break
+		}
+	}
+	return repaired
+}
+
+// gemmaBracketSplitSuspect reports whether a parsed call carries the
+// signature of that gap: parser residue in a key, or a value that still
+// begins with "[" because the bare-value fallback stopped at the array's
+// first inner comma.
+func gemmaBracketSplitSuspect(call message.ToolCall) bool {
+	for key, value := range call.Function.Arguments {
+		if !gemmaArgumentKeyRE.MatchString(key) {
+			return true
+		}
+		if strings.HasPrefix(strings.TrimSpace(value), "[") {
+			return true
+		}
+	}
+	return false
+}
+
+type gemmaArgumentBlock struct {
+	name      string
+	arguments string
+}
+
+// gemmaArgumentBlocks locates every call:NAME{…} block in raw, in order,
+// pairing each name with its balanced brace contents.
+func gemmaArgumentBlocks(raw string) []gemmaArgumentBlock {
+	var blocks []gemmaArgumentBlock
+	remaining := raw
+	for {
+		index := strings.Index(remaining, "call:")
+		if index < 0 {
+			return blocks
+		}
+		remaining = remaining[index+len("call:"):]
+		brace := strings.Index(remaining, "{")
+		if brace < 0 {
+			return blocks
+		}
+		name := strings.TrimSpace(remaining[:brace])
+		remaining = remaining[brace:]
+		end := gemmaBalancedEnd(remaining, '{', '}')
+		if end < 0 {
+			blocks = append(blocks, gemmaArgumentBlock{name: name, arguments: remaining[1:]})
+			return blocks
+		}
+		blocks = append(blocks, gemmaArgumentBlock{name: name, arguments: remaining[1:end]})
+		remaining = remaining[end+1:]
+	}
+}
+
+// gemmaBalancedEnd returns the index of the delimiter closing the one at
+// s[0], skipping over quote-token pairs so a delimiter inside a value never
+// closes the block. It returns -1 when the block is unterminated.
+func gemmaBalancedEnd(s string, open, close byte) int {
+	if len(s) == 0 || s[0] != open {
+		return -1
+	}
+	depth := 0
+	for index := 0; index < len(s); {
+		if width := gemmaQuotedValueWidth(s[index:]); width > 0 {
+			index += width
+			continue
+		}
+		switch s[index] {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return index
+			}
+		}
+		index++
+	}
+	return -1
+}
+
+// gemmaQuotedValueWidth returns the byte length of a complete quote-token
+// delimited value at the start of s, or 0 when s does not start with one.
+func gemmaQuotedValueWidth(s string) int {
+	for _, token := range gemmaQuoteTokens {
+		if !strings.HasPrefix(s, token) {
+			continue
+		}
+		closing := strings.Index(s[len(token):], token)
+		if closing < 0 {
+			return 0
+		}
+		return len(token) + closing + len(token)
+	}
+	return 0
+}
+
+// parseGemmaBracketAwareArgs parses one Gemma argument block the way
+// parseGemmaArgs does, except that "[…]" and "{…}" values are kept whole as
+// one balanced value instead of being cut at their first inner comma. The
+// bracketed result is what repairScalarAsArray already knows how to turn into
+// a real array. It returns nil the moment the block stops looking like
+// key:value pairs, so a hopeless parse is never mistaken for a repair.
+func parseGemmaBracketAwareArgs(raw string) map[string]string {
+	arguments := make(map[string]string)
+	remaining := raw
+	for {
+		remaining = strings.TrimLeft(remaining, ", \t\r\n")
+		if remaining == "" {
+			return arguments
+		}
+		colon := strings.Index(remaining, ":")
+		if colon < 0 {
+			return nil
+		}
+		key := strings.Trim(strings.TrimSpace(remaining[:colon]), `"`)
+		if !gemmaArgumentKeyRE.MatchString(key) {
+			return nil
+		}
+		remaining = strings.TrimSpace(remaining[colon+1:])
+
+		if width := gemmaQuotedValueWidth(remaining); width > 0 {
+			token := gemmaQuoteTokenPrefix(remaining)
+			arguments[key] = remaining[len(token) : width-len(token)]
+			remaining = remaining[width:]
+			continue
+		}
+		if token := gemmaQuoteTokenPrefix(remaining); token != "" {
+			// Unterminated value: keep the residue so the swallowed-key
+			// check still sees the same corruption it does today.
+			arguments[key] = remaining[len(token):]
+			return arguments
+		}
+		if remaining[0] == '[' || remaining[0] == '{' {
+			open, close := byte('['), byte(']')
+			if remaining[0] == '{' {
+				open, close = '{', '}'
+			}
+			end := gemmaBalancedEnd(remaining, open, close)
+			if end < 0 {
+				return nil
+			}
+			arguments[key] = remaining[:end+1]
+			remaining = remaining[end+1:]
+			continue
+		}
+		if remaining[0] == '"' {
+			end := strings.Index(remaining[1:], `"`)
+			if end < 0 {
+				return nil
+			}
+			arguments[key] = remaining[1 : end+1]
+			remaining = remaining[end+2:]
+			continue
+		}
+		end := strings.IndexAny(remaining, ",}")
+		if end < 0 {
+			arguments[key] = strings.TrimSpace(remaining)
+			return arguments
+		}
+		arguments[key] = strings.TrimSpace(remaining[:end])
+		remaining = remaining[end:]
+	}
+}
+
+func gemmaQuoteTokenPrefix(s string) string {
+	for _, token := range gemmaQuoteTokens {
+		if strings.HasPrefix(s, token) {
+			return token
+		}
+	}
+	return ""
 }
 
 // parseGemmaZeroArgumentCalls handles valid call:name{} output that yzma's

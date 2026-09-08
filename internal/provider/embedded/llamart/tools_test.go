@@ -647,10 +647,9 @@ func TestToolOutputRouterGemmaRejectsSwallowedKey(t *testing.T) {
 // comma is followed by a quote token directly rather than by an identifier
 // and a colon, so the check must not fire.
 //
-// It deliberately asserts only that the call is not rejected as malformed.
-// yzma's parseGemmaArgs has no case for "[", so it already truncates this
-// value at the first top-level comma and loses "cal_2" before llmtui sees
-// it — a separate gap in that dependency, unchanged by the check above.
+// yzma's parseGemmaArgs has no case for "[", so it truncates this value at
+// the first top-level comma and loses "cal_2"; repairGemmaBracketSplitArgs
+// re-parses the block and both elements must survive.
 func TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements(t *testing.T) {
 	tool := provider.ToolSpec{
 		Name: "calendar_events",
@@ -667,5 +666,70 @@ func TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements(t *testing
 	}
 	if len(calls) != 1 {
 		t.Fatalf("calls = %+v, want the call to survive the swallowed-key check", calls)
+	}
+	if calls[0].Arguments != `{"calendar_ids":["cal_1","cal_2"]}` {
+		t.Fatalf("arguments = %s, want both array elements", calls[0].Arguments)
+	}
+}
+
+// TestToolOutputRouterGemmaRepairsBracketSplitArguments reproduces the live
+// calendar_events failure against three calendars: the model emitted a
+// correct call, but yzma's parseGemmaArgs has no case for "[", so it cut
+// calendar_ids at the array's first inner comma and folded the rest of the
+// array plus the following key into one nonsense key — making "end" look
+// like an argument the model never sent. Every retry was told the same, so
+// the repeated-call guard ended the turn.
+func TestToolOutputRouterGemmaRepairsBracketSplitArguments(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+		`start:<|"|>2026-09-09T00:00:00+02:00<|"|>, end:<|"|>2026-09-09T23:59:59+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one call", calls)
+	}
+	if calls[0].ArgumentsError != "" {
+		t.Fatalf("ArgumentsError = %q, want the call to be dispatchable", calls[0].ArgumentsError)
+	}
+	want := `{"calendar_ids":["cal_1","cal_2","cal_3"],"end":"2026-09-09T23:59:59+02:00",` +
+		`"start":"2026-09-09T00:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[0].Arguments != want {
+		t.Fatalf("Arguments = %s, want %s", calls[0].Arguments, want)
+	}
+}
+
+// TestToolOutputRouterGemmaRejectsImpossibleKey covers the residue shapes the
+// bracket-aware re-parse cannot recover: whatever survives must never be
+// dispatched or reported as a missing argument, since the absorbed key is not
+// one the model declined to send.
+func TestToolOutputRouterGemmaRejectsImpossibleKey(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name:       "calendar_events",
+		Parameters: []byte(`{"type":"object","properties":{"start":{"type":"string"}}}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{<|"|>x<|"|>], start:<|"|>2026-09-09T00:00:00+02:00<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err == nil {
+		t.Fatalf("Finish returned calls %+v, want a malformed tool call error", calls)
+	}
+	if !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("Finish error = %v, want a malformed tool call error", err)
 	}
 }

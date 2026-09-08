@@ -348,7 +348,11 @@ advertise parallel tool calls in one assistant response.
   determines reliability—configuration can enable a protocol, but cannot make
   a model good at tool use. Gemma's `call:name{}` form is accepted for tools
   whose JSON schema permits an empty object (for example pathless `list_dir`);
-  missing required arguments remain errors. A Gemma-only prompt hint asks the
+  missing required arguments remain errors. Gemma bracketed array arguments
+  (`calendar_ids:[<|"|>a<|"|>, <|"|>b<|"|>]`) are re-parsed by llmtui: the
+  upstream parser has no `[` case and would otherwise drop every element after
+  the first and silently swallow the next argument's key. A Gemma-only prompt
+  hint asks the
   model to answer after tool results and is applied to a cloned request—it is
   not written into the conversation history.
 - `/think on|off|auto` and `chat.reasoning` are passed to the GGUF Jinja
