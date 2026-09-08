@@ -27,6 +27,16 @@ Calendar entitlement is required for macOS to offer the full-access prompt.
 The command above creates an ad-hoc signature suitable for a local source
 build.
 
+Verify the entitlement actually landed before going further:
+
+```sh
+codesign -dv --entitlements - llmtui-personal-apps-calendar.app
+```
+
+The output must list `com.apple.security.personal-information.calendars`. A
+bundle signed without `--entitlements` still reports a valid ad-hoc signature,
+but macOS denies the access request before displaying a prompt.
+
 If `swiftc` reports that the active SDK is unsupported by the compiler,
 Command Line Tools and the selected developer directory are from different
 Xcode releases. Install matching tools or select a matching full Xcode
@@ -47,10 +57,32 @@ open -W -n "$APP" --stdout /dev/stdout --stderr /dev/stderr --args --list-calend
 ```
 
 This is the permission-triggering validation step. Grant Full Calendar Access
-when macOS asks. The command prints each calendar's display title and native
-EventKit `id`; put the intended `id` values, not localized titles such as
-`Domácí`, in `personal_apps.calendar.allowed_calendars`. Then restart llmtui,
-run `/personal-apps connect calendar`, and request events.
+when macOS asks. The command prints a JSON array in which each entry carries
+the calendar's localized `title` and its native EventKit `id`:
+
+```json
+[
+  {
+    "id" : "35284761-30D3-418F-A1D7-7C67DC3417A1",
+    "shared" : false,
+    "source" : "US ICLOUD",
+    "title" : "Domácí",
+    "writable" : true
+  }
+]
+```
+
+Put the intended `id` values, not localized titles such as `Domácí`, in
+`personal_apps.calendar.allowed_calendars`. Then restart llmtui, run
+`/personal-apps connect calendar`, and request events.
+
+If no prompt appears and the command reports that access was not granted, the
+bundle identifier may hold a cached decision from an earlier build that was
+signed without the entitlement. Clear it and rerun the command above:
+
+```sh
+tccutil reset Calendar com.patrikcze.llmtui.personalapps.calendar
+```
 
 LaunchServices matters for this first request: invoking the nested executable
 from a hardened terminal or editor makes that parent application responsible

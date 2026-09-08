@@ -40,12 +40,42 @@ To find Mail's native account UUIDs, run this read-only one-off command:
 osascript -l JavaScript -e 'Application("Mail").accounts().map(a => a.name() + " => " + a.id())'
 ```
 
-`calendar_list` returns only calendars already in the allowlist. To obtain the
-native EventKit identifiers, explicitly run the installed helper with
-`--list-calendars` as described in its source-build README, then add only the
-printed `id` values you intend to expose. Display titles are not identifiers,
-regardless of language. Reload config, then explicitly run
-`/personal-apps connect mail` or `/personal-apps connect calendar`.
+`calendar_list` returns only calendars already in the allowlist, so it cannot
+be used to discover identifiers. To find Calendar's native EventKit
+identifiers, explicitly run the installed companion's setup command once:
+
+```sh
+APP="$HOME/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app"
+open -W -n "$APP" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+```
+
+Unlike the Mail command above, this one is not read-only in the privacy sense:
+it is the step that triggers the macOS prompt. Grant **Full Calendar Access**
+when asked. It then prints a JSON array with one entry per calendar:
+
+```json
+[
+  {
+    "id" : "35284761-30D3-418F-A1D7-7C67DC3417A1",
+    "shared" : false,
+    "source" : "US ICLOUD",
+    "title" : "Domácí",
+    "writable" : true
+  }
+]
+```
+
+Copy the `id` values you intend to expose into `allowed_calendars`. Use the
+`id`, never the `title`: display titles are localized (`Domácí`, `Kalendář`)
+and match nothing. A configured identifier that matches no available calendar
+is reported as `scope_denied` rather than returning an empty list.
+
+Run it through `open` rather than invoking the nested executable directly. A
+direct call from a terminal or editor makes that parent application responsible
+for the privacy prompt, and macOS can deny the request before showing one.
+
+Reload config, then explicitly run `/personal-apps connect mail` or
+`/personal-apps connect calendar`.
 
 ## Calendar companion
 
