@@ -321,6 +321,7 @@ func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
 		"mail_move", "mail_set_read", "mail_set_flag", "mail_save_draft",
 		"calendar_create_event", "calendar_update_event",
 		"never invent",
+		"not supported",
 	} {
 		if !strings.Contains(PersonalAppsInstructions, want) {
 			t.Errorf("PersonalAppsInstructions does not mention %q", want)
