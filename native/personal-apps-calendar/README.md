@@ -19,7 +19,7 @@ make calendar-helper-setup
 This builds in a temporary directory under Application Support rather than in
 the project, signs the completed bundle, and installs it to
 `~/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app`.
-It then opens the installed bundle, requests Full Calendar Access, and prints
+It then runs the installed bundle, requests Full Calendar Access, and prints
 the native calendar IDs needed in the configuration. Use
 `make calendar-helper-install` when installation is all that is wanted, or
 `make calendar-helper-list` to repeat just the permission/ID step.
@@ -61,12 +61,10 @@ Run `llmtui doctor` or `/doctor personal-apps` first: both checks are passive
 and report a missing, relative, or non-executable path without launching the
 companion or requesting Calendar access.
 
-After installing the signed bundle, explicitly run its setup command once
-through LaunchServices:
+After installing the signed bundle, explicitly run its setup command once:
 
 ```sh
-APP="$HOME/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app"
-open -W -n "$APP" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+make calendar-helper-list
 ```
 
 This is the permission-triggering validation step. Grant Full Calendar Access
@@ -97,9 +95,11 @@ signed without the entitlement. Clear it and rerun the command above:
 tccutil reset Calendar com.patrikcze.llmtui.personalapps.calendar
 ```
 
-LaunchServices matters for this first request: invoking the nested executable
-from a hardened terminal or editor makes that parent application responsible
-for the privacy prompt, and macOS can deny the request before showing one.
+macOS attributes a terminal-launched Calendar request to the terminal or host
+application that started it. Run setup from the same terminal used to launch
+`llmtui`; if it reports that access is denied, grant that terminal **Full
+Calendar Access** in System Settings, then retry. This is a macOS privacy
+decision, not a different helper path to configure.
 
 This source-build helper is only ad-hoc signed. A release app bundle needs a
 separately reviewed Developer ID signing/notarization and archive-inclusion

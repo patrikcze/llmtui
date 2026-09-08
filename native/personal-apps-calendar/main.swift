@@ -359,11 +359,15 @@ private struct PersonalAppsCalendar {
                     return
                 }
             } catch {
-                throw BridgeFailure.permissionDenied(error.localizedDescription)
+                throw BridgeFailure.permissionDenied("macOS could not present the Full Calendar Access request: \(error.localizedDescription)")
             }
-            throw BridgeFailure.permissionDenied("full calendar access was not granted")
-        case .writeOnly, .denied, .restricted:
-            throw BridgeFailure.permissionDenied("full calendar access is required")
+            throw BridgeFailure.permissionDenied("macOS declined Full Calendar Access")
+        case .writeOnly:
+            throw BridgeFailure.permissionDenied("write-only Calendar Access is insufficient; grant Full Calendar Access")
+        case .denied:
+            throw BridgeFailure.permissionDenied("Full Calendar Access is denied for the process that launched this helper")
+        case .restricted:
+            throw BridgeFailure.permissionDenied("Full Calendar Access is restricted by macOS policy")
         @unknown default:
             throw BridgeFailure.permissionDenied("calendar authorization is unavailable")
         }

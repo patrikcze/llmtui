@@ -83,12 +83,20 @@ if ! build_calendar_helper; then
 	exit 1
 fi
 cp "$source_dir/Info.plist" "$bundle/Contents/Info.plist"
+for key in CFBundleIdentifier CFBundleExecutable CFBundlePackageType CFBundleShortVersionString CFBundleVersion NSPrincipalClass; do
+	if ! /usr/libexec/PlistBuddy -c "Print :$key" "$bundle/Contents/Info.plist" >/dev/null 2>&1; then
+		echo "error: Calendar helper Info.plist is missing required $key" >&2
+		exit 1
+	fi
+done
 codesign --force --sign "${CODESIGN_IDENTITY:--}" --options runtime --entitlements "$source_dir/Calendar.entitlements" "$bundle"
 codesign --verify --deep --strict "$bundle"
-if ! codesign -d --entitlements - "$bundle" 2>&1 | grep -q 'com.apple.security.personal-information.calendars'; then
-	echo "error: Calendar entitlement was not applied to the helper" >&2
-	exit 1
-fi
+for entitlement in com.apple.security.app-sandbox com.apple.security.personal-information.calendars; do
+	if ! codesign -d --entitlements - "$bundle" 2>&1 | grep -q "$entitlement"; then
+		echo "error: $entitlement entitlement was not applied to the helper" >&2
+		exit 1
+	fi
+done
 
 if [ -e "$destination" ] || [ -L "$destination" ]; then
 	mv "$destination" "$backup"

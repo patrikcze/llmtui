@@ -70,9 +70,11 @@ Copy the `id` values you intend to expose into `allowed_calendars`. Use the
 and match nothing. A configured identifier that matches no available calendar
 is reported as `scope_denied` rather than returning an empty list.
 
-Run it through `open` rather than invoking the nested executable directly. A
-direct call from a terminal or editor makes that parent application responsible
-for the privacy prompt, and macOS can deny the request before showing one.
+macOS attributes a terminal-launched Calendar request to the terminal or host
+application that started it. Run setup and `llmtui` from the same terminal. If
+setup reports `permission_denied`, grant that terminal **Full Calendar Access**
+in System Settings, then retry; changing `calendar.helper_path` does not change
+this macOS privacy decision.
 
 Reload config, then explicitly run `/personal-apps connect mail` or
 `/personal-apps connect calendar`.

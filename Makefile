@@ -9,6 +9,7 @@ BINDIR  ?= $(PREFIX)/bin
 INSTALL_CMD ?= install
 CALENDAR_HELPERS_DIR ?= $(HOME)/Library/Application Support/llmtui/helpers
 CALENDAR_HELPER_APP := $(CALENDAR_HELPERS_DIR)/llmtui-personal-apps-calendar.app
+CALENDAR_HELPER_EXECUTABLE := $(CALENDAR_HELPER_APP)/Contents/MacOS/llmtui-personal-apps-calendar
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -93,7 +94,7 @@ calendar-helper-install:
 .PHONY: calendar-helper-list
 calendar-helper-list:
 	@test -d "$(CALENDAR_HELPER_APP)" || { echo "Calendar helper is not installed; run 'make calendar-helper-install' first." >&2; exit 1; }
-	open -W -n "$(CALENDAR_HELPER_APP)" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+	"$(CALENDAR_HELPER_EXECUTABLE)" --list-calendars
 
 ## calendar-helper-setup: install the helper, request access, and list Calendar identifiers
 .PHONY: calendar-helper-setup
