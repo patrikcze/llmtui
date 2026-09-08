@@ -10,37 +10,43 @@ non-recurring `calendar_create_event` and `calendar_update_event` operations.
 It never sends invitations, changes attendees, edits recurrence, or starts a
 background agent.
 
-Build it explicitly; llmtui never compiles or downloads it at runtime:
+From a source checkout, install it with one explicit setup command:
 
 ```sh
-mkdir -p llmtui-personal-apps-calendar.app/Contents/MacOS
-swiftc -parse-as-library -o llmtui-personal-apps-calendar.app/Contents/MacOS/llmtui-personal-apps-calendar main.swift
-cp Info.plist llmtui-personal-apps-calendar.app/Contents/Info.plist
-codesign --force --sign - --entitlements Calendar.entitlements llmtui-personal-apps-calendar.app
+make calendar-helper-setup
 ```
+
+This builds in a temporary directory under Application Support rather than in
+the project, signs the completed bundle, and installs it to
+`~/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app`.
+It then opens the installed bundle, requests Full Calendar Access, and prints
+the native calendar IDs needed in the configuration. Use
+`make calendar-helper-install` when installation is all that is wanted, or
+`make calendar-helper-list` to repeat just the permission/ID step.
 
 Sign the completed bundle, not only the executable produced by `swiftc`.
 Bundle-level signing binds `Info.plist` and its
 `com.patrikcze.llmtui.personalapps.calendar` identifier to the executable so
 macOS Calendar privacy controls can identify the helper consistently. The
 Calendar entitlement is required for macOS to offer the full-access prompt.
-The command above creates an ad-hoc signature suitable for a local source
-build.
+The setup command creates an ad-hoc signature suitable for a local source
+build. Set `CODESIGN_IDENTITY` when a local signing identity is required.
 
 Verify the entitlement actually landed before going further:
 
 ```sh
-codesign -dv --entitlements - llmtui-personal-apps-calendar.app
+codesign -dv --entitlements - "$HOME/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app"
 ```
 
 The output must list `com.apple.security.personal-information.calendars`. A
 bundle signed without `--entitlements` still reports a valid ad-hoc signature,
 but macOS denies the access request before displaying a prompt.
 
-If `swiftc` reports that the active SDK is unsupported by the compiler,
-Command Line Tools and the selected developer directory are from different
-Xcode releases. Install matching tools or select a matching full Xcode
-developer directory before building; llmtui cannot repair a system toolchain.
+If the setup command reports that the active SDK is unsupported by the
+compiler, Command Line Tools and the selected developer directory are from
+different Xcode releases. Install matching tools or select a matching full
+Xcode developer directory before rerunning the command; llmtui cannot repair
+a system toolchain.
 
 The caller must configure the resulting **absolute** executable path in
 `personal_apps.calendar.helper_path` to the executable inside that bundle.

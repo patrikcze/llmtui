@@ -156,6 +156,22 @@ or remove that managed installation. Linux amd64/arm64 and Windows amd64 can
 install the pinned Vulkan variant with `llmtui runtime install --backend
 vulkan`.
 
+### Apple Mail and Calendar (macOS)
+
+Mail and Calendar are opt-in personal-data integrations. From a source
+checkout, install the Calendar companion, request Full Calendar Access, and
+print the identifiers required for a narrow allowlist with:
+
+```bash
+make calendar-helper-setup
+```
+
+The helper is built and installed under `~/Library/Application Support/llmtui`,
+not in the project directory. Configure its printed executable path and the
+calendar IDs, then explicitly connect it in chat. See
+[Apple Mail and Calendar](docs/personal-apps.md) for the configuration and
+approval flow.
+
 Release archives also include starter skills and plugins under
 `examples/skills` and `examples/plugins`. They remain inert by default: add
 those directories to `skills.paths` / `plugins.paths`, or copy individual

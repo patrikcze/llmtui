@@ -7,6 +7,8 @@ DIST    := dist
 PREFIX  ?= $(HOME)/.local
 BINDIR  ?= $(PREFIX)/bin
 INSTALL_CMD ?= install
+CALENDAR_HELPERS_DIR ?= $(HOME)/Library/Application Support/llmtui/helpers
+CALENDAR_HELPER_APP := $(CALENDAR_HELPERS_DIR)/llmtui-personal-apps-calendar.app
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -81,6 +83,23 @@ install: build
 	$(INSTALL_CMD) -d $(DESTDIR)$(BINDIR)
 	$(INSTALL_CMD) -m 0755 $(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
 	@echo "installed $(BINARY) to $(DESTDIR)$(BINDIR)"
+
+## calendar-helper-install: build, sign, and install the macOS Calendar helper
+.PHONY: calendar-helper-install
+calendar-helper-install:
+	sh native/personal-apps-calendar/install.sh "$(CALENDAR_HELPER_APP)"
+
+## calendar-helper-list: request access and print native Calendar identifiers
+.PHONY: calendar-helper-list
+calendar-helper-list:
+	@test -d "$(CALENDAR_HELPER_APP)" || { echo "Calendar helper is not installed; run 'make calendar-helper-install' first." >&2; exit 1; }
+	open -W -n "$(CALENDAR_HELPER_APP)" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+
+## calendar-helper-setup: install the helper, request access, and list Calendar identifiers
+.PHONY: calendar-helper-setup
+calendar-helper-setup:
+	@$(MAKE) --no-print-directory calendar-helper-install
+	@$(MAKE) --no-print-directory calendar-helper-list
 
 ## fmt: format all Go sources
 .PHONY: fmt

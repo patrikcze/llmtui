@@ -41,12 +41,12 @@ osascript -l JavaScript -e 'Application("Mail").accounts().map(a => a.name() + "
 ```
 
 `calendar_list` returns only calendars already in the allowlist, so it cannot
-be used to discover identifiers. To find Calendar's native EventKit
-identifiers, explicitly run the installed companion's setup command once:
+be used to discover identifiers. From a source checkout, install the
+companion, request Calendar access, and print its native EventKit identifiers
+with one explicit command:
 
 ```sh
-APP="$HOME/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app"
-open -W -n "$APP" --stdout /dev/stdout --stderr /dev/stderr --args --list-calendars
+make calendar-helper-setup
 ```
 
 Unlike the Mail command above, this one is not read-only in the privacy sense:
@@ -80,8 +80,11 @@ Reload config, then explicitly run `/personal-apps connect mail` or
 ## Calendar companion
 
 The Calendar integration is unavailable until `calendar.helper_path` names an
-absolute executable inside a separately built or installed EventKit app
-bundle. The source-build instructions and required `Info.plist` are in
+absolute executable inside the installed EventKit app bundle. The setup
+command installs the default bundle to
+`~/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app`;
+set `helper_path` to its executable inside `Contents/MacOS`. The source-build
+instructions and required `Info.plist` are in
 [`native/personal-apps-calendar/README.md`](../native/personal-apps-calendar/README.md).
 
 Use either `llmtui doctor` or `/doctor personal-apps` before connecting. These
