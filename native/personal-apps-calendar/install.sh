@@ -52,14 +52,9 @@ if ! "$swiftc" -parse-as-library -module-cache-path "$stage/module-cache" \
 	-o "$bundle/Contents/MacOS/$executable_name" "$source_dir/main.swift"; then
 	developer_dir=$(xcode-select -p 2>/dev/null || printf '%s' 'unknown')
 	echo "error: Swift could not compile the Calendar helper (active developer directory: $developer_dir)." >&2
-	if [ ! -d /Applications/Xcode.app/Contents/Developer ]; then
-		echo "       No full Xcode is installed at /Applications/Xcode.app." >&2
-		echo "       Install matching Command Line Tools in System Settings > General > Software Update," >&2
-		echo "       or install Xcode from the App Store and rerun this command." >&2
-	else
-		echo "       Select the matching Xcode developer directory, then rerun this command:" >&2
-		echo "       sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer" >&2
-	fi
+	echo "       /Library/Developer/CommandLineTools is the correct directory for Command Line Tools." >&2
+	echo "       Update or reinstall Command Line Tools so its Swift compiler and macOS SDK are from" >&2
+	echo "       the same release, then rerun this command. No xcode-select switch is needed." >&2
 	exit 1
 fi
 cp "$source_dir/Info.plist" "$bundle/Contents/Info.plist"
