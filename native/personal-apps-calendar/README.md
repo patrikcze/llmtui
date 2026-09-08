@@ -44,9 +44,11 @@ but macOS denies the access request before displaying a prompt.
 
 If the setup command reports that the active SDK is unsupported by the
 compiler, Command Line Tools and the selected developer directory are from
-different Xcode releases. Install matching tools or select a matching full
-Xcode developer directory before rerunning the command; llmtui cannot repair
-a system toolchain.
+different Xcode releases. Install matching Command Line Tools through macOS
+Software Update, or install a matching full Xcode. If full Xcode is installed
+at `/Applications/Xcode.app`, select it with
+`sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`
+before rerunning the command; llmtui cannot repair a system toolchain.
 
 The caller must configure the resulting **absolute** executable path in
 `personal_apps.calendar.helper_path` to the executable inside that bundle.
