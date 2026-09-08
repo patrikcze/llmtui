@@ -27,7 +27,7 @@ esac
 if [ -n "${SWIFTC:-}" ]; then
 	swiftc=$SWIFTC
 else
-	if ! swiftc=$(xcrun --find swiftc 2>/dev/null); then
+	if ! swiftc=$(command -v swiftc 2>/dev/null); then
 		echo "error: Swift compiler not found; install Xcode or Command Line Tools" >&2
 		exit 1
 	fi
@@ -48,8 +48,33 @@ trap cleanup EXIT HUP INT TERM
 bundle="$stage/$app_name"
 mkdir -p "$bundle/Contents/MacOS" "$stage/module-cache"
 
-if ! "$swiftc" -parse-as-library -module-cache-path "$stage/module-cache" \
-	-o "$bundle/Contents/MacOS/$executable_name" "$source_dir/main.swift"; then
+swift_target=""
+sdk_path=$(xcrun --show-sdk-path 2>/dev/null || true)
+swift_module_dir="$sdk_path/usr/lib/swift/Swift.swiftmodule"
+if [ "$(uname -m)" = "arm64" ] && \
+	[ ! -f "$swift_module_dir/arm64-apple-macos.swiftinterface" ] && \
+	[ -f "$swift_module_dir/arm64e-apple-macos.swiftinterface" ]; then
+	# Some macOS 26 Command Line Tools SDKs ship only an arm64e Swift
+	# interface. Target that available interface rather than letting swiftc
+	# fail while it looks for a missing arm64 one.
+	macos_major=$(sw_vers -productVersion | cut -d. -f1)
+	swift_target="arm64e-apple-macosx$macos_major.0"
+	echo "using Swift target $swift_target"
+fi
+
+if [ -n "$swift_target" ]; then
+	build_calendar_helper() {
+		"$swiftc" -parse-as-library -target "$swift_target" -module-cache-path "$stage/module-cache" \
+			-o "$bundle/Contents/MacOS/$executable_name" "$source_dir/main.swift"
+	}
+else
+	build_calendar_helper() {
+		"$swiftc" -parse-as-library -module-cache-path "$stage/module-cache" \
+			-o "$bundle/Contents/MacOS/$executable_name" "$source_dir/main.swift"
+	}
+fi
+
+if ! build_calendar_helper; then
 	developer_dir=$(xcode-select -p 2>/dev/null || printf '%s' 'unknown')
 	echo "error: Swift could not compile the Calendar helper (active developer directory: $developer_dir)." >&2
 	echo "       /Library/Developer/CommandLineTools is the correct directory for Command Line Tools." >&2

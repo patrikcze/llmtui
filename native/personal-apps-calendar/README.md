@@ -50,6 +50,10 @@ reinstall Command Line Tools through macOS Software Update so its Swift
 compiler and SDK come from the same release, then rerun the command. llmtui
 cannot repair a mixed system toolchain.
 
+Some macOS 26 Command Line Tools SDKs expose only an `arm64e` Swift standard
+library interface on Apple silicon. The setup command detects that layout and
+builds the companion for the available target automatically.
+
 The caller must configure the resulting **absolute** executable path in
 `personal_apps.calendar.helper_path` to the executable inside that bundle.
 Run `llmtui doctor` or `/doctor personal-apps` first: both checks are passive
