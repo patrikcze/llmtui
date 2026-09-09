@@ -735,6 +735,109 @@ func TestToolOutputRouterGemmaRepairsBracketSplitArguments(t *testing.T) {
 	}
 }
 
+// TestToolOutputRouterGemmaRepairsRepeatedCallsPositionally guards against
+// silently applying the first call's arguments to a later call with the same
+// name. yzma preserves call order, but the old repair consumed a raw block
+// only when a call needed repair. A clean first calendar_events call therefore
+// left its block available for a bracket-split second call, which then borrowed
+// the first time window instead of its own.
+func TestToolOutputRouterGemmaRepairsRepeatedCallsPositionally(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>` +
+		`call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+		`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}` +
+		`call:calendar_events{calendar_ids:[<|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+		`start:<|"|>2026-09-10T10:00:00+02:00<|"|>, end:<|"|>2026-09-10T11:00:00+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}` +
+		`<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %+v, want two calls", calls)
+	}
+	wantFirst := `{"calendar_ids":["cal_1"],"end":"2026-09-09T09:00:00+02:00",` +
+		`"start":"2026-09-09T08:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[0].Arguments != wantFirst {
+		t.Fatalf("first Arguments = %s, want %s", calls[0].Arguments, wantFirst)
+	}
+	wantSecond := `{"calendar_ids":["cal_2","cal_3"],"end":"2026-09-10T11:00:00+02:00",` +
+		`"start":"2026-09-10T10:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[1].Arguments != wantSecond {
+		t.Fatalf("second Arguments = %s, want %s", calls[1].Arguments, wantSecond)
+	}
+}
+
+func TestToolOutputRouterGemmaRepairMatchesYZMACallSelection(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+
+	t.Run("whitespace before opening brace", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+		router.Push(`<|toolcall>call:calendar_events {` +
+			`calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>], ` +
+			`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		if len(calls) != 1 || !strings.Contains(calls[0].Arguments, `"calendar_ids":["cal_1","cal_2"]`) {
+			t.Fatalf("calls = %+v, want repaired calendar ids", calls)
+		}
+	})
+
+	t.Run("mixed empty and populated calls", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+		router.Push(`<|toolcall>` +
+			`call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+			`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}` +
+			`call:calendar_events{}` +
+			`call:calendar_events{calendar_ids:[<|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+			`start:<|"|>2026-09-10T10:00:00+02:00<|"|>, end:<|"|>2026-09-10T11:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}` +
+			`<toolcall|>`)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		if len(calls) != 2 {
+			t.Fatalf("calls = %+v, want two populated calls", calls)
+		}
+		if !strings.Contains(calls[1].Arguments, `"calendar_ids":["cal_2","cal_3"]`) ||
+			!strings.Contains(calls[1].Arguments, `"start":"2026-09-10T10:00:00+02:00"`) {
+			t.Fatalf("second call = %+v, want its own repaired arguments", calls[1])
+		}
+	})
+}
+
 // TestToolOutputRouterGemmaRejectsImpossibleKey covers the residue shapes the
 // bracket-aware re-parse cannot recover: whatever survives must never be
 // dispatched or reported as a missing argument, since the absorbed key is not

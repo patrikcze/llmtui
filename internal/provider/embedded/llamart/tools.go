@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	gemmaCallStart                = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\{`)
+	gemmaCallStart                = regexp.MustCompile(`call:[A-Za-z_][A-Za-z0-9_.-]*\s*\{`)
 	gemmaZeroArgumentCall         = regexp.MustCompile(`call:([A-Za-z_][A-Za-z0-9_.-]*)\{\s*\}`)
 	gemmaAlternateToolcallTokenRE = regexp.MustCompile(`<\|toolcall\|>?`)
 
@@ -321,31 +321,40 @@ func gemmaImpossibleKey(calls []message.ToolCall) bool {
 //
 // The repair re-parses only the calls yzma provably mangled (detected by
 // gemmaImpossibleKey), from the same raw text, with a scanner that treats
-// "[…]" as one balanced value. Everything yzma parsed cleanly is left exactly
-// as it was. A re-parse that cannot produce well-formed keys is discarded, so
-// the malformed path still catches genuinely corrupt output.
+// "[…]" as one balanced value. Raw blocks are consumed for every parsed call,
+// including calls that need no repair, so repeated calls with the same name
+// cannot borrow arguments from an earlier occurrence. Everything yzma parsed
+// cleanly is left exactly as it was. A re-parse that cannot produce well-formed
+// keys is discarded, so the malformed path still catches genuinely corrupt
+// output.
 func repairGemmaBracketSplitArgs(raw string, calls []message.ToolCall) []message.ToolCall {
 	blocks := gemmaArgumentBlocks(raw)
 	if len(blocks) == 0 {
 		return calls
 	}
-	used := make(map[int]bool, len(blocks))
+	byName := make(map[string][]gemmaArgumentBlock, len(blocks))
+	for _, block := range blocks {
+		// yzma omits empty calls from a mixed response, so they must not
+		// consume a position in the queue aligned to its parsed calls.
+		if strings.TrimSpace(block.arguments) == "" {
+			continue
+		}
+		byName[block.name] = append(byName[block.name], block)
+	}
 	repaired := append([]message.ToolCall(nil), calls...)
 	for index, call := range repaired {
+		queue := byName[call.Function.Name]
+		if len(queue) == 0 {
+			continue
+		}
+		block := queue[0]
+		byName[call.Function.Name] = queue[1:]
 		if !gemmaBracketSplitSuspect(call) {
 			continue
 		}
-		for blockIndex, block := range blocks {
-			if used[blockIndex] || block.name != call.Function.Name {
-				continue
-			}
-			used[blockIndex] = true
-			arguments := parseGemmaBracketAwareArgs(block.arguments)
-			if len(arguments) == 0 {
-				break
-			}
+		arguments := parseGemmaBracketAwareArgs(block.arguments)
+		if len(arguments) > 0 {
 			repaired[index].Function.Arguments = arguments
-			break
 		}
 	}
 	return repaired
@@ -378,16 +387,13 @@ func gemmaArgumentBlocks(raw string) []gemmaArgumentBlock {
 	var blocks []gemmaArgumentBlock
 	remaining := raw
 	for {
-		index := strings.Index(remaining, "call:")
-		if index < 0 {
+		location := gemmaCallStart.FindStringIndex(remaining)
+		if location == nil {
 			return blocks
 		}
-		remaining = remaining[index+len("call:"):]
-		brace := strings.Index(remaining, "{")
-		if brace < 0 {
-			return blocks
-		}
-		name := strings.TrimSpace(remaining[:brace])
+		start := location[0]
+		brace := location[1] - 1
+		name := strings.TrimSpace(remaining[start+len("call:") : brace])
 		remaining = remaining[brace:]
 		end := gemmaBalancedEnd(remaining, '{', '}')
 		if end < 0 {
