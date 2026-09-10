@@ -377,10 +377,26 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 		}
 	})
 	t.Run("unknown", func(t *testing.T) {
+		// A plain unknown name (as opposed to an mcp__server__tool-shaped
+		// one, see TestToolOutputRouterReturnsTypedUnofferedToolError) must
+		// not abort the whole generation: reproduced live with Gemma 4
+		// calling mail_save_draft directly (a change_prepare change type,
+		// never a tool) and getting a hard "generation failed" that ended
+		// the turn with no way to recover. The call is still returned,
+		// carrying the problem in ArgumentsError exactly like a missing or
+		// invalid argument does, so the model sees it as a normal tool
+		// result and can correct itself in the same turn.
 		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
 		router.Push(`<tool_call>{"name":"delete_everything","arguments":{}}</tool_call>`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), "unknown tool") || !strings.Contains(err.Error(), "weather") {
-			t.Fatalf("Finish error = %v", err)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish error = %v, want no error (a graceful ArgumentsError instead)", err)
+		}
+		if len(calls) != 1 || calls[0].Name != "delete_everything" {
+			t.Fatalf("calls = %+v", calls)
+		}
+		if !strings.Contains(calls[0].ArgumentsError, "unknown tool") || !strings.Contains(calls[0].ArgumentsError, "weather") {
+			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
 	t.Run("invalid typed argument", func(t *testing.T) {

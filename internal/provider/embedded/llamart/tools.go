@@ -641,6 +641,24 @@ func unstreamedText(cleaned, emitted string) string {
 	return ""
 }
 
+// mcpToolNamePrefix mirrors internal/tools.SplitMCPToolName's naming shape
+// ("mcp__server__tool"). It is duplicated here, as a shape check only, rather
+// than imported: internal/provider/embedded/llamart must stay a
+// minimal-dependency leaf package (CLAUDE.md architecture note 2), and
+// internal/tools sits above it, so this package cannot import that one.
+const mcpToolNamePrefix = "mcp__"
+
+// looksLikeMCPToolName reports whether name has the shape an MCP-routed tool
+// call name always has, without resolving it to any real server or tool.
+func looksLikeMCPToolName(name string) bool {
+	rest, ok := strings.CutPrefix(name, mcpToolNamePrefix)
+	if !ok {
+		return false
+	}
+	server, tool, ok := strings.Cut(rest, "__")
+	return ok && server != "" && tool != ""
+}
+
 func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([]provider.ToolCall, error) {
 	if len(parsed) == 0 {
 		return nil, nil
@@ -654,10 +672,26 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		name := strings.TrimSpace(call.Function.Name)
 		spec, ok := offered[name]
 		if !ok {
-			return nil, &provider.ToolNotOfferedError{
+			notOffered := &provider.ToolNotOfferedError{
 				RequestedName: name,
 				OfferedNames:  offeredToolNames(tools),
 			}
+			if looksLikeMCPToolName(name) {
+				// internal/tui's hiddenMCPToolRecoveryName auto-discloses and
+				// retries exactly this shape, but only in response to a hard
+				// EventError carrying this type — so this one case must keep
+				// failing the whole generation rather than degrade below.
+				return nil, notOffered
+			}
+			// Any other unknown name (observed live: Gemma 4 calling
+			// mail_save_draft/calendar_create_event directly — those are
+			// change_prepare change types, never tools) is a mistake the
+			// model can see and correct within the same turn, the same way
+			// a missing or invalid argument already is a couple of lines
+			// down. Ending the whole generation over it, the way a hard
+			// error does, gives the model no chance to recover at all.
+			result = append(result, provider.ToolCall{Name: name, ArgumentsError: notOffered.Error()})
+			continue
 		}
 		schema, err := decodeJSONObject(spec.Parameters)
 		if err != nil {
