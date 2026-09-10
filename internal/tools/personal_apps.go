@@ -79,8 +79,22 @@ func describePersonalAppsCall(c Call) string {
 // change_prepare variant shapes that a flat argument schema cannot express
 // on its own, so a call never has to be guessed and corrected from an error
 // message alone.
+//
+// The opening bullet exists because this one text is shared verbatim by both
+// protocols: every subsequent bullet writes an operation's call shape as a
+// bare name (change_prepare {"changes":[...]}), which is only the literal
+// syntax under native tool-calling. Reproduced live: a session that fell
+// back from native to the fenced protocol mid-conversation (see
+// internal/tui's rejectNativeToolCapability) kept calling change_prepare
+// directly — the exact pattern this text showed it — and got "unknown tool"
+// three times in a row, because under the fenced protocol every operation
+// must be wrapped as the single personal_apps tool's
+// {"operation":"change_prepare","arguments":{...}} body. The model correctly
+// followed what it was told; the text was wrong for the protocol it was
+// actually on.
 const PersonalAppsInstructions = `Personal Mail/Calendar rules:
-- Call {"operation":"status"} before anything else if you have not already this turn; it costs nothing and tells you exactly what is currently permitted.
+- Every name below (status, mail_accounts, mail_mailboxes, mail_search, mail_read, calendar_list, calendar_events, calendar_event, calendar_free_slots, change_prepare, change_apply, open_item) is a personal_apps operation. With native tool-calling, each is its own tool, called directly by that exact name. Without native tool-calling (the fenced-block protocol, including right after a mid-conversation fallback away from native), none of them are tools by themselves: call the single personal_apps tool instead, with {"operation":"<name>","arguments":{...the same fields shown below...}}. An "unknown tool" error naming one of these means the wrapper is required right now, not that the operation is unavailable.
+- Call status before anything else if you have not already this turn; it costs nothing and tells you exactly what is currently permitted.
 - Read flow, mail: mail_accounts -> (optional) mail_mailboxes {"account_id":"<id from mail_accounts>"} -> mail_search {"account_ids":["<id>"]} or {"mailbox_ids":["<id from mail_mailboxes>"]} -> mail_read {"message_ids":["<id from mail_search>"]}. Every id is copied verbatim from the result that returned it; never invent one or borrow a field name from a different operation — mail_read takes message_ids, never account_id or mailbox_ids.
 - Read flow, calendar: calendar_list -> calendar_events {"calendar_ids":["<id>"],"start":"<RFC3339>","end":"<RFC3339>","timezone":"<IANA>"}, or calendar_free_slots (adds "duration_minutes" and "working_hours":{"start":"HH:MM","end":"HH:MM"}), or calendar_event {"event_id":"<id from calendar_events>"} for one item.
 - A read result's coverage field states whether it is complete. Never present a partial result as the whole inbox or the whole calendar.

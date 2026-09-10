@@ -330,6 +330,30 @@ func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
 	}
 }
 
+// TestPersonalAppsInstructionsExplainBothCallingConventions guards a live
+// failure distinct from the change-type confusion above: every operation's
+// call shape in this shared text is written as a bare name
+// (change_prepare {"changes":[...]}), which is only literal syntax under
+// native tool-calling. A session that fell back from native to the
+// fenced-block protocol mid-conversation kept calling change_prepare
+// directly — the exact pattern this text showed — and got "unknown tool"
+// three times before giving up, because the fenced protocol requires every
+// operation wrapped as personal_apps's own {"operation":"...","arguments":
+// {...}} body. The text must say this explicitly so it stays correct
+// regardless of which protocol is actually active when a model reads it.
+func TestPersonalAppsInstructionsExplainBothCallingConventions(t *testing.T) {
+	for _, want := range []string{
+		"personal_apps operation",
+		"its own tool, called directly by that exact name",
+		`{"operation":"<name>","arguments":`,
+		"unknown tool",
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
+
 // TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools guards the fix for
 // a live, repeated failure (Gemma 4 E4B, both via LM Studio and embedded):
 // the model called calendar_create_event directly as if it were its own
