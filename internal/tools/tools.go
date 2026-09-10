@@ -253,6 +253,11 @@ func Parse(reply string) []Call {
 			break // unterminated block: ignore it and everything after
 		}
 	}
+	if len(calls) == 0 {
+		if call := parseGemmaFallbackPersonalAppsCall(reply); call != nil {
+			calls = append(calls, *call)
+		}
+	}
 	return calls
 }
 

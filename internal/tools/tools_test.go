@@ -114,6 +114,51 @@ func TestParsePersonalAppsOperationSynthesizesEnvelope(t *testing.T) {
 	}
 }
 
+// Gemma 4 can retain its compact native-style token after a native request
+// has fallen back to the fenced protocol. That must still reach the normal
+// personal-apps validation and approval path, rather than becoming prose the
+// model mistakes for an executed call.
+func TestParseGemmaFallbackPersonalAppsCall(t *testing.T) {
+	calls := Parse(`<|tool_call>call change_apply {"plan_id":"plan_123"}`)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1: %+v", len(calls), calls)
+	}
+	call := calls[0]
+	if call.Tool != ToolPersonalApps || call.InputErr != "" {
+		t.Fatalf("call = %+v, want a valid personal_apps call", call)
+	}
+	var envelope struct {
+		Operation string          `json:"operation"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(call.Body), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if envelope.Operation != "change_apply" || string(envelope.Arguments) != `{"plan_id":"plan_123"}` {
+		t.Fatalf("envelope = %+v, want change_apply with its exact arguments", envelope)
+	}
+}
+
+func TestParseGemmaFallbackPersonalAppsCallIsNarrow(t *testing.T) {
+	for _, reply := range []string{
+		`plain text <|tool_call>call change_apply {"plan_id":"plan_123"}`,
+		`<|tool_call>call run_command {"cmd":"echo unsafe"}`,
+	} {
+		if calls := Parse(reply); len(calls) != 0 {
+			t.Errorf("Parse(%q) = %+v, want no compatibility call", reply, calls)
+		}
+	}
+	for _, reply := range []string{
+		`<|tool_call>call change_apply ["not-an-object"]`,
+		`<|tool_call>call change_apply {"plan_id":"plan_123"} extra`,
+	} {
+		calls := Parse(reply)
+		if len(calls) != 1 || calls[0].Tool != ToolPersonalApps || calls[0].InputErr == "" {
+			t.Errorf("Parse(%q) = %+v, want one non-executing personal-apps error", reply, calls)
+		}
+	}
+}
+
 // TestParsePersonalAppsOperationRejectsOversizedBody guards the same byte
 // limit CallsFromNative already enforces for the native path.
 func TestParsePersonalAppsOperationRejectsOversizedBody(t *testing.T) {

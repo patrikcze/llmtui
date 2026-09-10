@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
@@ -16,6 +18,61 @@ import (
 // composition root chose not to construct one for this platform.
 var errPersonalAppsDisabled = errors.New(
 	"personal apps integration is disabled (see /personal-apps status, or personal_apps.enabled in config)")
+
+// gemmaFallbackPersonalAppsOpen is the compact tool token Gemma 4 can emit
+// after native calling falls back to the fenced protocol. It intentionally
+// recognizes only a known personal-apps operation, never a workspace command
+// or an arbitrary tool name. The normal fenced form remains the documented
+// fallback protocol; this is a compatibility seam for a model that has
+// already started a native-style response.
+var gemmaFallbackPersonalAppsOpen = regexp.MustCompile(`^<\|tool_?call>\s*call\s*:?\s*([A-Za-z][A-Za-z0-9_-]*)\s*`)
+
+// parseGemmaFallbackPersonalAppsCall recognizes one complete compact Gemma
+// operation with a JSON object argument. It is intentionally strict: the
+// marker must begin the reply, the operation must be one personal-apps
+// operation that this build knows, and the JSON value must be an object with
+// no unrecognized suffix. This gives the same approval and validation path as
+// a fenced personal-apps call without expanding the fallback parser to shell,
+// filesystem, web, or MCP calls.
+func parseGemmaFallbackPersonalAppsCall(reply string) *Call {
+	input := strings.TrimSpace(reply)
+	loc := gemmaFallbackPersonalAppsOpen.FindStringSubmatchIndex(input)
+	if loc == nil {
+		return nil
+	}
+	op := personalapps.Operation(input[loc[2]:loc[3]])
+	if !op.Valid() {
+		return nil
+	}
+	call := &Call{Tool: ToolPersonalApps}
+	remaining := input[loc[1]:]
+	decoder := json.NewDecoder(strings.NewReader(remaining))
+	var args json.RawMessage
+	if err := decoder.Decode(&args); err != nil {
+		call.InputErr = fmt.Sprintf("%s arguments are not valid JSON: %v", op, err)
+		return call
+	}
+	if len(args) == 0 || args[0] != '{' {
+		call.InputErr = fmt.Sprintf("%s arguments must be a JSON object", op)
+		return call
+	}
+	tail := strings.TrimSpace(remaining[decoder.InputOffset():])
+	if tail != "" && tail != "<|tool_call|>" && tail != "<|toolcall|>" {
+		call.InputErr = fmt.Sprintf("%s arguments have an unrecognized suffix", op)
+		return call
+	}
+	if len(args) > MaxPersonalAppsPayloadBytes {
+		call.InputErr = fmt.Sprintf("%s arguments exceed the %d byte limit", op, MaxPersonalAppsPayloadBytes)
+		return call
+	}
+	envelope, err := personalAppsEnvelope(op, string(args))
+	if err != nil {
+		call.InputErr = fmt.Sprintf("%s arguments are not valid JSON: %v", op, err)
+		return call
+	}
+	call.Body = envelope
+	return call
+}
 
 // decodePersonalAppsBody applies only a size guard to a fenced call's block
 // body. It deliberately does not parse the JSON: internal/personalapps.
