@@ -198,19 +198,42 @@ func Parse(reply string) []Call {
 		for j := i + 1; j < len(lines); j++ {
 			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
 				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
-				switch call.Tool {
-				case ToolAskUser:
-					decodeAskUserBody(&call)
-				case ToolLocalContext:
-					decodeLocalContextBody(&call)
-				case ToolSearch:
-					decodeToolSearchBody(&call)
-				case ToolReadFile:
-					decodeReadFileBody(&call)
-				case ToolEditFile:
-					decodeEditFileBody(&call)
-				case ToolPersonalApps:
-					decodePersonalAppsBody(&call)
+				if op := personalapps.Operation(call.Tool); op.Valid() {
+					// Fenced personal_apps tools are named one-per-operation
+					// (PersonalAppsFencedForms), matching native tool-calling's
+					// own one-per-operation schema, so a model calls them like
+					// every other fenced tool. internal/personalapps.ParseRequest
+					// still requires the combined {"operation","arguments"}
+					// envelope; that reshaping happens here, once, built from
+					// data this file fully controls — the tool name the fence
+					// marker itself named — never inferred from the model's own
+					// body shape. See personalAppsEnvelope's own doc comment for
+					// why that distinction matters.
+					body := call.Body
+					call.Path = ""
+					if len(body) > MaxPersonalAppsPayloadBytes {
+						call.InputErr = fmt.Sprintf("%s arguments exceed the %d byte limit", op, MaxPersonalAppsPayloadBytes)
+					} else if env, err := personalAppsEnvelope(op, body); err != nil {
+						call.InputErr = fmt.Sprintf("%s arguments are not valid JSON: %v", op, err)
+					} else {
+						call.Body = env
+					}
+					call.Tool = ToolPersonalApps
+				} else {
+					switch call.Tool {
+					case ToolAskUser:
+						decodeAskUserBody(&call)
+					case ToolLocalContext:
+						decodeLocalContextBody(&call)
+					case ToolSearch:
+						decodeToolSearchBody(&call)
+					case ToolReadFile:
+						decodeReadFileBody(&call)
+					case ToolEditFile:
+						decodeEditFileBody(&call)
+					case ToolPersonalApps:
+						decodePersonalAppsBody(&call)
+					}
 				}
 				if server, tool, ok := SplitMCPToolName(call.Tool); ok {
 					call.MCPServer, call.MCPTool = server, tool

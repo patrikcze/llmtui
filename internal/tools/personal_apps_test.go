@@ -215,6 +215,25 @@ func TestDescribePersonalAppsCall(t *testing.T) {
 	}
 }
 
+// TestPersonalAppsFencedFormsOneBulletPerOperation guards the fenced-protocol
+// half of the same fix as TestPersonalAppsSpecsOneToolPerOperation: one
+// fenced tool bullet per operation, named exactly the operation string, so
+// Parse's dispatch (checking personalapps.Operation(call.Tool).Valid())
+// always finds them and matches personalapps.Operations() exactly.
+func TestPersonalAppsFencedFormsOneBulletPerOperation(t *testing.T) {
+	forms := PersonalAppsFencedForms()
+	want := personalapps.Operations()
+	if len(forms) != len(want) {
+		t.Fatalf("PersonalAppsFencedForms() returned %d forms, want %d", len(forms), len(want))
+	}
+	for i, op := range want {
+		prefix := "- " + string(op) + " — "
+		if !strings.HasPrefix(forms[i], prefix) {
+			t.Errorf("forms[%d] = %q, want prefix %q", i, forms[i], prefix)
+		}
+	}
+}
+
 // TestPersonalAppsSpecsOneToolPerOperation guards the shape this whole
 // schema redesign depends on: one native tool per operation, named exactly
 // the operation string (so CallsFromNative's dispatch — checking

@@ -378,7 +378,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 				instructions += "\n" + tools.SkillInstructions
 			}
 			if m.personalApps != nil {
-				instructions += "\n" + tools.PersonalAppsFencedForm
+				for _, form := range tools.PersonalAppsFencedForms() {
+					instructions += "\n" + form
+				}
 			}
 			instructions += m.fencedDynamicToolInstructions()
 		}

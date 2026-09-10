@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -67,6 +68,82 @@ func TestParseIgnoresPlainCodeAndUnterminated(t *testing.T) {
 	}
 	if got := Parse("no tools here"); len(got) != 0 {
 		t.Errorf("prose parsed: %+v", got)
+	}
+}
+
+// TestParsePersonalAppsOperationSynthesizesEnvelope guards the fix for a
+// live failure: a fenced-protocol model (Gemma 4) had to hand-write the
+// combined {"operation":"...","arguments":{...}} envelope itself in a
+// ```tool personal_apps block body, flattened change_prepare's "changes"
+// field to the envelope's top level, and got "unknown field \"changes\" is
+// not part of this operation" from internal/personalapps.ParseRequest.
+// Fenced personal_apps operations are now named one-per-operation
+// (PersonalAppsFencedForms), exactly like native tool-calling's own schema,
+// so the model writes only the flat operation body — the envelope is
+// synthesized here from the fence's own tool name, which the model never
+// gets a chance to flatten.
+func TestParsePersonalAppsOperationSynthesizesEnvelope(t *testing.T) {
+	reply := "```tool change_prepare\n" +
+		`{"changes":[{"type":"mail_save_draft","sender_account_id":"acct_1","to":["a@b.com"],"subject":"s","body":"b"}]}` +
+		"\n```"
+	calls := Parse(reply)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1: %+v", len(calls), calls)
+	}
+	c := calls[0]
+	if c.Tool != ToolPersonalApps {
+		t.Fatalf("Tool = %q, want %q", c.Tool, ToolPersonalApps)
+	}
+	if c.InputErr != "" {
+		t.Fatalf("InputErr = %q, want none", c.InputErr)
+	}
+	var envelope struct {
+		Operation string `json:"operation"`
+		Arguments struct {
+			Changes []map[string]any `json:"changes"`
+		} `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(c.Body), &envelope); err != nil {
+		t.Fatalf("Body is not the expected envelope: %v (body: %s)", err, c.Body)
+	}
+	if envelope.Operation != "change_prepare" {
+		t.Errorf("operation = %q, want change_prepare", envelope.Operation)
+	}
+	if len(envelope.Arguments.Changes) != 1 || envelope.Arguments.Changes[0]["type"] != "mail_save_draft" {
+		t.Errorf("arguments.changes = %+v, want the one mail_save_draft change nested under arguments", envelope.Arguments.Changes)
+	}
+}
+
+// TestParsePersonalAppsOperationRejectsOversizedBody guards the same byte
+// limit CallsFromNative already enforces for the native path.
+func TestParsePersonalAppsOperationRejectsOversizedBody(t *testing.T) {
+	oversized := strings.Repeat("a", MaxPersonalAppsPayloadBytes+1)
+	reply := "```tool status\n" + oversized + "\n```"
+	calls := Parse(reply)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(calls))
+	}
+	if !strings.Contains(calls[0].InputErr, "byte limit") {
+		t.Errorf("InputErr = %q, want a byte-limit rejection", calls[0].InputErr)
+	}
+}
+
+// TestParsePersonalAppsCombinedFormStillDispatches guards backward
+// compatibility: the old combined ```tool personal_apps form (no longer
+// advertised in PersonalAppsFencedForms, but still accepted) must keep
+// working exactly as before for a model that already knows it.
+func TestParsePersonalAppsCombinedFormStillDispatches(t *testing.T) {
+	reply := "```tool personal_apps\n" + `{"operation":"status","arguments":{}}` + "\n```"
+	calls := Parse(reply)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(calls))
+	}
+	c := calls[0]
+	if c.Tool != ToolPersonalApps || c.InputErr != "" {
+		t.Fatalf("call = %+v, want the combined form dispatched cleanly", c)
+	}
+	if c.Body != `{"operation":"status","arguments":{}}`+"\n" {
+		t.Errorf("Body = %q, want the model's own body preserved byte-for-byte", c.Body)
 	}
 }
 
