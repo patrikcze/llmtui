@@ -373,6 +373,30 @@ func TestPersonalAppsInstructionsExplainBothCallingConventions(t *testing.T) {
 	}
 }
 
+// TestPersonalAppsInstructionsRequireReadingTheOutcomeBeforeClaimingSuccess
+// guards a live failure distinct from every protocol/dispatch bug above: the
+// model correctly ran status -> mail_accounts -> change_prepare ->
+// change_apply, change_apply's own result reported
+// {"outcomes":[{"outcome":"outcome_unknown",...}],"applied":0,"unknown":1},
+// and the model told the user the draft "has been saved successfully"
+// anyway — its own words were "since I executed all steps successfully
+// based on the provided API flow... I should confirm the task was
+// completed," treating having called the right tools as success instead of
+// reading what change_apply actually reported. No text anywhere told the
+// model that outcome_unknown is not evidence of success, so it filled that
+// gap with the most dangerous possible assumption.
+func TestPersonalAppsInstructionsRequireReadingTheOutcomeBeforeClaimingSuccess(t *testing.T) {
+	for _, want := range []string{
+		"outcome_unknown",
+		"not evidence of success",
+		`"applied"`,
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
+
 // TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools guards the fix for
 // a live, repeated failure (Gemma 4 E4B, both via LM Studio and embedded):
 // the model called calendar_create_event directly as if it were its own
