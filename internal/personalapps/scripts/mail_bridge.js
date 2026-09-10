@@ -648,10 +648,49 @@ function opMailMove(Mail, req) {
 // A mailbox named "Drafts" cannot be used for confirmation: mailbox names
 // are localized (for example, "Koncepty"), provider-defined, and can be
 // duplicated. Mail's scripting dictionary instead exposes one special,
-// application-wide Drafts mailbox. The native id came directly from the
-// outgoing message Mail just saved, so looking it up there is authoritative
-// without making an account-name or mailbox-position assumption.
-function findSavedDraft(Mail, account, nativeID) {
+// application-wide Drafts mailbox. Some Mail versions assign an outgoing
+// message a different id once it is persisted as a stored Drafts message, so
+// capture the Drafts ids before saving and use the single new item as a
+// readback fallback when the outgoing id does not resolve directly.
+function draftIDsBeforeSave(Mail) {
+  try {
+    var messages = Mail.draftsMailbox().messages();
+    var ids = {};
+    for (var i = 0; i < messages.length; i++) {
+      try {
+        ids[String(messages[i].id())] = true;
+      } catch (e) {
+        /* one unreadable id must not discard the whole snapshot */
+      }
+    }
+    return ids;
+  } catch (e) {
+    return null;
+  }
+}
+
+function newGlobalDraftSince(Mail, before) {
+  if (!before) return null;
+  try {
+    var messages = Mail.draftsMailbox().messages();
+    var added = [];
+    for (var i = 0; i < messages.length; i++) {
+      var id;
+      try {
+        id = String(messages[i].id());
+      } catch (e) {
+        continue;
+      }
+      if (!before[id]) added.push(messages[i]);
+    }
+    if (added.length === 1) return added[0];
+  } catch (e) {
+    /* fall through to the account-tree lookup */
+  }
+  return null;
+}
+
+function findSavedDraft(Mail, account, nativeID, beforeDraftIDs) {
   try {
     var globalDrafts = Mail.draftsMailbox();
     var globalFound = globalDrafts.messages.whose({ id: parseInt(nativeID, 10) })();
@@ -661,6 +700,9 @@ function findSavedDraft(Mail, account, nativeID) {
   } catch (e) {
     /* fall back to implementations which expose Drafts in the account tree */
   }
+
+  var newlyAdded = newGlobalDraftSince(Mail, beforeDraftIDs);
+  if (newlyAdded) return { message: newlyAdded, path: [globalDraftsPathSegment] };
 
   var top;
   try {
@@ -707,6 +749,7 @@ function opMailSaveDraft(Mail, req) {
     if (!r) return errorResponse('save_draft', 'not_found', 'message being replied to was not found');
     inReplyTo = r.message;
   }
+  var beforeDraftIDs = draftIDsBeforeSave(Mail);
 
   try {
     var draft;
@@ -750,7 +793,7 @@ function opMailSaveDraft(Mail, req) {
   if (!nativeID) {
     return errorResponse('save_draft', 'internal', 'draft saved but Mail did not provide an id to confirm it');
   }
-  var saved = findSavedDraft(Mail, account, nativeID);
+  var saved = findSavedDraft(Mail, account, nativeID, beforeDraftIDs);
   if (!saved) return errorResponse('save_draft', 'internal', 'draft saved but could not be confirmed in the sender account');
   return { version: 1, op: 'save_draft', messages: [messageMeta(saved.message, d.sender_account_id, saved.path)] };
 }

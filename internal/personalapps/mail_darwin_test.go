@@ -127,12 +127,15 @@ func TestNewMailBackendReturnsNonNilOnDarwin(t *testing.T) {
 // failed mutation after successfully saving a draft on localized accounts.
 func TestMailBridgeConfirmsSavedDraftByIdentityNotLocalizedFolderName(t *testing.T) {
 	for _, want := range []string{
-		"function findSavedDraft(Mail, account, nativeID)",
+		"function draftIDsBeforeSave(Mail)",
+		"function newGlobalDraftSince(Mail, before)",
+		"function findSavedDraft(Mail, account, nativeID, beforeDraftIDs)",
 		"messages.whose({ id: parseInt(nativeID, 10) })()",
 		"path: [segs[i]]",
 		"globalDraftsPathSegment = '__llmtui_global_drafts__'",
 		"globalDrafts = Mail.draftsMailbox()",
-		"findSavedDraft(Mail, account, nativeID)",
+		"beforeDraftIDs = draftIDsBeforeSave(Mail)",
+		"findSavedDraft(Mail, account, nativeID, beforeDraftIDs)",
 		"ref.path[0] === globalDraftsPathSegment",
 	} {
 		if !strings.Contains(mailBridgeScript, want) {
