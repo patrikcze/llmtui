@@ -619,6 +619,30 @@ func estimatePrepared(out prompt.Output, specs []provider.ToolSpec, window, rese
 	return est
 }
 
+// preserveEmbeddedReasoning creates request-local continuation data for
+// templates that explicitly support preserved thinking. It never mutates the
+// session: hidden reasoning remains unpersisted and cannot cross into a later
+// process. Agent requests intentionally never receive it, preserving the
+// verifier's fresh-context trust boundary.
+func (m *Model) preserveEmbeddedReasoning(messages []provider.Message) []provider.Message {
+	pc, ok := m.cfg.Providers[m.cfg.Provider]
+	if !ok || pc.Type != "embedded" || pc.Reasoning == nil || !pc.Reasoning.Preserve || m.agentRunActive() {
+		return messages
+	}
+
+	result := append([]provider.Message(nil), messages...)
+	for index := range result {
+		message := &result[index]
+		if message.Role != provider.RoleAssistant || message.Reasoning == "" {
+			continue
+		}
+		if message.Continuation == nil {
+			message.Continuation = &provider.ProviderContinuation{Reasoning: message.Reasoning}
+		}
+	}
+	return result
+}
+
 // oldestGroupEnd returns the exclusive end of the first complete conversation
 // group. User turns include their following assistant/tool work up to the next
 // user; assistant tool calls include all immediately following tool results.
@@ -869,6 +893,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 	window, _ := m.contextWindow()
 	reserve := m.cfg.Context.ReserveResponseTokens
 	historyMessages, existingSummary, agentScoped := m.requestHistory()
+	historyMessages = m.preserveEmbeddedReasoning(historyMessages)
 	if !m.toolsNative {
 		historyMessages = projectNativeToolHistoryForFencedProtocol(historyMessages)
 	}

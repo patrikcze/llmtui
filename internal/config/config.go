@@ -49,8 +49,14 @@ type ProviderConfig struct {
 	GPULayers *int `mapstructure:"gpu_layers" yaml:"gpu_layers,omitempty"`
 	// Threads is the CPU thread count (0 = auto).
 	Threads int `mapstructure:"threads" yaml:"threads,omitempty"`
+	// ThreadsBatch overrides the CPU thread count for prompt and batch
+	// processing. Zero preserves the existing Threads behavior.
+	ThreadsBatch int `mapstructure:"threads_batch" yaml:"threads_batch,omitempty"`
 	// BatchSize is the native decode batch size (0 = runtime default).
 	BatchSize int `mapstructure:"batch_size" yaml:"batch_size,omitempty"`
+	// UBatchSize is the native physical micro-batch size. Zero preserves the
+	// llama.cpp/Yzma default used before this setting existed.
+	UBatchSize int `mapstructure:"ubatch_size" yaml:"ubatch_size,omitempty"`
 	// ChatTemplate overrides the model's GGUF chat-template metadata.
 	ChatTemplate string `mapstructure:"chat_template" yaml:"chat_template,omitempty"`
 	// ToolFormat selects the embedded llama.cpp tool-call grammar.
@@ -63,9 +69,17 @@ type ProviderConfig struct {
 	// KVCacheType selects the native K/V cache element type: "f16" (default)
 	// or "q8_0" (about half the KV memory, small quality cost).
 	KVCacheType string `mapstructure:"kv_cache_type" yaml:"kv_cache_type,omitempty"`
+	// KVCache provides separate K/V cache types and an optional K/Q/V offload
+	// override. Its type fields take precedence over KVCacheType.
+	KVCache *EmbeddedKVCacheConfig `mapstructure:"kv_cache" yaml:"kv_cache,omitempty"`
 	// FlashAttention selects the flash-attention mode: "auto" (default),
 	// "on", or "off".
 	FlashAttention string `mapstructure:"flash_attention" yaml:"flash_attention,omitempty"`
+	// Reasoning configures optional embedded template controls. chat.reasoning
+	// remains the per-request reasoning-mode selector.
+	Reasoning *EmbeddedReasoningConfig `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
+	// Speculative is opt-in experimental embedded speculative decoding.
+	Speculative *EmbeddedSpeculativeConfig `mapstructure:"speculative" yaml:"speculative,omitempty"`
 	// RopeScalingType overrides the model's RoPE scaling mode. Empty keeps
 	// the model metadata/runtime default.
 	RopeScalingType string   `mapstructure:"rope_scaling_type" yaml:"rope_scaling_type,omitempty"`

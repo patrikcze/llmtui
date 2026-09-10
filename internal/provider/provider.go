@@ -126,17 +126,17 @@ type Message struct {
 	// answer byte. Same rule as Reasoning: never serialized, cached,
 	// persisted, or sent back to a backend.
 	ReasoningDuration time.Duration `json:"-" yaml:"-"`
-	// Continuation carries provider-visible, privacy-sensitive state needed
-	// only while completing an active tool cycle. It is deliberately excluded
-	// from serialization so raw model reasoning never enters saved history.
-	// Providers may send it back only on the assistant tool-call message that
-	// produced it; callers must clear it after a final answer.
+	// Continuation carries provider-visible, privacy-sensitive state. It is
+	// deliberately excluded from serialization so raw model reasoning never
+	// enters saved history. It normally completes an active tool cycle; the
+	// embedded provider may also construct it transiently for a configured,
+	// compatible preserved-thinking template.
 	Continuation *ProviderContinuation `json:"-" yaml:"-"`
 }
 
-// ProviderContinuation is ephemeral state that a backend requires on the
-// next sampling request in the same tool cycle. Reasoning is raw model CoT:
-// it must never be displayed, logged, cached, exported, or persisted.
+// ProviderContinuation is ephemeral state a backend requires for a follow-up
+// request. Reasoning is raw model CoT: it must never be logged, exported, or
+// persisted. Rendering is controlled separately by Message.Reasoning.
 type ProviderContinuation struct {
 	Reasoning string
 	Opaque    json.RawMessage

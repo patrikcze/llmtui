@@ -7,6 +7,7 @@ func TestMatchBuiltIns(t *testing.T) {
 		model string
 		want  string
 	}{
+		{"Qwen3.8-27B-UD-Q4_K_XL", "qwen3.8"},
 		{"qwen3:8b", "qwen"},
 		{"qwythos-9b-claude-mythos-5-1m", "qwen"},
 		{"llama3.1:70b", "llama"},
@@ -20,6 +21,16 @@ func TestMatchBuiltIns(t *testing.T) {
 		if !ok || p.Name != tt.want {
 			t.Errorf("Match(%q) = (%s, %v), want %s", tt.model, p.Name, ok, tt.want)
 		}
+	}
+}
+
+func TestQwen38ProfileDefaults(t *testing.T) {
+	p, ok := Match(BuiltIn(), "qwen3.8-27b")
+	if !ok || p.Name != "qwen3.8" {
+		t.Fatalf("Match(qwen3.8-27b) = (%+v, %v)", p, ok)
+	}
+	if p.ContextWindow != 262144 || p.PreferredTemperature != 1.0 || !p.ReasoningHint {
+		t.Fatalf("Qwen3.8 profile = %+v", p)
 	}
 }
 

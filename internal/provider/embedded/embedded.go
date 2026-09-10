@@ -404,12 +404,14 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 	protocol := p.protocolFor(req.Model)
 
 	genReq := GenRequest{
-		Messages:    req.Messages,
-		Tools:       req.Tools,
-		Reasoning:   req.Reasoning,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		MaxTokens:   req.MaxTokens,
+		Messages:          req.Messages,
+		Tools:             req.Tools,
+		Reasoning:         req.Reasoning,
+		ReasoningEffort:   opts.Reasoning.Effort,
+		PreserveReasoning: opts.Reasoning.Preserve,
+		Temperature:       req.Temperature,
+		TopP:              req.TopP,
+		MaxTokens:         req.MaxTokens,
 		Progress: func(message string) {
 			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: message})
 		},
@@ -611,7 +613,9 @@ func (p *Provider) RuntimeFingerprint() string {
 	writeInt64(h, int64(opts.ContextSize))
 	writeInt64(h, int64(opts.GPULayers))
 	writeInt64(h, int64(opts.Threads))
+	writeInt64(h, int64(opts.ThreadsBatch))
 	writeInt64(h, int64(opts.BatchSize))
+	writeInt64(h, int64(opts.UBatchSize))
 	writeField(h, []byte(opts.ChatTemplate))
 	toolFormat := opts.ToolFormat
 	if toolFormat == "" {
@@ -634,11 +638,46 @@ func (p *Provider) RuntimeFingerprint() string {
 		kvCacheType = opts.KVCacheType
 	}
 	writeField(h, []byte(kvCacheType))
+	kvCacheK, err := ParseKVCacheType(opts.KVCache.TypeK)
+	if err != nil {
+		kvCacheK = opts.KVCache.TypeK
+	}
+	writeField(h, []byte(kvCacheK))
+	kvCacheV, err := ParseKVCacheType(opts.KVCache.TypeV)
+	if err != nil {
+		kvCacheV = opts.KVCache.TypeV
+	}
+	writeField(h, []byte(kvCacheV))
+	if opts.KVCache.Offload == nil {
+		writeField(h, []byte("offload-unset"))
+	} else if *opts.KVCache.Offload {
+		writeField(h, []byte("offload-true"))
+	} else {
+		writeField(h, []byte("offload-false"))
+	}
 	flashAttention, err := ParseFlashAttention(opts.FlashAttention)
 	if err != nil {
 		flashAttention = opts.FlashAttention
 	}
 	writeField(h, []byte(flashAttention))
+	reasoningEffort, err := ParseReasoningEffort(string(opts.Reasoning.Effort))
+	if err != nil {
+		reasoningEffort = opts.Reasoning.Effort
+	}
+	writeField(h, []byte(reasoningEffort))
+	if opts.Reasoning.Preserve {
+		writeField(h, []byte("preserve-reasoning"))
+	} else {
+		writeField(h, []byte("do-not-preserve-reasoning"))
+	}
+	speculativeType, err := ParseSpeculativeType(string(opts.Speculative.Type))
+	if err != nil {
+		speculativeType = opts.Speculative.Type
+	}
+	writeField(h, []byte(speculativeType))
+	writeInt64(h, int64(opts.Speculative.DraftNMax))
+	writeField(h, []byte(opts.Speculative.KVCache.TypeK))
+	writeField(h, []byte(opts.Speculative.KVCache.TypeV))
 	ropeScalingType, err := ParseRopeScalingType(string(opts.RopeScaling.Type))
 	if err != nil {
 		ropeScalingType = opts.RopeScaling.Type

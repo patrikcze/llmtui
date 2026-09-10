@@ -31,6 +31,17 @@ func Default() Profile {
 func BuiltIn() []Profile {
 	return []Profile{
 		{
+			// Qwen3.8's recommended inference defaults differ materially from
+			// older Qwen generations, so it must precede the generic Qwen match.
+			Name:                 "qwen3.8",
+			Match:                []string{"qwen3.8"},
+			ContextWindow:        262144,
+			PreferredTemperature: 1.0,
+			SupportsJSONMode:     true,
+			PromptStyle:          "direct",
+			ReasoningHint:        true,
+		},
+		{
 			Name:                 "coder",
 			Match:                []string{"coder", "codellama", "deepseek", "starcoder", "codegemma", "codestral"},
 			ContextWindow:        32768,

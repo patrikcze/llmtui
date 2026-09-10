@@ -58,7 +58,7 @@ func renderChatTemplate(
 	reasoning string,
 	native nativeTemplateRenderer,
 ) (renderedPrompt, error) {
-	return renderChatTemplateWithProtocol(template, messages, tools, reasoning, provider.ModelProtocol{}, native)
+	return renderChatTemplateWithProtocol(template, messages, tools, reasoning, embedded.ReasoningEffortAuto, false, provider.ModelProtocol{}, native)
 }
 
 func renderChatTemplateWithProtocol(
@@ -66,14 +66,19 @@ func renderChatTemplateWithProtocol(
 	messages []provider.Message,
 	tools []provider.ToolSpec,
 	reasoning string,
+	reasoningEffort embedded.ReasoningEffort,
+	preserveReasoning bool,
 	protocol provider.ModelProtocol,
 	native nativeTemplateRenderer,
 ) (renderedPrompt, error) {
 	mode := strings.ToLower(strings.TrimSpace(reasoning))
 	auto := mode == "" || mode == "auto"
+	if reasoningEffort == "" {
+		reasoningEffort = embedded.ReasoningEffortAuto
+	}
 
 	var nativeErr error
-	if !protocol.HarmonyRequired && auto && len(tools) == 0 && nativeCompatibleMessages(messages) {
+	if !protocol.HarmonyRequired && auto && reasoningEffort == embedded.ReasoningEffortAuto && !preserveReasoning && len(tools) == 0 && nativeCompatibleMessages(messages) {
 		nativeMessages, err := chatMessages(messages)
 		if err == nil {
 			text, err := native(template, nativeMessages)
@@ -84,7 +89,7 @@ func renderChatTemplateWithProtocol(
 		}
 	}
 
-	data, err := jinjaTemplateDataForProtocol(messages, tools, mode, protocol)
+	data, err := jinjaTemplateDataForProtocol(messages, tools, mode, reasoningEffort, preserveReasoning, protocol)
 	if err != nil {
 		return renderedPrompt{}, err
 	}
@@ -131,12 +136,19 @@ func templateRenderError(nativeErr, jinjaErr error) error {
 	)
 }
 
-func jinjaTemplateDataForProtocol(messages []provider.Message, tools []provider.ToolSpec, reasoning string, protocol provider.ModelProtocol) (map[string]any, error) {
+func jinjaTemplateDataForProtocol(
+	messages []provider.Message,
+	tools []provider.ToolSpec,
+	reasoning string,
+	reasoningEffort embedded.ReasoningEffort,
+	preserveReasoning bool,
+	protocol provider.ModelProtocol,
+) (map[string]any, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("chat request has no messages")
 	}
 	result := map[string]any{
-		"messages":              templateMessages(messages),
+		"messages":              templateMessages(messages, preserveReasoning),
 		"add_generation_prompt": true,
 	}
 	if protocol.HarmonyRequired {
@@ -157,6 +169,12 @@ func jinjaTemplateDataForProtocol(messages []provider.Message, tools []provider.
 		default:
 			return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
 		}
+		if reasoningEffort != embedded.ReasoningEffortAuto {
+			result["reasoning_effort"] = string(reasoningEffort)
+		}
+		if preserveReasoning && templateSupportsPreservedReasoning(messages) {
+			result["preserve_reasoning"] = true
+		}
 	}
 	if len(tools) > 0 {
 		mapped, err := templateTools(tools)
@@ -168,7 +186,7 @@ func jinjaTemplateDataForProtocol(messages []provider.Message, tools []provider.
 	return result, nil
 }
 
-func templateMessages(messages []provider.Message) []any {
+func templateMessages(messages []provider.Message, preserveReasoning bool) []any {
 	result := make([]any, 0, len(messages))
 	for _, message := range messages {
 		mapped := map[string]any{
@@ -202,6 +220,9 @@ func templateMessages(messages []provider.Message) []any {
 				mapped["thinking"] = message.Continuation.Reasoning
 			}
 		}
+		if preserveReasoning && message.Role == provider.RoleAssistant && message.Continuation != nil && message.Continuation.Reasoning != "" {
+			mapped["thinking"] = message.Continuation.Reasoning
+		}
 		if message.ToolCallID != "" {
 			mapped["tool_call_id"] = message.ToolCallID
 		}
@@ -211,6 +232,19 @@ func templateMessages(messages []provider.Message) []any {
 		result = append(result, mapped)
 	}
 	return result
+}
+
+// templateSupportsPreservedReasoning requires at least one assistant message
+// with structured hidden reasoning. The template itself remains authoritative:
+// an unknown variable is harmless under Jinja, and only templates that inspect
+// preserve_reasoning make use of this opt-in data.
+func templateSupportsPreservedReasoning(messages []provider.Message) bool {
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant && message.Continuation != nil && message.Continuation.Reasoning != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func templateTools(tools []provider.ToolSpec) ([]any, error) {

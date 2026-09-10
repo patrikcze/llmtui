@@ -28,9 +28,15 @@ type GenRequest struct {
 	Grammar     string
 	GrammarRoot string
 	Reasoning   string
-	Temperature float64
-	TopP        float64
-	MaxTokens   int
+	// ReasoningEffort is an optional template-level effort value. It remains
+	// separate from Reasoning, which selects on/off mode for this request.
+	ReasoningEffort ReasoningEffort
+	// PreserveReasoning permits compatible templates to receive prior hidden
+	// assistant reasoning supplied through Message.Continuation.
+	PreserveReasoning bool
+	Temperature       float64
+	TopP              float64
+	MaxTokens         int
 	// Progress receives non-content activity such as prompt-processing
 	// updates. The provider surfaces it as reasoning so the TUI's inactivity
 	// watchdog is reset without mixing status text into the answer.

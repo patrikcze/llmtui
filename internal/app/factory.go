@@ -2,6 +2,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -159,12 +160,64 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 	if err != nil {
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
 	}
+	kvCache := embedded.KVCache{TypeK: kvCacheType, TypeV: kvCacheType}
+	if pc.KVCache != nil {
+		if pc.KVCache.TypeK != "" {
+			kvCache.TypeK, err = embedded.ParseKVCacheType(pc.KVCache.TypeK)
+			if err != nil {
+				return embedded.Options{}, fmt.Errorf("embedded provider configuration: kv_cache.type_k: %w", err)
+			}
+		}
+		if pc.KVCache.TypeV != "" {
+			kvCache.TypeV, err = embedded.ParseKVCacheType(pc.KVCache.TypeV)
+			if err != nil {
+				return embedded.Options{}, fmt.Errorf("embedded provider configuration: kv_cache.type_v: %w", err)
+			}
+		}
+		kvCache.Offload = pc.KVCache.Offload
+	}
 	flashAttention, err := embedded.ParseFlashAttention(pc.FlashAttention)
 	if err != nil {
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
 	}
-	if err := embedded.ValidateKVFlashCombination(kvCacheType, flashAttention); err != nil {
+	if err := embedded.ValidateKVFlashCombination(kvCache.TypeV, flashAttention); err != nil {
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+	}
+	reasoningEffort := embedded.ReasoningEffortAuto
+	reasoningPreserve := false
+	if pc.Reasoning != nil {
+		reasoningEffort, err = embedded.ParseReasoningEffort(pc.Reasoning.Effort)
+		if err != nil {
+			return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+		}
+		reasoningPreserve = pc.Reasoning.Preserve
+	}
+	speculative := embedded.Speculative{Type: embedded.SpeculativeOff}
+	if pc.Speculative != nil {
+		speculative.Type, err = embedded.ParseSpeculativeType(pc.Speculative.Type)
+		if err != nil {
+			return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
+		}
+		speculative.DraftNMax = pc.Speculative.DraftNMax
+		if speculative.Type == embedded.SpeculativeDraftMTP && speculative.DraftNMax <= 0 {
+			return embedded.Options{}, errors.New("embedded provider configuration: speculative.draft_n_max must be greater than zero when speculative.type is draft-mtp")
+		}
+		if pc.Speculative.KVCache != nil {
+			speculative.KVCache.TypeK = kvCache.TypeK
+			speculative.KVCache.TypeV = kvCache.TypeV
+			if pc.Speculative.KVCache.TypeK != "" {
+				speculative.KVCache.TypeK, err = embedded.ParseKVCacheType(pc.Speculative.KVCache.TypeK)
+				if err != nil {
+					return embedded.Options{}, fmt.Errorf("embedded provider configuration: speculative.kv_cache.type_k: %w", err)
+				}
+			}
+			if pc.Speculative.KVCache.TypeV != "" {
+				speculative.KVCache.TypeV, err = embedded.ParseKVCacheType(pc.Speculative.KVCache.TypeV)
+				if err != nil {
+					return embedded.Options{}, fmt.Errorf("embedded provider configuration: speculative.kv_cache.type_v: %w", err)
+				}
+			}
+		}
 	}
 	ropeScalingType, err := embedded.ParseRopeScalingType(pc.RopeScalingType)
 	if err != nil {
@@ -246,14 +299,22 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		ContextSize:    contextSize,
 		GPULayers:      gpuLayers,
 		Threads:        pc.Threads,
+		ThreadsBatch:   pc.ThreadsBatch,
 		BatchSize:      pc.BatchSize,
+		UBatchSize:     pc.UBatchSize,
 		ChatTemplate:   pc.ChatTemplate,
 		ToolFormat:     toolFormat,
 		SWAFull:        pc.SWAFull,
 		KVCacheType:    kvCacheType,
+		KVCache:        kvCache,
 		FlashAttention: flashAttention,
-		RopeScaling:    ropeScaling,
-		Sampling:       sampling,
+		Reasoning: struct {
+			Effort   embedded.ReasoningEffort
+			Preserve bool
+		}{Effort: reasoningEffort, Preserve: reasoningPreserve},
+		Speculative: speculative,
+		RopeScaling: ropeScaling,
+		Sampling:    sampling,
 	}, nil
 }
 

@@ -233,6 +233,47 @@ func TestBuildContextParamsPreservesRopeDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyContextOptionsAdvanced(t *testing.T) {
+	offload := false
+	params := llama.ContextParams{NUbatch: 512, Offload_kqv: 1}
+	opts := embedded.Options{
+		Threads:      6,
+		ThreadsBatch: 4,
+		UBatchSize:   256,
+		KVCache: embedded.KVCache{
+			TypeK:   embedded.KVCacheTypeQ8_0,
+			TypeV:   embedded.KVCacheTypeQ4_0,
+			Offload: &offload,
+		},
+	}
+	if err := applyContextOptions(&params, opts, 4096, 2048, opts.KVCache.TypeK, opts.KVCache.TypeV, embedded.FlashAttentionOn); err != nil {
+		t.Fatalf("applyContextOptions() error = %v", err)
+	}
+	if params.NCtx != 4096 || params.NBatch != 2048 || params.NUbatch != 256 {
+		t.Fatalf("context sizes = n_ctx:%d n_batch:%d n_ubatch:%d", params.NCtx, params.NBatch, params.NUbatch)
+	}
+	if params.NThreads != 6 || params.NThreadsBatch != 4 {
+		t.Fatalf("threads = generate:%d batch:%d", params.NThreads, params.NThreadsBatch)
+	}
+	if params.TypeK != llama.GGMLTypeQ8_0 || params.TypeV != llama.GGMLTypeQ4_0 || params.Offload_kqv != 0 {
+		t.Fatalf("KV params = K:%v V:%v offload:%d", params.TypeK, params.TypeV, params.Offload_kqv)
+	}
+	if params.FlashAttentionType != llama.FlashAttentionTypeEnabled {
+		t.Fatalf("FlashAttentionType = %v", params.FlashAttentionType)
+	}
+}
+
+func TestApplyContextOptionsPreservesLegacyDefaults(t *testing.T) {
+	params := llama.ContextParams{NUbatch: 256, Offload_kqv: 1}
+	opts := embedded.Options{Threads: 6}
+	if err := applyContextOptions(&params, opts, 4096, 512, embedded.KVCacheTypeF16, embedded.KVCacheTypeF16, embedded.FlashAttentionAuto); err != nil {
+		t.Fatalf("applyContextOptions() error = %v", err)
+	}
+	if params.NUbatch != 256 || params.NThreads != 6 || params.NThreadsBatch != 6 || params.Offload_kqv != 1 {
+		t.Fatalf("legacy defaults changed: %+v", params)
+	}
+}
+
 func TestValidateSamplingDRY(t *testing.T) {
 	valid := embedded.Sampling{DRYMultiplier: 0.8, DRYBase: 1.75, DRYAllowedLength: 2, DRYPenaltyLastN: -1}
 	if err := validateSampling(valid); err != nil {

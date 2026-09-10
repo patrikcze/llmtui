@@ -409,6 +409,20 @@ Two new optional persistent flags, `--context-size` and `--gpu-layers`,
 bind only when set (existing precedence rules). `ListModels` returns the
 configured model plus sibling `*.gguf` files for the model picker.
 
+The pinned Yzma v1.26.1 context ABI also supports independently configured
+`NThreadsBatch`, `NUbatch`, `TypeK`, `TypeV`, and `Offload_kqv`. llmtui maps
+these from opt-in embedded settings while retaining the old `kv_cache_type` as
+a shared K/V fallback and preserving native defaults for omitted micro-batch
+and offload values. The normal autoregressive generation loop remains
+unchanged.
+
+Yzma exposes experimental MTP context fields, but its pinned release does not
+expose the staging next-token embedding API used by llama.cpp's faithful
+`draft-mtp` implementation. Consequently explicit `draft-mtp` is rejected at
+load time rather than emulated with a divergent Go acceptance loop or direct
+FFI. A future compatible Yzma/runtime pin can add that separate generation
+path without altering the standard path.
+
 ### Tool calling
 
 Capabilities are honest: no native tool support is advertised. If the TUI
