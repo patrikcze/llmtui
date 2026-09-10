@@ -349,26 +349,34 @@ func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
 	}
 }
 
-// TestPersonalAppsInstructionsExplainBothCallingConventions guards a live
-// failure distinct from the change-type confusion above: every operation's
-// call shape in this shared text is written as a bare name
-// (change_prepare {"changes":[...]}), which is only literal syntax under
-// native tool-calling. A session that fell back from native to the
-// fenced-block protocol mid-conversation kept calling change_prepare
-// directly — the exact pattern this text showed — and got "unknown tool"
-// three times before giving up, because the fenced protocol requires every
-// operation wrapped as personal_apps's own {"operation":"...","arguments":
-// {...}} body. The text must say this explicitly so it stays correct
-// regardless of which protocol is actually active when a model reads it.
+// TestPersonalAppsInstructionsExplainBothCallingConventions guards the
+// protocol boundary: native mode calls an operation directly; fenced mode
+// emits the advertised same-named form and lets Parse synthesize the
+// combined envelope. Giving the model an unadvertised wrapper contradicts
+// the catalog and makes it hand-write JSON the parser can construct safely.
 func TestPersonalAppsInstructionsExplainBothCallingConventions(t *testing.T) {
 	for _, want := range []string{
 		"personal_apps operation",
 		"its own tool, called directly by that exact name",
-		`{"operation":"<name>","arguments":`,
+		"emit the advertised fenced tool named exactly <name>",
+		"Do not emit an unadvertised personal_apps tool",
 		"unknown tool",
 	} {
 		if !strings.Contains(PersonalAppsInstructions, want) {
 			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
+
+func TestPersonalAppsInstructionsRouteCalendarEditsThroughCalendar(t *testing.T) {
+	for _, want := range []string{
+		"Calendar records, never project files",
+		"never use list_dir, glob, grep, or workspace search",
+		"query calendar_events for a bounded time range",
+		"event_id and expected_version from that fresh Calendar read",
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not route calendar edits correctly: missing %q", want)
 		}
 	}
 }

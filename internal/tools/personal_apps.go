@@ -81,22 +81,16 @@ func describePersonalAppsCall(c Call) string {
 // message alone.
 //
 // The opening bullet exists because this one text is shared verbatim by both
-// protocols: every subsequent bullet writes an operation's call shape as a
-// bare name (change_prepare {"changes":[...]}), which is only the literal
-// syntax under native tool-calling. Reproduced live: a session that fell
-// back from native to the fenced protocol mid-conversation (see
-// internal/tui's rejectNativeToolCapability) kept calling change_prepare
-// directly — the exact pattern this text showed it — and got "unknown tool"
-// three times in a row, because under the fenced protocol every operation
-// must be wrapped as the single personal_apps tool's
-// {"operation":"change_prepare","arguments":{...}} body. The model correctly
-// followed what it was told; the text was wrong for the protocol it was
-// actually on.
+// protocols. Fenced mode advertises one form per operation and Parse builds
+// the combined envelope from that form's controlled name; this guidance must
+// describe that exact route rather than ask a model to manufacture a wrapper
+// that the catalog does not advertise.
 const PersonalAppsInstructions = `Personal Mail/Calendar rules:
-- Every name below (status, mail_accounts, mail_mailboxes, mail_search, mail_read, calendar_list, calendar_events, calendar_event, calendar_free_slots, change_prepare, change_apply, open_item) is a personal_apps operation. With native tool-calling, each is its own tool, called directly by that exact name. Without native tool-calling (the fenced-block protocol, including right after a mid-conversation fallback away from native), none of them are tools by themselves: call the single personal_apps tool instead, with {"operation":"<name>","arguments":{...the same fields shown below...}}. An "unknown tool" error naming one of these means the wrapper is required right now, not that the operation is unavailable.
+- Every name below (status, mail_accounts, mail_mailboxes, mail_search, mail_read, calendar_list, calendar_events, calendar_event, calendar_free_slots, change_prepare, change_apply, open_item) is a personal_apps operation. With native tool-calling, each is its own tool, called directly by that exact name. Without native tool-calling, emit the advertised fenced tool named exactly <name> and put only that operation's fields in its JSON body; the application supplies the combined envelope. Do not emit an unadvertised personal_apps tool or write an operation/arguments envelope yourself. An "unknown tool" error means use the exact advertised operation name, not a change type or a guessed tool name.
 - Call status before anything else if you have not already this turn; it costs nothing and tells you exactly what is currently permitted.
 - Read flow, mail: mail_accounts -> (optional) mail_mailboxes {"account_id":"<id from mail_accounts>"} -> mail_search {"account_ids":["<id>"]} or {"mailbox_ids":["<id from mail_mailboxes>"]} -> mail_read {"message_ids":["<id from mail_search>"]}. Every id is copied verbatim from the result that returned it; never invent one or borrow a field name from a different operation — mail_read takes message_ids, never account_id or mailbox_ids.
 - Read flow, calendar: calendar_list -> calendar_events {"calendar_ids":["<id>"],"start":"<RFC3339>","end":"<RFC3339>","timezone":"<IANA>"}, or calendar_free_slots (adds "duration_minutes" and "working_hours":{"start":"HH:MM","end":"HH:MM"}), or calendar_event {"event_id":"<id from calendar_events>"} for one item.
+- Calendar events are Calendar records, never project files. To find or edit an existing or recent event, never use list_dir, glob, grep, or workspace search: query calendar_events for a bounded time range, then calendar_event if needed. For calendar_update_event, copy event_id and expected_version from that fresh Calendar read; do not infer either from chat history.
 - A read result's coverage field states whether it is complete. Never present a partial result as the whole inbox or the whole calendar.
 - change_prepare {"changes":[...]} only previews; it changes nothing. change_apply {"plan_id":"<id from change_prepare>"} executes only after the human approves that exact plan in their own review, not because you called change_prepare. Never put change_prepare and change_apply in the same tool batch; wait for the returned plan and a separate approval.
 - change_apply's result reports "outcomes":[{"outcome":"applied"|"stale"|"failed"|"outcome_unknown",...}] plus "applied"/"failed"/"unknown" counts — read them before saying anything happened. Only "applied" means the change is confirmed to have happened. "outcome_unknown" means the effect could not be established — it is not evidence of success and never means "probably worked because the call completed"; tell the user it could not be confirmed and show the detail, never report it as done. Calling every documented step in order is not itself success; the result's own outcome is the only thing that is.
