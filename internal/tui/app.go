@@ -1576,7 +1576,7 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// this field back in instead.
 	for _, r := range results {
 		if r.Call.Tool == tools.ToolPersonalApps && r.Output != "" {
-			m.lastPersonalAppsResult = truncateAgentText(r.Output, 2048)
+			m.lastPersonalAppsResult = truncatePersonalAppsDebugResult(r.Output, 2048)
 		}
 	}
 	// Native calls (they carry IDs) answer with role:"tool" messages per the

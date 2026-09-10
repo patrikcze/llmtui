@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -809,7 +810,8 @@ func (m *Model) debugOverlay() string {
 		m.kv(&b, "contract raw", terminaltext.Sanitize(normalizeWhitespace(d.AgentContractRaw)))
 	}
 	if d.PersonalAppsResult != "" {
-		m.kv(&b, "personal_apps result", terminaltext.Sanitize(normalizeWhitespace(d.PersonalAppsResult)))
+		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
+		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")
 	}
 	if d.Duration > 0 {
 		m.kv(&b, "duration", d.Duration.Round(10*time.Millisecond).String())
@@ -910,6 +912,23 @@ func (m *Model) debugOverlay() string {
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("full section text: /prompt composed"))
 	return m.overlayFooter(&b)
+}
+
+// formatPersonalAppsDebugResult keeps the model-visible untrusted frame but
+// expands its JSON body for the human-facing debug overlay. Overlays do not
+// apply the chat renderer's width wrapping, so flattening this result made a
+// bridge error appear as one clipped line with no reachable detail.
+func formatPersonalAppsDebugResult(result string) string {
+	result = terminaltext.Sanitize(result)
+	lines := strings.Split(result, "\n")
+	if len(lines) != 3 {
+		return result
+	}
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, []byte(lines[1]), "", "  "); err != nil {
+		return result
+	}
+	return lines[0] + "\n" + formatted.String() + "\n" + lines[2]
 }
 
 // --- /keys -----------------------------------------------------------------

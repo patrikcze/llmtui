@@ -10,7 +10,9 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/personalapps"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
+	"github.com/patrikcze/llmtui/internal/untrusted"
 )
 
 // personalAppsTestModel is newTestModel with the integration enabled and
@@ -403,5 +405,33 @@ func TestSendToolResultsRecordsPersonalAppsResultForDebug(t *testing.T) {
 	}})
 	if !strings.Contains(m.lastDebug.PersonalAppsResult, "boom-detail") {
 		t.Fatalf("lastDebug.PersonalAppsResult = %q, want the tool's own output", m.lastDebug.PersonalAppsResult)
+	}
+}
+
+func TestPersonalAppsDebugKeepsErrorDetailReadable(t *testing.T) {
+	m := newTestModel(t)
+	m.lastDebug.When = time.Now()
+	m.lastDebug.PersonalAppsResult = untrusted.Frame("personal_apps", "change_apply", `{"operation":"change_apply","outcomes":[{"outcome":"outcome_unknown","code":"internal","detail":"Mail AppleEvent error -1728"}]}`)
+
+	overlay := terminaltext.Sanitize(m.debugOverlay())
+	for _, want := range []string{
+		"personal_apps result\n",
+		"\n  \"outcomes\": [",
+		"\"detail\": \"Mail AppleEvent error -1728\"",
+	} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("debug overlay missing %q:\n%s", want, overlay)
+		}
+	}
+}
+
+func TestTruncatePersonalAppsDebugResultKeepsTailDetail(t *testing.T) {
+	value := strings.Repeat("x", 180) + `{"detail":"tail-error"}`
+	got := truncatePersonalAppsDebugResult(value, 128)
+	if !strings.Contains(got, "tail-error") {
+		t.Fatalf("truncated diagnostic lost tail detail: %q", got)
+	}
+	if !strings.Contains(got, "showing beginning and end") {
+		t.Fatalf("truncated diagnostic omitted its marker: %q", got)
 	}
 }
