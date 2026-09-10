@@ -322,9 +322,47 @@ func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
 		"calendar_create_event", "calendar_update_event",
 		"never invent",
 		"not supported",
+		"never tools to call by themselves",
 	} {
 		if !strings.Contains(PersonalAppsInstructions, want) {
 			t.Errorf("PersonalAppsInstructions does not mention %q", want)
 		}
+	}
+}
+
+// TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools guards the fix for
+// a live, repeated failure (Gemma 4 E4B, both via LM Studio and embedded):
+// the model called calendar_create_event directly as if it were its own
+// tool — it appears in change_prepare's changes[] schema and in
+// PersonalAppsInstructions' change-shape examples, indistinguishable in
+// naming convention from real tool names it had just successfully called
+// (status, calendar_list) — and got "unknown tool" both times, natively and
+// after falling back to the fenced protocol, because it never is one: it is
+// only a value for one changes[] entry's "type" field. Both the tool's own
+// description and its changes field description must say so explicitly,
+// since native tool-calling models weight a tool's own schema text more
+// than the shared system-prompt paragraph.
+func TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools(t *testing.T) {
+	var changePrepareDescription string
+	for _, s := range PersonalAppsSpecs() {
+		if s.Name == "change_prepare" {
+			changePrepareDescription = s.Description
+		}
+	}
+	if changePrepareDescription == "" {
+		t.Fatal("PersonalAppsSpecs() has no change_prepare entry")
+	}
+	if !strings.Contains(changePrepareDescription, "never separate tools") {
+		t.Errorf("change_prepare description = %q, want it to say change types are never separate tools", changePrepareDescription)
+	}
+
+	schema := personalAppsSchemaOf(t, "change_prepare")
+	changes, ok := schema.Properties["changes"].(map[string]any)
+	if !ok {
+		t.Fatal("change_prepare schema is missing a changes property")
+	}
+	desc, _ := changes["description"].(string)
+	if !strings.Contains(desc, "never tool names") {
+		t.Errorf("changes field description = %q, want it to say these are never tool names", desc)
 	}
 }
