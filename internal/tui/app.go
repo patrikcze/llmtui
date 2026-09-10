@@ -265,9 +265,13 @@ type Model struct {
 	lastUserMsg         string
 	lastImages          []provider.Image
 	lastDebug           debugInfo
-	debugMode           bool
-	keys                keyInspectorState // /keys interactive inspector overlay
-	cfgPath             string
+	// lastPersonalAppsResult survives a lastDebug reset (every request-prep
+	// path replaces lastDebug wholesale); each debugInfo{} construction site
+	// copies it back in. See sendToolResults.
+	lastPersonalAppsResult string
+	debugMode              bool
+	keys                   keyInspectorState // /keys interactive inspector overlay
+	cfgPath                string
 
 	// Optional bounded verified loop. The implementation lives in
 	// agent_loop.go so ordinary chat remains a direct compatibility path.
@@ -1565,6 +1569,16 @@ func (m *Model) denyPendingTools() tea.Cmd {
 func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// Results must reach the model, not a stale cached reply.
 	m.bypassCache = true
+	// Kept on the model, not directly on lastDebug: every path below
+	// (continueChat, dispatch) replaces m.lastDebug wholesale with a fresh
+	// debugInfo{} for the next request, which would erase an assignment made
+	// here before it was ever displayed. Each debugInfo{} literal copies
+	// this field back in instead.
+	for _, r := range results {
+		if r.Call.Tool == tools.ToolPersonalApps && r.Output != "" {
+			m.lastPersonalAppsResult = truncateAgentText(r.Output, 2048)
+		}
+	}
 	// Native calls (they carry IDs) answer with role:"tool" messages per the
 	// function-calling protocol; parsed fenced blocks keep the text protocol.
 	if len(results) > 0 && results[0].Call.ID != "" {

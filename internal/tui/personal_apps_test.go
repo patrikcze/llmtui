@@ -387,3 +387,21 @@ func TestPersonalAppsPrivateSessionBlocksSaveAndCache(t *testing.T) {
 		t.Fatal("saveSession succeeded after disconnect during a private session")
 	}
 }
+
+// TestSendToolResultsRecordsPersonalAppsResultForDebug guards a real
+// diagnostic gap found live: a failed mutation's own outcomes/code/detail
+// JSON — exactly what the model received — had no path into /debug last, so
+// a real bridge/JXA failure (change_apply reporting outcome_unknown) was
+// undiagnosable without asking the model to retype JSON from memory, which
+// risks paraphrasing the very detail that matters.
+func TestSendToolResultsRecordsPersonalAppsResultForDebug(t *testing.T) {
+	m := newTestModel(t)
+	output := `{"operation":"change_apply","outcomes":[{"outcome":"outcome_unknown","code":"internal","detail":"boom-detail"}]}`
+	m.sendToolResults([]tools.Result{{
+		Call:   tools.Call{ID: "call_1", Tool: tools.ToolPersonalApps},
+		Output: output,
+	}})
+	if !strings.Contains(m.lastDebug.PersonalAppsResult, "boom-detail") {
+		t.Fatalf("lastDebug.PersonalAppsResult = %q, want the tool's own output", m.lastDebug.PersonalAppsResult)
+	}
+}

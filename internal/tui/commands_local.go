@@ -808,6 +808,9 @@ func (m *Model) debugOverlay() string {
 	if d.AgentContractRaw != "" {
 		m.kv(&b, "contract raw", terminaltext.Sanitize(normalizeWhitespace(d.AgentContractRaw)))
 	}
+	if d.PersonalAppsResult != "" {
+		m.kv(&b, "personal_apps result", terminaltext.Sanitize(normalizeWhitespace(d.PersonalAppsResult)))
+	}
 	if d.Duration > 0 {
 		m.kv(&b, "duration", d.Duration.Round(10*time.Millisecond).String())
 	}
