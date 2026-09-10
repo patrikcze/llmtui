@@ -36,6 +36,24 @@ func TestClickDragSelectsAndCopiesText(t *testing.T) {
 	}
 }
 
+func TestClickDragSelectsInsideDebugOverlay(t *testing.T) {
+	m := newTestModel(t)
+	m.openOverlay("debug detail\nsecond line")
+
+	m.View() // triggers zone.Scan(), registering the viewport's bounds
+	z := waitForZone(t, chatViewportZoneID)
+
+	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
+	if !m.sel.selecting {
+		t.Fatal("click inside a debug overlay should start a selection")
+	}
+	m.Update(tea.MouseMotionMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
+	if !m.sel.hasSelection || cmd == nil {
+		t.Fatal("a debug-overlay drag should keep a selection and copy it")
+	}
+}
+
 func TestSingleCellClickDoesNotSelect(t *testing.T) {
 	m := newTestModel(t)
 	m.session.AddAssistant("some reply text")
