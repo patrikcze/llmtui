@@ -136,6 +136,25 @@ func CodeOf(err error) Code {
 	return CodeInternal
 }
 
+// MessageOf reports the model-safe message for err, empty for a nil error.
+// It never surfaces a wrapped cause (Error.Err): that field is kept for Go's
+// own error chain (errors.Is/As, %w — see Error.Error()'s own use of it),
+// not for display, and every caller that puts a message in front of a model
+// or a human must go through this accessor instead of err.Error() to keep
+// that boundary. A bridge-reported failure's Message is already bounded
+// (bridgeErrorToDomain clips it) specifically so it can be shown, unlike a
+// generic host-side error, which falls back to a fixed, content-free string.
+func MessageOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Message
+	}
+	return "an internal error occurred"
+}
+
 // StatusOf maps an error onto the Status a Result should report.
 func StatusOf(err error) Status {
 	switch CodeOf(err) {

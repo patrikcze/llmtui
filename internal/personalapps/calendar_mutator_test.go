@@ -3,6 +3,8 @@ package personalapps
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,6 +94,37 @@ func TestEventKitCalendarMutatorCreateEventAllDay(t *testing.T) {
 	}
 	if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeApplied {
 		t.Fatalf("outcomes = %+v", outcomes)
+	}
+}
+
+// TestEventKitCalendarMutatorCreateEventFailurePropagatesMessage guards the
+// same diagnostic gap fixed for mail: a create_event failure reached the
+// user as the generic "the create request could not be completed" with no
+// way to tell what actually went wrong. The underlying error's own message
+// must survive into Detail.
+func TestEventKitCalendarMutatorCreateEventFailurePropagatesMessage(t *testing.T) {
+	backend := newEventKitCalendarBackend(fakeCalendarBridgeRunner{runFn: func(request []byte) ([]byte, error) {
+		return nil, errors.New("boom-calendar")
+	}})
+	m := newEventKitCalendarMutator(backend)
+
+	start := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	ts := func(t time.Time) *Timestamp { return &Timestamp{Time: t} }
+	rc := ResolvedChange{
+		Change: Change{Type: ChangeCalendarCreateEvent, CalendarCreateEvent: &CalendarCreateEventChange{
+			CalendarID: "cal_h", Title: "New event", Start: ts(start), End: ts(start.Add(time.Hour)),
+		}},
+		Refs: map[Handle]ResourceRef{"cal_h": {Kind: KindCalendar, Adapter: AdapterCalendar, NativeID: "cal-1"}},
+	}
+	outcomes, err := m.Apply(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeUnknown {
+		t.Fatalf("outcomes = %+v, want a single unknown outcome", outcomes)
+	}
+	if !strings.Contains(outcomes[0].Detail, "boom-calendar") {
+		t.Errorf("Detail = %q, want it to include the underlying error's own message", outcomes[0].Detail)
 	}
 }
 

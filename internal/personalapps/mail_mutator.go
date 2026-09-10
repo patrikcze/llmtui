@@ -96,7 +96,7 @@ func (m *jxaMailMutator) setState(ctx context.Context, targets []MessageTarget, 
 		// every item it would have covered is unknown, not "not applied" —
 		// Mail may have partially processed the batch before the failure.
 		for _, idx := range okIdx {
-			outcomes[idx] = ItemOutcome{Target: targets[idx].MessageID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the mutation request could not be completed"}
+			outcomes[idx] = ItemOutcome{Target: targets[idx].MessageID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the mutation request could not be completed: " + MessageOf(err)}
 		}
 		return outcomes, nil
 	}
@@ -140,7 +140,7 @@ func (m *jxaMailMutator) move(ctx context.Context, rc ResolvedChange) ([]ItemOut
 	resp, err := m.backend.call(ctx, bridgeRequest{Op: "move", Move: &req})
 	if err != nil {
 		for _, idx := range okIdx {
-			outcomes[idx] = ItemOutcome{Target: change.Messages[idx].MessageID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the move request could not be completed"}
+			outcomes[idx] = ItemOutcome{Target: change.Messages[idx].MessageID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the move request could not be completed: " + MessageOf(err)}
 		}
 		return outcomes, nil
 	}
@@ -185,7 +185,7 @@ func (m *jxaMailMutator) saveDraft(ctx context.Context, rc ResolvedChange) ([]It
 	}
 	resp, err := m.backend.call(ctx, bridgeRequest{Op: "save_draft", SaveDraft: &req})
 	if err != nil {
-		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the draft request could not be completed"}}, nil
+		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the draft request could not be completed: " + MessageOf(err)}}, nil
 	}
 	if len(resp.Messages) != 1 {
 		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeBridgeProtocolError, Detail: "the draft response did not confirm the saved draft"}}, nil
