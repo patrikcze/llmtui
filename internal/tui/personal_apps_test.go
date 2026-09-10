@@ -3,13 +3,16 @@ package tui
 import (
 	"context"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/personalapps"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
+	"github.com/patrikcze/llmtui/internal/untrusted"
 )
 
 // personalAppsTestModel is newTestModel with the integration enabled and
@@ -51,23 +54,68 @@ func TestPersonalAppsDisabledLeavesToolAbsent(t *testing.T) {
 	}
 }
 
-func TestPersonalAppsEnabledWiresServiceAndTool(t *testing.T) {
-	m := personalAppsTestModel(t, nil)
+// TestPersonalAppsEnabledOffersOnlyPermittedOperations pins the contract in
+// Scope.AllowedOperations: a disabled or disconnected adapter's operations
+// are absent from the model-visible catalog rather than present and failing.
+// Before this, every operation was offered regardless of connection state,
+// so a model called calendar_list on a never-connected Calendar, got
+// app_unavailable, and could not tell an ungranted adapter from an outage.
+func TestPersonalAppsEnabledOffersOnlyPermittedOperations(t *testing.T) {
+	m := personalAppsTestModel(t, func(c *config.PersonalAppsConfig) {
+		c.Calendar.Enabled = true
+		c.Calendar.AllowedCalendars = []string{"cal-1"}
+	})
 	if m.personalApps == nil {
 		t.Fatal("personalApps was not constructed although personal_apps.enabled is true")
 	}
 	if m.toolRunner.PersonalApps == nil {
 		t.Fatal("Runner.PersonalApps was not wired")
 	}
-	found := 0
+
+	offered := offeredPersonalAppsOperations(m)
+	if !slices.Equal(offered, permittedPersonalAppsOperations(m)) {
+		t.Fatalf("offered %v, want exactly the permitted operations %v",
+			offered, permittedPersonalAppsOperations(m))
+	}
+	if slices.Contains(offered, string(personalapps.OpCalendarList)) {
+		t.Fatalf("offered %v includes calendar_list while Calendar is not connected", offered)
+	}
+
+	if err := m.personalApps.Connect(personalapps.AdapterCalendar); err != nil {
+		t.Fatalf("Connect(calendar): %v", err)
+	}
+	connected := offeredPersonalAppsOperations(m)
+	if !slices.Equal(connected, permittedPersonalAppsOperations(m)) {
+		t.Fatalf("after connecting, offered %v, want exactly the permitted operations %v",
+			connected, permittedPersonalAppsOperations(m))
+	}
+	// Calendar operations become reachable only where the platform supports
+	// them at all, so follow Status rather than asserting a fixed set.
+	if want := slices.Contains(permittedPersonalAppsOperations(m), string(personalapps.OpCalendarList)); want &&
+		!slices.Contains(connected, string(personalapps.OpCalendarList)) {
+		t.Fatalf("after connecting, offered %v omits a permitted calendar_list", connected)
+	}
+}
+
+func offeredPersonalAppsOperations(m *Model) []string {
+	out := make([]string, 0, len(personalapps.Operations()))
 	for _, spec := range m.eligibleToolSpecs() {
 		if personalapps.Operation(spec.Name).Valid() {
-			found++
+			out = append(out, spec.Name)
 		}
 	}
-	if want := len(personalapps.Operations()); found != want {
-		t.Fatalf("eligibleToolSpecs has %d personal_apps operations, want all %d", found, want)
+	slices.Sort(out)
+	return out
+}
+
+func permittedPersonalAppsOperations(m *Model) []string {
+	ops := m.personalApps.Status().Operations
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, string(op))
 	}
+	slices.Sort(out)
+	return out
 }
 
 func TestDoctorPersonalAppsExplainsMissingCalendarHelperWithoutLaunchingIt(t *testing.T) {
@@ -339,5 +387,51 @@ func TestPersonalAppsPrivateSessionBlocksSaveAndCache(t *testing.T) {
 	}
 	if _, err := m.saveSession(false); err == nil {
 		t.Fatal("saveSession succeeded after disconnect during a private session")
+	}
+}
+
+// TestSendToolResultsRecordsPersonalAppsResultForDebug guards a real
+// diagnostic gap found live: a failed mutation's own outcomes/code/detail
+// JSON — exactly what the model received — had no path into /debug last, so
+// a real bridge/JXA failure (change_apply reporting outcome_unknown) was
+// undiagnosable without asking the model to retype JSON from memory, which
+// risks paraphrasing the very detail that matters.
+func TestSendToolResultsRecordsPersonalAppsResultForDebug(t *testing.T) {
+	m := newTestModel(t)
+	output := `{"operation":"change_apply","outcomes":[{"outcome":"outcome_unknown","code":"internal","detail":"boom-detail"}]}`
+	m.sendToolResults([]tools.Result{{
+		Call:   tools.Call{ID: "call_1", Tool: tools.ToolPersonalApps},
+		Output: output,
+	}})
+	if !strings.Contains(m.lastDebug.PersonalAppsResult, "boom-detail") {
+		t.Fatalf("lastDebug.PersonalAppsResult = %q, want the tool's own output", m.lastDebug.PersonalAppsResult)
+	}
+}
+
+func TestPersonalAppsDebugKeepsErrorDetailReadable(t *testing.T) {
+	m := newTestModel(t)
+	m.lastDebug.When = time.Now()
+	m.lastDebug.PersonalAppsResult = untrusted.Frame("personal_apps", "change_apply", `{"operation":"change_apply","outcomes":[{"outcome":"outcome_unknown","code":"internal","detail":"Mail AppleEvent error -1728"}]}`)
+
+	overlay := terminaltext.Sanitize(m.debugOverlay())
+	for _, want := range []string{
+		"personal_apps result\n",
+		"\n  \"outcomes\": [",
+		"\"detail\": \"Mail AppleEvent error -1728\"",
+	} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("debug overlay missing %q:\n%s", want, overlay)
+		}
+	}
+}
+
+func TestTruncatePersonalAppsDebugResultKeepsTailDetail(t *testing.T) {
+	value := strings.Repeat("x", 180) + `{"detail":"tail-error"}`
+	got := truncatePersonalAppsDebugResult(value, 128)
+	if !strings.Contains(got, "tail-error") {
+		t.Fatalf("truncated diagnostic lost tail detail: %q", got)
+	}
+	if !strings.Contains(got, "showing beginning and end") {
+		t.Fatalf("truncated diagnostic omitted its marker: %q", got)
 	}
 }

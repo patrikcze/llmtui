@@ -367,15 +367,36 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 	t.Run("malformed", func(t *testing.T) {
 		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
 		router.Push(`<tool_call>{"name":"weather","arguments":{"city":"Prague"}`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), "malformed") {
-			t.Fatalf("Finish error = %v", err)
+		_, _, err := router.Finish()
+		var malformed *embedded.MalformedToolCallError
+		// Must be the typed error, not just a string containing "malformed":
+		// Provider.Chat type-switches on it to decide EventDone versus a hard
+		// EventError (see embedded.TestChatMalformedToolCallIsSoftDoneNotHardError).
+		if !errors.As(err, &malformed) {
+			t.Fatalf("Finish error = %T %v, want *embedded.MalformedToolCallError", err, err)
 		}
 	})
 	t.Run("unknown", func(t *testing.T) {
+		// A plain unknown name (as opposed to an mcp__server__tool-shaped
+		// one, see TestToolOutputRouterReturnsTypedUnofferedToolError) must
+		// not abort the whole generation: reproduced live with Gemma 4
+		// calling mail_save_draft directly (a change_prepare change type,
+		// never a tool) and getting a hard "generation failed" that ended
+		// the turn with no way to recover. The call is still returned,
+		// carrying the problem in ArgumentsError exactly like a missing or
+		// invalid argument does, so the model sees it as a normal tool
+		// result and can correct itself in the same turn.
 		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
 		router.Push(`<tool_call>{"name":"delete_everything","arguments":{}}</tool_call>`)
-		if _, _, err := router.Finish(); err == nil || !strings.Contains(err.Error(), "unknown tool") || !strings.Contains(err.Error(), "weather") {
-			t.Fatalf("Finish error = %v", err)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish error = %v, want no error (a graceful ArgumentsError instead)", err)
+		}
+		if len(calls) != 1 || calls[0].Name != "delete_everything" {
+			t.Fatalf("calls = %+v", calls)
+		}
+		if !strings.Contains(calls[0].ArgumentsError, "unknown tool") || !strings.Contains(calls[0].ArgumentsError, "weather") {
+			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
 	t.Run("invalid typed argument", func(t *testing.T) {
@@ -396,6 +417,24 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
 		}
 	})
+}
+
+// TestToolOutputRouterRejectsUnrepairedJSONToolBlock covers the third
+// malformed-tool-call throw site (validateUnrepairedJSONToolBlocks, standard
+// and Phi formats): a second <tool_call> block with invalid JSON must fail
+// the whole response even though the first block parsed cleanly, and it must
+// fail with the same typed error as the other two throw sites so
+// Provider.Chat's soft-EventDone translation covers every tool format
+// uniformly, not just Gemma.
+func TestToolOutputRouterRejectsUnrepairedJSONToolBlock(t *testing.T) {
+	router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
+	router.Push(`<tool_call>{"name":"weather","arguments":{"city":"Prague"}}</tool_call>` +
+		`<tool_call>{"name":"weather","arguments":{city:Prague}}</tool_call>`)
+	_, calls, err := router.Finish()
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
+	}
 }
 
 func TestToolOutputRouterGemmaZeroArgumentCallsHonorSchema(t *testing.T) {
@@ -602,5 +641,233 @@ func TestPrepareToolMessagesAddsGemmaFollowupToClonedUserTurn(t *testing.T) {
 	}
 	if strings.Contains(standard[len(standard)-1].Content, gemmaToolFollowupInstruction) {
 		t.Fatalf("non-Gemma user turn changed: %+v", standard)
+	}
+}
+
+// TestToolOutputRouterGemmaRejectsSwallowedKey reproduces the live
+// calendar_events failure: a Gemma 4 MoE finetune at temperature 0.8 omitted
+// the closing quote token after "start", so yzma's parseGemmaArgs read past
+// the delimiter and absorbed `, end:<|"|>...` into start's value. The call
+// then reached normalizeToolCalls looking structurally valid but missing
+// "end", which reported a missing required argument — sending the model to
+// retry the identical call until the repeated-call guard killed the turn.
+// A provably corrupt parse must be malformed instead, so the router's
+// existing one-shot retry and fenced-protocol fallback can engage.
+func TestToolOutputRouterGemmaRejectsSwallowedKey(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+		`start:<|"|>2026-09-09T00:00:00+02:00, end:<|"|>2026-09-09T23:59:59+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
+	}
+}
+
+// TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements guards the
+// swallowed-key check against the shape closest to it: a bracketed array of
+// quote-wrapped elements also puts a comma next to quote tokens, but that
+// comma is followed by a quote token directly rather than by an identifier
+// and a colon, so the check must not fire.
+//
+// yzma's parseGemmaArgs has no case for "[", so it truncates this value at
+// the first top-level comma and loses "cal_2"; repairGemmaBracketSplitArgs
+// re-parses the block and both elements must survive.
+func TestToolOutputRouterGemmaKeepsBracketedArrayWithMultipleElements(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"properties":{"calendar_ids":{"type":"array","items":{"type":"string"}}}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>]}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want the call to survive the swallowed-key check", calls)
+	}
+	if calls[0].Arguments != `{"calendar_ids":["cal_1","cal_2"]}` {
+		t.Fatalf("arguments = %s, want both array elements", calls[0].Arguments)
+	}
+}
+
+// TestToolOutputRouterGemmaRepairsBracketSplitArguments reproduces the live
+// calendar_events failure against three calendars: the model emitted a
+// correct call, but yzma's parseGemmaArgs has no case for "[", so it cut
+// calendar_ids at the array's first inner comma and folded the rest of the
+// array plus the following key into one nonsense key — making "end" look
+// like an argument the model never sent. Every retry was told the same, so
+// the repeated-call guard ended the turn.
+func TestToolOutputRouterGemmaRepairsBracketSplitArguments(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+		`start:<|"|>2026-09-09T00:00:00+02:00<|"|>, end:<|"|>2026-09-09T23:59:59+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one call", calls)
+	}
+	if calls[0].ArgumentsError != "" {
+		t.Fatalf("ArgumentsError = %q, want the call to be dispatchable", calls[0].ArgumentsError)
+	}
+	want := `{"calendar_ids":["cal_1","cal_2","cal_3"],"end":"2026-09-09T23:59:59+02:00",` +
+		`"start":"2026-09-09T00:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[0].Arguments != want {
+		t.Fatalf("Arguments = %s, want %s", calls[0].Arguments, want)
+	}
+}
+
+// TestToolOutputRouterGemmaRepairsRepeatedCallsPositionally guards against
+// silently applying the first call's arguments to a later call with the same
+// name. yzma preserves call order, but the old repair consumed a raw block
+// only when a call needed repair. A clean first calendar_events call therefore
+// left its block available for a bracket-split second call, which then borrowed
+// the first time window instead of its own.
+func TestToolOutputRouterGemmaRepairsRepeatedCallsPositionally(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>` +
+		`call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+		`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}` +
+		`call:calendar_events{calendar_ids:[<|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+		`start:<|"|>2026-09-10T10:00:00+02:00<|"|>, end:<|"|>2026-09-10T11:00:00+02:00<|"|>, ` +
+		`timezone:<|"|>Europe/Prague<|"|>}` +
+		`<toolcall|>`)
+	_, calls, err := router.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %+v, want two calls", calls)
+	}
+	wantFirst := `{"calendar_ids":["cal_1"],"end":"2026-09-09T09:00:00+02:00",` +
+		`"start":"2026-09-09T08:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[0].Arguments != wantFirst {
+		t.Fatalf("first Arguments = %s, want %s", calls[0].Arguments, wantFirst)
+	}
+	wantSecond := `{"calendar_ids":["cal_2","cal_3"],"end":"2026-09-10T11:00:00+02:00",` +
+		`"start":"2026-09-10T10:00:00+02:00","timezone":"Europe/Prague"}`
+	if calls[1].Arguments != wantSecond {
+		t.Fatalf("second Arguments = %s, want %s", calls[1].Arguments, wantSecond)
+	}
+}
+
+func TestToolOutputRouterGemmaRepairMatchesYZMACallSelection(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name: "calendar_events",
+		Parameters: []byte(`{
+			"type":"object",
+			"required":["calendar_ids","start","end","timezone"],
+			"properties":{
+				"calendar_ids":{"type":"array","items":{"type":"string"}},
+				"start":{"type":"string"},
+				"end":{"type":"string"},
+				"timezone":{"type":"string"}
+			}
+		}`),
+	}
+
+	t.Run("whitespace before opening brace", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+		router.Push(`<|toolcall>call:calendar_events {` +
+			`calendar_ids:[<|"|>cal_1<|"|>, <|"|>cal_2<|"|>], ` +
+			`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}<toolcall|>`)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		if len(calls) != 1 || !strings.Contains(calls[0].Arguments, `"calendar_ids":["cal_1","cal_2"]`) {
+			t.Fatalf("calls = %+v, want repaired calendar ids", calls)
+		}
+	})
+
+	t.Run("mixed empty and populated calls", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+		router.Push(`<|toolcall>` +
+			`call:calendar_events{calendar_ids:<|"|>cal_1<|"|>, ` +
+			`start:<|"|>2026-09-09T08:00:00+02:00<|"|>, end:<|"|>2026-09-09T09:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}` +
+			`call:calendar_events{}` +
+			`call:calendar_events{calendar_ids:[<|"|>cal_2<|"|>, <|"|>cal_3<|"|>], ` +
+			`start:<|"|>2026-09-10T10:00:00+02:00<|"|>, end:<|"|>2026-09-10T11:00:00+02:00<|"|>, ` +
+			`timezone:<|"|>Europe/Prague<|"|>}` +
+			`<toolcall|>`)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish: %v", err)
+		}
+		if len(calls) != 2 {
+			t.Fatalf("calls = %+v, want two populated calls", calls)
+		}
+		if !strings.Contains(calls[1].Arguments, `"calendar_ids":["cal_2","cal_3"]`) ||
+			!strings.Contains(calls[1].Arguments, `"start":"2026-09-10T10:00:00+02:00"`) {
+			t.Fatalf("second call = %+v, want its own repaired arguments", calls[1])
+		}
+	})
+}
+
+// TestToolOutputRouterGemmaRejectsImpossibleKey covers the residue shapes the
+// bracket-aware re-parse cannot recover: whatever survives must never be
+// dispatched or reported as a missing argument, since the absorbed key is not
+// one the model declined to send.
+func TestToolOutputRouterGemmaRejectsImpossibleKey(t *testing.T) {
+	tool := provider.ToolSpec{
+		Name:       "calendar_events",
+		Parameters: []byte(`{"type":"object","properties":{"start":{"type":"string"}}}`),
+	}
+	router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{tool})
+	router.Push(`<|toolcall>call:calendar_events{<|"|>x<|"|>], start:<|"|>2026-09-09T00:00:00+02:00<|"|>}<toolcall|>`)
+	_, calls, err := router.Finish()
+	var malformed *embedded.MalformedToolCallError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
 	}
 }

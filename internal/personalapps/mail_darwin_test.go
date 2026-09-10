@@ -119,3 +119,63 @@ func TestNewMailBackendReturnsNonNilOnDarwin(t *testing.T) {
 		t.Fatal("expected a non-nil MailBackend on darwin")
 	}
 }
+
+// The bridge is a JXA program, so this source-level contract protects a
+// platform-specific behavior that the ordinary fake bridge tests cannot
+// execute: draft confirmation must use Mail's stable message id, never an
+// English or position-based Drafts-folder heuristic. The latter reports a
+// failed mutation after successfully saving a draft on localized accounts.
+func TestMailBridgeConfirmsSavedDraftByIdentityNotLocalizedFolderName(t *testing.T) {
+	for _, want := range []string{
+		"function draftIDsBeforeSave(Mail)",
+		"function newGlobalDraftSince(Mail, before)",
+		"function findSavedDraft(Mail, account, nativeID, beforeDraftIDs)",
+		"messages.whose({ id: parseInt(nativeID, 10) })()",
+		"path: [segs[i]]",
+		"globalDraftsPathSegment = '__llmtui_global_drafts__'",
+		"globalDrafts = Mail.draftsMailbox()",
+		"beforeDraftIDs = draftIDsBeforeSave(Mail)",
+		"findSavedDraft(Mail, account, nativeID, beforeDraftIDs)",
+		"ref.path[0] === globalDraftsPathSegment",
+	} {
+		if !strings.Contains(mailBridgeScript, want) {
+			t.Errorf("mail bridge does not retain identity-based draft confirmation %q", want)
+		}
+	}
+	for _, obsolete := range []string{
+		"/^drafts$/i",
+		"['Drafts']",
+		"msgs[msgs.length - 1]",
+	} {
+		if strings.Contains(mailBridgeScript, obsolete) {
+			t.Errorf("mail bridge still uses localized or position-based confirmation %q", obsolete)
+		}
+	}
+}
+
+// Saving a draft through Mail's JXA dictionary requires adding the constructed
+// outgoing message to the application's outgoingMessages collection. A plain
+// object specifier (or a redundant .make call) is not a draft Mail can save.
+// The selected account is also an explicit part of the personal-apps contract,
+// so the script must set its sender rather than relying on Mail's default.
+func TestMailBridgeCreatesDraftInSelectedAccount(t *testing.T) {
+	for _, want := range []string{
+		"senderAddresses = account.emailAddresses()",
+		"draft = Mail.OutgoingMessage({ visible: false })",
+		"Mail.outgoingMessages.push(draft)",
+		"draft.sender = sender",
+		"Mail.Recipient({ address: list[i] })",
+	} {
+		if !strings.Contains(mailBridgeScript, want) {
+			t.Errorf("mail bridge does not retain draft creation contract %q", want)
+		}
+	}
+	for _, obsolete := range []string{
+		"Mail.OutgoingMessage().make()",
+		"Mail.Recipient({ address: list[i] }).make()",
+	} {
+		if strings.Contains(mailBridgeScript, obsolete) {
+			t.Errorf("mail bridge still uses an unowned JXA object %q", obsolete)
+		}
+	}
+}

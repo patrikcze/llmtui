@@ -37,11 +37,12 @@ type selectionState struct {
 }
 
 // beginSelection starts a new selection at the clicked cell, replacing any
-// prior one. Only left-clicks inside the chat viewport start a selection;
-// a click elsewhere (input box, status bar) or while an overlay owns the
-// viewport leaves selection state untouched.
+// prior one. Only left-clicks inside the viewport start a selection; a click
+// elsewhere (input box or status bar) leaves selection state untouched. An
+// overlay still uses this viewport, so it is selectable too — especially
+// important for /debug last diagnostics.
 func (m *Model) beginSelection(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
-	if msg.Button != tea.MouseLeft || m.overlayOpen {
+	if msg.Button != tea.MouseLeft {
 		return m, nil
 	}
 	z := zone.Get(chatViewportZoneID)

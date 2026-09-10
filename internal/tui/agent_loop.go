@@ -1480,3 +1480,23 @@ func truncateAgentText(value string, maxBytes int) string {
 	prefix, _ := terminaltext.TruncateBytes(value, maxBytes)
 	return prefix + "…"
 }
+
+// truncatePersonalAppsDebugResult keeps both ends of a bounded diagnostic.
+// A personal_apps result is framed JSON, and an actionable bridge error is
+// normally in outcomes[].detail near its end. The generic head-only helper
+// above hid exactly that field in /debug last.
+func truncatePersonalAppsDebugResult(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	const marker = "\n… personal_apps diagnostic truncated; showing beginning and end …\n"
+	if maxBytes <= len(marker) {
+		out, _ := terminaltext.TruncateBytes(marker, maxBytes)
+		return out
+	}
+	headBytes := (maxBytes - len(marker)) / 2
+	tailBytes := maxBytes - len(marker) - headBytes
+	head, _ := terminaltext.TruncateBytes(value, headBytes)
+	tail, _ := terminaltext.TailBytes(value, tailBytes)
+	return head + marker + tail
+}

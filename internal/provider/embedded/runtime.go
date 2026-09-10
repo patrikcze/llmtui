@@ -2,6 +2,7 @@ package embedded
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 )
@@ -59,6 +60,29 @@ type GenResult struct {
 	ToolCalls        []provider.ToolCall
 	Turn             *provider.AssistantTurn
 	Truncated        bool
+}
+
+// MalformedToolCallError is the error a Runtime.Generate implementation
+// returns when the model's own output made a tool-call attempt recognizable
+// (a call-start marker, or a JSON tool-call wrapper, was seen) but the
+// runtime's own grammar/text parser could not turn it into a structured
+// call. This is the embedded-runtime equivalent of what
+// provider.ChatEvent.MalformedToolCall already names for remote backends
+// (openai.looksLikeUnparsedToolCall, the Harmony content guard): the
+// backend's own parser failing on a real attempt, not a model that chose not
+// to call a tool.
+//
+// Provider.Chat must translate this into EventDone with MalformedToolCall
+// set, never into a hard EventError: the existing one-shot-retry /
+// fenced-protocol-fallback recovery already handles this outcome for remote
+// backends and applies equally well here, since the fenced protocol does not
+// depend on the runtime's native call-grammar parser at all.
+type MalformedToolCallError struct {
+	Format ToolFormat
+}
+
+func (e *MalformedToolCallError) Error() string {
+	return fmt.Sprintf("model emitted a recognizable but malformed %s tool call", e.Format)
 }
 
 // NativeDiagnostics describes the native backends visible to a loaded runtime.

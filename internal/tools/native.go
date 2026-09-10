@@ -446,9 +446,29 @@ func WebSpecs() []provider.ToolSpec {
 // actually valid for its operation — this schema only narrows what a model
 // has to guess before finding that out.
 func PersonalAppsSpecs() []provider.ToolSpec {
-	ops := personalapps.Operations()
+	return personalAppsSpecsFor(personalapps.Operations())
+}
+
+// PersonalAppsSpecsFor returns only the specs a caller may currently invoke,
+// given personalapps.StatusView.Operations. Offering the full catalog
+// regardless of connection state contradicts Scope.AllowedOperations' own
+// contract ("a disabled or disconnected adapter's operations are absent
+// rather than present and failing") and was observed live: with Calendar
+// enabled but never connected, a model called calendar_list, got
+// app_unavailable, and had no way to tell a permanently ungranted adapter
+// from a transient outage. Only PersonalAppsSpecs' full catalog feeds the
+// capability registry, which must classify every operation name whether or
+// not it is callable right now.
+func PersonalAppsSpecsFor(allowed []personalapps.Operation) []provider.ToolSpec {
+	return personalAppsSpecsFor(allowed)
+}
+
+func personalAppsSpecsFor(ops []personalapps.Operation) []provider.ToolSpec {
 	specs := make([]provider.ToolSpec, 0, len(ops))
 	for _, op := range ops {
+		if !op.Valid() {
+			continue
+		}
 		specs = append(specs, provider.ToolSpec{
 			Name:        string(op),
 			Description: personalAppsOperationDescription(op),
@@ -485,7 +505,7 @@ func personalAppsOperationDescription(op personalapps.Operation) string {
 	case personalapps.OpCalendarFreeSlots:
 		return "Compute deterministic free-time gaps from observed busy intervals in the selected calendars only — never other people's availability."
 	case personalapps.OpChangePrepare:
-		return "Validate a bounded set of Mail/Calendar changes and return an immutable plan_id preview. Performs no external write."
+		return "Validate a bounded set of Mail/Calendar changes and return an immutable plan_id preview. Performs no external write. mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, and calendar_update_event are change TYPES for this tool's changes[] entries, never separate tools — do not call one of those names directly; it will fail with \"unknown tool\"."
 	case personalapps.OpChangeApply:
 		return "Execute one plan a human has already approved in their own review. There is no argument that grants approval yourself."
 	case personalapps.OpOpenItem:
@@ -550,7 +570,7 @@ func personalAppsFieldSchemas() map[string]map[string]any {
 		"item_id": field(str, "The item to open in its owning app, an id from any prior read result."),
 		"changes": map[string]any{
 			"type":        "array",
-			"description": "One or more change objects — see PersonalAppsInstructions for each change type's exact shape (mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, calendar_update_event).",
+			"description": "One or more change objects, each with its own \"type\" field (mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, or calendar_update_event) — see PersonalAppsInstructions for each type's exact shape. These are values for \"type\" inside this array, never tool names to call by themselves.",
 			"items":       map[string]any{"type": "object"},
 		},
 		"plan_id": field(str, "The plan_id a prior change_prepare returned, after a human approved it in a separate turn."),

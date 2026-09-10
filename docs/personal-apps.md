@@ -40,17 +40,53 @@ To find Mail's native account UUIDs, run this read-only one-off command:
 osascript -l JavaScript -e 'Application("Mail").accounts().map(a => a.name() + " => " + a.id())'
 ```
 
-`calendar_list` returns only calendars already in the allowlist. This release
-does not expose a pre-scope calendar-ID discovery command, so obtain the native
-EventKit identifier during the helper's explicit setup/validation process and
-add only the identifiers you intend to expose. Reload config, then explicitly
-run `/personal-apps connect mail` or `/personal-apps connect calendar`.
+`calendar_list` returns only calendars already in the allowlist, so it cannot
+be used to discover identifiers. From a source checkout, install the
+companion, request Calendar access, and print its native EventKit identifiers
+with one explicit command:
+
+```sh
+make calendar-helper-setup
+```
+
+Unlike the Mail command above, this one is not read-only in the privacy sense:
+it is the step that triggers the macOS prompt. Grant **Full Calendar Access**
+when asked. It then prints a JSON array with one entry per calendar:
+
+```json
+[
+  {
+    "id" : "35284761-30D3-418F-A1D7-7C67DC3417A1",
+    "shared" : false,
+    "source" : "US ICLOUD",
+    "title" : "Domácí",
+    "writable" : true
+  }
+]
+```
+
+Copy the `id` values you intend to expose into `allowed_calendars`. Use the
+`id`, never the `title`: display titles are localized (`Domácí`, `Kalendář`)
+and match nothing. A configured identifier that matches no available calendar
+is reported as `scope_denied` rather than returning an empty list.
+
+macOS attributes a terminal-launched Calendar request to the terminal or host
+application that started it. Run setup and `llmtui` from the same terminal. If
+setup reports `permission_denied`, grant that terminal **Full Calendar Access**
+in System Settings, then retry; changing `calendar.helper_path` does not change
+this macOS privacy decision.
+
+Reload config, then explicitly run `/personal-apps connect mail` or
+`/personal-apps connect calendar`.
 
 ## Calendar companion
 
 The Calendar integration is unavailable until `calendar.helper_path` names an
-absolute executable inside a separately built or installed EventKit app
-bundle. The source-build instructions and required `Info.plist` are in
+absolute executable inside the installed EventKit app bundle. The setup
+command installs the default bundle to
+`~/Library/Application Support/llmtui/helpers/llmtui-personal-apps-calendar.app`;
+set `helper_path` to its executable inside `Contents/MacOS`. The source-build
+instructions and required `Info.plist` are in
 [`native/personal-apps-calendar/README.md`](../native/personal-apps-calendar/README.md).
 
 Use either `llmtui doctor` or `/doctor personal-apps` before connecting. These

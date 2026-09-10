@@ -22,6 +22,12 @@
 
 ObjC.import('Foundation');
 
+// Mail exposes one application-wide Drafts mailbox rather than placing it in
+// every account's mailbox tree. This private path segment lets a confirmed
+// draft reference round-trip through findMessageForRef without exposing a
+// localized mailbox name as an API contract.
+var globalDraftsPathSegment = '__llmtui_global_drafts__';
+
 function readStdin() {
   var data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
   return $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
@@ -434,7 +440,16 @@ function opSearch(Mail, req) {
 function findMessageForRef(Mail, ref) {
   var account = findAccount(Mail.accounts(), ref.account_id);
   if (!account) return null;
-  var mailbox = navigateToMailbox(account, ref.path);
+  var mailbox;
+  if (ref.path.length === 1 && ref.path[0] === globalDraftsPathSegment) {
+    try {
+      mailbox = Mail.draftsMailbox();
+    } catch (e) {
+      mailbox = null;
+    }
+  } else {
+    mailbox = navigateToMailbox(account, ref.path);
+  }
   if (!mailbox) return null;
   var found;
   try {
@@ -626,13 +641,107 @@ function opMailMove(Mail, req) {
 // opMailSaveDraft composes and saves a draft — a reply when in_reply_to is
 // set (using Mail's own reply command, so quoting/threading/signature come
 // from Mail itself rather than a guessed "Re:" subject), otherwise a new
-// outgoing message. It never sends. The saved draft is re-found in the
-// account's Drafts mailbox afterward and its confirmed stored state is what
-// is returned, never the in-memory object the script just built.
+// outgoing message. It never sends. The saved draft is re-found by its
+// Mail-issued native id afterward and its confirmed stored state is what is
+// returned, never the in-memory object the script just built.
+//
+// A mailbox named "Drafts" cannot be used for confirmation: mailbox names
+// are localized (for example, "Koncepty"), provider-defined, and can be
+// duplicated. Mail's scripting dictionary instead exposes one special,
+// application-wide Drafts mailbox. Some Mail versions assign an outgoing
+// message a different id once it is persisted as a stored Drafts message, so
+// capture the Drafts ids before saving and use the single new item as a
+// readback fallback when the outgoing id does not resolve directly.
+function draftIDsBeforeSave(Mail) {
+  try {
+    var messages = Mail.draftsMailbox().messages();
+    var ids = {};
+    for (var i = 0; i < messages.length; i++) {
+      try {
+        ids[String(messages[i].id())] = true;
+      } catch (e) {
+        /* one unreadable id must not discard the whole snapshot */
+      }
+    }
+    return ids;
+  } catch (e) {
+    return null;
+  }
+}
+
+function newGlobalDraftSince(Mail, before) {
+  if (!before) return null;
+  try {
+    var messages = Mail.draftsMailbox().messages();
+    var added = [];
+    for (var i = 0; i < messages.length; i++) {
+      var id;
+      try {
+        id = String(messages[i].id());
+      } catch (e) {
+        continue;
+      }
+      if (!before[id]) added.push(messages[i]);
+    }
+    if (added.length === 1) return added[0];
+  } catch (e) {
+    /* fall through to the account-tree lookup */
+  }
+  return null;
+}
+
+function findSavedDraft(Mail, account, nativeID, beforeDraftIDs) {
+  try {
+    var globalDrafts = Mail.draftsMailbox();
+    var globalFound = globalDrafts.messages.whose({ id: parseInt(nativeID, 10) })();
+    if (globalFound && globalFound.length > 0) {
+      return { message: globalFound[0], path: [globalDraftsPathSegment] };
+    }
+  } catch (e) {
+    /* fall back to implementations which expose Drafts in the account tree */
+  }
+
+  var newlyAdded = newGlobalDraftSince(Mail, beforeDraftIDs);
+  if (newlyAdded) return { message: newlyAdded, path: [globalDraftsPathSegment] };
+
+  var top;
+  try {
+    top = account.mailboxes();
+  } catch (e) {
+    return null;
+  }
+  var names = top.map(function (mb) {
+    return mb.name();
+  });
+  var segs = disambiguate(names);
+  for (var i = 0; i < top.length; i++) {
+    var found;
+    try {
+      found = top[i].messages.whose({ id: parseInt(nativeID, 10) })();
+    } catch (e) {
+      found = [];
+    }
+    if (found && found.length > 0) {
+      return { message: found[0], path: [segs[i]] };
+    }
+  }
+  return null;
+}
+
 function opMailSaveDraft(Mail, req) {
   var d = req.save_draft;
   var account = findAccount(Mail.accounts(), d.sender_account_id);
   if (!account) return errorResponse('save_draft', 'not_found', 'sender account not found');
+  var senderAddresses;
+  try {
+    senderAddresses = account.emailAddresses();
+  } catch (e) {
+    return errorResponse('save_draft', 'internal', 'sender account has no readable email address');
+  }
+  if (!senderAddresses || senderAddresses.length === 0 || !senderAddresses[0]) {
+    return errorResponse('save_draft', 'internal', 'sender account has no email address');
+  }
+  var sender = String(senderAddresses[0]);
 
   var inReplyTo = null;
   if (d.in_reply_to) {
@@ -640,21 +749,24 @@ function opMailSaveDraft(Mail, req) {
     if (!r) return errorResponse('save_draft', 'not_found', 'message being replied to was not found');
     inReplyTo = r.message;
   }
+  var beforeDraftIDs = draftIDsBeforeSave(Mail);
 
   try {
     var draft;
     if (inReplyTo) {
       draft = inReplyTo.reply({ openingWindow: false, replyToAll: false });
     } else {
-      draft = Mail.OutgoingMessage().make();
+      draft = Mail.OutgoingMessage({ visible: false });
+      Mail.outgoingMessages.push(draft);
     }
     draft.visible = false;
-    if (d.subject) draft.subject = d.subject;
+    draft.sender = sender;
+    draft.subject = d.subject || '';
     draft.content = d.body || '';
 
     var addRecipients = function (list, key) {
       for (var i = 0; i < (list || []).length; i++) {
-        draft[key].push(Mail.Recipient({ address: list[i] }).make());
+        draft[key].push(Mail.Recipient({ address: list[i] }));
       }
     };
     if (!inReplyTo) {
@@ -672,24 +784,18 @@ function opMailSaveDraft(Mail, req) {
     return errorResponse('save_draft', 'internal', String(e));
   }
 
-  var draftsBox = null;
-  var top = account.mailboxes();
-  for (var i = 0; i < top.length; i++) {
-    if (/^drafts$/i.test(top[i].name())) {
-      draftsBox = top[i];
-      break;
-    }
-  }
-  if (!draftsBox) return errorResponse('save_draft', 'internal', 'draft saved but no Drafts mailbox was found to confirm it');
-  var msgs;
+  var nativeID = '';
   try {
-    msgs = draftsBox.messages();
+    nativeID = String(draft.id());
   } catch (e) {
-    msgs = [];
+    /* reported below */
   }
-  var newest = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-  if (!newest) return errorResponse('save_draft', 'internal', 'draft saved but could not be confirmed in Drafts');
-  return { version: 1, op: 'save_draft', messages: [messageMeta(newest, d.sender_account_id, ['Drafts'])] };
+  if (!nativeID) {
+    return errorResponse('save_draft', 'internal', 'draft saved but Mail did not provide an id to confirm it');
+  }
+  var saved = findSavedDraft(Mail, account, nativeID, beforeDraftIDs);
+  if (!saved) return errorResponse('save_draft', 'internal', 'draft saved but could not be confirmed in the sender account');
+  return { version: 1, op: 'save_draft', messages: [messageMeta(saved.message, d.sender_account_id, saved.path)] };
 }
 
 function handle(req) {

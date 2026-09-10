@@ -2,15 +2,27 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
   <key>CFBundleIdentifier</key>
   <string>com.patrikcze.llmtui.personalapps.calendar</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
   <key>CFBundleName</key>
   <string>llmtui Personal Apps Calendar</string>
   <key>CFBundleExecutable</key>
   <string>llmtui-personal-apps-calendar</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSUIElement</key>
+  <true/>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>llmtui reads the calendars you explicitly allow to show your agenda and calculate local free time.</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
 </dict>
 </plist>

@@ -303,6 +303,17 @@ func (f *fixture) calendarHandle(t *testing.T) Handle {
 	return calendars[0].ID
 }
 
+func TestCalendarListReportsConfiguredIdentifierMismatch(t *testing.T) {
+	f := newFixture(t, func(opts *Options) {
+		opts.Scope.AllowedCalendars = []string{"Personal"}
+	})
+
+	res := f.run(t, `{"operation":"calendar_list"}`)
+	if res.Status != StatusDenied || res.Error == nil || res.Error.Code != CodeScopeDenied {
+		t.Fatalf("calendar_list result = %+v, want scope_denied", res)
+	}
+}
+
 func TestNewRequiresAPrivacyGateWithAnyBackend(t *testing.T) {
 	_, err := New(Options{Mail: &fakeMail{}})
 	if err == nil {

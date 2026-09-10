@@ -67,6 +67,15 @@ type debugInfo struct {
 	// task-contract request, kept so a contract park is diagnosable in
 	// `/debug last` rather than only showing an opaque error string.
 	AgentContractRaw string
+	// PersonalAppsResult is the bounded, already-sanitized Output of the most
+	// recent personal_apps tool call — the exact JSON (outcomes, codes,
+	// detail messages) the model itself received. A live investigation found
+	// this had no diagnostic path at all: change_apply's own outcome_unknown
+	// detail (see internal/personalapps.MessageOf) was visible only inside
+	// the model's own paraphrase of it, never verbatim, so a real bridge/JXA
+	// failure was undiagnosable without asking the model to retype JSON from
+	// memory. /debug last shows it, nothing else consumes it.
+	PersonalAppsResult string
 	// MemoryHits is the merged, ranked hit list from the unified
 	// memoryindex.Retriever built in compositionBase (both KindUserPreference
 	// and KindSourceChunk hits). It is observability only — /debug last shows
@@ -378,7 +387,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 				instructions += "\n" + tools.SkillInstructions
 			}
 			if m.personalApps != nil {
-				instructions += "\n" + tools.PersonalAppsFencedForm
+				for _, form := range tools.PersonalAppsFencedForms() {
+					instructions += "\n" + form
+				}
 			}
 			instructions += m.fencedDynamicToolInstructions()
 		}
@@ -1145,6 +1156,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			SummaryActive: prepared.estimate.SummaryToken > 0,
 			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 			MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
+			PersonalAppsResult: m.lastPersonalAppsResult,
 		}
 		m.failVerifiedRun(prepareErr)
 		m.endAgentRun()
@@ -1183,6 +1195,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 				SummaryActive: prepared.estimate.SummaryToken > 0,
 				NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 				MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
+				PersonalAppsResult: m.lastPersonalAppsResult,
 			}
 			// The cached answer completed this run; run-scoped skills (which
 			// were part of the key) deactivate like on a live final answer.
@@ -1248,6 +1261,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
+		PersonalAppsResult: m.lastPersonalAppsResult,
 	}
 
 	return m.startRequest(req)
@@ -1276,7 +1290,7 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 		specs = append(specs, tools.SkillSpecs()...)
 	}
 	if m.personalApps != nil {
-		specs = append(specs, tools.PersonalAppsSpecs()...)
+		specs = append(specs, tools.PersonalAppsSpecsFor(m.personalApps.Status().Operations)...)
 	}
 	specs = append(specs, mcpToolSpecs(m.mcpRegistry)...)
 	return specs
@@ -1417,6 +1431,7 @@ func (m *Model) continueChat() tea.Cmd {
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
+		PersonalAppsResult: m.lastPersonalAppsResult,
 	}
 	return m.startRequest(req)
 }

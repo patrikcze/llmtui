@@ -62,7 +62,7 @@ func (m *eventKitCalendarMutator) create(ctx context.Context, rc ResolvedChange)
 	}
 	resp, err := m.backend.call(ctx, calendarBridgeRequest{Operation: "create_event", CreateEvent: &req})
 	if err != nil {
-		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the create request could not be completed"}}, nil
+		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the create request could not be completed: " + MessageOf(err)}}, nil
 	}
 	if resp.Event == nil {
 		return []ItemOutcome{{Outcome: OutcomeUnknown, Code: CodeBridgeProtocolError, Detail: "the create response did not confirm the event"}}, nil
@@ -113,7 +113,7 @@ func (m *eventKitCalendarMutator) update(ctx context.Context, rc ResolvedChange)
 	}
 	resp, err := m.backend.call(ctx, calendarBridgeRequest{Operation: "update_event", UpdateEvent: &req})
 	if err != nil {
-		return []ItemOutcome{{Target: c.EventID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the update request could not be completed"}}, nil
+		return []ItemOutcome{{Target: c.EventID, Outcome: OutcomeUnknown, Code: CodeOf(err), Detail: "the update request could not be completed: " + MessageOf(err)}}, nil
 	}
 	if resp.Event == nil {
 		return []ItemOutcome{{Target: c.EventID, Outcome: OutcomeUnknown, Code: CodeBridgeProtocolError, Detail: "the update response did not confirm the event"}}, nil

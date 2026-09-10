@@ -2,6 +2,7 @@ package personalapps
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -266,6 +267,14 @@ func TestJXAMailMutatorSaveDraftFailurePropagates(t *testing.T) {
 	if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeUnknown {
 		t.Fatalf("outcomes = %+v, want a single unknown outcome", outcomes)
 	}
+	// Reproduced live: a save_draft failure reached the user as the generic
+	// "the draft request could not be completed" with no way to tell what
+	// actually broke, while Mail had already silently left a partial draft
+	// behind. The bridge's own message (here "boom") must survive into
+	// Detail so a real failure is diagnosable instead of opaque.
+	if !strings.Contains(outcomes[0].Detail, "boom") {
+		t.Errorf("Detail = %q, want it to include the bridge's own message", outcomes[0].Detail)
+	}
 }
 
 func TestJXAMailMutatorMutationCallFailureIsUnknownNotFailed(t *testing.T) {
@@ -294,6 +303,9 @@ func TestJXAMailMutatorMutationCallFailureIsUnknownNotFailed(t *testing.T) {
 	// read as a safe-to-retry "failed", only "unknown".
 	if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeUnknown {
 		t.Fatalf("outcomes = %+v, want a single unknown outcome", outcomes)
+	}
+	if !strings.Contains(outcomes[0].Detail, "more output than allowed") {
+		t.Errorf("Detail = %q, want it to include the underlying error's own message", outcomes[0].Detail)
 	}
 }
 

@@ -215,6 +215,25 @@ func TestDescribePersonalAppsCall(t *testing.T) {
 	}
 }
 
+// TestPersonalAppsFencedFormsOneBulletPerOperation guards the fenced-protocol
+// half of the same fix as TestPersonalAppsSpecsOneToolPerOperation: one
+// fenced tool bullet per operation, named exactly the operation string, so
+// Parse's dispatch (checking personalapps.Operation(call.Tool).Valid())
+// always finds them and matches personalapps.Operations() exactly.
+func TestPersonalAppsFencedFormsOneBulletPerOperation(t *testing.T) {
+	forms := PersonalAppsFencedForms()
+	want := personalapps.Operations()
+	if len(forms) != len(want) {
+		t.Fatalf("PersonalAppsFencedForms() returned %d forms, want %d", len(forms), len(want))
+	}
+	for i, op := range want {
+		prefix := "- " + string(op) + " — "
+		if !strings.HasPrefix(forms[i], prefix) {
+			t.Errorf("forms[%d] = %q, want prefix %q", i, forms[i], prefix)
+		}
+	}
+}
+
 // TestPersonalAppsSpecsOneToolPerOperation guards the shape this whole
 // schema redesign depends on: one native tool per operation, named exactly
 // the operation string (so CallsFromNative's dispatch — checking
@@ -321,9 +340,104 @@ func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
 		"mail_move", "mail_set_read", "mail_set_flag", "mail_save_draft",
 		"calendar_create_event", "calendar_update_event",
 		"never invent",
+		"not supported",
+		"never tools to call by themselves",
 	} {
 		if !strings.Contains(PersonalAppsInstructions, want) {
 			t.Errorf("PersonalAppsInstructions does not mention %q", want)
 		}
+	}
+}
+
+// TestPersonalAppsInstructionsExplainBothCallingConventions guards the
+// protocol boundary: native mode calls an operation directly; fenced mode
+// emits the advertised same-named form and lets Parse synthesize the
+// combined envelope. Giving the model an unadvertised wrapper contradicts
+// the catalog and makes it hand-write JSON the parser can construct safely.
+func TestPersonalAppsInstructionsExplainBothCallingConventions(t *testing.T) {
+	for _, want := range []string{
+		"personal_apps operation",
+		"its own tool, called directly by that exact name",
+		"emit the advertised fenced tool named exactly <name>",
+		"Do not emit an unadvertised personal_apps tool",
+		"unknown tool",
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
+
+func TestPersonalAppsInstructionsRouteCalendarEditsThroughCalendar(t *testing.T) {
+	for _, want := range []string{
+		"Calendar records, never project files",
+		"never use list_dir, glob, grep, or workspace search",
+		"query calendar_events for a bounded time range",
+		"event_id and expected_version from that fresh Calendar read",
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not route calendar edits correctly: missing %q", want)
+		}
+	}
+}
+
+// TestPersonalAppsInstructionsRequireReadingTheOutcomeBeforeClaimingSuccess
+// guards a live failure distinct from every protocol/dispatch bug above: the
+// model correctly ran status -> mail_accounts -> change_prepare ->
+// change_apply, change_apply's own result reported
+// {"outcomes":[{"outcome":"outcome_unknown",...}],"applied":0,"unknown":1},
+// and the model told the user the draft "has been saved successfully"
+// anyway — its own words were "since I executed all steps successfully
+// based on the provided API flow... I should confirm the task was
+// completed," treating having called the right tools as success instead of
+// reading what change_apply actually reported. No text anywhere told the
+// model that outcome_unknown is not evidence of success, so it filled that
+// gap with the most dangerous possible assumption.
+func TestPersonalAppsInstructionsRequireReadingTheOutcomeBeforeClaimingSuccess(t *testing.T) {
+	for _, want := range []string{
+		"outcome_unknown",
+		"not evidence of success",
+		`"applied"`,
+	} {
+		if !strings.Contains(PersonalAppsInstructions, want) {
+			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		}
+	}
+}
+
+// TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools guards the fix for
+// a live, repeated failure (Gemma 4 E4B, both via LM Studio and embedded):
+// the model called calendar_create_event directly as if it were its own
+// tool — it appears in change_prepare's changes[] schema and in
+// PersonalAppsInstructions' change-shape examples, indistinguishable in
+// naming convention from real tool names it had just successfully called
+// (status, calendar_list) — and got "unknown tool" both times, natively and
+// after falling back to the fenced protocol, because it never is one: it is
+// only a value for one changes[] entry's "type" field. Both the tool's own
+// description and its changes field description must say so explicitly,
+// since native tool-calling models weight a tool's own schema text more
+// than the shared system-prompt paragraph.
+func TestPersonalAppsChangePrepareWarnsChangeTypesAreNotTools(t *testing.T) {
+	var changePrepareDescription string
+	for _, s := range PersonalAppsSpecs() {
+		if s.Name == "change_prepare" {
+			changePrepareDescription = s.Description
+		}
+	}
+	if changePrepareDescription == "" {
+		t.Fatal("PersonalAppsSpecs() has no change_prepare entry")
+	}
+	if !strings.Contains(changePrepareDescription, "never separate tools") {
+		t.Errorf("change_prepare description = %q, want it to say change types are never separate tools", changePrepareDescription)
+	}
+
+	schema := personalAppsSchemaOf(t, "change_prepare")
+	changes, ok := schema.Properties["changes"].(map[string]any)
+	if !ok {
+		t.Fatal("change_prepare schema is missing a changes property")
+	}
+	desc, _ := changes["description"].(string)
+	if !strings.Contains(desc, "never tool names") {
+		t.Errorf("changes field description = %q, want it to say these are never tool names", desc)
 	}
 }
