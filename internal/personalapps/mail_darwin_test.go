@@ -119,3 +119,30 @@ func TestNewMailBackendReturnsNonNilOnDarwin(t *testing.T) {
 		t.Fatal("expected a non-nil MailBackend on darwin")
 	}
 }
+
+// The bridge is a JXA program, so this source-level contract protects a
+// platform-specific behavior that the ordinary fake bridge tests cannot
+// execute: draft confirmation must use Mail's stable message id, never an
+// English or position-based Drafts-folder heuristic. The latter reports a
+// failed mutation after successfully saving a draft on localized accounts.
+func TestMailBridgeConfirmsSavedDraftByIdentityNotLocalizedFolderName(t *testing.T) {
+	for _, want := range []string{
+		"function findSavedDraft(account, nativeID)",
+		"messages.whose({ id: parseInt(nativeID, 10) })()",
+		"path: [segs[i]]",
+		"findSavedDraft(account, nativeID)",
+	} {
+		if !strings.Contains(mailBridgeScript, want) {
+			t.Errorf("mail bridge does not retain identity-based draft confirmation %q", want)
+		}
+	}
+	for _, obsolete := range []string{
+		"/^drafts$/i",
+		"['Drafts']",
+		"msgs[msgs.length - 1]",
+	} {
+		if strings.Contains(mailBridgeScript, obsolete) {
+			t.Errorf("mail bridge still uses localized or position-based confirmation %q", obsolete)
+		}
+	}
+}

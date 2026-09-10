@@ -626,9 +626,41 @@ function opMailMove(Mail, req) {
 // opMailSaveDraft composes and saves a draft — a reply when in_reply_to is
 // set (using Mail's own reply command, so quoting/threading/signature come
 // from Mail itself rather than a guessed "Re:" subject), otherwise a new
-// outgoing message. It never sends. The saved draft is re-found in the
-// account's Drafts mailbox afterward and its confirmed stored state is what
-// is returned, never the in-memory object the script just built.
+// outgoing message. It never sends. The saved draft is re-found by its
+// Mail-issued native id afterward and its confirmed stored state is what is
+// returned, never the in-memory object the script just built.
+//
+// A mailbox named "Drafts" cannot be used for confirmation: mailbox names
+// are localized (for example, "Koncepty"), provider-defined, and can be
+// duplicated. Mail's scripting dictionary exposes a special drafts mailbox,
+// but it is application-wide rather than tied to the sender account; walking
+// that account's root mailboxes by the saved draft's own id keeps both the
+// account and the returned path authoritative.
+function findSavedDraft(account, nativeID) {
+  var top;
+  try {
+    top = account.mailboxes();
+  } catch (e) {
+    return null;
+  }
+  var names = top.map(function (mb) {
+    return mb.name();
+  });
+  var segs = disambiguate(names);
+  for (var i = 0; i < top.length; i++) {
+    var found;
+    try {
+      found = top[i].messages.whose({ id: parseInt(nativeID, 10) })();
+    } catch (e) {
+      found = [];
+    }
+    if (found && found.length > 0) {
+      return { message: found[0], path: [segs[i]] };
+    }
+  }
+  return null;
+}
+
 function opMailSaveDraft(Mail, req) {
   var d = req.save_draft;
   var account = findAccount(Mail.accounts(), d.sender_account_id);
@@ -672,24 +704,18 @@ function opMailSaveDraft(Mail, req) {
     return errorResponse('save_draft', 'internal', String(e));
   }
 
-  var draftsBox = null;
-  var top = account.mailboxes();
-  for (var i = 0; i < top.length; i++) {
-    if (/^drafts$/i.test(top[i].name())) {
-      draftsBox = top[i];
-      break;
-    }
-  }
-  if (!draftsBox) return errorResponse('save_draft', 'internal', 'draft saved but no Drafts mailbox was found to confirm it');
-  var msgs;
+  var nativeID = '';
   try {
-    msgs = draftsBox.messages();
+    nativeID = String(draft.id());
   } catch (e) {
-    msgs = [];
+    /* reported below */
   }
-  var newest = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-  if (!newest) return errorResponse('save_draft', 'internal', 'draft saved but could not be confirmed in Drafts');
-  return { version: 1, op: 'save_draft', messages: [messageMeta(newest, d.sender_account_id, ['Drafts'])] };
+  if (!nativeID) {
+    return errorResponse('save_draft', 'internal', 'draft saved but Mail did not provide an id to confirm it');
+  }
+  var saved = findSavedDraft(account, nativeID);
+  if (!saved) return errorResponse('save_draft', 'internal', 'draft saved but could not be confirmed in the sender account');
+  return { version: 1, op: 'save_draft', messages: [messageMeta(saved.message, d.sender_account_id, saved.path)] };
 }
 
 function handle(req) {
