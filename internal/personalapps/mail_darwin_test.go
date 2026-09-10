@@ -146,3 +146,30 @@ func TestMailBridgeConfirmsSavedDraftByIdentityNotLocalizedFolderName(t *testing
 		}
 	}
 }
+
+// Saving a draft through Mail's JXA dictionary requires adding the constructed
+// outgoing message to the application's outgoingMessages collection. A plain
+// object specifier (or a redundant .make call) is not a draft Mail can save.
+// The selected account is also an explicit part of the personal-apps contract,
+// so the script must set its sender rather than relying on Mail's default.
+func TestMailBridgeCreatesDraftInSelectedAccount(t *testing.T) {
+	for _, want := range []string{
+		"senderAddresses = account.emailAddresses()",
+		"draft = Mail.OutgoingMessage({ visible: false })",
+		"Mail.outgoingMessages.push(draft)",
+		"draft.sender = sender",
+		"Mail.Recipient({ address: list[i] })",
+	} {
+		if !strings.Contains(mailBridgeScript, want) {
+			t.Errorf("mail bridge does not retain draft creation contract %q", want)
+		}
+	}
+	for _, obsolete := range []string{
+		"Mail.OutgoingMessage().make()",
+		"Mail.Recipient({ address: list[i] }).make()",
+	} {
+		if strings.Contains(mailBridgeScript, obsolete) {
+			t.Errorf("mail bridge still uses an unowned JXA object %q", obsolete)
+		}
+	}
+}

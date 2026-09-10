@@ -665,6 +665,16 @@ function opMailSaveDraft(Mail, req) {
   var d = req.save_draft;
   var account = findAccount(Mail.accounts(), d.sender_account_id);
   if (!account) return errorResponse('save_draft', 'not_found', 'sender account not found');
+  var senderAddresses;
+  try {
+    senderAddresses = account.emailAddresses();
+  } catch (e) {
+    return errorResponse('save_draft', 'internal', 'sender account has no readable email address');
+  }
+  if (!senderAddresses || senderAddresses.length === 0 || !senderAddresses[0]) {
+    return errorResponse('save_draft', 'internal', 'sender account has no email address');
+  }
+  var sender = String(senderAddresses[0]);
 
   var inReplyTo = null;
   if (d.in_reply_to) {
@@ -678,15 +688,17 @@ function opMailSaveDraft(Mail, req) {
     if (inReplyTo) {
       draft = inReplyTo.reply({ openingWindow: false, replyToAll: false });
     } else {
-      draft = Mail.OutgoingMessage().make();
+      draft = Mail.OutgoingMessage({ visible: false });
+      Mail.outgoingMessages.push(draft);
     }
     draft.visible = false;
-    if (d.subject) draft.subject = d.subject;
+    draft.sender = sender;
+    draft.subject = d.subject || '';
     draft.content = d.body || '';
 
     var addRecipients = function (list, key) {
       for (var i = 0; i < (list || []).length; i++) {
-        draft[key].push(Mail.Recipient({ address: list[i] }).make());
+        draft[key].push(Mail.Recipient({ address: list[i] }));
       }
     };
     if (!inReplyTo) {
