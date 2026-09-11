@@ -93,6 +93,11 @@ type streamEventMsg struct {
 	gen int
 }
 
+type toolCallProbeMsg struct {
+	report provider.ToolCallConformance
+	err    error
+}
+
 type clipboardImageMsg struct {
 	img provider.Image
 	err error
@@ -265,6 +270,10 @@ type Model struct {
 	lastUserMsg         string
 	lastImages          []provider.Image
 	lastDebug           debugInfo
+	// toolCallDiagnostics is intentionally process-local and content-free. It
+	// survives native tool continuations so /debug last can show one complete
+	// call/result lifecycle, but starts fresh for a new user turn.
+	toolCallDiagnostics []provider.ToolCallDiagnostic
 	// lastPersonalAppsResult survives a lastDebug reset (every request-prep
 	// path replaces lastDebug wholesale); each debugInfo{} construction site
 	// copies it back in. See sendToolResults.
@@ -953,6 +962,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStreamEvent(msg)
 
+	case toolCallProbeMsg:
+		if msg.err != nil {
+			m.errText = "tool-call conformance probe: " + msg.err.Error()
+		} else {
+			m.lastDebug.ToolCallConformance = &msg.report
+			m.notice = fmt.Sprintf("tool-call probe: native %s · args %s · correlation %s — /debug tool-calls", msg.report.NativeCall, msg.report.Arguments, msg.report.ResultCorrelation)
+		}
+		m.refreshViewport()
+		return m, nil
+
 	case agentVerificationMsg:
 		return m.handleAgentVerification(msg)
 
@@ -1381,6 +1400,18 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
+	for _, call := range calls {
+		if call.ID == "" {
+			continue // legacy fenced protocol is not provider-native evidence.
+		}
+		classification := provider.ToolCallNativeReceived
+		stage := provider.ToolCallStageToolResolved
+		if call.InputErr != "" {
+			classification = provider.ToolCallInvalidArguments
+			stage = provider.ToolCallStageArgumentsInvalid
+		}
+		m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: stage, Classification: classification, ToolCallID: call.ID, ToolName: call.Tool})
+	}
 	if cmd, handled := m.handleAskUserBatch(calls); handled {
 		return cmd
 	}
@@ -1428,6 +1459,9 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 	}
 	for _, c := range runnable {
 		if m.callNeedsApproval(c) {
+			if c.ID != "" {
+				m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: provider.ToolCallStageApprovalRequired, Classification: provider.ToolCallApprovalBlocked, ToolCallID: c.ID, ToolName: c.Tool})
+			}
 			m.overlayOpen = false
 			m.keys.keysMode = false
 			m.waitForApproval(plan, false)
@@ -1488,6 +1522,11 @@ func (m *Model) rejectNativeToolCapability() {
 // preserves ordering for mixed batches.
 func (m *Model) runToolPlan(plan toolBatchPlan) tea.Cmd {
 	calls := plan.runnableCalls()
+	for _, call := range calls {
+		if call.ID != "" {
+			m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: provider.ToolCallStageExecutionStarted, Classification: provider.ToolCallNativeReceived, ToolCallID: call.ID, ToolName: call.Tool})
+		}
+	}
 	ctx, gen, err := m.beginToolBatch(m.agentContext(), calls)
 	if err != nil {
 		m.errText = err.Error()
@@ -1555,6 +1594,11 @@ func (m *Model) denyPendingTools() tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
 	m.clearPendingTools()
+	for _, call := range calls {
+		if call.ID != "" {
+			m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: provider.ToolCallStageApprovalDenied, Classification: provider.ToolCallApprovalBlocked, ToolCallID: call.ID, ToolName: call.Tool})
+		}
+	}
 	m.denyPersonalAppsCalls(calls)
 	m.advanceToolRound()
 	m.complete(turnOutcomeToolContinuation)
@@ -1575,6 +1619,20 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// here before it was ever displayed. Each debugInfo{} literal copies
 	// this field back in instead.
 	for _, r := range results {
+		if r.Call.ID != "" {
+			classification := provider.ToolCallNativeReceived
+			stage := provider.ToolCallStageExecutionSucceeded
+			if r.Err != nil {
+				classification, stage = provider.ToolCallExecutionFailed, provider.ToolCallStageExecutionFailed
+				if errors.Is(r.Err, tools.ErrUnknownTool) {
+					classification, stage = provider.ToolCallUnknownTool, provider.ToolCallStageToolResolved
+				}
+			}
+			m.recordToolCallDiagnostics(
+				provider.ToolCallDiagnostic{Stage: stage, Classification: classification, ToolCallID: r.Call.ID, ToolName: r.Call.Tool},
+				provider.ToolCallDiagnostic{Stage: provider.ToolCallStageResultCorrelated, Classification: provider.ToolCallNativeReceived, ToolCallID: r.Call.ID, ToolName: r.Call.Tool},
+			)
+		}
 		if r.Call.Tool == tools.ToolPersonalApps && r.Output != "" {
 			m.lastPersonalAppsResult = truncatePersonalAppsDebugResult(r.Output, 2048)
 		}
@@ -2163,6 +2221,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
+		m.recordToolCallDiagnostics(msg.event.ToolCallDiagnostics...)
 		// A backend can fail to parse the model's tool-call attempt into
 		// structured ToolCalls and instead leak the raw, still-tokenized
 		// attempt into content (see openai.looksLikeUnparsedToolCall). That
@@ -2191,6 +2250,15 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// the tool results always carry the same IDs.
 		tools.EnsureToolCallIDs(msg.event.ToolCalls, &m.toolCallSeq)
 		m.lastDebug.ToolCalls = diagnoseToolCalls(msg.event.ToolCalls)
+		for _, call := range msg.event.ToolCalls {
+			m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{
+				Stage: provider.ToolCallStageNormalized, Classification: provider.ToolCallNativeReceived,
+				ToolCallID: call.ID, ToolName: call.Name, NativeCallCount: len(msg.event.ToolCalls), Streaming: m.lastDebug.Stream,
+			})
+		}
+		if hasSuspectedToolCensoring(msg.event.ToolCallDiagnostics) {
+			m.notice = "provider returned no structured tool call but response had tool markers — nothing was executed; /debug last"
+		}
 		m.streamToolCalls = msg.event.ToolCalls
 		if msg.event.Turn != nil {
 			m.streamContinuation = msg.event.Turn.Continuation

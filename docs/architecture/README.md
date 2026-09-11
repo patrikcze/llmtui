@@ -445,6 +445,7 @@ the 2026-07-19 full review (all prior findings remediated). Highlights:
 - [`v1-provider-capabilities.md`](v1-provider-capabilities.md) — the tri-state capability model in full.
 - [`v1-state-and-storage.md`](v1-state-and-storage.md) — the source-of-truth and cache/persistence tables.
 - [`v1-agent-runtime.md`](v1-agent-runtime.md) — the `turnRuntime` state machine, progress ledger and live budgets in detail (implemented; written forward-looking).
+- [`../tool-call-diagnostics.md`](../tool-call-diagnostics.md) — native tool-call lifecycle observations, censoring diagnostics, and the harmless provider conformance probe.
 
 ### Historical audit trail (retained; cited by code comments)
 

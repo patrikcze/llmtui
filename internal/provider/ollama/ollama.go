@@ -156,6 +156,7 @@ type wireFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      bool            `json:"strict,omitempty"`
 }
 
 // wireToolCall is one tool invocation. Ollama transports the arguments as a
@@ -188,6 +189,7 @@ func toWireTools(specs []provider.ToolSpec) []wireTool {
 			Name:        s.Name,
 			Description: s.Description,
 			Parameters:  provider.NormalizeToolParameters(s.Parameters),
+			Strict:      s.Strict,
 		}})
 	}
 	return out
@@ -457,7 +459,10 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if len(toolCalls) > 0 && reasoning.Len() > 0 {
 		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning.String()}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn})
+	provider.Emit(ctx, events, provider.ChatEvent{
+		Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn,
+		ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, completion.String(), toolCalls, truncated, false),
+	})
 }
 
 // Capabilities describes the native Ollama API.

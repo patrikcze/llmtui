@@ -92,6 +92,10 @@ type ToolSpec struct {
 	Name        string
 	Description string
 	Parameters  json.RawMessage
+	// Strict asks backends that support it to enforce the declared schema for
+	// this function. It is advisory for backends whose native protocol lacks
+	// a strict-function field; llmtui still validates every received call.
+	Strict bool
 }
 
 // Image is a binary image attachment for vision-capable models.
@@ -310,6 +314,10 @@ type ChatEvent struct {
 	// openai/gpt-oss models). Such content is not a real answer and must not
 	// be treated, shown, or stored as one.
 	MalformedToolCall bool
+	// ToolCallDiagnostics describes bounded observations made while decoding
+	// this response. It is diagnostic-only metadata: consumers must never use
+	// it to reconstruct or execute a call from assistant text.
+	ToolCallDiagnostics []ToolCallDiagnostic
 }
 
 // Provider is implemented by every LLM backend.

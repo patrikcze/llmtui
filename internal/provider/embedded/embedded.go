@@ -464,9 +464,10 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 			// retry and fenced-protocol fallback (which does not depend on
 			// this runtime's native call-grammar parser) applies here too.
 			provider.Emit(genCtx, events, provider.ChatEvent{
-				Type:              provider.EventDone,
-				Turn:              &provider.AssistantTurn{Completed: true},
-				MalformedToolCall: true,
+				Type:                provider.EventDone,
+				Turn:                &provider.AssistantTurn{Completed: true},
+				MalformedToolCall:   true,
+				ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, "", nil, result.Truncated, true),
 				Usage: &provider.Usage{
 					PromptTokens:     result.PromptTokens,
 					CompletionTokens: result.CompletionTokens,
@@ -479,12 +480,14 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		return
 	}
 
+	content := ""
+	if result.Turn != nil {
+		content = result.Turn.FinalContent
+	}
 	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Turn: result.Turn, Truncated: result.Truncated, Usage: &provider.Usage{
-		PromptTokens:     result.PromptTokens,
-		CompletionTokens: result.CompletionTokens,
-		TotalTokens:      result.PromptTokens + result.CompletionTokens,
-		Estimated:        false,
-	}})
+		PromptTokens: result.PromptTokens, CompletionTokens: result.CompletionTokens,
+		TotalTokens: result.PromptTokens + result.CompletionTokens, Estimated: false,
+	}, ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, content, result.ToolCalls, result.Truncated, false)})
 }
 
 // switchModelIfRequested handles a ChatRequest.Model that names a different

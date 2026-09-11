@@ -54,15 +54,20 @@ type debugInfo struct {
 	ToolsHash     string
 	SummaryActive bool
 	ToolCalls     []toolCallDiagnostic
-	NativeTools   bool
-	WebEnabled    bool
-	RAGEnabled    bool
-	Reasoning     string
-	AgentRunID    string
-	AgentCycle    int
-	AgentStage    string
-	AgentStatus   string
-	AgentVerdict  string
+	// ToolCallDiagnostics is a bounded, content-free lifecycle trace. Provider
+	// marker observations never become runnable calls; this is shown only in
+	// /debug last.
+	ToolCallDiagnostics []provider.ToolCallDiagnostic
+	ToolCallConformance *provider.ToolCallConformance
+	NativeTools         bool
+	WebEnabled          bool
+	RAGEnabled          bool
+	Reasoning           string
+	AgentRunID          string
+	AgentCycle          int
+	AgentStage          string
+	AgentStatus         string
+	AgentVerdict        string
 	// AgentContractRaw is the bounded raw model output from the most recent
 	// task-contract request, kept so a contract park is diagnosable in
 	// `/debug last` rather than only showing an opaque error string.
@@ -84,6 +89,29 @@ type debugInfo struct {
 	// output per Global Constraint 2.
 	MemoryHits      []memoryindex.Hit
 	MemoryRetrieval memoryRetrievalDiagnostics
+}
+
+const maxToolCallDiagnostics = 64
+
+func (m *Model) recordToolCallDiagnostics(events ...provider.ToolCallDiagnostic) {
+	if len(events) == 0 {
+		return
+	}
+	m.toolCallDiagnostics = append(m.toolCallDiagnostics, events...)
+	if overflow := len(m.toolCallDiagnostics) - maxToolCallDiagnostics; overflow > 0 {
+		copy(m.toolCallDiagnostics, m.toolCallDiagnostics[overflow:])
+		m.toolCallDiagnostics = m.toolCallDiagnostics[:maxToolCallDiagnostics]
+	}
+	m.lastDebug.ToolCallDiagnostics = append([]provider.ToolCallDiagnostic(nil), m.toolCallDiagnostics...)
+}
+
+func hasSuspectedToolCensoring(events []provider.ToolCallDiagnostic) bool {
+	for _, event := range events {
+		if event.Classification == provider.ToolCallSuspectedCensored || event.Classification == provider.ToolCallIncompleteStream {
+			return true
+		}
+	}
+	return false
 }
 
 type memoryRetrievalDiagnostics struct {
@@ -1159,6 +1187,9 @@ func toolSpecsFingerprint(specs []provider.ToolSpec) string {
 // provider (with retry). Used by send() and /retry.
 func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	defer m.syncAgentDebug()
+	if !strings.HasPrefix(raw, tools.ResultsPrefix) {
+		m.toolCallDiagnostics = nil
+	}
 	m.lastUserMsg = raw
 	m.lastImages = images
 	// personalAppsPrivate forces the same "bypass" path an explicit
@@ -1181,7 +1212,8 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			SummaryActive: prepared.estimate.SummaryToken > 0,
 			NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 			MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
-			PersonalAppsResult: m.lastPersonalAppsResult,
+			PersonalAppsResult:  m.lastPersonalAppsResult,
+			ToolCallDiagnostics: append([]provider.ToolCallDiagnostic(nil), m.toolCallDiagnostics...),
 		}
 		m.failVerifiedRun(prepareErr)
 		m.endAgentRun()
@@ -1220,7 +1252,8 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 				SummaryActive: prepared.estimate.SummaryToken > 0,
 				NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 				MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
-				PersonalAppsResult: m.lastPersonalAppsResult,
+				PersonalAppsResult:  m.lastPersonalAppsResult,
+				ToolCallDiagnostics: append([]provider.ToolCallDiagnostic(nil), m.toolCallDiagnostics...),
 			}
 			// The cached answer completed this run; run-scoped skills (which
 			// were part of the key) deactivate like on a live final answer.
@@ -1286,7 +1319,8 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
-		PersonalAppsResult: m.lastPersonalAppsResult,
+		PersonalAppsResult:  m.lastPersonalAppsResult,
+		ToolCallDiagnostics: append([]provider.ToolCallDiagnostic(nil), m.toolCallDiagnostics...),
 	}
 
 	return m.startRequest(req)
@@ -1456,7 +1490,8 @@ func (m *Model) continueChat() tea.Cmd {
 		SummaryActive: prepared.estimate.SummaryToken > 0,
 		NativeTools:   m.useNativeTools(), WebEnabled: m.webOn, RAGEnabled: m.ragOn, Reasoning: m.effectiveReasoning(),
 		MemoryHits: prepared.memoryHits, MemoryRetrieval: prepared.memoryDiag,
-		PersonalAppsResult: m.lastPersonalAppsResult,
+		PersonalAppsResult:  m.lastPersonalAppsResult,
+		ToolCallDiagnostics: append([]provider.ToolCallDiagnostic(nil), m.toolCallDiagnostics...),
 	}
 	return m.startRequest(req)
 }
