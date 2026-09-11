@@ -136,6 +136,20 @@ func TestRenderExitSummaryZeroState(t *testing.T) {
 	}
 }
 
+func TestRenderExitSummaryPrivateSessionExplainsSkippedHistory(t *testing.T) {
+	out := renderExitSummary(styles.ClaudeInspired(), exitSummaryData{
+		SessionID:      "session-private",
+		HistoryPrivate: true,
+		WallTime:       5 * time.Second,
+	})
+	if !strings.Contains(out, "not saved — personal") || !strings.Contains(out, "Mail/Calendar content read (private session)") {
+		t.Errorf("private-session save explanation missing:\n%s", out)
+	}
+	if strings.Contains(out, "llmtui history") {
+		t.Errorf("private session must not advertise a resumable history:\n%s", out)
+	}
+}
+
 func TestRenderExitSummaryEstimatedMarker(t *testing.T) {
 	out := renderExitSummary(styles.ClaudeInspired(), exitSummaryData{
 		SessionID: "session-x",
@@ -214,5 +228,9 @@ func TestExitSummarySnapshot(t *testing.T) {
 	}
 	if d.WallTime <= 0 {
 		t.Errorf("WallTime = %v, want > 0", d.WallTime)
+	}
+	m.personalAppsPrivate.Store(true)
+	if !m.exitSummary().HistoryPrivate {
+		t.Error("private session was not captured in the exit summary")
 	}
 }
