@@ -15,7 +15,7 @@ func TestParseKVCacheType(t *testing.T) {
 		{"", KVCacheTypeF16, false},
 		{"f16", KVCacheTypeF16, false},
 		{" Q8_0 ", KVCacheTypeQ8_0, false},
-		{"q4_0", "", true},
+		{"q4_0", KVCacheTypeQ4_0, false},
 		{"fp32", "", true},
 	}
 	for _, tc := range cases {
@@ -108,6 +108,9 @@ func TestValidateKVFlashCombination(t *testing.T) {
 		if err := ValidateKVFlashCombination(KVCacheTypeQ8_0, fa); err != nil {
 			t.Errorf("q8_0 with flash_attention %s: unexpected error %v", fa, err)
 		}
+	}
+	if err := ValidateKVFlashCombination(KVCacheTypeQ4_0, FlashAttentionOff); err == nil {
+		t.Error("q4_0 V cache with flash_attention off must be rejected")
 	}
 	if err := ValidateKVFlashCombination(KVCacheTypeF16, FlashAttentionOff); err != nil {
 		t.Errorf("f16 with flash_attention off: unexpected error %v", err)

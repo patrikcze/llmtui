@@ -9,6 +9,7 @@ import (
 	"github.com/hybridgroup/yzma/pkg/llama"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/embedded"
 )
 
 // gemma4TemplateFixture is deliberately small, but uses the constructs that
@@ -149,7 +150,7 @@ func TestTemplateMessagesPreserveToolContinuation(t *testing.T) {
 			}},
 		},
 		{Role: provider.RoleTool, ToolCallID: "call-1", ToolName: "weather", Content: `{"temp":21}`},
-	})
+	}, false)
 	assistant := mapped[0].(map[string]any)
 	if assistant["content"] != "I will check." {
 		t.Errorf("assistant content = %v", assistant["content"])
@@ -175,7 +176,7 @@ func TestGPTOSSTemplateUsesEffortAndThinkingContinuation(t *testing.T) {
 	}}
 	template := `effort={{ reasoning_effort }}{% for message in messages %}{% if message.thinking is defined %}|thinking={{ message.thinking }}{% endif %}{% endfor %}`
 	nativeCalls := 0
-	rendered, err := renderChatTemplateWithProtocol(template, messages, nil, "high", protocol, func(string, []llama.ChatMessage) (string, error) {
+	rendered, err := renderChatTemplateWithProtocol(template, messages, nil, "high", embedded.ReasoningEffortAuto, false, protocol, func(string, []llama.ChatMessage) (string, error) {
 		nativeCalls++
 		return "incorrect native rendering", nil
 	})
@@ -189,11 +190,36 @@ func TestGPTOSSTemplateUsesEffortAndThinkingContinuation(t *testing.T) {
 		t.Fatalf("legacy llama_chat_apply_template was used %d times for Harmony", nativeCalls)
 	}
 
-	data, err := jinjaTemplateDataForProtocol([]provider.Message{{Role: provider.RoleUser, Content: "hi"}}, nil, "auto", protocol)
+	data, err := jinjaTemplateDataForProtocol([]provider.Message{{Role: provider.RoleUser, Content: "hi"}}, nil, "auto", embedded.ReasoningEffortAuto, false, protocol)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data["reasoning_effort"] != "medium" {
 		t.Fatalf("default reasoning_effort = %v, want medium", data["reasoning_effort"])
+	}
+}
+
+func TestTemplateSupportsConfiguredEffortAndPreservedThinking(t *testing.T) {
+	messages := []provider.Message{{
+		Role:         provider.RoleAssistant,
+		Content:      "answer",
+		Continuation: &provider.ProviderContinuation{Reasoning: "private reasoning"},
+	}}
+	template := `{% if reasoning_effort is defined %}effort={{ reasoning_effort }}|{% endif %}{% if preserve_reasoning is defined %}preserve={{ preserve_reasoning }}|{% endif %}{% for message in messages %}{% if message.thinking is defined %}thinking={{ message.thinking }}{% endif %}{% endfor %}`
+	rendered, err := renderChatTemplateWithProtocol(
+		template,
+		messages,
+		nil,
+		"on",
+		embedded.ReasoningEffortMedium,
+		true,
+		provider.ModelProtocol{},
+		func(string, []llama.ChatMessage) (string, error) { return "native", nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.text != "effort=medium|preserve=True|thinking=private reasoning" {
+		t.Fatalf("rendered = %q", rendered.text)
 	}
 }

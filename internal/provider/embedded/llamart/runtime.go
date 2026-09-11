@@ -165,6 +165,9 @@ func (r *Runtime) Load(
 	if opts.ContextSize < 0 {
 		return meta, fmt.Errorf("context_size must not be negative: %d", opts.ContextSize)
 	}
+	if opts.Speculative.Type == embedded.SpeculativeDraftMTP {
+		return meta, errors.New("speculative.type draft-mtp is unavailable with the pinned Yzma v1.26.1 bindings: llama.cpp requires staging next-token embedding APIs that Yzma does not expose; disable speculative decoding or use a compatible future Yzma/runtime pair")
+	}
 	if err := opts.RopeScaling.Validate(); err != nil {
 		return meta, err
 	}
@@ -389,7 +392,17 @@ func (r *Runtime) Generate(
 			return result, err
 		}
 	}
-	rendered, err := renderChatTemplateWithProtocol(r.template, messages, req.Tools, req.Reasoning, r.protocol, applyTemplate)
+	preserveReasoning := req.PreserveReasoning && strings.Contains(r.template, "preserve_reasoning")
+	rendered, err := renderChatTemplateWithProtocol(
+		r.template,
+		messages,
+		req.Tools,
+		req.Reasoning,
+		req.ReasoningEffort,
+		preserveReasoning,
+		r.protocol,
+		applyTemplate,
+	)
 	if err != nil {
 		return result, err
 	}
@@ -871,8 +884,14 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	if opts.Threads < 0 || opts.Threads > math.MaxInt32 {
 		return llama.ContextParams{}, 0, fmt.Errorf("threads %d is outside the supported range 0..%d", opts.Threads, math.MaxInt32)
 	}
+	if opts.ThreadsBatch < 0 || opts.ThreadsBatch > math.MaxInt32 {
+		return llama.ContextParams{}, 0, fmt.Errorf("threads_batch %d is outside the supported range 0..%d", opts.ThreadsBatch, math.MaxInt32)
+	}
 	if opts.BatchSize < 0 || uint64(opts.BatchSize) > math.MaxUint32 {
 		return llama.ContextParams{}, 0, fmt.Errorf("batch_size %d is outside the supported range 0..%d", opts.BatchSize, uint64(math.MaxUint32))
+	}
+	if opts.UBatchSize < 0 || uint64(opts.UBatchSize) > math.MaxUint32 {
+		return llama.ContextParams{}, 0, fmt.Errorf("ubatch_size %d is outside the supported range 0..%d", opts.UBatchSize, uint64(math.MaxUint32))
 	}
 
 	batchSize := opts.BatchSize
@@ -881,6 +900,9 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	}
 	if batchSize > nCtx {
 		batchSize = nCtx
+	}
+	if opts.UBatchSize > batchSize {
+		return llama.ContextParams{}, 0, fmt.Errorf("ubatch_size %d cannot exceed batch_size %d", opts.UBatchSize, batchSize)
 	}
 
 	kvCacheType, err := embedded.ParseKVCacheType(opts.KVCacheType)
@@ -891,13 +913,47 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	if err != nil {
 		return llama.ContextParams{}, 0, err
 	}
-	if err := embedded.ValidateKVFlashCombination(kvCacheType, flashAttention); err != nil {
+	kvCacheK := opts.KVCache.TypeK
+	if kvCacheK == "" {
+		kvCacheK = kvCacheType
+	}
+	kvCacheK, err = embedded.ParseKVCacheType(kvCacheK)
+	if err != nil {
+		return llama.ContextParams{}, 0, fmt.Errorf("kv_cache.type_k: %w", err)
+	}
+	kvCacheV := opts.KVCache.TypeV
+	if kvCacheV == "" {
+		kvCacheV = kvCacheType
+	}
+	kvCacheV, err = embedded.ParseKVCacheType(kvCacheV)
+	if err != nil {
+		return llama.ContextParams{}, 0, fmt.Errorf("kv_cache.type_v: %w", err)
+	}
+	if err := embedded.ValidateKVFlashCombination(kvCacheV, flashAttention); err != nil {
 		return llama.ContextParams{}, 0, err
 	}
 
 	params := llama.ContextDefaultParams()
+	if err := applyContextOptions(&params, opts, nCtx, batchSize, kvCacheK, kvCacheV, flashAttention); err != nil {
+		return llama.ContextParams{}, 0, err
+	}
+	return params, batchSize, nil
+}
+
+func applyContextOptions(
+	params *llama.ContextParams,
+	opts embedded.Options,
+	nCtx, batchSize int,
+	kvCacheK, kvCacheV, flashAttention string,
+) error {
+	if params == nil {
+		return errors.New("nil llama context parameters")
+	}
 	params.NCtx = uint32(nCtx)
 	params.NBatch = uint32(batchSize)
+	if opts.UBatchSize > 0 {
+		params.NUbatch = uint32(opts.UBatchSize)
+	}
 	if params.NUbatch > params.NBatch {
 		params.NUbatch = params.NBatch
 	}
@@ -905,8 +961,11 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 		params.NThreads = int32(opts.Threads)
 		params.NThreadsBatch = int32(opts.Threads)
 	}
-	if err := applyRopeScaling(&params, opts.RopeScaling); err != nil {
-		return llama.ContextParams{}, 0, err
+	if opts.ThreadsBatch > 0 {
+		params.NThreadsBatch = int32(opts.ThreadsBatch)
+	}
+	if err := applyRopeScaling(params, opts.RopeScaling); err != nil {
+		return err
 	}
 
 	// llama.cpp's C default is swa_full=true (full-size KV for every
@@ -920,9 +979,14 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	} else {
 		params.SwaFull = 0
 	}
-	if kvCacheType == embedded.KVCacheTypeQ8_0 {
-		params.TypeK = llama.GGMLTypeQ8_0
-		params.TypeV = llama.GGMLTypeQ8_0
+	params.TypeK = llamaKVCacheType(kvCacheK)
+	params.TypeV = llamaKVCacheType(kvCacheV)
+	if opts.KVCache.Offload != nil {
+		if *opts.KVCache.Offload {
+			params.Offload_kqv = 1
+		} else {
+			params.Offload_kqv = 0
+		}
 	}
 	switch flashAttention {
 	case embedded.FlashAttentionOn:
@@ -932,7 +996,18 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	default:
 		params.FlashAttentionType = llama.FlashAttentionTypeAuto
 	}
-	return params, batchSize, nil
+	return nil
+}
+
+func llamaKVCacheType(value string) llama.GGMLType {
+	switch value {
+	case embedded.KVCacheTypeQ8_0:
+		return llama.GGMLTypeQ8_0
+	case embedded.KVCacheTypeQ4_0:
+		return llama.GGMLTypeQ4_0
+	default:
+		return llama.GGMLTypeF16
+	}
 }
 
 func applyRopeScaling(params *llama.ContextParams, scaling embedded.RopeScaling) error {

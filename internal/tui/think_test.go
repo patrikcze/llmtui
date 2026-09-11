@@ -80,6 +80,31 @@ func TestDedicatedReasoningEventIsCapturedSeparately(t *testing.T) {
 	}
 }
 
+func TestPreserveEmbeddedReasoningBuildsTransientContinuation(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Provider = "embedded"
+	m.cfg.Providers = map[string]config.ProviderConfig{}
+	m.cfg.Providers["embedded"] = config.ProviderConfig{
+		Type:      "embedded",
+		Reasoning: &config.EmbeddedReasoningConfig{Preserve: true},
+	}
+	messages := []provider.Message{{
+		Role:      provider.RoleAssistant,
+		Content:   "visible answer",
+		Reasoning: "private chain of thought",
+	}}
+	prepared := m.preserveEmbeddedReasoning(messages)
+	if prepared[0].Continuation == nil || prepared[0].Continuation.Reasoning != "private chain of thought" {
+		t.Fatalf("preserved continuation = %+v", prepared[0].Continuation)
+	}
+	if messages[0].Continuation != nil {
+		t.Fatal("request preparation mutated the session message")
+	}
+	if prepared[0].Content != "visible answer" || prepared[0].Reasoning != "private chain of thought" {
+		t.Fatalf("preservation changed visible message: %+v", prepared[0])
+	}
+}
+
 func TestProviderProgressIsNotCapturedAsReasoning(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true

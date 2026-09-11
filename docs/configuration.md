@@ -104,11 +104,18 @@ Embedded-only provider keys:
 | `context_size` | `0` | `min(n_ctx_train, 8192)`; positive values are capped at the trained context unless an extrapolating `rope_scaling_type` is explicitly selected |
 | `gpu_layers` | `-1` | `-1` all possible layers; `0` CPU only; positive = exact count. The **only** GPU control — no `tensor_split`/`split_mode`/`main_gpu`/device selection; multi-GPU uses llama.cpp's default split, constrained by `CUDA_VISIBLE_DEVICES` etc. at launch |
 | `threads` | `0` | Automatic CPU thread selection |
+| `threads_batch` | `threads` | Optional prompt/batch thread count |
 | `batch_size` | `512` | Prompt-decode batch size |
+| `ubatch_size` | llama.cpp default | Optional physical micro-batch size; must not exceed the effective batch size |
 | `chat_template` | GGUF metadata | Inline Jinja template override |
 | `swa_full` | `false` | `true` restores full-size sliding-window KV caches (more memory) |
 | `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |
+| `kv_cache.type_k`, `kv_cache.type_v` | `kv_cache_type` | Independent `f16`, `q8_0`, or `q4_0` K/V cache types; explicit sides override the legacy shared type |
+| `kv_cache.offload` | runtime default | Optional K/Q/V GPU-offload override; omitted retains llama.cpp's native default |
 | `flash_attention` | `auto` | `auto`, `on`, or `off` |
+| `reasoning.effort` | `auto` | Embedded compatible-template effort: `auto`, `low`, `medium`, `high`, or `xhigh` |
+| `reasoning.preserve` | `false` | Keep hidden reasoning in in-memory compatible-template history; never session-persisted |
+| `speculative.type` | `off` | `off` or explicit `draft-mtp`; the pinned Yzma binding currently rejects `draft-mtp` safely because its required staging APIs are unavailable |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
 | `rope_scaling_type` | GGUF metadata | Optional override: `none`, `linear`, `yarn`, or `longrope` |
 | `rope_freq_base` | GGUF metadata | Positive RoPE base-frequency override |

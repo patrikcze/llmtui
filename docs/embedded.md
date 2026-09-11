@@ -227,10 +227,15 @@ model_profiles:
 | `context_size` | `0` | Bounded model default: `min(n_ctx_train, 8192)`; a positive value is capped at the trained context unless `linear`, `yarn`, or `longrope` scaling is explicitly selected |
 | `gpu_layers` | `-1` | `-1` offloads all possible layers, `0` is CPU-only, positive values set an exact layer count |
 | `threads` | `0` | llama.cpp automatic CPU thread selection |
+| `threads_batch` | `threads` | Optional prompt/batch CPU thread count; omit to retain the existing `threads` behavior |
 | `batch_size` | `512` | Prompt-decode batch size, capped by the context size |
+| `ubatch_size` | llama.cpp default | Optional physical micro-batch size; it must be positive and no larger than the effective `batch_size` |
 | `chat_template` | model metadata | Inline Jinja chat template override; this is template text, not a filename |
 | `swa_full` | `false` | `true` restores llama.cpp's full-size KV cache for sliding-window-attention layers. The default window-sized SWA cache cuts KV memory several-fold on Gemma-style models (Gemma 4 E4B at 131072 tokens: ~2.0 GiB vs ~7.2 GiB) at the cost of occasional full prompt re-decodes when an old prefix cannot be trimmed in place |
 | `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |
+| `kv_cache.type_k` | `kv_cache_type` | Key-cache type: `f16`, `q8_0`, or `q4_0` |
+| `kv_cache.type_v` | `kv_cache_type` | Value-cache type: `f16`, `q8_0`, or `q4_0`; quantized values require flash attention not to be `off` |
+| `kv_cache.offload` | runtime default | Optional `true`/`false` K/Q/V GPU-offload override; omitting it preserves llama.cpp's native default |
 | `flash_attention` | `auto` | Flash-attention mode: `auto` (llama.cpp decides per model/backend), `on`, or `off` |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi`; prefer `auto` unless model detection needs an override |
 | `rope_scaling_type` | model metadata | Optional override: `none`, `linear`, `yarn`, or `longrope` |
@@ -253,6 +258,90 @@ model_profiles:
 | `sampling.dry_sequence_breakers` | newline, `:`, `"`, `*` | Boundaries that stop DRY sequence matching; these llama.cpp defaults apply when DRY is enabled and the key is omitted |
 | `sampling.seed` | `0` | `0` selects a random seed; another value is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings, safe across token/UTF-8 boundaries |
+
+`kv_cache_type` is retained for compatibility. When `kv_cache` is absent it
+sets both K and V. A non-empty `kv_cache.type_k` or `kv_cache.type_v` overrides
+only that side, so `kv_cache_type: q8_0` plus `kv_cache.type_v: q4_0` means K
+is `q8_0` and V is `q4_0`.
+
+## Advanced reasoning and speculative settings
+
+The embedded provider continues to use `chat.reasoning` and `/think` for the
+per-request `auto`/`on`/`off` switch. The embedded-only block below supplies
+optional template controls; it does not change that switch or the visibility
+controlled by `/thoughts`.
+
+```yaml
+providers:
+  qwen38:
+    type: embedded
+    reasoning:
+      effort: medium       # auto|low|medium|high|xhigh; auto leaves the template default
+      preserve: true       # only compatible GGUF Jinja templates consume this
+```
+
+`reasoning.preserve` is off by default. When enabled, hidden reasoning is
+kept only in memory for ordinary embedded chat turns and is supplied as the
+template's structured `thinking` field only when the template declares a
+`preserve_reasoning` variable. It never becomes visible assistant content,
+never follows `/thoughts show|hide`, is not written to sessions, and is not
+included in agent executor/verifier requests. Restarting or loading a saved
+session deliberately drops it. Its token cost is included while it remains in
+the active request history.
+
+The pinned Yzma v1.26.1 binding does not expose llama.cpp's common
+reasoning-budget sampler, so llmtui intentionally has no `reasoning.budget`
+key. It also lacks the staging next-token embedding APIs required by the
+pinned llama.cpp `draft-mtp` implementation. `speculative.type: draft-mtp`
+parses as an explicit request but fails before model initialization with an
+actionable compatibility error; `off` (or omission) is the stable default.
+No partial speculative decoder or duplicate FFI layer is used.
+
+## Qwen3.8 example
+
+Qwen3.8 has a built-in profile selected before generic Qwen profiles. It
+provides a 262144-token context estimate, temperature `1.0`, direct prompting,
+and the reasoning hint; explicit chat/template settings still take precedence.
+
+```yaml
+providers:
+  qwen38:
+    type: embedded
+    model_path: /models/Qwen3.8-27B-UD-Q4_K_XL.gguf
+    context_size: 262144
+    gpu_layers: -1
+    threads: 6
+    threads_batch: 6
+    batch_size: 2048
+    ubatch_size: 256
+    flash_attention: on
+    kv_cache:
+      type_k: q8_0
+      type_v: q4_0
+      offload: true
+    reasoning:
+      effort: medium
+      preserve: true
+    sampling:
+      top_k: 20
+      min_p: 0.0
+      repeat_penalty: 1.0
+      presence_penalty: 0.0
+      dry_multiplier: 0.8
+      dry_base: 1.75
+      dry_allowed_length: 2
+      dry_penalty_last_n: 0
+
+chat:
+  reasoning: on
+  temperature: 1.0
+  top_p: 0.95
+```
+
+For a baseline comparison, remove `threads_batch`, `ubatch_size`, `kv_cache`,
+and `reasoning`, or set `speculative.type: off`. Measure prompt and generation
+throughput, first-token latency, total duration, and memory use on your own
+runtime; this release does not claim a speculative speed-up.
 
 The shared `chat.temperature`, `chat.top_p`, and `chat.max_tokens` settings
 still shape each request. A temperature at or below zero uses greedy sampling.

@@ -73,23 +73,23 @@ func ResolveToolFormat(configured ToolFormat, modelPath string) (ToolFormat, boo
 	}
 }
 
-// KV cache element types supported for the native K/V cache. F16 is the
-// llama.cpp default; Q8_0 halves KV memory with a small quality cost.
+// KV cache element types supported by the pinned llama.cpp/Yzma runtime.
 const (
 	KVCacheTypeF16  = "f16"
 	KVCacheTypeQ8_0 = "q8_0"
+	KVCacheTypeQ4_0 = "q4_0"
 )
 
-// ParseKVCacheType validates a configured kv_cache_type. Empty selects f16.
+// ParseKVCacheType validates a configured KV cache type. Empty selects f16.
 func ParseKVCacheType(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch normalized {
 	case "":
 		return KVCacheTypeF16, nil
-	case KVCacheTypeF16, KVCacheTypeQ8_0:
+	case KVCacheTypeF16, KVCacheTypeQ8_0, KVCacheTypeQ4_0:
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("unsupported embedded kv_cache_type %q (supported: f16, q8_0)", value)
+		return "", fmt.Errorf("unsupported embedded kv cache type %q (supported: f16, q8_0, q4_0)", value)
 	}
 }
 
@@ -118,14 +118,73 @@ func ParseFlashAttention(value string) (string, error) {
 // refuses at context init: a quantized V cache requires flash attention, so
 // q8_0 with flash_attention "off" can never load (and with "auto" it fails on
 // backends where flash attention resolves to disabled).
-func ValidateKVFlashCombination(kvCacheType, flashAttention string) error {
-	if kvCacheType == KVCacheTypeQ8_0 && flashAttention == FlashAttentionOff {
+func ValidateKVFlashCombination(typeV, flashAttention string) error {
+	if (typeV == KVCacheTypeQ8_0 || typeV == KVCacheTypeQ4_0) && flashAttention == FlashAttentionOff {
 		return fmt.Errorf(
-			"kv_cache_type %q requires flash attention: set flash_attention: auto or on, or use kv_cache_type: f16",
-			kvCacheType,
+			"KV cache V type %q requires flash attention: set flash_attention: auto or on, or set kv_cache.type_v: f16",
+			typeV,
 		)
 	}
 	return nil
+}
+
+// ReasoningEffort is an optional model-template reasoning level. Auto leaves
+// the template's own default untouched.
+type ReasoningEffort string
+
+const (
+	ReasoningEffortAuto   ReasoningEffort = "auto"
+	ReasoningEffortLow    ReasoningEffort = "low"
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	ReasoningEffortHigh   ReasoningEffort = "high"
+	ReasoningEffortXHigh  ReasoningEffort = "xhigh"
+)
+
+func ParseReasoningEffort(value string) (ReasoningEffort, error) {
+	normalized := ReasoningEffort(strings.ToLower(strings.TrimSpace(value)))
+	switch normalized {
+	case "", ReasoningEffortAuto:
+		return ReasoningEffortAuto, nil
+	case ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded reasoning.effort %q (supported: auto, low, medium, high, xhigh)", value)
+	}
+}
+
+// SpeculativeType identifies an optional embedded decoding path.
+type SpeculativeType string
+
+const (
+	SpeculativeOff      SpeculativeType = "off"
+	SpeculativeDraftMTP SpeculativeType = "draft-mtp"
+)
+
+func ParseSpeculativeType(value string) (SpeculativeType, error) {
+	normalized := SpeculativeType(strings.ToLower(strings.TrimSpace(value)))
+	switch normalized {
+	case "", SpeculativeOff:
+		return SpeculativeOff, nil
+	case SpeculativeDraftMTP:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unsupported embedded speculative.type %q (supported: off, draft-mtp)", value)
+	}
+}
+
+// KVCache configures target or draft K/V types. Offload nil preserves the
+// native default instead of accidentally changing it through a Go zero value.
+type KVCache struct {
+	TypeK   string
+	TypeV   string
+	Offload *bool
+}
+
+// Speculative configures the optional speculative decoder.
+type Speculative struct {
+	Type      SpeculativeType
+	DraftNMax int
+	KVCache   KVCache
 }
 
 // Rope scaling modes supported by the linked llama.cpp runtime. Unspecified
@@ -235,8 +294,13 @@ type Options struct {
 	GPULayers int
 	// Threads is the CPU thread count. 0 means "auto".
 	Threads int
+	// ThreadsBatch is the prompt/batch thread count. 0 preserves Threads.
+	ThreadsBatch int
 	// BatchSize is the native decode batch size. 0 means "runtime default".
 	BatchSize int
+	// UBatchSize is the native physical micro-batch size. 0 preserves the
+	// llama.cpp default used by older llmtui configurations.
+	UBatchSize int
 	// ChatTemplate overrides the model's GGUF chat-template metadata, for
 	// models that ship broken or missing template metadata.
 	ChatTemplate string
@@ -252,11 +316,19 @@ type Options struct {
 	// full re-decode when the cache refuses a partial removal.
 	SWAFull bool
 	// KVCacheType selects the K/V cache element type: "" or "f16" (default),
-	// or "q8_0" (about half the KV memory, small quality cost).
+	// "q8_0", or "q4_0". Structured KVCache overrides each side separately.
 	KVCacheType string
+	// KVCache supplies separate K/V cache types and an optional K/Q/V offload
+	// override. TypeK and TypeV are already normalized by the factory.
+	KVCache KVCache
 	// FlashAttention selects the flash-attention mode: "" or "auto"
 	// (default, llama.cpp decides), "on", or "off".
 	FlashAttention string
-	RopeScaling    RopeScaling
-	Sampling       Sampling
+	Reasoning      struct {
+		Effort   ReasoningEffort
+		Preserve bool
+	}
+	Speculative Speculative
+	RopeScaling RopeScaling
+	Sampling    Sampling
 }

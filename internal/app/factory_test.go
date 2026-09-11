@@ -167,6 +167,83 @@ func TestBuildEmbeddedOptionsTildeExpansion(t *testing.T) {
 	}
 }
 
+func TestBuildEmbeddedOptionsAdvancedContextConfiguration(t *testing.T) {
+	offload := false
+	opts, err := buildEmbeddedOptions(config.ProviderConfig{
+		Type:         "embedded",
+		ModelPath:    "/models/qwen3.8.gguf",
+		Threads:      6,
+		ThreadsBatch: 4,
+		BatchSize:    2048,
+		UBatchSize:   256,
+		KVCacheType:  "q8_0",
+		KVCache: &config.EmbeddedKVCacheConfig{
+			TypeV:   "q4_0",
+			Offload: &offload,
+		},
+		Reasoning: &config.EmbeddedReasoningConfig{Effort: "medium", Preserve: true},
+	}, ActiveOverrides{})
+	if err != nil {
+		t.Fatalf("buildEmbeddedOptions() error = %v", err)
+	}
+	if opts.ThreadsBatch != 4 || opts.UBatchSize != 256 {
+		t.Fatalf("batch options = threads:%d ubatch:%d", opts.ThreadsBatch, opts.UBatchSize)
+	}
+	if opts.KVCache.TypeK != embedded.KVCacheTypeQ8_0 || opts.KVCache.TypeV != embedded.KVCacheTypeQ4_0 || opts.KVCache.Offload == nil || *opts.KVCache.Offload {
+		t.Fatalf("KV cache = %+v", opts.KVCache)
+	}
+	if opts.Reasoning.Effort != embedded.ReasoningEffortMedium || !opts.Reasoning.Preserve {
+		t.Fatalf("reasoning = %+v", opts.Reasoning)
+	}
+}
+
+func TestBuildEmbeddedOptionsLegacyKVCacheRemainsShared(t *testing.T) {
+	opts, err := buildEmbeddedOptions(config.ProviderConfig{Type: "embedded", ModelPath: "/models/model.gguf", KVCacheType: "q8_0"}, ActiveOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.KVCache.TypeK != embedded.KVCacheTypeQ8_0 || opts.KVCache.TypeV != embedded.KVCacheTypeQ8_0 {
+		t.Fatalf("legacy cache type resolved to K:%q V:%q", opts.KVCache.TypeK, opts.KVCache.TypeV)
+	}
+}
+
+func TestBuildEmbeddedOptionsRejectsInvalidAdvancedConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		pc   config.ProviderConfig
+		want string
+	}{
+		{
+			name: "invalid KV type",
+			pc:   config.ProviderConfig{Type: "embedded", ModelPath: "model.gguf", KVCache: &config.EmbeddedKVCacheConfig{TypeK: "bad"}},
+			want: "kv_cache.type_k",
+		},
+		{
+			name: "quantized V without flash attention",
+			pc:   config.ProviderConfig{Type: "embedded", ModelPath: "model.gguf", FlashAttention: "off", KVCache: &config.EmbeddedKVCacheConfig{TypeV: "q4_0"}},
+			want: "requires flash attention",
+		},
+		{
+			name: "invalid reasoning effort",
+			pc:   config.ProviderConfig{Type: "embedded", ModelPath: "model.gguf", Reasoning: &config.EmbeddedReasoningConfig{Effort: "max"}},
+			want: "reasoning.effort",
+		},
+		{
+			name: "draft MTP without limit",
+			pc:   config.ProviderConfig{Type: "embedded", ModelPath: "model.gguf", Speculative: &config.EmbeddedSpeculativeConfig{Type: "draft-mtp"}},
+			want: "draft_n_max",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildEmbeddedOptions(tt.pc, ActiveOverrides{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("buildEmbeddedOptions() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildEmbeddedOptionsRejectsUnknownToolFormat(t *testing.T) {
 	_, err := buildEmbeddedOptions(config.ProviderConfig{
 		Type:       "embedded",

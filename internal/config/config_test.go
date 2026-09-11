@@ -87,6 +87,50 @@ chat:
 	}
 }
 
+func TestEmbeddedAdvancedConfigurationParses(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  qwen38:
+    type: embedded
+    model_path: /models/qwen3.8.gguf
+    threads: 6
+    threads_batch: 4
+    batch_size: 2048
+    ubatch_size: 256
+    kv_cache_type: q8_0
+    kv_cache:
+      type_v: q4_0
+      offload: false
+    reasoning:
+      effort: medium
+      preserve: true
+    speculative:
+      type: draft-mtp
+      draft_n_max: 2
+      kv_cache:
+        type_k: q4_0
+        type_v: q4_0
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := cfg.Providers["qwen38"]
+	if pc.ThreadsBatch != 4 || pc.UBatchSize != 256 || pc.KVCache == nil || pc.KVCache.TypeV != "q4_0" || pc.KVCache.Offload == nil || *pc.KVCache.Offload {
+		t.Fatalf("advanced embedded config = %+v", pc)
+	}
+	if pc.Reasoning == nil || pc.Reasoning.Effort != "medium" || !pc.Reasoning.Preserve {
+		t.Fatalf("reasoning config = %+v", pc.Reasoning)
+	}
+	if pc.Speculative == nil || pc.Speculative.Type != "draft-mtp" || pc.Speculative.DraftNMax != 2 || pc.Speculative.KVCache == nil || pc.Speculative.KVCache.TypeK != "q4_0" {
+		t.Fatalf("speculative config = %+v", pc.Speculative)
+	}
+}
+
 func TestSetDefaultProviderPreservesOtherConfig(t *testing.T) {
 	path := writeConfig(t, `
 # Keep this comment and every unrelated configuration section.
