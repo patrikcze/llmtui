@@ -39,34 +39,36 @@ type exitSummaryState struct {
 // exitSummaryData is everything the exit summary needs, decoupled from the
 // Bubble Tea model so rendering stays a pure, testable function.
 type exitSummaryData struct {
-	SessionID   string
-	Saved       bool
-	UserMsgs    int
-	ReplyMsgs   int
-	ToolOK      int
-	ToolErr     int
-	CacheOn     bool
-	CacheHits   int
-	CacheMisses int
-	WallTime    time.Duration
-	APITime     time.Duration
-	Models      []modelUsageStat
-	Width       int
+	SessionID      string
+	Saved          bool
+	HistoryPrivate bool
+	UserMsgs       int
+	ReplyMsgs      int
+	ToolOK         int
+	ToolErr        int
+	CacheOn        bool
+	CacheHits      int
+	CacheMisses    int
+	WallTime       time.Duration
+	APITime        time.Duration
+	Models         []modelUsageStat
+	Width          int
 }
 
 // exitSummary snapshots the session for rendering after the TUI closes.
 func (m *Model) exitSummary() exitSummaryData {
 	d := exitSummaryData{
-		SessionID: m.sessionName,
-		Saved:     m.exit.savedPath != "",
-		UserMsgs:  m.exit.sentCount,
-		ReplyMsgs: m.exit.replyCount,
-		ToolOK:    m.toolOK,
-		ToolErr:   m.toolErr,
-		WallTime:  time.Since(m.exit.startedAt),
-		APITime:   m.exit.apiTime,
-		Models:    m.exit.modelStats,
-		Width:     m.width,
+		SessionID:      m.sessionName,
+		Saved:          m.exit.savedPath != "",
+		HistoryPrivate: m.personalAppsPrivate.Load(),
+		UserMsgs:       m.exit.sentCount,
+		ReplyMsgs:      m.exit.replyCount,
+		ToolOK:         m.toolOK,
+		ToolErr:        m.toolErr,
+		WallTime:       time.Since(m.exit.startedAt),
+		APITime:        m.exit.apiTime,
+		Models:         m.exit.modelStats,
+		Width:          m.width,
 	}
 	if m.responseCache != nil {
 		cs := m.responseCache.Stats()
@@ -139,6 +141,9 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 	}
 	if d.CacheOn {
 		row(&b, "Cache", fmt.Sprintf("%d hits · %d misses", d.CacheHits, d.CacheMisses))
+	}
+	if d.HistoryPrivate {
+		row(&b, "History", "not saved — personal Mail/Calendar content read (private session)")
 	}
 	b.WriteString("\n")
 

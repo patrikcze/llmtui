@@ -1949,6 +1949,8 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.updateSuggestions()
 		m.syncInputHeight()
 		m.notice = "input cleared — press ctrl+c again to exit"
+	case m.personalAppsPrivate.Load():
+		m.notice = "press ctrl+c again to exit (private session: history will not be saved)"
 	default:
 		m.notice = "press ctrl+c again to exit (session auto-saves)"
 	}
