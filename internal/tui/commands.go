@@ -175,7 +175,7 @@ func slashCommands() []slashCommand {
 
 		// --- Diagnostics ---
 		{name: "doctor", usage: "/doctor [provider [name]|mcp|personal-apps]", desc: "provider, model, MCP, and personal-app diagnostics", category: "Diagnostics", run: cmdDoctor},
-		{name: "debug", usage: "/debug [on|off|last]", desc: "debug drawer for the last request", category: "Diagnostics", run: cmdDebug},
+		{name: "debug", usage: "/debug [on|off|last|tool-calls [test]]", desc: "debug drawer; inspect or probe native tool calls", category: "Diagnostics", run: cmdDebug},
 		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", run: cmdKeys},
 		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", run: cmdConfig},
 

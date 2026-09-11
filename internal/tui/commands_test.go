@@ -602,6 +602,19 @@ func TestDebugCommands(t *testing.T) {
 	}
 }
 
+func TestDebugCommandHelpListsToolCallDiagnostics(t *testing.T) {
+	for _, command := range slashCommands() {
+		if command.name != "debug" {
+			continue
+		}
+		if !strings.Contains(command.usage, "tool-calls [test]") || !strings.Contains(command.desc, "native tool calls") {
+			t.Fatalf("debug help = %+v, want tool-call diagnostics", command)
+		}
+		return
+	}
+	t.Fatal("debug command is not registered")
+}
+
 func TestToolCallDiagnosticsAreMetadataOnly(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true
