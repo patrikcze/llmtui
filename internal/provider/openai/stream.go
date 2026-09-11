@@ -218,5 +218,8 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	if len(calls) > 0 && reasoning.Len() > 0 {
 		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning.String()}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: calls, Truncated: finishLen, Turn: turn, MalformedToolCall: malformed})
+	provider.Emit(ctx, events, provider.ChatEvent{
+		Type: provider.EventDone, Usage: usage, ToolCalls: calls, Truncated: finishLen, Turn: turn, MalformedToolCall: malformed,
+		ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, true, completion.String(), calls, finishLen, malformed),
+	})
 }

@@ -761,7 +761,7 @@ func (m *Model) doctorOverlay(report string) string {
 // --- /debug -----------------------------------------------------------------
 
 func cmdDebug(m *Model, args string) tea.Cmd {
-	sub, _ := splitArgs(args)
+	sub, rest := splitArgs(args)
 	switch sub {
 	case "":
 		m.notice = "debug mode: " + onOff(m.debugMode) + " — /debug on|off|last"
@@ -773,10 +773,68 @@ func cmdDebug(m *Model, args string) tea.Cmd {
 		m.notice = "debug mode off"
 	case "last":
 		m.openOverlay(m.debugOverlay())
+	case "tool-calls":
+		if strings.TrimSpace(rest) == "test" {
+			return m.startToolCallConformanceProbe()
+		}
+		if strings.TrimSpace(rest) != "" {
+			return m.fail("usage: /debug tool-calls [test]")
+		}
+		m.openOverlay(m.toolCallDiagnosticsOverlay())
 	default:
-		return m.fail("usage: /debug [on|off|last]")
+		return m.fail("usage: /debug [on|off|last|tool-calls]")
 	}
 	return nil
+}
+
+func (m *Model) toolCallDiagnosticsOverlay() string {
+	d := m.lastDebug
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("debug — tool-call lifecycle") + "\n\n")
+	if len(d.ToolCallDiagnostics) == 0 && d.ToolCallConformance == nil {
+		b.WriteString(m.theme.SystemNote.Render("no native tool-call diagnostics for this turn") + "\n")
+		return m.overlayFooter(&b)
+	}
+	b.WriteString(m.theme.SystemNote.Render("metadata only; marker detections cannot execute tools") + "\n\n")
+	for _, event := range d.ToolCallDiagnostics {
+		line := fmt.Sprintf("%s · %s", event.Stage, event.Classification)
+		if event.ToolName != "" {
+			line += " · " + event.ToolName
+		}
+		if event.ToolCallID != "" {
+			line += " · id " + event.ToolCallID
+		}
+		if event.Detail != "" {
+			line += " · " + event.Detail
+		}
+		b.WriteString(m.theme.StatusValue.Render("  "+line) + "\n")
+	}
+	if d.ToolCallConformance != nil {
+		r := d.ToolCallConformance
+		b.WriteString("\n" + m.theme.UserLabel.Render("conformance probe") + "\n")
+		fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(fmt.Sprintf("capability %s · native %s · name %s · args %s · ID %s · correlation %s · required selection %s",
+			r.AdvertisedCapability, r.NativeCall, r.ToolName, r.Arguments, r.CallID, r.ResultCorrelation, r.RequiredSelection)))
+		if r.SuspectedCensoring || r.Detail != "" {
+			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(fmt.Sprintf("suspected censoring %v · boundary %s · %s", r.SuspectedCensoring, r.FailureBoundary, r.Detail)))
+		}
+	}
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) startToolCallConformanceProbe() tea.Cmd {
+	if m.thinking || m.busy() {
+		return m.fail("tool-call conformance probe is available only while chat is idle")
+	}
+	prov, model := m.prov, m.model
+	stream := m.cfg.StreamEnabled()
+	timeout := app.RequestTimeout(m.cfg.Network)
+	m.notice = "running harmless native tool-call conformance probe…"
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		report, err := provider.ProbeNativeToolCalls(ctx, prov, model, stream)
+		return toolCallProbeMsg{report: report, err: err}
+	}
 }
 
 func (m *Model) debugOverlay() string {
@@ -849,6 +907,25 @@ func (m *Model) debugOverlay() string {
 				"%s · id %s · args %d bytes · JSON %v · SHA-256 %s",
 				call.Name, call.ID, call.ArgumentBytes, call.ArgumentsJSON, call.ArgumentsHash)))
 		}
+	}
+	if len(d.ToolCallDiagnostics) > 0 {
+		b.WriteString("\n" + m.theme.UserLabel.Render("tool-call lifecycle") + "\n")
+		for _, event := range d.ToolCallDiagnostics {
+			line := fmt.Sprintf("%s · %s", event.Stage, event.Classification)
+			if event.ToolName != "" {
+				line += " · " + event.ToolName
+			}
+			if event.Detail != "" {
+				line += " · " + event.Detail
+			}
+			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(line))
+		}
+	}
+	if d.ToolCallConformance != nil {
+		r := d.ToolCallConformance
+		b.WriteString("\n" + m.theme.UserLabel.Render("tool-call conformance probe") + "\n")
+		fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(fmt.Sprintf("capability %s · native %s · name %s · args %s · ID %s · correlation %s · required selection %s",
+			r.AdvertisedCapability, r.NativeCall, r.ToolName, r.Arguments, r.CallID, r.ResultCorrelation, r.RequiredSelection)))
 	}
 
 	if len(m.ragLast) > 0 {

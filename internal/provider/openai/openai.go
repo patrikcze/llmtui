@@ -214,6 +214,7 @@ type wireFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      bool            `json:"strict,omitempty"`
 }
 
 // wireToolCall is one tool invocation in an assistant message or response.
@@ -238,6 +239,7 @@ func toWireTools(specs []provider.ToolSpec) []wireTool {
 			Name:        s.Name,
 			Description: s.Description,
 			Parameters:  provider.NormalizeToolParameters(s.Parameters),
+			Strict:      s.Strict,
 		}})
 	}
 	return out
@@ -485,7 +487,10 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	if len(toolCalls) > 0 && reasoning != "" {
 		turn.Continuation = &provider.ProviderContinuation{Reasoning: reasoning}
 	}
-	provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn, MalformedToolCall: malformed})
+	provider.Emit(ctx, events, provider.ChatEvent{
+		Type: provider.EventDone, Usage: usage, ToolCalls: toolCalls, Truncated: truncated, Turn: turn, MalformedToolCall: malformed,
+		ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, false, content, toolCalls, truncated, malformed),
+	})
 }
 
 // looksLikeUnparsedToolCall reports whether content is a failed tool-call

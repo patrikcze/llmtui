@@ -602,6 +602,24 @@ func TestDebugCommands(t *testing.T) {
 	}
 }
 
+func TestToolCallDiagnosticsAreMetadataOnly(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.handleStreamEvent(streamEventMsg{gen: m.streamGen, ok: true, event: provider.ChatEvent{
+		Type: provider.EventDone,
+		ToolCallDiagnostics: []provider.ToolCallDiagnostic{{
+			Stage: provider.ToolCallStageIntentSuspected, Classification: provider.ToolCallSuspectedCensored,
+			Detail: "tool_call_envelope", Streaming: true,
+		}},
+	}})
+	if len(m.pendingCalls) != 0 {
+		t.Fatalf("diagnostic marker created runnable calls: %#v", m.pendingCalls)
+	}
+	if got := m.toolCallDiagnosticsOverlay(); !strings.Contains(got, "suspected_censored_tool_call") || !strings.Contains(got, "cannot execute") {
+		t.Fatalf("diagnostics overlay = %q", got)
+	}
+}
+
 func TestThinkCommand(t *testing.T) {
 	m := newTestModel(t)
 	runCommand(m, "/think off")
