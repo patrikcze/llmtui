@@ -112,7 +112,7 @@ func suspectedToolMarker(model, content string) string {
 		return "harmony_recipient_or_channel"
 	}
 	switch {
-	case strings.HasPrefix(trimmed, "<tool_call>"), strings.HasPrefix(trimmed, "<|tool_call>"), strings.HasPrefix(trimmed, "<|toolcall>"):
+	case strings.HasPrefix(trimmed, "<tool_call>"), strings.HasPrefix(trimmed, "<|tool_call>"), strings.HasPrefix(trimmed, "<|toolcall>"), strings.HasPrefix(trimmed, "<|tools>"):
 		return "tool_call_envelope"
 	case strings.HasPrefix(trimmed, "<function="):
 		return "qwen_function_envelope"

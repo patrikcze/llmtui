@@ -14,6 +14,7 @@ func TestObserveToolCallResponse(t *testing.T) {
 		{name: "fenced JSON is not a marker", content: "```json\n{\"name\":\"read_file\"}\n```", want: ToolCallNoIntentObserved},
 		{name: "native call", calls: []ToolCall{{ID: "c1", Name: "read_file", Arguments: `{}`}}, want: ToolCallNativeReceived},
 		{name: "qwen envelope", content: "<function=read_file><parameter=path>a.txt", want: ToolCallSuspectedCensored},
+		{name: "tools control envelope", content: "<|tools>{\"name\":\"read_file\"}", want: ToolCallSuspectedCensored},
 		{name: "incomplete tool envelope", content: "<tool_call>{\"name\":\"read_file\"", truncated: true, want: ToolCallIncompleteStream},
 		{name: "harmony recipient", model: "openai/gpt-oss-20b", content: "to=functions.read_file<|message|>{}", want: ToolCallSuspectedCensored},
 	}
