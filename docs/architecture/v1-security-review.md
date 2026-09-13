@@ -120,3 +120,20 @@ truncation handling all show no security regression at this baseline.
 | No secrets or generated local data committed | Re-checked in the final working tree; the user-supplied governing prompt remains intentionally untracked |
 | Prior security review findings re-verified, not just cited | Done (§1) |
 | New findings from this baseline documented | Done (§3) |
+
+## 6. 2026-09-13 focused trust-boundary review
+
+Full report: `.claude/tasks/plans/2026-09-13-security-review.md`. Confirmed:
+0 Critical, 0 High, 1 Medium, 2 Low.
+
+| Finding | Severity | Status | Fix |
+| --- | --- | --- | --- |
+| Auto-approved `git status/diff/show/log/blame` could execute a repository-configured helper (`diff.external`, `core.fsmonitor`, a `.gitattributes` textconv driver) — **reopens SEC-003** ("git subcommand bypass"), which closed the subcommand-spelling gap but not the effective-configuration one | Medium (CWE-78) | Fixed | `internal/tools/tools.go` (`hardenGitInvocation`, `gitHardenedEnv`): every such command now runs with `core.fsmonitor`/`interactive.diffFilter` forced off via `GIT_CONFIG_*` env overrides and `--no-ext-diff`/`--no-textconv` appended; human-approved (mutating) git commands are left untouched. Regression tests in `internal/tools/security_review_2026_09_13_test.go`. |
+| `RestoreSession` could fall back from a missing exact user/plugin skill identity to an unqualified-ID match that turned out to be a workspace skill, activating it without the fresh approval `SourceWorkspace` refs already require | Low (CWE-863) | Fixed | `internal/skill/manager.go` (`RestoreSession`): the fallback now checks the resolved skill's actual source and declines with the same "not restored" warning when it is `SourceWorkspace`. Regression test `TestSessionRestoreMissingUserRefDoesNotFallBackToWorkspaceSkill` in `internal/skill/manager_test.go`. |
+| `go list -mod=mod` (or `-mod mod`) was auto-approved like every other `go list` form, but can write `go.mod`/`go.sum` as a side effect of an ordinary listing query | Low (CWE-863) | Fixed | `internal/tools/guardrails.go` (`goListArgsAreObservational`): only `-mod=mod`/`-mod mod` now asks; every other `go list` form (including no `-mod` flag, the readonly default) stays auto-approved. Regression tests in `internal/tools/security_review_2026_09_13_test.go`. |
+
+All three were reproduced against the real `Runner`/`skill.Manager` (not
+mocked) before fixing, and the fixes were verified to make each reproduction
+fail on the pre-fix code and pass on the fixed code. See `docs/security.md`'s
+"Command classifier" and "Git configuration cannot repurpose an
+auto-approved git command" entries for the user-facing description.
