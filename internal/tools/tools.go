@@ -842,6 +842,7 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	if commandReferencesOutsideWorkspace(cmdline, r.root) {
 		return "", fmt.Errorf("run_command blocked: command references a path outside the workspace")
 	}
+	execLine, gitEnv := hardenGitInvocation(cmdline)
 
 	timeout := r.CommandTimeout
 	if timeout <= 0 {
@@ -852,12 +853,12 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/C", cmdline)
+		cmd = exec.CommandContext(ctx, "cmd", "/C", execLine)
 	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", cmdline)
+		cmd = exec.CommandContext(ctx, "sh", "-c", execLine)
 	}
 	cmd.Dir = r.root
-	cmd.Env = sanitizedEnv(os.Environ())
+	cmd.Env = append(sanitizedEnv(os.Environ()), gitEnv...)
 	procutil.SetupProcAttr(cmd)
 	// A descendant retaining stdout/stderr must not keep CombinedOutput
 	// blocked indefinitely after the context kills the direct shell.
@@ -928,6 +929,102 @@ var blockedCommandEnvNames = map[string]bool{
 	"KUBECONFIG":          true,
 	"VAULT_ADDR":          true,
 	"RIPGREP_CONFIG_PATH": true,
+}
+
+// gitReadOnlyConfigOverrides neutralizes repository-local Git configuration
+// keys that name an executable helper and that a genuinely read-only
+// status/log/diff/show/blame invocation never needs. A supplied working tree
+// can set these in its accompanying .git/config (a normal clone never
+// transports .git/config, but a full checkout handed to the agent can carry
+// an attacker-modified one); an auto-approved "read-only" git command would
+// otherwise launch the configured helper with the user's privileges.
+// diff.external is deliberately not here: an empty override value still
+// counts as "external diff configured" and git fails the whole command
+// ("external diff died") instead of falling back to its built-in diff, so it
+// is neutralized with the --no-ext-diff flag in hardenGitInvocation instead.
+// See the 2026-09-13 security review, finding 1 (CWE-78), reopening SEC-003
+// ("git subcommand bypass", docs/architecture/v1-security-review.md).
+var gitReadOnlyConfigOverrides = [][2]string{
+	{"core.fsmonitor", ""},
+	{"interactive.diffFilter", ""},
+	{"core.pager", "cat"},
+}
+
+// gitHardenedEnv returns GIT_CONFIG_COUNT/KEY_n/VALUE_n environment
+// variables that override gitReadOnlyConfigOverrides. These environment
+// overrides take the same "above every config file" precedence as -c
+// command-line options, so they win over repo-local, global, and system Git
+// configuration regardless of which one names the helper.
+func gitHardenedEnv() []string {
+	env := make([]string, 0, len(gitReadOnlyConfigOverrides)*2+1)
+	env = append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(gitReadOnlyConfigOverrides)))
+	for i, kv := range gitReadOnlyConfigOverrides {
+		env = append(env,
+			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]),
+			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]),
+		)
+	}
+	return env
+}
+
+// gitNoExtDiffSubcommands are read-only git subcommands that can render a
+// diff and therefore consult diff.external/GIT_EXTERNAL_DIFF unless told not
+// to; gitNoTextconvSubcommands additionally/instead consult an
+// attribute-assigned textconv filter (gitattributes(5)), whose name comes
+// from tracked .gitattributes content and so cannot be neutralized by a
+// fixed config-key override the way gitReadOnlyConfigOverrides handles
+// core.fsmonitor. Only the documented "--no-ext-diff"/"--no-textconv" flags
+// disable them for a given invocation.
+var (
+	gitNoExtDiffSubcommands  = map[string]bool{"diff": true, "show": true, "log": true}
+	gitNoTextconvSubcommands = map[string]bool{"diff": true, "show": true, "log": true, "blame": true}
+)
+
+// hardenGitInvocation returns the command line to actually execute and any
+// extra environment variables to run it with. It applies only to a "git"
+// command whose subcommand/arguments are already provably read-only
+// (gitSubcommandIsReadOnly — the same shape ClassifyCommand lets run
+// automatically) and that carries no shell syntax making re-tokenizing it
+// unsafe (the same metacharacter and quoting shapes ClassifyCommand always
+// sends to approval); the same shape check also means the CLI-flag rewrite
+// below can never touch an explicitly-approved mutating command such as
+// "git push", which may legitimately depend on credential.helper. Everything
+// else is returned unchanged with no extra environment: a command still
+// requiring human approval is shown and run exactly as written, never
+// silently rewritten.
+func hardenGitInvocation(cmdline string) (execLine string, env []string) {
+	if strings.ContainsAny(cmdline, "\n\r|;&<>`$\\%^!()*?[]{}\"'") {
+		return cmdline, nil
+	}
+	fields := strings.Fields(cmdline)
+	if len(fields) == 0 || fields[0] != "git" || !gitSubcommandIsReadOnly(fields) {
+		return cmdline, nil
+	}
+	env = gitHardenedEnv()
+	sub := fields[1]
+	var extra []string
+	hasFlag := func(name string) bool {
+		for _, f := range fields[2:] {
+			if f == name {
+				return true
+			}
+		}
+		return false
+	}
+	if gitNoExtDiffSubcommands[sub] && !hasFlag("--no-ext-diff") && !hasFlag("--ext-diff") {
+		extra = append(extra, "--no-ext-diff")
+	}
+	if gitNoTextconvSubcommands[sub] && !hasFlag("--no-textconv") && !hasFlag("--textconv") {
+		extra = append(extra, "--no-textconv")
+	}
+	if len(extra) == 0 {
+		return cmdline, env
+	}
+	rewritten := make([]string, 0, len(fields)+len(extra))
+	rewritten = append(rewritten, fields[0], sub)
+	rewritten = append(rewritten, extra...)
+	rewritten = append(rewritten, fields[2:]...)
+	return strings.Join(rewritten, " "), env
 }
 
 func sanitizedEnv(environ []string) []string {

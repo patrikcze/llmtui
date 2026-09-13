@@ -213,15 +213,30 @@ and an explicit category selection; the picker defaults to skip.
     managers, cloud/container CLIs) always ask, as does anything
     unrecognized. Ripgrep options that launch helper processes (`--pre`,
     `--hostname-bin`, and `-z`/`--search-zip`) also always ask; ordinary
-    searches remain automatic. Flag values that carry a path are inspected
-    whether they are attached (`-f/etc/passwd`), separated by `=`
-    (`--file=/etc/passwd`), or a standalone token, so a path cannot hide
-    behind a leading `-`. `tree -o`/`--output` asks because it writes a file.
+    searches remain automatic. `go list -mod=mod` (or the equivalent
+    `-mod mod`) always asks too — every other `go list` form stays readonly,
+    but that flag mode lets an ordinary listing query add a missing
+    requirement to `go.mod` or a sum entry to `go.sum` as a side effect. Flag
+    values that carry a path are inspected whether they are attached
+    (`-f/etc/passwd`), separated by `=` (`--file=/etc/passwd`), or a
+    standalone token, so a path cannot hide behind a leading `-`. `tree
+    -o`/`--output` asks because it writes a file.
   - **Confinement** — file tools reject absolute paths, `..`, and symlinks
     resolving outside the launch directory. Commands run with the workspace
     as their working directory; path-like arguments are symlink-resolved
     before classification, and external/secret paths, quoted/globbed paths,
     and `git diff --no-index` always require explicit approval.
+  - **Git configuration cannot repurpose an auto-approved git command** — a
+    supplied full working tree carries its own `.git/config` (a normal clone
+    never transports it), so `diff.external`, `core.fsmonitor`, or a tracked
+    `.gitattributes` textconv driver could otherwise launch a
+    repository-chosen program with your privileges the moment the model runs
+    an auto-approved `git status`, `diff`, `show`, `log`, or `blame`. Every
+    such command runs with `core.fsmonitor` and `interactive.diffFilter`
+    forced off and `--no-ext-diff`/`--no-textconv` appended, regardless of
+    what the repository's configuration or attributes ask for; a
+    human-approved `git` command (for example `git push`, which may
+    legitimately need `credential.helper`) is never rewritten this way.
   - **Write guardrails** — writes into `.git/` (a model-written git hook
     would otherwise execute on your next git command), key-material
     directories (`.ssh`, `.gnupg`), `.llmtui/` (the workspace skill and

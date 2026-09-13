@@ -84,11 +84,33 @@ var riskyPrograms = map[string]string{
 // observational and never build, execute, or write repository/user state.
 // "test", "vet", and "fmt" are deliberately excluded: test/vet compile and
 // load (vet also runs analyzers with side effects for some checks) the
-// repository's own code, and fmt rewrites source files. "env" is handled
-// separately by goEnvArgsAreObservational since only some of its forms are
-// safe.
+// repository's own code, and fmt rewrites source files. "env" and "list" are
+// handled separately (goEnvArgsAreObservational, goListArgsAreObservational)
+// since only some of their forms are safe.
 var autoAllowedGoSubcommands = map[string]bool{
-	"list": true, "version": true,
+	"version": true,
+}
+
+// goListArgsAreObservational reports whether "go list" arguments keep it in
+// its default readonly mode. "-mod=mod" (or the equivalent two-token
+// "-mod mod") switches module resolution to update mode, letting an ordinary
+// listing query add a missing requirement to go.mod, or a sum entry to
+// go.sum, as a side effect — see the 2026-09-13 security review, finding 3
+// (CWE-863). Every other "go list" form, including no -mod flag at all
+// (readonly is the default since Go 1.16) and "-mod=readonly"/"-mod=vendor",
+// stays observational.
+func goListArgsAreObservational(args []string) bool {
+	for i, a := range args {
+		switch a {
+		case "-mod=mod", "--mod=mod":
+			return false
+		case "-mod", "--mod":
+			if i+1 < len(args) && args[i+1] == "mod" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // goEnvKeyPattern matches a bare Go environment variable name such as
@@ -278,6 +300,11 @@ func (p GuardrailPolicy) ClassifyCommand(body, root string) CommandClass {
 				return CommandClass{VerdictAsk, "go env with flags or a response file can read or write persistent go env config"}
 			}
 			classReason = "go env observational query"
+		case sub == "list":
+			if !goListArgsAreObservational(fields[2:]) {
+				return CommandClass{VerdictAsk, "go list -mod=mod can modify go.mod or go.sum"}
+			}
+			classReason = "go list observational query"
 		case autoAllowedGoSubcommands[sub]:
 			classReason = "go toolchain check"
 		default:

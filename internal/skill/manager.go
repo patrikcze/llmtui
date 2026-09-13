@@ -555,6 +555,20 @@ func (m *Manager) RestoreSession(refs []Ref) (warnings []string) {
 				warnings = append(warnings, fmt.Sprintf("saved skill %s is no longer available — not restored", qid))
 				continue
 			}
+			// The saved reference named a user/plugin skill, but only its
+			// unqualified ID still resolves, and that ID now belongs to a
+			// workspace skill. Falling through would activate a workspace
+			// skill across the same trust boundary the direct
+			// SourceWorkspace branch above requires fresh approval for
+			// (2026-09-13 security review, finding 2, CWE-863) — the source
+			// changed, not just the content, so this is a substitution, not
+			// a restore.
+			if s2.Source == SourceWorkspace {
+				warnings = append(warnings, fmt.Sprintf(
+					"saved skill %s is no longer available, and workspace:%s now uses that id — not restored; use /skills use %s after reviewing it",
+					qid, r.ID, r.ID))
+				continue
+			}
 			s = s2
 		}
 		if r.Hash != "" && s.Hash != r.Hash {
