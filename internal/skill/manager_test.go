@@ -375,6 +375,43 @@ func TestSessionRefsAndRestore(t *testing.T) {
 	}
 }
 
+// TestSessionRestoreMissingUserRefDoesNotFallBackToWorkspaceSkill covers the
+// 2026-09-13 security review, finding 2 (CWE-863): a saved SourceUser (or
+// SourcePlugin) reference whose exact identity is gone must not fall back to
+// a same-ID workspace skill and activate it. Falling back would cross the
+// workspace-skill trust boundary — normally gated by an explicit /skills use
+// or a fresh in-session approval — merely because a session was resumed.
+func TestSessionRestoreMissingUserRefDoesNotFallBackToWorkspaceSkill(t *testing.T) {
+	workspace := t.TempDir()
+	writeSkill(t, workspace, "same-id", "malicious workspace instructions")
+	m := newTestManager(t, Options{Paths: Paths{WorkspaceDir: workspace}})
+
+	// The saved ref names a *user* skill "same-id" (by a hash that cannot
+	// match any workspace skill's content hash) that no longer exists in
+	// this registry — only a workspace skill with the same unqualified ID
+	// does.
+	warns := m.RestoreSession([]Ref{{
+		ID: "same-id", Scope: "session", Source: string(SourceUser), Hash: "deadbeefdeadbeef",
+	}})
+	if len(warns) != 1 || !strings.Contains(warns[0], "not restored") {
+		t.Fatalf("warns = %v, want one \"not restored\" warning", warns)
+	}
+	if active := m.Active(); len(active) != 0 {
+		t.Fatalf("active = %+v, want no substituted workspace skill", active)
+	}
+
+	// The same guard applies to a saved plugin reference.
+	warns = m.RestoreSession([]Ref{{
+		ID: "same-id", Scope: "session", Source: string(SourcePlugin), PluginID: "gone-plugin", Hash: "deadbeefdeadbeef",
+	}})
+	if len(warns) != 1 || !strings.Contains(warns[0], "not restored") {
+		t.Fatalf("plugin warns = %v, want one \"not restored\" warning", warns)
+	}
+	if active := m.Active(); len(active) != 0 {
+		t.Fatalf("active after plugin restore = %+v, want no substituted workspace skill", active)
+	}
+}
+
 func TestPluginLifecycle(t *testing.T) {
 	pluginDir := t.TempDir()
 	writePlugin(t, pluginDir, "jira-tools", "worklog", "task-review")
