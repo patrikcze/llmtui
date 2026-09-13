@@ -38,7 +38,6 @@ const acceptLanguage = "en-US,en;q=0.9"
 // genuine "this page does not exist".
 var retryableStatuses = map[int]bool{
 	http.StatusForbidden:          true, // 403
-	http.StatusTooManyRequests:    true, // 429
 	http.StatusServiceUnavailable: true, // 503
 }
 
@@ -46,6 +45,8 @@ var retryableStatuses = map[int]bool{
 // statuses the page (with any text body) and an error are both returned so
 // the model can see what the server said.
 func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.http.Timeout)
+	defer cancel()
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return Page{URL: rawURL}, fmt.Errorf("parse URL: %w", err)
@@ -59,10 +60,15 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, rawReadCap))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, rawReadCap+1))
 	if err != nil {
 		return Page{URL: rawURL, Status: resp.StatusCode}, fmt.Errorf("read response: %w", err)
 	}
+	rawTruncated := len(body) > rawReadCap
+	if rawTruncated {
+		body = body[:rawReadCap]
+	}
+	u = resp.Request.URL
 	page := Page{URL: u.String(), Status: resp.StatusCode, Bytes: len(body)}
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if ct == "" {
@@ -81,6 +87,7 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
 	}
 
 	page.Content, page.Truncated = c.capContent(page.Content, len(body))
+	page.Truncated = page.Truncated || rawTruncated
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return page, fmt.Errorf("fetch failed: status %d", resp.StatusCode)
 	}
@@ -125,7 +132,7 @@ func (c *Client) shouldRetryHTTP1(ctx context.Context, resp *http.Response, err 
 		return false
 	}
 	if err != nil {
-		return !errors.Is(err, errBlockedAddress)
+		return !errors.Is(err, errBlockedAddress) && !errors.Is(err, errTooManyRedirects)
 	}
 	return retryableStatuses[resp.StatusCode]
 }

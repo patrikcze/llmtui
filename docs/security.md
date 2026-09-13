@@ -294,8 +294,13 @@ and an explicit category selection; the picker defaults to skip.
     before reaching the model; binary content types are refused.
   - **Request shape** — `web_fetch` presents a mainstream desktop-browser
     `User-Agent` (a tool-identifying string is rejected by much of the public
-    web) and, on a transport failure or a `403`/`429`/`503`, retries once over
-    HTTP/1.1. It stays GET-only, adds no cookies or auth, and both the primary
+    web) and, on a transport failure or a `403`/`503`, retries once over
+    HTTP/1.1. HTTP `429` is returned without retrying. Search replays its
+    read-only DuckDuckGo POST once over HTTP/1.1 on transport failure, but
+    never retries HTTP blocks or detected challenges. Both tools share one
+    configured timeout across attempts; search rejects oversized or
+    unrecognized result pages instead of reporting empty results. Fetch stays
+    GET-only, adds no cookies or auth, and both the primary
     and fallback clients use the same SSRF-guarded dialer and 5-hop redirect
     limit. A deliberate SSRF rejection is never retried.
   - **Prompt-injection posture** — fetched pages are untrusted input. The
