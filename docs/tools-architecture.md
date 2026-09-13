@@ -186,7 +186,12 @@ Three built-ins are controlled before ordinary Runner execution:
 - `ask_user` is a control-flow barrier. The TUI pauses, reuses the existing
     question picker or free-text input, and returns the answer under the original
     `tool_call_id`. It is never an approval. Side-effecting siblings in the same
-    batch do not run.
+    batch do not run. It is offered in regular chat and agent mode whenever
+    tools are enabled, through native function calling or the fenced fallback.
+    Both protocols keep the original turn open while waiting. The model is
+    instructed to use it for necessary clarification instead of a prose-only
+    question, with up to four choices when appropriate. Multiple search results
+    alone do not require clarification; tool approval uses its own prompt.
 - `local_context` uses an injectable local collector behind `Runner`. It returns
     bounded structured facts for `time`, `system`, `workspace`, `processes`,
     `clipboard`, and `recent_files`. Clipboard is the only kind that enters

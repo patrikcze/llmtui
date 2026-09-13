@@ -230,3 +230,87 @@ func TestAskUserAgentCancelWhileWaiting(t *testing.T) {
 		t.Fatalf("cancel result = %+v", last)
 	}
 }
+
+// Exercise ordinary chat from request construction through the picker and
+// continuation. Choosing a source must not also approve fetching its URL.
+func TestAskUserRegularChatRequestAndChoice(t *testing.T) {
+	for _, native := range []bool{true, false} {
+		t.Run(map[bool]string{true: "native", false: "fenced"}[native], func(t *testing.T) {
+			args := `{"question":"Which source should I read?","choices":["wikiHow","facts.uk","FactRetriever"]}`
+			steps := []agentScriptStep{
+				{toolCalls: []provider.ToolCall{{ID: "ask-source", Name: tools.ToolAskUser, Arguments: args}}},
+				{toolCalls: []provider.ToolCall{{ID: "fetch-source", Name: tools.ToolWebFetch, Arguments: `{"url":"https://www.wikihow.com/Funny-Fun-Facts"}`}}},
+			}
+			if !native {
+				steps = []agentScriptStep{
+					{text: "```tool ask_user\n" + args + "\n```"},
+					{text: "```tool web_fetch https://www.wikihow.com/Funny-Fun-Facts\n```"},
+				}
+			}
+			m := newTestModel(t)
+			prov := &scriptedAgentProvider{steps: steps}
+			m.prov = prov
+			m.agentOn = false
+			m.toolsOn = true
+			m.toolsNative = native
+			m.webOn = true
+			m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+			m.input.SetValue("Let me choose which source you read.")
+			driveAgentCommands(t, m, m.send())
+			if len(prov.requests) != 1 {
+				t.Fatalf("requests=%d err=%s", len(prov.requests), m.errText)
+			}
+			if _, ok := specByName(prov.requests[0].Tools, tools.ToolAskUser); ok != native {
+				t.Fatalf("native=%v ask_user offered=%v", native, ok)
+			}
+			system := prov.requests[0].Messages[0].Content
+			if !strings.Contains(system, "use ask_user instead of asking in ordinary reply text") {
+				t.Error("missing explicit clarification routing guidance")
+			}
+			if m.pendingAsk == nil || m.state != turnWaitingUserInput || !m.overlayOpen || len(m.picker.pickerItems) != 3 {
+				t.Fatalf("pending=%v state=%s picker=%v", m.pendingAsk, m.state, m.picker.pickerItems)
+			}
+			if m.agentLoop.run != nil {
+				t.Fatal("regular chat created an agent run")
+			}
+			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			driveAgentCommands(t, m, cmd)
+			if len(prov.requests) != 2 {
+				t.Fatalf("requests=%d err=%s", len(prov.requests), m.errText)
+			}
+			answered := false
+			for _, msg := range prov.requests[1].Messages {
+				if !strings.Contains(msg.Content, `"answer":"wikiHow"`) {
+					continue
+				}
+				answered = true
+				if !strings.Contains(msg.Content, `"grants_authorization":false`) {
+					t.Fatal("answer missing authorization boundary")
+				}
+				if native && (msg.Role != provider.RoleTool || msg.ToolCallID != "ask-source") {
+					t.Fatalf("uncorrelated answer: %+v", msg)
+				}
+				if !native && (msg.Role != provider.RoleUser || !strings.Contains(msg.Content, tools.ResultsPrefix)) {
+					t.Fatalf("invalid fenced answer: %+v", msg)
+				}
+			}
+			if !answered {
+				t.Fatal("continuation did not receive the selected answer")
+			}
+			if m.pendingAsk != nil || len(m.pendingCalls) != 1 || m.pendingCalls[0].Tool != tools.ToolWebFetch {
+				t.Fatalf("fetch must wait for separate approval: ask=%v calls=%v", m.pendingAsk, m.pendingCalls)
+			}
+			if m.exit.sentCount != 1 {
+				t.Fatalf("answer started a new user turn: sentCount=%d", m.exit.sentCount)
+			}
+		})
+	}
+}
+
+func TestToolsOverviewShowsAskUser(t *testing.T) {
+	m := newTestModel(t)
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	if !strings.Contains(m.toolsOverlay(), tools.ToolAskUser) {
+		t.Fatal("/tools overview omits ask_user")
+	}
+}
