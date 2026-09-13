@@ -101,7 +101,7 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolAskUser,
-			Description: "Ask the human only when a decision or missing information is required before continuing. Do not use this for tool approval. Call it alone, without other tools in the same batch.",
+			Description: "Ask the user a necessary clarification question in regular chat or agent mode, and wait for their answer. Use this instead of asking in ordinary reply text; provide up to 4 choices to show a picker, or omit choices for text input. Do not use this for tool approval. Call it alone, without other tools in the same batch.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -729,7 +729,7 @@ Rules:
 - Use read_file with offset/limit when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
-- ask_user is not approval. Call it alone, only when the human's decision or missing information is required before continuing.
+`+askUserInstructions+`
 - For the current date, time, timezone, weekday, or relative dates (today, tomorrow, yesterday, next Monday, deadlines, schedules), call local_context with kind=time; never infer the current date from training knowledge.
 - Connected MCP schemas may be hidden to save context. The compact MCP directory is authoritative for inventory; use tool_search to make a matching tool callable.
 - For an MCP/external-service action whose schema is not already provided, use tool_search %s. Never pass an MCP tool name to run_command. A truncated search result is not the complete catalog.

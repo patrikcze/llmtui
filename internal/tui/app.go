@@ -2358,6 +2358,12 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if cmd := m.maybeRunTools(); cmd != nil {
 			return m, cmd
 		}
+		// A fenced ask_user can pause synchronously without returning a
+		// command. Keep the original turn alive until the answer arrives,
+		// just as the native-tool branch above does.
+		if m.pendingAsk != nil {
+			return m, nil
+		}
 		// No tool continuation and no pending approval: the run reached its
 		// final answer, so run-scoped skills deactivate. (A pending approval
 		// means the run is still in flight — cleanup happens on its own
