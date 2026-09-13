@@ -27,7 +27,7 @@ type Page struct {
 // usable; construct with NewClient.
 type Client struct {
 	http      *http.Client // default, HTTP/2-capable
-	httpH1    *http.Client // HTTP/1.1-only fallback for fetch retries
+	httpH1    *http.Client // HTTP/1.1-only fallback for search and fetch retries
 	maxPageKB int
 	searchURL string // test override; defaults to DuckDuckGo
 
