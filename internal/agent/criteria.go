@@ -381,3 +381,22 @@ func CollectEvidence(cycle int, execution ExecutionResult) []EvidenceItem {
 	}
 	return items
 }
+
+// UserAnswerCausalFacts returns bounded controller facts about a completed
+// ask_user barrier. A later mutation in the same ToolCalls sequence follows
+// the answer because the executor cannot resume until that answer arrives.
+// The verifier receives this fact separately from model prose so it does not
+// mistake one live executor cycle for simultaneous actions.
+func UserAnswerCausalFacts(execution ExecutionResult) []string {
+	answerReceived := false
+	for _, call := range execution.ToolCalls {
+		if call.Name == "ask_user" && call.Succeeded {
+			answerReceived = true
+			continue
+		}
+		if answerReceived && call.Succeeded && (call.Name == "write_file" || call.Name == "edit_file") {
+			return []string{"a user answer was received before the later workspace mutation"}
+		}
+	}
+	return nil
+}

@@ -1031,6 +1031,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		// but never ask a post-execution verifier to establish goalposts.
 		EstablishCriteria: false,
 		Execution:         execution,
+		CausalFacts:       agent.UserAnswerCausalFacts(execution),
 		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
 	model := m.effectiveVerifierModel()

@@ -174,11 +174,18 @@ func TestParseNonEstablishingVerifierDefaultsUnusedCriterionFields(t *testing.T)
 
 func TestVerifierPromptExplainsSuccessfulAskUserEvidence(t *testing.T) {
 	prompt := verifierMessages(`{"Execution":{"tool_calls":[{"name":"ask_user","succeeded":true}]}}`, false)[0].Content
-	if !strings.Contains(prompt, "successful ask_user proves a correlated answer") || !strings.Contains(prompt, "user confirmed") ||
-		!strings.Contains(prompt, "ask_user pauses execution, so a later entry") ||
-		!strings.Contains(prompt, "fulfills ask-before-write, even in one cycle") ||
-		!strings.Contains(prompt, "grants_authorization:false") {
-		t.Fatalf("verifier prompt does not explain the ask_user evidence contract: %q", prompt)
+	for _, want := range []string{
+		"A successful ask_user proves a",
+		"correlated answer",
+		"user confirmed",
+		"\"CausalFacts\" are controller facts and override contrary inferences",
+		"ask_user pauses execution, so a later entry",
+		"fulfills ask-before-write, even in one cycle",
+		"grants_authorization:false",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("verifier prompt missing %q: %q", want, prompt)
+		}
 	}
 }
 
@@ -693,6 +700,7 @@ func TestVerifierEvidenceCarriesCumulativeRunState(t *testing.T) {
 		Evidence: []agent.EvidenceItem{
 			{Cycle: 1, Kind: agent.EvidenceTest, Source: "go test ./...", Success: true},
 		},
+		CausalFacts: []string{"a user answer was received before the later workspace mutation"},
 		PriorCycles: []agent.MemoryEntry{
 			{Cycle: 1, Objective: "first objective", Verdict: agent.VerificationPassed},
 		},
@@ -703,7 +711,7 @@ func TestVerifierEvidenceCarriesCumulativeRunState(t *testing.T) {
 	}
 	req := client.requests[0]
 	evidence := req.Messages[1].Content
-	for _, want := range []string{"gather data", "produce report", "go test ./...", "first objective", "c1", "c2"} {
+	for _, want := range []string{"gather data", "produce report", "go test ./...", "first objective", "c1", "c2", "a user answer was received before the later workspace mutation"} {
 		if !strings.Contains(evidence, want) {
 			t.Fatalf("evidence missing cumulative state %q: %s", want, evidence)
 		}

@@ -86,6 +86,9 @@ type Input struct {
 	// verifier cross-cycle context without any transcript.
 	Evidence    []agent.EvidenceItem
 	PriorCycles []agent.MemoryEntry
+	// CausalFacts are bounded controller-derived ordering facts for this
+	// cycle. They contain no user answer text or model prose.
+	CausalFacts []string
 	// EstablishCriteria asks this verification to also propose the stable
 	// criteria decomposition. Set only while nothing is pinned.
 	EstablishCriteria bool
@@ -279,9 +282,10 @@ func verifierMessages(evidence string, establishing bool) []provider.Message {
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: `You are an independent verifier. Evaluate only the supplied observable evidence.
 Do not assume work succeeded. Tool, build, test, permission, timeout, and safety failures are authoritative.
-ToolCalls are chronological controller evidence, not executor prose. ask_user pauses execution, so a later entry
-follows its answer. A successful ask_user proves a correlated answer; "user confirmed" means affirmative; text is
-redacted. A later successful write_file or edit_file fulfills ask-before-write, even in one cycle.
+"CausalFacts" are controller facts and override contrary inferences. ToolCalls are chronological controller evidence,
+not executor prose. ask_user pauses execution, so a later entry follows its answer. A successful ask_user proves a
+correlated answer; "user confirmed" means affirmative; text is redacted. A later successful write_file or edit_file
+fulfills ask-before-write, even in one cycle.
 grants_authorization:false only means ask_user did not bypass approval. Do not reject, repeat, or request the same
 input because the answer is redacted or calls share a cycle.
 Decide "retryable" from your own judgment of this evidence. Set retryable=false only when the task is fundamentally

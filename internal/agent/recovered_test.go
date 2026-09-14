@@ -163,3 +163,32 @@ func TestCollectEvidenceNamesSuccessfulTools(t *testing.T) {
 		t.Fatal("the recovered ask_user failure should still appear as evidence")
 	}
 }
+
+func TestUserAnswerCausalFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		calls []ToolCallRecord
+		want  bool
+	}{
+		{
+			name:  "answer before write",
+			calls: []ToolCallRecord{{Name: "ask_user", Succeeded: true}, {Name: "write_file", Succeeded: true}},
+			want:  true,
+		},
+		{
+			name:  "write before answer",
+			calls: []ToolCallRecord{{Name: "write_file", Succeeded: true}, {Name: "ask_user", Succeeded: true}},
+		},
+		{
+			name:  "failed answer",
+			calls: []ToolCallRecord{{Name: "ask_user", Succeeded: false}, {Name: "write_file", Succeeded: true}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts := UserAnswerCausalFacts(ExecutionResult{ToolCalls: tc.calls})
+			if (len(facts) > 0) != tc.want {
+				t.Fatalf("UserAnswerCausalFacts = %v, want fact=%t", facts, tc.want)
+			}
+		})
+	}
+}
