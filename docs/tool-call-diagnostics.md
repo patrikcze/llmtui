@@ -35,9 +35,17 @@ approval, and execution.
 The detector intentionally ignores ordinary prose, fenced JSON examples, and
 bare JSON. It does not inspect or display reasoning content. When it sees a
 strong provider-specific marker but the provider supplied no structured call,
-the chat shows a concise notice and `/debug tool-calls` records
-`suspected_censored_tool_call`; nothing is retried or executed because of that
-diagnostic.
+the controller drops that visible envelope and may make **one** schema-bound
+reissue for the current execution cycle. The reissue contains a fixed protocol
+reminder, never the envelope, inferred arguments, or reasoning. A later call
+is executable only if the provider returns a fresh structured call that passes
+the normal registration, validation, and approval path.
+
+The single recovery budget is shared with malformed-native-call,
+hidden-MCP-schema, and empty-continuation recovery. It prevents alternating
+failures from multiplying model requests. `/debug tool-calls` records a
+content-free `recovery` event with its category, attempt, and scheduled or
+exhausted outcome. A marker itself still never becomes a tool call.
 
 The historic fenced ` ```tool ` compatibility protocol remains separate from
 native-provider diagnostics. This feature does not widen it, reinterpret a
@@ -62,6 +70,8 @@ the privacy posture without making it executable.
 - `provider_parse_error`, `suspected_censored_tool_call`, or
   `incomplete_streamed_tool_call` identifies an earlier provider/streaming
   boundary. These observations cannot run a tool.
+- `recovery_scheduled` and `recovery_budget_exhausted` identify the bounded
+  controller decision around a later inference; neither is execution evidence.
 - `normalized`, `tool_resolved`, `arguments_invalid`, `approval_required`,
   `approval_denied`, `execution_succeeded`/`execution_failed`, and
   `result_correlated` identify existing llmtui controller boundaries.

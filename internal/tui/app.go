@@ -2299,7 +2299,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// while using native tools, retry through the fenced protocol so
 			// the attempt does not repeat the same failing backend conversion.
 			// Otherwise give it exactly one fresh attempt at the same round.
-			malformedRecovery := m.turnRuntime.claimToolRecovery(provider.ToolRecoveryMalformedCall)
+			malformedRecovery := m.claimToolRecovery(provider.ToolRecoveryMalformedCall)
 			m.recordToolRecovery(malformedRecovery)
 			if malformedRecovery.Allowed() {
 				m.malformedToolCallRetried = true
@@ -2328,7 +2328,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// one-off sampling event, so give it exactly one fresh attempt
 			// at the same round (same accumulated history, nothing resent)
 			// before treating it as a real failure.
-			emptyRecovery := m.turnRuntime.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
+			emptyRecovery := m.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
 			m.recordToolRecovery(emptyRecovery)
 			if emptyRecovery.Allowed() {
 				m.emptyContinuationRetried = true
@@ -2404,7 +2404,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case provider.EventError:
 		if name, ok := m.hiddenMCPToolRecoveryName(msg.event.Err); ok {
-			decision := m.turnRuntime.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
+			decision := m.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
 			m.recordToolRecovery(decision)
 			if !decision.Allowed() {
 				m.streamFailed(msg.event.Err)

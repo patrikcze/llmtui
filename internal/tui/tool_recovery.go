@@ -18,7 +18,7 @@ func (m *Model) visiblePseudoCallRecoveryDecision(events []provider.ToolCallDiag
 	}
 	for _, event := range events {
 		if event.Classification == provider.ToolCallSuspectedCensored {
-			return m.turnRuntime.claimToolRecovery(provider.ToolRecoveryVisiblePseudoCall)
+			return m.claimToolRecovery(provider.ToolRecoveryVisiblePseudoCall)
 		}
 	}
 	return provider.ToolRecoveryDecision{}

@@ -68,6 +68,20 @@ Both modes obey identical safety rules: agent mode never changes
 `tools.approve`, never activates tools, never connects MCP servers, and never
 grants network access on its own.
 
+## Calibration and assistance
+
+The runtime keeps integrity fixes and experimental assistance separate. Tool
+receipts, proof/freshness checks, bounded recovery, context accounting, and
+approval gates are controller rules. They remain active regardless of any
+assistance experiment.
+
+The current format-assistance tracker is shadow-only: it records repeated
+control-format failures for the selected model and reports a reversible
+recommendation in `/debug`, but it does not change prompts, select a model, or
+route a request. No automatic assistance default has been adopted. The
+synthetic baseline, opt-in endpoint procedure, denominators, and saved-state
+compatibility gate are documented in [agent-evaluation.md](agent-evaluation.md).
+
 ## Lifecycle
 
 Each run establishes a contract, then follows the execution stages:

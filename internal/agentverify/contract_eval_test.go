@@ -8,8 +8,9 @@ package agentverify_test
 //
 // It never runs in normal CI: set LLMTUI_EVAL_BASE_URL and LLMTUI_EVAL_MODEL
 // (optionally LLMTUI_EVAL_API_KEY) to enable it. This is a diagnostic, not a
-// pass/fail gate — it logs outcomes and only fails on a hard error contacting
-// the endpoint.
+// pass/fail gate — it logs only bounded outcome metadata and fails only on a
+// hard error contacting the endpoint. It never exports the endpoint's raw
+// control response, question text, or criteria.
 
 import (
 	"context"
@@ -56,16 +57,16 @@ func TestContractStageAgainstRealEndpoint(t *testing.T) {
 
 			switch {
 			case err != nil && errors.Is(err, agent.ErrMalformedControl):
-				t.Logf("outcome = PARK (%v); raw = %s", err, out.Raw)
+				t.Logf("outcome = PARK (%v)", err)
 			case err != nil:
 				t.Fatalf("hard error contacting the endpoint: %v", err)
 			case out.Contract.NeedsUserInput:
-				t.Logf("outcome = ASK; question = %q; options = %v", out.Contract.Question, out.Contract.UserOptions)
+				t.Log("outcome = ASK")
 				if !tc.wantAsk {
 					t.Logf("NOTE: expected an executable decomposition here")
 				}
 			default:
-				t.Logf("outcome = DECOMPOSE; criteria = %v", out.Contract.Criteria)
+				t.Logf("outcome = DECOMPOSE; criteria_count = %d", len(out.Contract.Criteria))
 				if tc.wantAsk {
 					t.Logf("NOTE: expected a clarifying question here")
 				}

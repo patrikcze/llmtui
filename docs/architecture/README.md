@@ -10,6 +10,9 @@ comments, but this file is authoritative.
 - **Per-topic guides:** `docs/*.md` (agent loop, tools, prompt composition,
   context management, security, MCP, RAG, memory, skills, embedded inference,
   self-management, …)
+- **Agent calibration:** [`../agent-evaluation.md`](../agent-evaluation.md)
+  defines the deterministic baseline and the opt-in live-endpoint procedure;
+  it does not treat synthetic fixture success as a model-quality claim.
 
 Baseline: `master`, Go 1.27, ~36 internal packages. Verify version-sensitive
 details (the embedded runtime pin, dependency versions) against the source —

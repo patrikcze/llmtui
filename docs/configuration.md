@@ -312,6 +312,10 @@ task may retain them; a new human request clears them. Disabled, disconnected,
 or unregistered tools are never searchable, and disconnecting an already
 disclosed server removes its schemas immediately. Search results include
 `total_matches` and explicitly identify a bounded shortlist as truncated.
+Before retaining a returned dynamic schema, llmtui checks that the next normal
+request can fit it under the active context strategy and response reserve. A
+context-bound result leaves `tool_search` visible and asks the model to refine
+the query instead of advertising an unavailable schema.
 Several searches may share one search-only batch; all are validated first and
 one invalid search rejects the batch atomically. Discovery mixed with an
 executable call is always rejected.

@@ -38,6 +38,14 @@ fit at all, llmtui stops before contacting the provider and explains which
 overhead must be reduced. `/context` and `/debug last` show the estimated
 breakdown.
 
+Large MCP catalogs use the same accounting when a `tool_search` result tries
+to disclose a full dynamic schema. llmtui tentatively prepares the next
+continuation with that schema and retains it only if the ordinary context
+strategy can fit it. If it cannot, the result explains that the schema was not
+retained and leaves `tool_search` available for a narrower query. Discovery
+does not bypass the context budget, make a hidden tool callable, or weaken its
+approval policy.
+
 ## The summary
 
 Built by a **heuristic summarizer** (no extra LLM call, deterministic): it
