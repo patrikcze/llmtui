@@ -470,6 +470,7 @@ func TestAgentEvolutionContractCoverageGapForcesSemanticVerification(t *testing.
 	m.toolsNative = true
 	m.toolsAutoApprove = true
 	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
 
 	driveAgentCommands(t, m, m.startVerifiedRun("Read report.md and write its heading to result.txt.", nil))
 

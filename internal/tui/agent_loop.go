@@ -966,8 +966,13 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
 			return syntheticResult(deterministic)
 		}
-		if run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 {
-			for _, criterion := range run.UnresolvedCriteria() {
+		// If every criterion is resolved but ContractCoverageJustified was
+		// false, the earlier all-resolved shortcut deliberately fell through:
+		// a semantic verifier must inspect the request for an omitted
+		// deliverable. Only genuinely unresolved deterministic/user-owned
+		// criteria can return a synthetic adaptive result here.
+		if unresolved := run.UnresolvedCriteria(); run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 && len(unresolved) > 0 {
+			for _, criterion := range unresolved {
 				if criterion.Kind == agent.CriterionUserInput {
 					return syntheticResult(agent.VerificationResult{
 						Verdict: agent.VerificationInconclusive, Summary: criterion.Text,
