@@ -81,21 +81,45 @@ func (m *Model) resetToolDisclosure() {
 	m.disclosedToolOrder = nil
 }
 
-func (m *Model) discloseTools(names []string) {
+// discloseTools promotes only schemas that still fit the ordinary request
+// budget. The trial uses prepareRequest, so disclosure follows the same
+// context accounting and compression policy as the next provider request.
+// The native tool_search schema is never dynamic and remains visible when a
+// full MCP schema cannot fit, preserving discovery access.
+func (m *Model) discloseTools(names []string) []string {
+	disclosed := make([]string, 0, len(names))
 	if m.disclosedTools == nil {
 		m.disclosedTools = make(map[string]bool)
 	}
 	for _, name := range names {
 		if m.disclosedTools[name] {
+			disclosed = append(disclosed, name)
 			continue
 		}
+		previousTools := make(map[string]bool, len(m.disclosedTools))
+		for previous := range m.disclosedTools {
+			previousTools[previous] = true
+		}
+		previousOrder := append([]string(nil), m.disclosedToolOrder...)
 		m.disclosedTools[name] = true
 		m.disclosedToolOrder = append(m.disclosedToolOrder, name)
 		for len(m.disclosedToolOrder) > maxTaskDisclosedTools {
 			delete(m.disclosedTools, m.disclosedToolOrder[0])
 			m.disclosedToolOrder = m.disclosedToolOrder[1:]
 		}
+		// Package tests may directly exercise disclosure before constructing a
+		// user turn. Production continuations always have that anchor, which
+		// is required for a meaningful request-budget trial.
+		if hasUserMessage(m.session.Messages) {
+			if _, err := m.prepareRequest("", nil, true); err != nil {
+				m.disclosedTools = previousTools
+				m.disclosedToolOrder = previousOrder
+				continue
+			}
+		}
+		disclosed = append(disclosed, name)
 	}
+	return disclosed
 }
 
 func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
@@ -160,13 +184,14 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		})
 	}
 	executed := make([]tools.Result, 0, len(runnable))
-	disclosedNames := make([]string, 0)
 	for _, call := range runnable {
 		result, names := m.runToolSearch(call, candidates)
+		accepted := m.discloseTools(names)
+		if len(accepted) != len(names) {
+			result.Output = constrainToolSearchDisclosure(result.Output)
+		}
 		executed = append(executed, result)
-		disclosedNames = append(disclosedNames, names...)
 	}
-	m.discloseTools(disclosedNames)
 	results, observed, statuses := plan.mergeResults(executed)
 	m.advanceToolRound()
 	m.toolOK += len(observed)
@@ -184,6 +209,19 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		)
 	}
 	return m.sendToolResults(results), true
+}
+
+func constrainToolSearchDisclosure(output string) string {
+	var result toolSearchResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		return output
+	}
+	result.Hint = "Matching schemas could not be retained within the current context budget. Refine the query or continue with tool_search; normal approval policy still applies."
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return output
+	}
+	return string(encoded)
 }
 
 func (m *Model) runToolSearch(call tools.Call, candidates []tools.ToolSearchCandidate) (tools.Result, []string) {

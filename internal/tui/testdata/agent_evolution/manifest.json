@@ -14,7 +14,7 @@
     {
       "id": "output/pseudo_tool_call",
       "kind": "characterization",
-      "limitation": "A visible pseudo-tool envelope is diagnosed but does not become an executable call."
+      "limitation": "A visible pseudo-tool envelope is dropped; only a later structured call reaches approval."
     },
     {
       "id": "operation/started_outcome_unknown",

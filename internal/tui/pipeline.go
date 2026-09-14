@@ -434,6 +434,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
+	if m.toolRecoveryFeedback != "" {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + m.toolRecoveryFeedback)
+	}
 	templatePrompt := ""
 	if m.template != "" {
 		if t, ok := m.cfg.Templates[m.template]; ok {
@@ -1196,6 +1199,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	defer m.syncAgentDebug()
 	if !strings.HasPrefix(raw, tools.ResultsPrefix) {
 		m.toolCallDiagnostics = nil
+		m.toolRecoveryFeedback = ""
 	}
 	m.lastUserMsg = raw
 	m.lastImages = images
@@ -1269,6 +1273,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			return nil
 		}
 	}
+	// Recovery feedback is controller-owned and applies to exactly one
+	// prepared request. It is never stored in conversation history.
+	m.toolRecoveryFeedback = ""
 	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("executor", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
@@ -1456,6 +1463,9 @@ func (m *Model) continueChat() tea.Cmd {
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
+	// Recovery feedback is controller-owned and applies to exactly one
+	// prepared request. It is never stored in conversation history.
+	m.toolRecoveryFeedback = ""
 	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("continuation", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)

@@ -553,38 +553,45 @@ func TestAgentActionClassSeparatesArgErrorFromExecError(t *testing.T) {
 // it must retain this no-direct-execution property.
 func TestAgentEvolutionPseudoToolCallCharacterization(t *testing.T) {
 	const pseudoCall = `<tool_call>{"name":"write_file","arguments":{"path":"pwned.txt","content":"unexpected"}}`
-	m, prov := configureAgentTestModel(t, agentScriptStep{
-		text: pseudoCall,
-		toolCallDiagnostics: provider.ObserveToolCallResponse(
-			"test-model",
-			true,
-			pseudoCall,
-			nil,
-			false,
-			false,
-		),
-	})
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{
+			text: pseudoCall,
+			toolCallDiagnostics: provider.ObserveToolCallResponse(
+				"test-model", true, pseudoCall, nil, false, false,
+			),
+		},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "reissued-write", Name: tools.ToolWriteFile, Arguments: `{"path":"pwned.txt","content":"expected"}`}}},
+	)
 	root := t.TempDir()
 	m.agentOn = false
 	m.toolsOn = true
 	m.toolsNative = true
-	m.toolsAutoApprove = true
+	m.toolsAutoApprove = false
 	m.toolRunner = tools.NewRunner(root, 64)
 
 	driveAgentCommands(t, m, m.dispatch("create pwned.txt", nil))
 
 	if _, err := os.Stat(filepath.Join(root, "pwned.txt")); !os.IsNotExist(err) {
-		t.Fatalf("pwned.txt = %v, want pseudo-call to execute nothing", err)
+		t.Fatalf("pwned.txt = %v, want pseudo-call and unapproved retry to execute nothing", err)
 	}
 	if !hasSuspectedToolCensoring(m.toolCallDiagnostics) {
 		t.Fatalf("diagnostics = %+v, want suspected pseudo-tool envelope", m.toolCallDiagnostics)
 	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider requests = %d, want pseudo-call reissue", len(prov.requests))
+	}
+	if len(m.pendingCalls) != 1 || m.pendingCalls[0].ID != "reissued-write" || m.pendingCalls[0].Tool != tools.ToolWriteFile {
+		t.Fatalf("reissued call did not reach ordinary approval: %+v", m.pendingCalls)
+	}
+	if got := m.session.Messages[len(m.session.Messages)-1]; got.Role != provider.RoleAssistant || len(got.ToolCalls) != 1 {
+		t.Fatalf("latest history message = %+v, want only structured reissued call", got)
+	}
 	reportEvolutionScenario(t, evolutionScenarioReport{
 		ID:         "output/pseudo_tool_call",
-		Verdict:    "suspected_intent_not_executed",
+		Verdict:    "reissued_through_approval",
 		Executed:   []string{},
 		Requests:   len(prov.requests),
 		Tokens:     15,
-		Limitation: "A visible pseudo-tool envelope is diagnosed but does not become an executable call.",
+		Limitation: "A visible pseudo-tool envelope is dropped; only a later structured call reaches approval.",
 	})
 }

@@ -135,20 +135,21 @@ func TestTurnRuntimeCycleResetPreservesRunProgress(t *testing.T) {
 	}
 }
 
-func TestTurnRuntimeContinuationRetriesAreOneShot(t *testing.T) {
+func TestTurnRuntimeRecoveryRetriesShareOneTurnBudget(t *testing.T) {
 	runtime := newTurnRuntime(3, t.TempDir())
-	if !runtime.claimEmptyContinuationRetry() || runtime.claimEmptyContinuationRetry() {
-		t.Fatal("empty continuation retry was not bounded to one attempt")
+	if !runtime.claimEmptyContinuationRetry() {
+		t.Fatal("empty continuation retry was not admitted")
 	}
 	runtime.clearEmptyContinuationRetry()
-	if !runtime.claimEmptyContinuationRetry() {
-		t.Fatal("empty continuation retry did not reset after usable output")
+	if runtime.claimMalformedToolRetry() || runtime.claimHiddenToolRecovery() {
+		t.Fatal("recovery categories were able to bypass the shared budget")
 	}
-	if !runtime.claimMalformedToolRetry() || runtime.claimMalformedToolRetry() {
-		t.Fatal("malformed tool retry was not bounded to one attempt")
+	if runtime.toolRecoveryAttempts != 1 || runtime.toolRecoveryReason != provider.ToolRecoveryEmptyContinuation {
+		t.Fatalf("recovery state = attempts:%d reason:%q", runtime.toolRecoveryAttempts, runtime.toolRecoveryReason)
 	}
-	if !runtime.claimHiddenToolRecovery() || runtime.claimHiddenToolRecovery() {
-		t.Fatal("hidden tool recovery was not bounded to one attempt")
+	runtime.resetCycle()
+	if !runtime.claimMalformedToolRetry() || runtime.toolRecoveryReason != provider.ToolRecoveryMalformedCall {
+		t.Fatal("new cycle did not receive a fresh shared recovery budget")
 	}
 }
 
