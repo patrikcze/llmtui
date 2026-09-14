@@ -90,7 +90,7 @@ func TestMixedBatchChargesOnlyExecutedCallsToAgentBudget(t *testing.T) {
 		Output: "README.md",
 	}
 
-	m.recordAgentToolResultsCount([]tools.Result{blocked, executed}, false, 1)
+	m.recordAgentToolResultsCount([]tools.Result{blocked, executed}, false, []agent.ActionStatus{agent.ActionBlocked, agent.ActionExecuted})
 	if m.agentLoop.liveToolCalls != 1 {
 		t.Fatalf("live tool calls = %d, want only the one executed call", m.agentLoop.liveToolCalls)
 	}

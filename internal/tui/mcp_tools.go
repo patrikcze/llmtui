@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -30,6 +31,11 @@ type mcpToolResultsMsg struct {
 	// per-call no-progress blocks stay in results for correlation but must
 	// never be fed back into the progress ledger.
 	observed []tools.Result
+	// statuses is aligned with results and classifies each slot (executed,
+	// blocked, unknown — see agent.ActionStatus) for
+	// Model.recordAgentToolResultsCount, so a synthetic per-call block never
+	// counts as executed evidence even inside an otherwise mixed batch.
+	statuses []agent.ActionStatus
 	// gen is the mcpBatchGen value active when the batch that produced this
 	// message was dispatched. app.go's mcpToolResultsMsg handler compares it
 	// against the model's current mcpBatchGen and drops the message if they
@@ -303,8 +309,8 @@ func runPlannedToolBatch(
 			}
 			executed = append(executed, executeDurableCall(c, guards[0], execute))
 		}
-		results, observed := plan.mergeResults(executed)
-		return mcpToolResultsMsg{results: results, observed: observed}
+		results, observed, statuses := plan.mergeResults(executed)
+		return mcpToolResultsMsg{results: results, observed: observed, statuses: statuses}
 	}
 }
 

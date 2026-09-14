@@ -113,6 +113,14 @@ type ToolCallRecord struct {
 	Succeeded bool      `json:"succeeded"`
 	ErrorKind ErrorKind `json:"error_kind,omitempty"`
 	Summary   string    `json:"summary,omitempty"`
+	// Status classifies what actually happened to the call attempt, additive
+	// to schema v1 (empty on records persisted before this field existed —
+	// treat that as unknown, never infer it was executed). Distinct from
+	// Succeeded, which only reports the outcome of a call that did run: a
+	// denied or ledger-blocked call has Succeeded=false and Status other than
+	// ActionExecuted, so no side effect can be inferred from failure alone.
+	// See ActionStatus in receipts.go.
+	Status ActionStatus `json:"status,omitempty"`
 }
 
 // TestResult is deterministic evidence reported by an executor adapter.

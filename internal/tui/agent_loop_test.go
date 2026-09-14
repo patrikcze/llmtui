@@ -406,10 +406,13 @@ func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) 
 	})
 }
 
-// TestAgentEvolutionSyntheticNewEvidenceCharacterization records the current
-// disagreement between live tool-call accounting and the cycle-level progress
-// flag. The blocked result is intentionally synthetic: no call executed.
-func TestAgentEvolutionSyntheticNewEvidenceCharacterization(t *testing.T) {
+// TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence is the Phase 1 fix
+// for a previously characterized gap (see git history for
+// TestAgentEvolutionSyntheticNewEvidenceCharacterization): a synthetic
+// blocked result — no call executed — must not set the cycle NewEvidence
+// flag, since NewEvidence and the live tool-call budget now agree that
+// nothing actually ran.
+func TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence(t *testing.T) {
 	m, _ := configureAgentTestModel(t)
 	run, err := agent.NewRun("synthetic-evidence", "inspect report", agent.DefaultLimits(), time.Now())
 	if err != nil {
@@ -423,22 +426,17 @@ func TestAgentEvolutionSyntheticNewEvidenceCharacterization(t *testing.T) {
 	m.recordAgentToolResultsCount([]tools.Result{{
 		Call: tools.Call{ID: "blocked-read", Tool: tools.ToolReadFile, Path: "report.md"},
 		Err:  errors.New("repeated tool call blocked: no new evidence"),
-	}}, false, 0)
+	}}, false, uniformActionStatuses(1, agent.ActionBlocked))
 
 	if m.agentLoop.liveToolCalls != 0 {
 		t.Fatalf("live tool calls = %d, want synthetic result to charge no execution", m.agentLoop.liveToolCalls)
 	}
-	if !m.agentLoop.execution.NewEvidence {
-		t.Fatal("NewEvidence = false, want current synthetic-result behavior captured")
+	if m.agentLoop.execution.NewEvidence {
+		t.Fatal("NewEvidence = true, want a synthetic (never-executed) result to leave it false")
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "progress/synthetic_new_evidence",
-		Verdict:    "new_evidence=true",
-		Executed:   []string{},
-		Requests:   0,
-		Tokens:     0,
-		Limitation: "A synthetic blocked result currently sets the cycle NewEvidence flag although no call executed.",
-	})
+	if got := m.agentLoop.execution.ToolCalls[0].Status; got != agent.ActionBlocked {
+		t.Fatalf("recorded status = %q, want %q", got, agent.ActionBlocked)
+	}
 }
 
 // TestAgentEvolutionCompletedObservationProjectionCharacterization records

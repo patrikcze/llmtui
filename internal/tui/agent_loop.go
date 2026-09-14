@@ -1177,22 +1177,51 @@ func toolCallDetail(call tools.Call) string {
 	}
 }
 
+// uniformActionStatuses builds a same-status slice for a batch every one of
+// whose results shares one classification (a whole-batch denial, ledger
+// block, or budget rejection never mixes with a genuinely executed call —
+// see recordAgentToolResultsCount's callers).
+func uniformActionStatuses(n int, status agent.ActionStatus) []agent.ActionStatus {
+	out := make([]agent.ActionStatus, n)
+	for i := range out {
+		out[i] = status
+	}
+	return out
+}
+
 // recordAgentToolResultsCount records the complete tool-result-shaped
-// evidence while charging only calls that actually executed to the live
-// tool-call budget. Synthetic progress blocks, denials, and budget rejections
-// must preserve protocol correlation without pretending a side effect ran.
-func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool, liveCount int) {
+// evidence while charging only calls that actually executed (statuses[i] ==
+// agent.ActionExecuted) to the live tool-call budget. statuses must be
+// aligned with results — see uniformActionStatuses for uniform batches and
+// toolBatchPlan.mergeResults for mixed ones. Synthetic progress blocks,
+// denials, and budget rejections must preserve protocol correlation without
+// pretending a side effect ran: a denied or blocked result is still recorded
+// as a ToolCallRecord/RunError, so deterministic policy (permission denial,
+// safety) still sees it, but it never contributes live budget charge or
+// NewEvidence — see the Phase 0 characterization this replaces in
+// docs/architecture and .claude/tasks/plans/llmtui-agent-evolution.md
+// finding #5.
+func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool, statuses []agent.ActionStatus) {
 	if !m.agentRunActive() {
 		return
 	}
-	if liveCount < 0 {
-		liveCount = 0
-	}
-	if liveCount > len(results) {
-		liveCount = len(results)
-	}
-	m.agentLoop.liveToolCalls += liveCount
-	for _, result := range results {
+	budgetCount, evidenceCount := 0, 0
+	for i, result := range results {
+		status := agent.ActionUnknown
+		if i < len(statuses) {
+			status = statuses[i]
+		}
+		if status == agent.ActionExecuted {
+			evidenceCount++
+			// ask_user is a real, evidence-bearing action (it sets
+			// NewEvidence below) but is deliberately excluded from the live
+			// tool-call budget: asking the user is not a rate-limited
+			// workspace action the way reads/writes/commands are — see
+			// TestAskUserAgentPauseAndLiveResume.
+			if result.Call.Tool != tools.ToolAskUser {
+				budgetCount++
+			}
+		}
 		kind := agent.ErrorKind("")
 		if result.Err != nil {
 			kind = classifyToolError(result, denied)
@@ -1201,13 +1230,14 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err == nil && result.Call.Tool == tools.ToolAskUser {
 			summary = askUserEvidenceSummary(result.Output)
 		}
+		detail := toolCallDetail(result.Call)
 		record := agent.ToolCallRecord{
-			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
-			ErrorKind: kind, Summary: summary,
+			ID: result.Call.ID, Name: result.Call.Tool, Detail: detail, Succeeded: result.Err == nil,
+			ErrorKind: kind, Summary: summary, Status: status,
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
 		if result.Err != nil {
-			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewError(kind, result.Call.Tool, result.Err))
+			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))
 		}
 		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) &&
 			strings.TrimSpace(result.Call.Path) != "" && !tools.IsNoChangeDiff(result.Diff) {
@@ -1225,10 +1255,18 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			})
 		}
 	}
+	m.agentLoop.liveToolCalls += budgetCount
 	if denied {
 		m.agentLoop.execution.NeedsUserInput = true
 	}
-	m.agentLoop.execution.NewEvidence = true
+	// A batch that was entirely blocked/rejected before anything ran (and
+	// was not itself a denial the user actively chose) produced no new
+	// observation: evidenceCount stays 0 and NewEvidence must not be set, or
+	// a synthetic no-progress block would count as the very progress it
+	// exists to detect the absence of.
+	if evidenceCount > 0 || denied {
+		m.agentLoop.execution.NewEvidence = true
+	}
 }
 
 // askUserEvidenceSummary keeps a narrowly useful fact for verification
@@ -1359,7 +1397,7 @@ func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd 
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResultsCount(results, false, 0)
+	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.appendTerminalToolResults(results)
 	m.toolErr += len(results)
 	run := m.agentLoop.run

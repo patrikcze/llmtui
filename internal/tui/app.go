@@ -1054,7 +1054,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolOK++
 			}
 		}
-		m.recordAgentToolResultsCount(msg.results, false, len(msg.observed))
+		m.recordAgentToolResultsCount(msg.results, false, msg.statuses)
 		if m.cfg.Tools.NoProgress.Enabled {
 			m.progress.observeResults(msg.observed)
 		}
@@ -1567,7 +1567,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResultsCount(results, false, 0)
+	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.toolErr += len(results)
 	m.notice = "Repeated tool call blocked: no new evidence"
 
@@ -1603,10 +1603,10 @@ func (m *Model) denyPendingTools() tea.Cmd {
 	m.advanceToolRound()
 	m.complete(turnOutcomeToolContinuation)
 	denied := tools.DeniedResults(calls)
-	results, _ := plan.mergeResults(denied)
+	results, _, _ := plan.mergeResults(denied)
 	m.toolErr += len(results)
 	m.notice = fmt.Sprintf("✗ denied %d tool call(s)", len(calls))
-	m.recordAgentToolResultsCount(results, true, 0)
+	m.recordAgentToolResultsCount(results, true, uniformActionStatuses(len(results), agent.ActionDenied))
 	return m.sendToolResults(results)
 }
 
@@ -1831,7 +1831,7 @@ func (m *Model) resolveBudget(choice int) tea.Cmd {
 		return m.startPlannedToolBatch(plan)
 	}
 	limited := tools.LimitResults(calls, m.toolMaxIter())
-	results, _ := plan.mergeResults(limited)
+	results, _, _ := plan.mergeResults(limited)
 	m.toolErr += len(results)
 	m.notice = "⚒ asking the model for its final answer without tools"
 	return m.sendToolResults(results)

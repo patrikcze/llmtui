@@ -44,11 +44,56 @@ func TestPruneRecoveredToolErrorsKeepsUnrecoveredAndNonToolErrors(t *testing.T) 
 	}
 }
 
-// TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName is a Phase 0
-// characterization fixture. A failed read of one path is treated as
-// recovered by a later successful read of another path because the current
-// recovery key is only the tool name. Phase 1 must change this expectation.
-func TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName(t *testing.T) {
+// TestRecoveredToolErrorsRequireSameResource is the Phase 1 fix for a
+// previously characterized gap (see git history for
+// TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName): a failed read of one
+// path is no longer treated as recovered by a later successful read of an
+// unrelated path merely because both calls share a tool name. Recovery
+// attribution now keys on the resource an error's ToolCallRecord names,
+// mirrored onto RunError.Resource by agent.NewToolError.
+func TestRecoveredToolErrorsRequireSameResource(t *testing.T) {
+	exec := ExecutionResult{
+		ToolCalls: []ToolCallRecord{
+			{Name: "read_file", Detail: "missing.md", Succeeded: false, ErrorKind: ErrorToolExecution},
+			{Name: "read_file", Detail: "other.md", Succeeded: true},
+		},
+		Errors: []RunError{{Kind: ErrorToolExecution, Op: "read_file", Resource: "missing.md", Message: "read missing.md: not found"}},
+	}
+
+	PruneRecoveredToolErrors(&exec)
+
+	if len(exec.Errors) != 1 {
+		t.Fatalf("errors = %+v, want the unrelated read of other.md to leave missing.md's failure unresolved", exec.Errors)
+	}
+}
+
+// TestRecoveredToolErrorsResolveOnSameResourceCorrection proves the positive
+// case: a failed call recovers when the correction targets the same
+// resource, not merely the same tool.
+func TestRecoveredToolErrorsResolveOnSameResourceCorrection(t *testing.T) {
+	exec := ExecutionResult{
+		ToolCalls: []ToolCallRecord{
+			{Name: "read_file", Detail: "report.md", Succeeded: false, ErrorKind: ErrorToolExecution},
+			{Name: "read_file", Detail: "report.md", Succeeded: true},
+		},
+		Errors: []RunError{{Kind: ErrorToolExecution, Op: "read_file", Resource: "report.md", Message: "transient read failure"}},
+	}
+
+	PruneRecoveredToolErrors(&exec)
+
+	if len(exec.Errors) != 0 {
+		t.Fatalf("errors = %+v, want the corrected re-read of report.md to resolve the failure", exec.Errors)
+	}
+}
+
+// TestRecoveredToolErrorsWithoutResourceNeverRecovers proves the safe
+// default for an error recorded with no resource identity (a pre-Phase-1
+// persisted record, or a tool with no narrow detail): with nothing to
+// attribute recovery to, it is never marked recovered by an unrelated
+// same-tool success, matching this package's "cannot acquire stronger proof
+// than originally recorded" rule for old data (see CLAUDE.md's Agent State
+// Model notes and .claude/tasks/plans/llmtui-agent-evolution.md §7).
+func TestRecoveredToolErrorsWithoutResourceNeverRecovers(t *testing.T) {
 	exec := ExecutionResult{
 		ToolCalls: []ToolCallRecord{
 			{Name: "read_file", Detail: "missing.md", Succeeded: false, ErrorKind: ErrorToolExecution},
@@ -59,8 +104,8 @@ func TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName(t *testing.T) {
 
 	PruneRecoveredToolErrors(&exec)
 
-	if len(exec.Errors) != 0 {
-		t.Fatalf("errors = %+v, want current tool-name-only recovery to prune the failed read", exec.Errors)
+	if len(exec.Errors) != 1 {
+		t.Fatalf("errors = %+v, want an error with no resource identity to stay unresolved rather than match by tool name alone", exec.Errors)
 	}
 }
 

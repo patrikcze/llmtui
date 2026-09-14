@@ -110,17 +110,17 @@ func MechanicallyComplete(execution ExecutionResult) bool {
 	if len(execution.ToolCalls) == 0 || execution.NeedsUserInput {
 		return false
 	}
-	last := lastToolOutcome(execution)
+	last := lastResourceOutcome(execution)
 	for _, runErr := range execution.Errors {
 		if !recoveredToolError(runErr, last) {
 			return false
 		}
 	}
 	for _, tool := range execution.ToolCalls {
-		// A failed call whose tool's final call succeeded was recovered
+		// A failed call whose resource's final call succeeded was recovered
 		// within the cycle — the same exemption EvaluateDeterministic makes
 		// for the trailing call.
-		if !tool.Succeeded && !last[tool.Name] {
+		if !tool.Succeeded && !last[tool.resourceKey()] {
 			return false
 		}
 	}

@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
@@ -166,11 +167,11 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 		disclosedNames = append(disclosedNames, names...)
 	}
 	m.discloseTools(disclosedNames)
-	results, observed := plan.mergeResults(executed)
+	results, observed, statuses := plan.mergeResults(executed)
 	m.advanceToolRound()
 	m.toolOK += len(observed)
 	m.toolErr += len(results) - len(observed)
-	m.recordAgentToolResultsCount(results, false, len(observed))
+	m.recordAgentToolResultsCount(results, false, statuses)
 	if m.cfg.Tools.NoProgress.Enabled {
 		m.progress.observeResults(observed)
 	}
@@ -258,7 +259,7 @@ func (m *Model) rejectWholeBatch(calls []tools.Call, err error) tea.Cmd {
 		results[index] = tools.Result{Call: call, Err: err}
 	}
 	m.toolErr += len(results)
-	m.recordAgentToolResultsCount(results, false, 0)
+	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.advanceToolRound()
 	return m.sendToolResults(results)
 }

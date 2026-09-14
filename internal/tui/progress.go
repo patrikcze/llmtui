@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -92,10 +93,16 @@ func (p toolBatchPlan) runnableCalls() []tools.Call {
 // mergeResults restores one result per original call and separately returns
 // only real execution outcomes for progress observation. Observing synthetic
 // block errors would change the digest and accidentally re-enable a stuck
-// fingerprint on the next round.
-func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed []tools.Result) {
+// fingerprint on the next round. statuses is aligned with merged and
+// classifies each slot for receipt/evidence purposes (see
+// internal/agent.ActionStatus): a ledger block is ActionBlocked, an accepted
+// call with no correlated result is ActionUnknown — genuinely unknown
+// whether it ran, never assumed to have failed or succeeded — and everything
+// else is ActionExecuted.
+func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed []tools.Result, statuses []agent.ActionStatus) {
 	merged = make([]tools.Result, 0, len(p.calls))
 	observed = make([]tools.Result, 0, len(executed))
+	statuses = make([]agent.ActionStatus, 0, len(p.calls))
 	executedIndex := 0
 	for i, call := range p.calls {
 		if reason := p.blocked[i]; reason != "" {
@@ -106,6 +113,7 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 					reason,
 				),
 			})
+			statuses = append(statuses, agent.ActionBlocked)
 			continue
 		}
 		if executedIndex >= len(executed) {
@@ -113,6 +121,7 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 				Call: call,
 				Err:  fmt.Errorf("tool result missing for accepted call; it was not reported as completed"),
 			})
+			statuses = append(statuses, agent.ActionUnknown)
 			continue
 		}
 		result := executed[executedIndex]
@@ -120,8 +129,9 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 		result.Call = call
 		merged = append(merged, result)
 		observed = append(observed, result)
+		statuses = append(statuses, agent.ActionExecuted)
 	}
-	return merged, observed
+	return merged, observed, statuses
 }
 
 // defaultProgressThreshold matches agent.max_repeated_failures' default so
