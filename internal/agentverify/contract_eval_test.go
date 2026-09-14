@@ -32,20 +32,22 @@ func TestContractStageAgainstRealEndpoint(t *testing.T) {
 	p := openai.New("eval", baseURL, os.Getenv("LLMTUI_EVAL_API_KEY"))
 
 	cases := []struct {
-		name string
-		task string
+		name       string
+		task       string
+		scenarioID string
 		// wantAsk is the documented expectation for the ambiguous prompts;
 		// a mismatch is logged, not failed, because the point of the probe is
 		// to measure model behaviour.
 		wantAsk bool
 	}{
-		{"ambiguous_reference", "Read the file I mentioned and give me its heading.", true},
-		{"named_missing_file", "Read absent.md and summarize it.", true},
-		{"clear_multipart", "Read report.md and give me its heading and the percentage change.", false},
+		{"ambiguous_reference", "Read the file I mentioned and give me its heading.", "contract/ambiguous_reference", true},
+		{"named_missing_file", "Read absent.md and summarize it.", "contract/named_missing_file", true},
+		{"clear_multipart", "Read report.md and write its heading to result.txt.", "contract/omitted_deliverable", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("scenario=%s model=%s", tc.scenarioID, model)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			out, err := agentverify.EstablishContract(ctx, p,

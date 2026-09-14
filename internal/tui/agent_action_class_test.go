@@ -546,3 +546,45 @@ func TestAgentActionClassSeparatesArgErrorFromExecError(t *testing.T) {
 		t.Errorf("execution-failure outcome = %q", failed.outcome)
 	}
 }
+
+// TestAgentEvolutionPseudoToolCallCharacterization uses the normal dispatch
+// driver and a provider diagnostic to show that a visible, provider-shaped
+// pseudo-call remains non-executable. Phase 5 may add a bounded reissue, but
+// it must retain this no-direct-execution property.
+func TestAgentEvolutionPseudoToolCallCharacterization(t *testing.T) {
+	const pseudoCall = `<tool_call>{"name":"write_file","arguments":{"path":"pwned.txt","content":"unexpected"}}`
+	m, prov := configureAgentTestModel(t, agentScriptStep{
+		text: pseudoCall,
+		toolCallDiagnostics: provider.ObserveToolCallResponse(
+			"test-model",
+			true,
+			pseudoCall,
+			nil,
+			false,
+			false,
+		),
+	})
+	root := t.TempDir()
+	m.agentOn = false
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.dispatch("create pwned.txt", nil))
+
+	if _, err := os.Stat(filepath.Join(root, "pwned.txt")); !os.IsNotExist(err) {
+		t.Fatalf("pwned.txt = %v, want pseudo-call to execute nothing", err)
+	}
+	if !hasSuspectedToolCensoring(m.toolCallDiagnostics) {
+		t.Fatalf("diagnostics = %+v, want suspected pseudo-tool envelope", m.toolCallDiagnostics)
+	}
+	reportEvolutionScenario(t, evolutionScenarioReport{
+		ID:         "output/pseudo_tool_call",
+		Verdict:    "suspected_intent_not_executed",
+		Executed:   []string{},
+		Requests:   len(prov.requests),
+		Tokens:     15,
+		Limitation: "A visible pseudo-tool envelope is diagnosed but does not become an executable call.",
+	})
+}
