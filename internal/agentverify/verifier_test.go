@@ -175,6 +175,8 @@ func TestParseNonEstablishingVerifierDefaultsUnusedCriterionFields(t *testing.T)
 func TestVerifierPromptExplainsSuccessfulAskUserEvidence(t *testing.T) {
 	prompt := verifierMessages(`{"Execution":{"tool_calls":[{"name":"ask_user","succeeded":true}]}}`, false)[0].Content
 	if !strings.Contains(prompt, "successful ask_user proves a correlated answer") || !strings.Contains(prompt, "user confirmed") ||
+		!strings.Contains(prompt, "ask_user pauses execution, so a later entry") ||
+		!strings.Contains(prompt, "fulfills ask-before-write, even in one cycle") ||
 		!strings.Contains(prompt, "grants_authorization:false") {
 		t.Fatalf("verifier prompt does not explain the ask_user evidence contract: %q", prompt)
 	}
