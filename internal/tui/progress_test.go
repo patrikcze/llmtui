@@ -248,7 +248,7 @@ func TestBlockedSyntheticResultDoesNotResetFingerprint(t *testing.T) {
 	l.observeResults([]tools.Result{{Call: stuck, Output: "unchanged"}})
 
 	plan, _ := l.planBatch([]tools.Call{stuck, fresh})
-	merged, observed := plan.mergeResults([]tools.Result{{Call: fresh, Output: "README.md"}})
+	merged, observed, _ := plan.mergeResults([]tools.Result{{Call: fresh, Output: "README.md"}})
 	if len(merged) != 2 || merged[0].Err == nil || len(observed) != 1 {
 		t.Fatalf("merged=%+v observed=%+v", merged, observed)
 	}

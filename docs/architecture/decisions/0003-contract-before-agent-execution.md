@@ -22,6 +22,11 @@ The contract request uses the active executor model, the existing verifier
 token/timeout bounds, response-constraint capability fallback, one malformed
 control repair, run-scoped cancellation, and run token/time accounting. A
 contract failure parks or exhausts the run without dispatching an executor.
+When the eligibility capsule offers `ask_user`, a contract that asks for
+missing user input delegates that question to the executor. This avoids a
+duplicate controller prompt and gives the later action a controller-observed
+answer-to-mutation order. A contract pause remains available when `ask_user`
+is unavailable.
 
 Post-execution semantic verification now evaluates pinned criteria; it does not
 establish initial scope. The shared `dispatch`/stream/tool/approval kernel is

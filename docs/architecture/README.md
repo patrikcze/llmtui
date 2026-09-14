@@ -10,6 +10,9 @@ comments, but this file is authoritative.
 - **Per-topic guides:** `docs/*.md` (agent loop, tools, prompt composition,
   context management, security, MCP, RAG, memory, skills, embedded inference,
   self-management, …)
+- **Agent calibration:** [`../agent-evaluation.md`](../agent-evaluation.md)
+  defines the deterministic baseline and the opt-in live-endpoint procedure;
+  it does not treat synthetic fixture success as a model-quality claim.
 
 Baseline: `master`, Go 1.27, ~36 internal packages. Verify version-sensitive
 details (the embedded runtime pin, dependency versions) against the source —
@@ -175,11 +178,13 @@ trigger → contract → (rules_load → executor → verifier → memory_write 
    user for missing information. The result pins into `AgentRun.Criteria` with
    controller-assigned IDs; the original request stays immutable; contract
    content cannot grant tools, permissions, or instruction precedence. A
-   `needs_user_input` contract surfaces as a clarifying question and
-   re-establishes the contract with the answer; if the model's control
-   envelope carries a valid question, any accidental provisional criteria are
-   discarded rather than parking the run. A genuine parse failure gets one
-   repair, then parks — and the bounded raw model output is recorded as a
+   `needs_user_input` contract defers to the executor's evidence-bearing
+   `ask_user` tool whenever that capability is available, so the controller
+   does not ask the same question twice. Without that capability, it surfaces
+   as a clarifying question and re-establishes the contract with the answer.
+   If the model's control envelope carries a valid question, any accidental
+   provisional criteria are discarded rather than parking the run. A genuine
+   parse failure gets one repair, then parks — and the bounded raw model output is recorded as a
    `contract_raw_output` event and shown in `/debug` so the park is
    diagnosable. Older persisted runs with no criteria take the contract stage
    on their next `/agent resume`.

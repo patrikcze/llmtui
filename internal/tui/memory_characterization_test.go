@@ -262,10 +262,13 @@ func TestCharacterization_CacheKeyVariesWithMemoryAndRAG(t *testing.T) {
 // seed markers into that this boundary would ever see; the field set itself
 // is the property under test.
 func TestCharacterization_AgentVerifierReceivesNoGenericMemoryOrRAG(t *testing.T) {
+	// CausalFacts are derived from the current cycle's controller-observed
+	// ToolCalls sequence in agent.UserAnswerCausalFacts. They carry no model,
+	// user-memory, RAG, or raw-answer content.
 	allowed := map[string]bool{
 		"RunID": true, "Cycle": true, "Task": true, "Objective": true,
 		"AcceptanceCriteria": true, "Criteria": true, "Evidence": true,
-		"PriorCycles": true, "EstablishCriteria": true, "Execution": true, "Tools": true,
+		"PriorCycles": true, "CausalFacts": true, "EstablishCriteria": true, "Execution": true, "Tools": true,
 	}
 
 	typ := reflect.TypeOf(agentverify.Input{})

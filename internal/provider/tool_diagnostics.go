@@ -23,6 +23,9 @@ const (
 	ToolCallStageExecutionSucceeded ToolCallStage = "execution_succeeded"
 	ToolCallStageExecutionFailed    ToolCallStage = "execution_failed"
 	ToolCallStageResultCorrelated   ToolCallStage = "result_correlated"
+	// ToolCallStageRecovery records a controller decision to request one
+	// fresh model response. It is never an executable tool-call stage.
+	ToolCallStageRecovery ToolCallStage = "recovery"
 )
 
 // ToolCallClassification is the outcome observed at one stage. Classifications
@@ -42,7 +45,42 @@ const (
 	ToolCallApprovalBlocked        ToolCallClassification = "approval_blocked"
 	ToolCallExecutionFailed        ToolCallClassification = "execution_failure"
 	ToolCallResultCorrelationError ToolCallClassification = "result_correlation_failure"
+	ToolCallRecoveryScheduled      ToolCallClassification = "recovery_scheduled"
+	ToolCallRecoveryExhausted      ToolCallClassification = "recovery_budget_exhausted"
 )
+
+// ToolRecoveryReason identifies a bounded controller retry category. These
+// values intentionally carry no model content, arguments, or approval state.
+type ToolRecoveryReason string
+
+const (
+	ToolRecoveryVisiblePseudoCall ToolRecoveryReason = "visible_pseudo_call"
+	ToolRecoveryMalformedCall     ToolRecoveryReason = "malformed_native_call"
+	ToolRecoveryHiddenMCPTool     ToolRecoveryReason = "hidden_mcp_tool"
+	ToolRecoveryEmptyContinuation ToolRecoveryReason = "empty_continuation"
+)
+
+// ToolRecoveryOutcome describes whether the shared per-turn recovery budget
+// admitted a retry. It is diagnostic control state, never execution evidence.
+type ToolRecoveryOutcome string
+
+const (
+	ToolRecoveryScheduled ToolRecoveryOutcome = "scheduled"
+	ToolRecoveryExhausted ToolRecoveryOutcome = "exhausted"
+)
+
+// ToolRecoveryDecision is the typed boundary between a detected recoverable
+// condition and the TUI's retry accounting. Attempt is one-based when a retry
+// is scheduled and is zero when the budget is exhausted.
+type ToolRecoveryDecision struct {
+	Reason  ToolRecoveryReason
+	Attempt int
+	Outcome ToolRecoveryOutcome
+}
+
+func (d ToolRecoveryDecision) Allowed() bool {
+	return d.Outcome == ToolRecoveryScheduled
+}
 
 // ToolCallDiagnostic is a bounded, content-free observation. Detail is a
 // stable category/marker name, never a provider response, tool arguments,

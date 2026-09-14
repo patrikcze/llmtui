@@ -63,6 +63,60 @@ func TestFileStoreCorruptRecovery(t *testing.T) {
 	}
 }
 
+// TestFileStoreLoadsPreReceiptRunWithoutInventingAttribution is the Phase 1
+// backward-compatibility acceptance check: a run persisted before
+// ToolCallRecord.Status and RunError.Resource existed must still load, and
+// its recovery/completion evaluation must not silently gain stronger proof
+// than what was originally recorded — see receipts.go and recovered.go.
+func TestFileStoreLoadsPreReceiptRunWithoutInventingAttribution(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	// Hand-authored to mirror exactly what schema v1 produced before this
+	// package's Status/Resource fields existed: no "status" on tool_calls,
+	// no "resource" on errors.
+	legacy := `{
+		"version": 1,
+		"id": "legacy-run",
+		"request": "read two files",
+		"status": "running",
+		"limits": {"max_cycles": 8, "max_tool_calls": 32, "max_tokens": 100000, "max_elapsed": 1800000000000, "max_repeated_failures": 3},
+		"cycles": [{
+			"number": 1,
+			"objective": "read two files",
+			"execution": {
+				"objective": "read two files",
+				"tool_calls": [
+					{"name": "read_file", "detail": "missing.md", "succeeded": false, "error_kind": "tool_execution"},
+					{"name": "read_file", "detail": "other.md", "succeeded": true}
+				],
+				"errors": [
+					{"kind": "tool_execution", "op": "read_file", "message": "read missing.md: not found"}
+				]
+			}
+		}]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "legacy-run.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), "legacy-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := *loaded.Cycles[0].Execution
+	if got := execution.ToolCalls[0].Status; got != "" {
+		t.Fatalf("legacy record Status = %q, want empty (unknown), not inferred", got)
+	}
+	if got := execution.Errors[0].Resource; got != "" {
+		t.Fatalf("legacy record Resource = %q, want empty (unknown), not inferred", got)
+	}
+	// No resource identity was ever recorded for this error, so it must not
+	// be treated as recovered by the unrelated successful read of other.md.
+	PruneRecoveredToolErrors(&execution)
+	if len(execution.Errors) != 1 {
+		t.Fatalf("errors after prune = %+v, want the legacy failure to stay unresolved", execution.Errors)
+	}
+}
+
 func TestFileStorePreservesAndRedactsRunStartContext(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStore(dir, 64*1024, 4)

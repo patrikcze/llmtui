@@ -38,7 +38,14 @@ type RunError struct {
 	Kind    ErrorKind `json:"kind"`
 	Op      string    `json:"op,omitempty"`
 	Message string    `json:"message"`
-	Cause   error     `json:"-"`
+	// Resource is the specific instance a tool failure acted on (the same
+	// dedup-relevant detail recorded on ToolCallRecord.Detail — a path, URL,
+	// or search pattern), additive to schema v1. Empty on errors with no
+	// narrow resource identity and on records persisted before this field
+	// existed; recovery attribution falls back to Op alone in that case. See
+	// recoveredToolError in recovered.go.
+	Resource string `json:"resource,omitempty"`
+	Cause    error  `json:"-"`
 }
 
 func (e RunError) Error() string {
@@ -57,4 +64,15 @@ func NewError(kind ErrorKind, op string, err error) RunError {
 		err = errors.New("unknown error")
 	}
 	return RunError{Kind: kind, Op: op, Message: truncate(err.Error(), 512), Cause: err}
+}
+
+// NewToolError constructs a bounded tool-failure error record with resource
+// attribution, so recovery (see recoveredToolError) can require the same
+// resource to have later succeeded rather than merely the same tool name.
+// Resource is the failed call's dedup-relevant detail; pass "" when the tool
+// has none, and attribution falls back to op alone.
+func NewToolError(kind ErrorKind, op, resource string, err error) RunError {
+	e := NewError(kind, op, err)
+	e.Resource = resource
+	return e
 }

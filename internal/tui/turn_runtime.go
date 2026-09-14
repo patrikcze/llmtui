@@ -63,6 +63,9 @@ type turnRuntime struct {
 	streamContinuation *provider.ProviderContinuation
 
 	toolDepth                int
+	toolRecoveryAttempts     int
+	toolRecoveryReason       provider.ToolRecoveryReason
+	lastToolRecoveryDecision provider.ToolRecoveryDecision
 	emptyContinuationRetried bool
 	malformedToolCallRetried bool
 	hasHiddenToolRecovery    bool
@@ -104,6 +107,9 @@ func (r *turnRuntime) resetTurn(progressThreshold int, progressRoot string) {
 
 func (r *turnRuntime) resetCycle() {
 	r.toolDepth = 0
+	r.toolRecoveryAttempts = 0
+	r.toolRecoveryReason = ""
+	r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{}
 	r.emptyContinuationRetried = false
 	r.malformedToolCallRetried = false
 	r.hasHiddenToolRecovery = false
@@ -121,11 +127,11 @@ func (r *turnRuntime) renewToolBudget() {
 }
 
 func (r *turnRuntime) claimMalformedToolRetry() bool {
-	if r.malformedToolCallRetried {
-		return false
+	decision := r.claimToolRecovery(provider.ToolRecoveryMalformedCall)
+	if decision.Allowed() {
+		r.malformedToolCallRetried = true
 	}
-	r.malformedToolCallRetried = true
-	return true
+	return decision.Allowed()
 }
 
 func (r *turnRuntime) clearMalformedToolRetry() {
@@ -133,23 +139,40 @@ func (r *turnRuntime) clearMalformedToolRetry() {
 }
 
 func (r *turnRuntime) claimHiddenToolRecovery() bool {
-	if r.hasHiddenToolRecovery {
-		return false
+	decision := r.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
+	if decision.Allowed() {
+		r.hasHiddenToolRecovery = true
 	}
-	r.hasHiddenToolRecovery = true
-	return true
+	return decision.Allowed()
 }
 
 func (r *turnRuntime) claimEmptyContinuationRetry() bool {
-	if r.emptyContinuationRetried {
-		return false
+	decision := r.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
+	if decision.Allowed() {
+		r.emptyContinuationRetried = true
 	}
-	r.emptyContinuationRetried = true
-	return true
+	return decision.Allowed()
 }
 
 func (r *turnRuntime) clearEmptyContinuationRetry() {
 	r.emptyContinuationRetried = false
+}
+
+// claimToolRecovery enforces one recovery reissue across all categories in a
+// turn. Keeping the budget shared prevents alternating parser, discovery, and
+// empty-output failures from multiplying requests.
+func (r *turnRuntime) claimToolRecovery(reason provider.ToolRecoveryReason) provider.ToolRecoveryDecision {
+	const maxToolRecoveryAttempts = 1
+	if r.toolRecoveryAttempts >= maxToolRecoveryAttempts {
+		r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{Reason: reason, Outcome: provider.ToolRecoveryExhausted}
+		return r.lastToolRecoveryDecision
+	}
+	r.toolRecoveryAttempts++
+	r.toolRecoveryReason = reason
+	r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{
+		Reason: reason, Attempt: r.toolRecoveryAttempts, Outcome: provider.ToolRecoveryScheduled,
+	}
+	return r.lastToolRecoveryDecision
 }
 
 func (r *turnRuntime) busy() bool {

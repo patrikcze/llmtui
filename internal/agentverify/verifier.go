@@ -86,6 +86,9 @@ type Input struct {
 	// verifier cross-cycle context without any transcript.
 	Evidence    []agent.EvidenceItem
 	PriorCycles []agent.MemoryEntry
+	// CausalFacts are bounded controller-derived ordering facts for this
+	// cycle. They contain no user answer text or model prose.
+	CausalFacts []string
 	// EstablishCriteria asks this verification to also propose the stable
 	// criteria decomposition. Set only while nothing is pinned.
 	EstablishCriteria bool
@@ -136,8 +139,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		Stream:      false,
 		Reasoning:   verifierReasoning(cfg.Model),
 	}
-	if reporter, ok := client.(interface{ Capabilities() provider.Capabilities }); ok &&
-		reporter.Capabilities().StructuredOutput == provider.CapabilitySupported {
+	if resolveCapabilities(client, cfg.Model).StructuredOutput == provider.CapabilitySupported {
 		req.ResponseConstraint = &provider.ResponseConstraint{
 			Name: "llmtui_verification", Grammar: jsonGBNF, GrammarRoot: "root",
 			JSONSchema: json.RawMessage(verifierJSONSchema), Strict: true,
@@ -176,6 +178,26 @@ func verifierReasoning(model string) string {
 		return "low"
 	}
 	return "off"
+}
+
+// resolveCapabilities mirrors provider.CapabilitiesFor's selected-model
+// resolution (prefer a model-specific report, then a provider-wide one, then
+// conservative defaults) without requiring the full provider.Provider
+// interface, so this package's minimal Client works with any client
+// implementing either capability-reporting interface — real providers and
+// test fakes alike. Previously both call sites checked only the
+// provider-wide Capabilities(), so a backend whose real capability depends
+// on the selected model (the embedded runtime, or a per-model override) was
+// judged by the wrong report — see finding #6 in
+// .claude/tasks/plans/llmtui-agent-evolution.md §4.
+func resolveCapabilities(client Client, model string) provider.Capabilities {
+	if reporter, ok := client.(provider.ModelCapabilityReporter); ok {
+		return reporter.CapabilitiesFor(model)
+	}
+	if reporter, ok := client.(provider.CapabilityReporter); ok {
+		return reporter.Capabilities()
+	}
+	return provider.DefaultCapabilities()
 }
 
 // isProviderRejection reports whether err is a request-level provider
@@ -260,10 +282,12 @@ func verifierMessages(evidence string, establishing bool) []provider.Message {
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: `You are an independent verifier. Evaluate only the supplied observable evidence.
 Do not assume work succeeded. Tool, build, test, permission, timeout, and safety failures are authoritative.
-ToolCalls are controller-observed evidence, not executor prose. A successful ask_user proves a correlated answer;
-its "user confirmed" summary proves an affirmative answer, while text is redacted. A following successful write_file
-or edit_file fulfills an ask-before-write condition. grants_authorization:false only means ask_user did not bypass
-application approval. Do not reject or repeat work solely because the answer text is redacted.
+"CausalFacts" are controller facts and override contrary inferences. ToolCalls are chronological controller evidence,
+not executor prose. ask_user pauses execution, so a later entry follows its answer. A successful ask_user proves a
+correlated answer; "user confirmed" means affirmative; text is redacted. A later successful write_file or edit_file
+fulfills ask-before-write, even in one cycle.
+grants_authorization:false only means ask_user did not bypass approval. Do not reject, repeat, or request the same
+input because the answer is redacted or calls share a cycle.
 Decide "retryable" from your own judgment of this evidence. Set retryable=false only when the task is fundamentally
 impossible (a denied permission, a safety block, or a missing capability); a deliverable that is merely
 incomplete or not yet synthesized is normally still retryable.

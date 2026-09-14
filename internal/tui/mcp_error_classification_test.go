@@ -80,7 +80,7 @@ func TestMCPContextErrorsReachAgentRecords(t *testing.T) {
 
 			m := newTestModel(t)
 			run := newAgentVerificationTestRun(t, m, "read a remote file", nil, agent.ExecutionResult{})
-			m.recordAgentToolResultsCount([]tools.Result{result}, false, 1)
+			m.recordAgentToolResultsCount([]tools.Result{result}, false, []agent.ActionStatus{agent.ActionExecuted})
 			execution := m.agentLoop.execution
 			if len(execution.ToolCalls) != 1 || len(execution.Errors) != 1 {
 				t.Fatalf("execution = %+v, want one failed call and error", execution)

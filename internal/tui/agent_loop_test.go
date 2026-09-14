@@ -254,6 +254,34 @@ func TestVerifiedAgentPinsTaskContractBeforeExecutor(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentContractCarriesCapabilityCapsule is the Phase 4 test for
+// the small capability capsule added to contract input: with tools enabled,
+// the contract request's payload must report read_files as available (and,
+// with no MCP servers connected, mcp_tools as unavailable) so contracting
+// can tell "achievable via a read" apart from "genuinely needs the user".
+func TestVerifiedAgentContractCarriesCapabilityCapsule(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Completed the requested task."},
+		agentScriptStep{text: verifierJSON("passed", "contract satisfied", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("complete the requested task", nil))
+
+	contractPayload := prov.requests[0].Messages[1].Content
+	if !strings.Contains(contractPayload, `"workspace_access":true`) {
+		t.Fatalf("contract payload missing workspace_access: %s", contractPayload)
+	}
+	if !strings.Contains(contractPayload, `"available":["read_files","write_files","run_commands"`) {
+		t.Fatalf("contract payload missing expected available categories: %s", contractPayload)
+	}
+	if !strings.Contains(contractPayload, `"unavailable":["web_access","mcp_tools"]`) {
+		t.Fatalf("contract payload missing expected unavailable categories: %s", contractPayload)
+	}
+}
+
 func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
 	m := newTestModel(t)
 	prov := &scriptedAgentProvider{contractReplies: []string{"not JSON", "still not JSON"}}
@@ -280,15 +308,63 @@ func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
 	}
 }
 
-// TestVerifiedAgentContractClarificationSurfacesInsteadOfParking covers the
-// deterministic /agent park observed with gemma-4-e4b on "read the file I
-// mentioned…": the tool-free contract model correctly wants clarification but
-// also returns a provisional `criteria` decomposition. The run must ask the
-// user which file — not park with an internal error — and must not run any
-// tool before the answer arrives. Supplying the answer re-establishes the
-// contract and the run proceeds.
-func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T) {
+// TestContractAssistanceShadowTrackerActivatesAndResetsOnModelSwitch is the
+// Phase 4 test for the measured-assistance shadow tracker: it must
+// accumulate evidence across runs on the same model (a per-run reset would
+// never let a threshold of 2 accumulate, since each run makes one contract
+// call), recommend a hint only once the threshold is reached, and reset
+// when the selected model changes — all without altering the fixed contract
+// prompt or request shape (shadow only, per agent.Assistance's doc
+// comment).
+func TestContractAssistanceShadowTrackerActivatesAndResetsOnModelSwitch(t *testing.T) {
+	m := newTestModel(t)
+	prov := &scriptedAgentProvider{}
+	m.prov = prov
+	m.model = "flaky-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Timeout = "1s"
+	m.cfg.Agent.Verifier.MaxTokens = 256
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+
+	prov.contractReplies = []string{"not JSON", "still not JSON"}
+	driveAgentCommands(t, m, m.startVerifiedRun("first bounded task", nil))
+	if m.agentLoop.run.Status != agent.DecisionParked {
+		t.Fatalf("run 1 status = %s, want parked", m.agentLoop.run.Status)
+	}
+	if m.lastDebug.AssistanceHint {
+		t.Fatalf("assistance hint after one format failure = true, want false (below threshold): %+v", m.lastDebug)
+	}
+
+	prov.contractReplies = []string{"not JSON again", "still not JSON"}
+	driveAgentCommands(t, m, m.startVerifiedRun("second bounded task", nil))
+	if m.agentLoop.run.Status != agent.DecisionParked {
+		t.Fatalf("run 2 status = %s, want parked", m.agentLoop.run.Status)
+	}
+	if !m.lastDebug.AssistanceHint || m.lastDebug.AssistanceReason != string(agent.AssistanceFormatHint) {
+		t.Fatalf("assistance after two consecutive format failures = %+v, want an active hint", m.lastDebug)
+	}
+	contractPrompt := prov.requests[len(prov.requests)-2].Messages[0].Content
+	if !strings.Contains(contractPrompt, "You establish a task contract before an agent may execute. Return only a small, stable decomposition") {
+		t.Fatalf("shadow tracking altered the contract prompt: %s", contractPrompt)
+	}
+
+	m.model = "different-model"
+	prov.contractReplies = []string{`{"criteria":["ok"],"needs_user_input":false,"question":"","user_options":[]}`}
+	driveAgentCommands(t, m, m.startVerifiedRun("third bounded task on a different model", nil))
+	if m.lastDebug.AssistanceHint {
+		t.Fatalf("assistance hint after switching models = true, want the switch to reset accumulated evidence: %+v", m.lastDebug)
+	}
+}
+
+// TestVerifiedAgentContractClarificationDelegatesToAskUser covers the
+// clarification case observed with gemma-4-e4b on "read the file I
+// mentioned…". When ask_user is available, the tool-free contract must defer
+// the question to the executor, which can associate the answer with later
+// evidence instead of opening a second controller-owned prompt.
+func TestVerifiedAgentContractClarificationDelegatesToAskUser(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-file", Name: tools.ToolAskUser, Arguments: `{"question":"Which file did you mean?"}`}}},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
 		agentScriptStep{text: "report.md heading is Q3 report."},
 		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
@@ -309,36 +385,91 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
 
 	run := m.agentLoop.run
-	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || run.Cycle != 0 || run.HasCriteria() {
-		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at contract/cycle 0",
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageExecutor || run.Cycle != 1 || !run.HasCriteria() {
+		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at executor/cycle 1",
 			run.Status, run.Stage, run.Cycle, len(run.Criteria))
 	}
-	if m.errText != "" {
-		t.Fatalf("errText = %q, want contract input rendered as a question instead of an error", m.errText)
+	if got := m.agentContractInputQuestion(); got != "" {
+		t.Fatalf("contract input question = %q, want executor-owned ask_user only", got)
 	}
-	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
-		t.Fatalf("contract input question = %q, want the model's clarifying question", got)
-	}
-	m.refreshViewport()
-	if got := m.viewport.View(); !strings.Contains(got, "agent needs your input") || !strings.Contains(got, "Which file did you mean?") {
-		t.Fatalf("contract input was not rendered above the composer: %q", got)
-	}
-	if m.overlayOpen || m.picker.pickerKind == pickerAgentQuestion {
-		t.Fatalf("contract clarification opened an option picker for ungrounded choices: %+v", m.picker)
+	if m.pendingAsk == nil {
+		t.Fatal("executor did not request the missing file")
 	}
 	if run.ToolCalls != 0 {
-		t.Fatalf("tool calls = %d before clarification, want 0", run.ToolCalls)
+		t.Fatalf("tool calls = %d before executor clarification, want 0", run.ToolCalls)
 	}
 
 	runID := run.ID
-	m.input.SetValue("report.md")
-	driveAgentCommands(t, m, m.send())
+	driveAgentCommands(t, m, m.answerAskUser("report.md"))
 
 	if m.agentLoop.run.ID != runID || m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("after answer: run = %+v, want the same run completed", m.agentLoop.run)
 	}
-	if m.agentLoop.run.ContractInput != "report.md" {
-		t.Fatalf("ContractInput = %q, want the user's answer", m.agentLoop.run.ContractInput)
+	if m.agentLoop.run.ContractInput != "" {
+		t.Fatalf("ContractInput = %q, want executor answer kept out of contract state", m.agentLoop.run.ContractInput)
+	}
+}
+
+func TestVerifiedAgentContractClarificationWithoutAskUserUsesContractInput(t *testing.T) {
+	m, prov := configureAgentTestModel(t)
+	prov.contractReplies = []string{`{"criteria":[],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`}
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || run.Cycle != 0 {
+		t.Fatalf("run = %+v, want contract-stage input pause without ask_user", run)
+	}
+	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
+		t.Fatalf("contract input question = %q", got)
+	}
+	if m.pendingAsk != nil {
+		t.Fatalf("pending ask = %+v, want no executor ask_user", m.pendingAsk)
+	}
+}
+
+// TestVerifiedAgentDelegatesContractClarificationToAskUser keeps a
+// contract-stage model from asking the same question that the executor can
+// ask with evidence. The contract is tool-free, so only the executor can
+// bind the selected answer to the later workspace mutation.
+func TestVerifiedAgentDelegatesContractClarificationToAskUser(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{
+			ID: "choose-content", Name: tools.ToolAskUser,
+			Arguments: `{"question":"Should choice.txt contain alpha or beta?","choices":["alpha","beta"]}`,
+		}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{
+			ID: "write-choice", Name: tools.ToolWriteFile,
+			Arguments: `{"path":"choice.txt","content":"beta"}`,
+		}}},
+		agentScriptStep{text: "choice.txt contains the selected value."},
+	)
+	prov.contractReplies = []string{`{"criteria":[],"needs_user_input":true,"question":"Should choice.txt contain alpha or beta?","user_options":["alpha","beta"]}`}
+	m.cfg.Agent.Verifier.Mode = "deterministic"
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Create choice.txt, but first ask whether it should contain alpha or beta.", nil))
+
+	if m.pendingAsk == nil || !m.overlayOpen {
+		t.Fatalf("contract clarification did not reach executor ask_user: pending=%+v overlay=%v", m.pendingAsk, m.overlayOpen)
+	}
+	if got := m.agentContractInputQuestion(); got != "" {
+		t.Fatalf("contract input question = %q, want executor-owned ask_user only", got)
+	}
+	if m.agentLoop.run.Stage != agent.StageExecutor || m.agentLoop.run.Cycle != 1 {
+		t.Fatalf("run = %+v, want executor cycle one paused on ask_user", m.agentLoop.run)
+	}
+
+	driveAgentCommands(t, m, m.answerAskUser("beta"))
+
+	if run := m.agentLoop.run; run.Status != agent.DecisionDone || run.Cycle != 1 {
+		t.Fatalf("run = %+v, want one-cycle completion", run)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests = %d, want contract + ask + write + completion", len(prov.requests))
 	}
 }
 
@@ -367,15 +498,22 @@ func TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay(t *testing.T)
 	}
 }
 
-// TestAgentEvolutionOmittedContractDeliverableCharacterization freezes a
-// Phase 0 limitation, not a desired completion policy. The contract names an
-// exact read despite a request that also requires a write. The current
-// controller can complete after the read because it has no way to represent
-// the omitted deliverable. Phase 2 must invert this expectation.
-func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) {
+// TestAgentEvolutionContractCoverageGapForcesSemanticVerification is the
+// Phase 2 fix for a previously characterized gap (see git history for
+// TestAgentEvolutionOmittedContractDeliverableCharacterization): a contract
+// that pins only an exact-read criterion for a request whose own text also
+// names an unaddressed write no longer completes on the mechanical
+// all-resolved shortcut. A real semantic verifier pass catches the missing
+// artifact, drives a second cycle that produces it, and only then does the
+// run complete.
+func TestAgentEvolutionContractCoverageGapForcesSemanticVerification(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-report", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
 		agentScriptStep{text: "The heading is Q3 report."},
+		agentScriptStep{text: verifierJSON("failed", "result.txt was never written", "write the heading to result.txt", true, true)},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-result", Name: tools.ToolWriteFile, Arguments: `{"path":"result.txt","content":"Q3 report"}`}}},
+		agentScriptStep{text: "Wrote the heading to result.txt."},
+		agentScriptStep{text: verifierJSON("passed", "result.txt now contains the heading", "", false, false)},
 	)
 	prov.contractReplies = []string{`{"criteria":["Read the file report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
 	root := t.TempDir()
@@ -386,30 +524,48 @@ func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) 
 	m.toolsNative = true
 	m.toolsAutoApprove = true
 	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
 
 	driveAgentCommands(t, m, m.startVerifiedRun("Read report.md and write its heading to result.txt.", nil))
 
 	run := m.agentLoop.run
-	if run.Status != agent.DecisionDone {
-		t.Fatalf("status = %q, want current completion after the lone contracted read", run.Status)
+	if run.Status != agent.DecisionDone || run.Cycle != 2 {
+		t.Fatalf("run = %+v, want two-cycle completion after the write", run)
 	}
-	if _, err := os.Stat(root + "/result.txt"); !os.IsNotExist(err) {
-		t.Fatalf("result.txt = %v, want omitted artifact to remain absent", err)
+	if data, err := os.ReadFile(root + "/result.txt"); err != nil || string(data) != "Q3 report" {
+		t.Fatalf("result.txt = %q, %v, want the previously omitted artifact written", data, err)
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "contract/omitted_deliverable",
-		Verdict:    string(run.Status),
-		Executed:   []string{tools.ToolReadFile},
-		Requests:   len(prov.requests),
-		Tokens:     run.PromptTokens + run.CompletionTokens,
-		Limitation: "A contract that names only an atomic read can complete a multi-part request without producing the omitted artifact.",
-	})
+	if len(prov.requests) != 7 {
+		t.Fatalf("requests = %d, want contract + 2x(executor/tool-continuation/verifier) = 7", len(prov.requests))
+	}
 }
 
-// TestAgentEvolutionSyntheticNewEvidenceCharacterization records the current
-// disagreement between live tool-call accounting and the cycle-level progress
-// flag. The blocked result is intentionally synthetic: no call executed.
-func TestAgentEvolutionSyntheticNewEvidenceCharacterization(t *testing.T) {
+// TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts
+// proves the Phase 2 coverage guard is narrowly scoped: a single pinned
+// criterion for a request that names no unaddressed mutating verb — even
+// one using "and" — still takes the mechanical shortcut, unchanged from
+// before. This is the same scenario as
+// TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay, asserted
+// here directly against agent.AgentRun.ContractCoverageJustified to pin the
+// guard's exact boundary.
+func TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts(t *testing.T) {
+	run, err := agent.NewRun("coverage-guard", "Read the file I mentioned and give me its heading.", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.PinTypedCriteria([]agent.CriterionSpec{{Text: "Read the file report.md", Kind: agent.CriterionSemantic}})
+	if !run.ContractCoverageJustified() {
+		t.Fatal("ContractCoverageJustified = false, want a non-mutating single criterion to still shortcut")
+	}
+}
+
+// TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence is the Phase 1 fix
+// for a previously characterized gap (see git history for
+// TestAgentEvolutionSyntheticNewEvidenceCharacterization): a synthetic
+// blocked result — no call executed — must not set the cycle NewEvidence
+// flag, since NewEvidence and the live tool-call budget now agree that
+// nothing actually ran.
+func TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence(t *testing.T) {
 	m, _ := configureAgentTestModel(t)
 	run, err := agent.NewRun("synthetic-evidence", "inspect report", agent.DefaultLimits(), time.Now())
 	if err != nil {
@@ -423,29 +579,27 @@ func TestAgentEvolutionSyntheticNewEvidenceCharacterization(t *testing.T) {
 	m.recordAgentToolResultsCount([]tools.Result{{
 		Call: tools.Call{ID: "blocked-read", Tool: tools.ToolReadFile, Path: "report.md"},
 		Err:  errors.New("repeated tool call blocked: no new evidence"),
-	}}, false, 0)
+	}}, false, uniformActionStatuses(1, agent.ActionBlocked))
 
 	if m.agentLoop.liveToolCalls != 0 {
 		t.Fatalf("live tool calls = %d, want synthetic result to charge no execution", m.agentLoop.liveToolCalls)
 	}
-	if !m.agentLoop.execution.NewEvidence {
-		t.Fatal("NewEvidence = false, want current synthetic-result behavior captured")
+	if m.agentLoop.execution.NewEvidence {
+		t.Fatal("NewEvidence = true, want a synthetic (never-executed) result to leave it false")
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "progress/synthetic_new_evidence",
-		Verdict:    "new_evidence=true",
-		Executed:   []string{},
-		Requests:   0,
-		Tokens:     0,
-		Limitation: "A synthetic blocked result currently sets the cycle NewEvidence flag although no call executed.",
-	})
+	if got := m.agentLoop.execution.ToolCalls[0].Status; got != agent.ActionBlocked {
+		t.Fatalf("recorded status = %q, want %q", got, agent.ActionBlocked)
+	}
 }
 
-// TestAgentEvolutionCompletedObservationProjectionCharacterization records
-// that the current cross-cycle projection removes raw tool output. This is an
-// intentional context bound today; Phase 3 will add a referenceable view for
-// observations needed by later work.
-func TestAgentEvolutionCompletedObservationProjectionCharacterization(t *testing.T) {
+// TestProjectCompletedAgentHistoryRemovesRawToolOutput guards the raw
+// transcript-projection half of the fix Phase 3 completed: the projected
+// history itself must still never carry a completed cycle's raw tool
+// output — only the bounded, labeled internal/agent.ObservationCache excerpt
+// surfaced via agentDirective is allowed to preserve a fact from it across
+// cycles now (see TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle
+// and TestAgentDirectiveReportsEvictedObservations for that channel).
+func TestProjectCompletedAgentHistoryRemovesRawToolOutput(t *testing.T) {
 	const heading = "UNIQUE_Q3_HEADING"
 	projected := projectCompletedAgentHistory([]provider.Message{
 		{Role: provider.RoleUser, Content: "Read report.md."},
@@ -458,14 +612,6 @@ func TestAgentEvolutionCompletedObservationProjectionCharacterization(t *testing
 			t.Fatalf("projected history retained raw observation: %+v", projected)
 		}
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "context/projected_observation",
-		Verdict:    "observation_projected_away",
-		Executed:   []string{tools.ToolReadFile},
-		Requests:   0,
-		Tokens:     0,
-		Limitation: "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle.",
-	})
 }
 
 // TestVerifiedAgentContractParkRecordsRawOutput proves a genuine contract
@@ -891,8 +1037,18 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 	if hasToolMessage || hasToolCallMessage {
 		t.Fatalf("cycle 2 request still carries cycle 1's raw tool exchange: %+v", cycle2Request.Messages)
 	}
-	if strings.Contains(got.String(), "cycle-one-marker.txt") {
-		t.Fatalf("cycle 2 request leaked cycle 1's raw tool result content:\n%s", got.String())
+	// Cycle 1's raw tool-call/tool-result transcript is gone (asserted
+	// above), but Phase 3's retained-observation cache still surfaces a
+	// small, explicitly labeled excerpt of what list_dir actually returned,
+	// so cycle 2 need not reread it to recall this fact. This is a bounded,
+	// deliberate exception to "no raw tool content across cycles" — it must
+	// appear only inside the labeled "Retained observations" line, never as
+	// a second, unlabeled copy elsewhere in the request.
+	if !strings.Contains(got.String(), "Retained observations") {
+		t.Fatalf("cycle 2 request lost the retained-observations section:\n%s", got.String())
+	}
+	if n := strings.Count(got.String(), "cycle-one-marker.txt"); n != 1 {
+		t.Fatalf("cycle-one-marker.txt appeared %d times in cycle 2's request, want exactly one (the labeled retained observation):\n%s", n, got.String())
 	}
 	// agentContinueDirective is expected here: it's cycle 2's OWN triggering
 	// message (startNextAgentCycle dispatches it to begin cycle 2), not
@@ -910,6 +1066,87 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 	// re-hitting an already-failed one across consecutive cycles).
 	if !strings.Contains(got.String(), "tried: "+tools.ToolListDir+" succeeded") {
 		t.Fatalf("cycle 2 request lost the prior cycle's tool-call recap:\n%s", got.String())
+	}
+}
+
+// TestAgentDirectiveExcludesWebAndMCPObservations proves the Phase 3
+// retained-observation cache is scoped to workspace-local read tools only:
+// web_fetch and MCP results already carry an untrusted.Frame wrapper baked
+// into their Output (see internal/tools/web.go and mcp_tools.go), and
+// truncating that framed string to a bounded excerpt could cut through its
+// closing marker, so neither is ever cached.
+func TestAgentDirectiveExcludesWebAndMCPObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run := newAgentVerificationTestRun(t, m, "inspect a page", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "fetch-1", Tool: tools.ToolWebFetch, Path: "https://example.com"}, Output: "WEB_MARKER content"},
+		{Call: tools.Call{ID: "mcp-1", Tool: "mcp__srv__read", MCPServer: "srv", MCPTool: "read"}, Output: "MCP_MARKER content"},
+	}, false, uniformActionStatuses(2, agent.ActionExecuted))
+	_ = run
+
+	directive := m.agentDirective()
+	if strings.Contains(directive, "WEB_MARKER") || strings.Contains(directive, "MCP_MARKER") {
+		t.Fatalf("directive retained a web/MCP observation: %s", directive)
+	}
+}
+
+// TestAgentDirectiveExcludesLocalContextObservations proves volatile
+// local_context results (time, clipboard, etc.) are never retained as a
+// durable cross-cycle fact — matching the same exclusion progressLedger
+// already applies to local_context (see progress.go's planBatch).
+func TestAgentDirectiveExcludesLocalContextObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "what time is it", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "time-1", Tool: tools.ToolLocalContext, ContextKind: "time"}, Output: "VOLATILE_TIME_MARKER"},
+	}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	directive := m.agentDirective()
+	if strings.Contains(directive, "VOLATILE_TIME_MARKER") {
+		t.Fatalf("directive retained a volatile local_context observation: %s", directive)
+	}
+}
+
+// TestAgentDirectiveDoesNotRetainFailedReads proves a failed or denied read
+// never becomes a retained observation — only a genuine successful
+// execution is a fact worth recalling.
+func TestAgentDirectiveDoesNotRetainFailedReads(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "read a missing file", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "read-1", Tool: tools.ToolReadFile, Path: "missing.md"}, Err: errors.New("not found")},
+	}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if _, ok := m.agentLoop.observations.Latest("read_file\x1fmissing.md"); ok {
+		t.Fatal("a failed read must not be retained as an observation")
+	}
+}
+
+// TestAgentDirectiveReportsEvictedObservations proves the Phase 3 omission
+// manifest: once the bounded observation cache overflows, agentDirective
+// names the dropped resource explicitly rather than silently losing it —
+// so a model can tell "never read" apart from "read, but no longer
+// retained; reread if you still need it."
+func TestAgentDirectiveReportsEvictedObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "inspect many files", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	for i := 0; i < agent.MaxObservations+1; i++ {
+		path := fmt.Sprintf("file-%02d.txt", i)
+		m.recordAgentToolResultsCount([]tools.Result{
+			{Call: tools.Call{ID: fmt.Sprintf("read-%d", i), Tool: tools.ToolReadFile, Path: path}, Output: "content"},
+		}, false, uniformActionStatuses(1, agent.ActionExecuted))
+	}
+
+	directive := m.agentDirective()
+	if !strings.Contains(directive, "no longer retained") {
+		t.Fatalf("directive did not report an omission after cache overflow:\n%s", directive)
+	}
+	if !strings.Contains(directive, "read_file(file-00.txt)") {
+		t.Fatalf("directive did not name the specific evicted resource:\n%s", directive)
 	}
 }
 

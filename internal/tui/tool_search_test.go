@@ -98,6 +98,26 @@ func TestLargeCatalogUsesProgressiveDisclosure(t *testing.T) {
 	}
 }
 
+func TestDisclosureRespectsContextBudgetAndKeepsSearchAvailable(t *testing.T) {
+	m := configureDiscoveryModel(t, 10, nil)
+	m.session.AddUser("find a Jira capability")
+	prepared, err := m.prepareRequest("", nil, true)
+	if err != nil {
+		t.Fatalf("prepare compact catalog: %v", err)
+	}
+	m.cfg.Context.MaxContextTokens = prepared.estimate.Total + m.cfg.Context.ReserveResponseTokens
+
+	if disclosed := m.discloseTools([]string{"mcp__jira__create_issue"}); len(disclosed) != 0 {
+		t.Fatalf("context-bound disclosure = %v, want none", disclosed)
+	}
+	if _, ok := specByName(m.activeToolSpecs(), tools.ToolSearch); !ok {
+		t.Fatal("context-bound disclosure removed tool_search")
+	}
+	if _, ok := specByName(m.activeToolSpecs(), "mcp__jira__create_issue"); ok {
+		t.Fatal("schema was retained despite context budget rejection")
+	}
+}
+
 func TestLargeCatalogPromotesCompactMCPDirectoryWithoutSchemas(t *testing.T) {
 	m := configureDiscoveryModel(t, 22, nil)
 	base := m.compositionBase("list Jira tools", nil, false)
@@ -406,7 +426,7 @@ func TestHiddenNativeMCPRecoveryRequiresExactEligibleNameAndIsBounded(t *testing
 	}
 
 	m := configureDiscoveryModel(t, 10, nil)
-	m.hasHiddenToolRecovery = true
+	m.toolRecoveryAttempts = 1
 	m.session.AddUser("continue")
 	m.transition(turnModelStreaming, turnOutcomeNone)
 	m.thinking = true

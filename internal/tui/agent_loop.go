@@ -78,6 +78,62 @@ type agentLoopState struct {
 	// same run-level ceiling agent.Decide would eventually enforce at a
 	// cycle boundary — without waiting for that boundary to be reached.
 	liveToolCalls int
+	// observations is a bounded, process-local cache of what workspace-local
+	// read tools actually returned, so a later cycle can recall a fact
+	// projectCompletedAgentHistory already stripped from the raw transcript
+	// without rereading it. Never persisted — see agent.ObservationCache's
+	// doc comment. Reset per run in startVerifiedRun; nil is a safe,
+	// functionally empty default (every method on a nil *ObservationCache is
+	// a no-op), so code before a run starts need not nil-check it.
+	observations *agent.ObservationCache
+	// evictedResourceKeys names resources whose retained observation was
+	// dropped from the bounded cache to make room for a newer one — the
+	// omission manifest: an explicit "this became unavailable", not a
+	// silent loss. Bounded the same way (oldest dropped first) so it cannot
+	// grow with run length.
+	evictedResourceKeys []string
+	// contractAssistance is the Phase 4 measured-assistance shadow tracker
+	// for the task-contract control stage: content-free counters of
+	// attributable control-format failures versus successes, scoped to the
+	// session (persists across runs so a per-run "one contract call" stage
+	// can still accumulate a pattern) and reset whenever the selected model
+	// changes (see contractAssistanceModel). contractAssistanceActive
+	// mirrors whether the most recent agent.ChooseAssistance call
+	// recommended a hint, so the next call can apply the success-window
+	// hysteresis. Neither field currently changes any request — see
+	// agent.Assistance's doc comment; both exist purely for /debug
+	// observability ahead of a measured "auto" rollout.
+	contractAssistance       agent.BehaviorStats
+	contractAssistanceActive bool
+	// contractAssistanceModel is the model identity contractAssistance was
+	// last measured against. recordContractAssistanceOutcome resets the
+	// counters whenever the live selected model no longer matches this,
+	// rather than hooking every one of the several sites that can change
+	// m.model (profile load, /model, config reload, demo mode) — see §8:
+	// "Switching model ... resets incompatible measurements."
+	contractAssistanceModel string
+}
+
+// maxEvictedResourceKeys bounds evictedResourceKeys the same way
+// agent.MaxObservations bounds the cache it tracks evictions from.
+const maxEvictedResourceKeys = agent.MaxObservations
+
+// recordEvictedObservation appends a newly evicted resource key to the
+// run's omission manifest, dropping the oldest entry once full and never
+// duplicating a key that's already recorded.
+func (m *Model) recordEvictedObservation(resourceKey string) {
+	if m.agentLoop == nil || resourceKey == "" {
+		return
+	}
+	for _, existing := range m.agentLoop.evictedResourceKeys {
+		if existing == resourceKey {
+			return
+		}
+	}
+	m.agentLoop.evictedResourceKeys = append(m.agentLoop.evictedResourceKeys, resourceKey)
+	if len(m.agentLoop.evictedResourceKeys) > maxEvictedResourceKeys {
+		m.agentLoop.evictedResourceKeys = m.agentLoop.evictedResourceKeys[1:]
+	}
 }
 
 type agentVerificationMsg struct {
@@ -432,6 +488,15 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.initialImages = append([]provider.Image(nil), images...)
 	m.resetAgentContext()
 	m.agentLoop.liveToolCalls = 0
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.agentLoop.evictedResourceKeys = nil
+	// contractAssistance is deliberately NOT reset here: it is a
+	// session-lifetime measurement (see its doc comment), not a per-run one
+	// — a threshold of "two consecutive format failures" could otherwise
+	// never accumulate evidence across the many runs a single
+	// contract-per-run stage produces. recordContractAssistanceOutcome
+	// itself resets it whenever it observes m.model has changed since the
+	// last recorded attempt.
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(id))
@@ -477,12 +542,77 @@ func (m *Model) startAgentContract() tea.Cmd {
 	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(runID))
 	m.syncAgentDebug()
 	m.refreshViewport()
+	capabilities := m.contractCapabilityCapsule()
 	return func() tea.Msg {
 		out, err := agentverify.EstablishContract(ctx, m.prov, agentverify.Config{
 			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
-		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput})
+		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput, Capabilities: capabilities})
 		return agentContractMsg{runID: runID, gen: gen, out: out, err: err}
 	}
+}
+
+// contractCapabilityCapsule derives the small, closed-vocabulary capability
+// capsule passed to EstablishContract (see agentverify.CapabilityCapsule's
+// doc comment). It is built from the same eligible-tool catalog the rest of
+// the tool pipeline uses, but reduced to category labels only — never a raw
+// tool name, schema, or MCP/skill-provided description, which could carry
+// untrusted instructions into a stage that has no approval gate.
+func (m *Model) contractCapabilityCapsule() agentverify.CapabilityCapsule {
+	eligibleNames := make(map[string]bool)
+	for _, spec := range m.eligibleToolSpecs() {
+		eligibleNames[spec.Name] = true
+	}
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if eligibleNames[name] {
+				return true
+			}
+		}
+		return false
+	}
+	category := func(available bool, label string, capsule *agentverify.CapabilityCapsule) {
+		if available {
+			capsule.Available = append(capsule.Available, label)
+		} else {
+			capsule.Unavailable = append(capsule.Unavailable, label)
+		}
+	}
+	capsule := agentverify.CapabilityCapsule{WorkspaceAccess: m.toolsOn && m.toolRunner != nil}
+	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob), "read_files", &capsule)
+	category(has(tools.ToolWriteFile, tools.ToolEditFile), "write_files", &capsule)
+	category(has(tools.ToolRunCommand), "run_commands", &capsule)
+	category(has(tools.ToolWebSearch, tools.ToolWebFetch), "web_access", &capsule)
+	category(m.mcpRegistry != nil && len(mcpToolSpecs(m.mcpRegistry)) > 0, "mcp_tools", &capsule)
+	if has(tools.ToolAskUser) {
+		capsule.Available = append(capsule.Available, "ask_user")
+	}
+	return capsule
+}
+
+// recordContractAssistanceOutcome updates the Phase 4 shadow behavior stats
+// (see agentLoopState.contractAssistance's doc comment) for one completed
+// task-contract request and recomputes the current Assistance
+// recommendation into m.lastDebug for `/debug last`. Only an attributable
+// control-format failure (the contract parked after exhausting its own
+// internal malformed-JSON repair) counts as a format failure; every other
+// outcome — including a genuine success — counts as a success, so a
+// permission/timeout/budget failure never inflates the format-failure
+// streak. This never changes a request; see the field's doc comment.
+func (m *Model) recordContractAssistanceOutcome(err error) {
+	if m.agentLoop == nil {
+		return
+	}
+	if m.agentLoop.contractAssistanceModel != m.model {
+		m.agentLoop.contractAssistance = agent.BehaviorStats{}
+		m.agentLoop.contractAssistanceActive = false
+		m.agentLoop.contractAssistanceModel = m.model
+	}
+	formatFailure := err != nil && errors.Is(err, agent.ErrMalformedControl)
+	m.agentLoop.contractAssistance.RecordControlAttempt(formatFailure)
+	assistance := agent.ChooseAssistance(m.agentLoop.contractAssistance, m.agentLoop.contractAssistanceActive)
+	m.agentLoop.contractAssistanceActive = assistance.Hint
+	m.lastDebug.AssistanceHint = assistance.Hint
+	m.lastDebug.AssistanceReason = string(assistance.Reason)
 }
 
 func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
@@ -504,6 +634,7 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 	if raw := strings.TrimSpace(msg.out.Raw); raw != "" {
 		m.lastDebug.AgentContractRaw = truncateAgentText(raw, 2048)
 	}
+	m.recordContractAssistanceOutcome(msg.err)
 	if msg.err != nil {
 		var runErr agent.RunError
 		if !errors.As(msg.err, &runErr) {
@@ -526,6 +657,20 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		return m, m.persistAgentRun()
 	}
 	contract := msg.out.Contract
+	// Contracting has no tool protocol of its own. When the executor can ask
+	// the user, a contract-stage clarification would duplicate that executor
+	// interaction: the contract cannot use or prove the answer, whereas the
+	// executor's ask_user result is ordered evidence for the eventual write.
+	// Keep the free-text contract pause only for configurations where asking is
+	// genuinely unavailable. The two criteria preserve both parts of the
+	// request for semantic verification without treating the model's proposed
+	// question or options as controller-owned facts.
+	if contract.NeedsUserInput && m.contractCanDelegateUserInput() {
+		contract = agentverify.Contract{Criteria: []string{
+			"obtain the user input needed to complete the original request using ask_user",
+			"complete the original request using the user's answer",
+		}}
+	}
 	if contract.NeedsUserInput {
 		if err := run.WaitForContractInput(contract.Question, time.Now()); err != nil {
 			m.failVerifiedRun(err)
@@ -553,6 +698,19 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 	m.syncAgentDebug()
 	persist := m.persistAgentRun()
 	return m, tea.Batch(persist, m.startInitialAgentCycle(run.Request, m.agentLoop.initialImages))
+}
+
+// contractCanDelegateUserInput reports whether a contract-stage question can
+// safely be deferred to the executor. The capsule is derived from the same
+// eligible tool set used when the contract request was made, so it cannot
+// claim that a disabled or unavailable ask_user tool exists.
+func (m *Model) contractCanDelegateUserInput() bool {
+	for _, capability := range m.contractCapabilityCapsule().Available {
+		if capability == "ask_user" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) startInitialAgentCycle(request string, images []provider.Image) tea.Cmd {
@@ -714,8 +872,24 @@ func (m *Model) agentDirective() string {
 			}
 		}
 	}
+	if recent := m.agentLoop.observations.Recent(maxDirectiveObservations); len(recent) > 0 {
+		b.WriteString("Retained observations from earlier reads this run (already available — do not reread solely to recover these):\n")
+		for _, view := range recent {
+			fmt.Fprintf(&b, "- %s\n", view.FormatExcerpt())
+		}
+	}
+	if len(m.agentLoop.evictedResourceKeys) > 0 {
+		fmt.Fprintf(&b, "Observations no longer retained (dropped from the bounded cache — reread if still needed): %s\n",
+			strings.Join(m.agentLoop.evictedResourceKeys, ", "))
+	}
 	return truncateAgentText(b.String(), maxAgentDirectiveBytes)
 }
+
+// maxDirectiveObservations bounds how many retained observations
+// agentDirective surfaces per request, independent of agent.MaxObservations
+// (the cache's own, larger retention bound) — the directive is a small
+// working-context excerpt, not a dump of everything still cached.
+const maxDirectiveObservations = 4
 
 func (m *Model) agentContextSources() []string {
 	sources := []string{"system_prompt", "current_user_request", "conversation_history", "provider_capabilities"}
@@ -791,8 +965,12 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// Criteria resolved from controller-observed evidence do not need a
 	// semantic verifier, regardless of verification mode. Sending a verifier
 	// that intentionally cannot see raw read_file output merely invites it to
-	// replay an already-proven atomic action.
-	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+	// replay an already-proven atomic action. This shortcut is only safe when
+	// contract coverage is justified: a contract that pinned a single
+	// criterion for a request whose own text names an unaddressed mutating
+	// step (see agent.AgentRun.ContractCoverageJustified) may have omitted a
+	// deliverable, so that case still falls through to a real semantic pass.
+	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 && run.ContractCoverageJustified() {
 		return syntheticResult(agent.VerificationResult{
 			Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
 			Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
@@ -815,8 +993,13 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
 			return syntheticResult(deterministic)
 		}
-		if run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 {
-			for _, criterion := range run.UnresolvedCriteria() {
+		// If every criterion is resolved but ContractCoverageJustified was
+		// false, the earlier all-resolved shortcut deliberately fell through:
+		// a semantic verifier must inspect the request for an omitted
+		// deliverable. Only genuinely unresolved deterministic/user-owned
+		// criteria can return a synthetic adaptive result here.
+		if unresolved := run.UnresolvedCriteria(); run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 && len(unresolved) > 0 {
+			for _, criterion := range unresolved {
 				if criterion.Kind == agent.CriterionUserInput {
 					return syntheticResult(agent.VerificationResult{
 						Verdict: agent.VerificationInconclusive, Summary: criterion.Text,
@@ -875,6 +1058,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		// but never ask a post-execution verifier to establish goalposts.
 		EstablishCriteria: false,
 		Execution:         execution,
+		CausalFacts:       agent.UserAnswerCausalFacts(execution),
 		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
 	model := m.effectiveVerifierModel()
@@ -1144,6 +1328,27 @@ func (m *Model) recordAgentTruncation() {
 	m.agentLoop.execution.NewEvidence = true
 }
 
+// isObservableReadTool reports whether a tool's successful Output is safe to
+// retain verbatim (bounded) in agent.ObservationCache for cross-cycle recall
+// via agentDirective. Scoped to workspace-local read tools whose results
+// already flow into the ordinary tool-result transcript unframed — the same
+// trust boundary this package already applies to them (see
+// internal/tools/web.go and mcp_tools.go, which wrap web/MCP/personal-apps
+// output in untrusted.Frame precisely because it is not workspace-local).
+// Excluding those here avoids re-embedding a framed string as a bounded
+// excerpt, which could truncate through its closing marker. Mutating tools
+// (write_file, edit_file) are excluded too: their evidence is already
+// captured via ChangedFiles, and an observation cache exists to avoid
+// rereading, not to double up on write evidence.
+func isObservableReadTool(tool string) bool {
+	switch tool {
+	case tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob, tools.ToolRunCommand:
+		return true
+	default:
+		return false
+	}
+}
+
 // toolCallDetail extracts the one argument most useful for recognizing
 // "I already tried this exact thing" across agent cycles — a URL, file
 // path, or search pattern. Deliberately narrow: unlike those, a
@@ -1177,22 +1382,51 @@ func toolCallDetail(call tools.Call) string {
 	}
 }
 
+// uniformActionStatuses builds a same-status slice for a batch every one of
+// whose results shares one classification (a whole-batch denial, ledger
+// block, or budget rejection never mixes with a genuinely executed call —
+// see recordAgentToolResultsCount's callers).
+func uniformActionStatuses(n int, status agent.ActionStatus) []agent.ActionStatus {
+	out := make([]agent.ActionStatus, n)
+	for i := range out {
+		out[i] = status
+	}
+	return out
+}
+
 // recordAgentToolResultsCount records the complete tool-result-shaped
-// evidence while charging only calls that actually executed to the live
-// tool-call budget. Synthetic progress blocks, denials, and budget rejections
-// must preserve protocol correlation without pretending a side effect ran.
-func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool, liveCount int) {
+// evidence while charging only calls that actually executed (statuses[i] ==
+// agent.ActionExecuted) to the live tool-call budget. statuses must be
+// aligned with results — see uniformActionStatuses for uniform batches and
+// toolBatchPlan.mergeResults for mixed ones. Synthetic progress blocks,
+// denials, and budget rejections must preserve protocol correlation without
+// pretending a side effect ran: a denied or blocked result is still recorded
+// as a ToolCallRecord/RunError, so deterministic policy (permission denial,
+// safety) still sees it, but it never contributes live budget charge or
+// NewEvidence — see the Phase 0 characterization this replaces in
+// docs/architecture and .claude/tasks/plans/llmtui-agent-evolution.md
+// finding #5.
+func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool, statuses []agent.ActionStatus) {
 	if !m.agentRunActive() {
 		return
 	}
-	if liveCount < 0 {
-		liveCount = 0
-	}
-	if liveCount > len(results) {
-		liveCount = len(results)
-	}
-	m.agentLoop.liveToolCalls += liveCount
-	for _, result := range results {
+	budgetCount, evidenceCount := 0, 0
+	for i, result := range results {
+		status := agent.ActionUnknown
+		if i < len(statuses) {
+			status = statuses[i]
+		}
+		if status == agent.ActionExecuted {
+			evidenceCount++
+			// ask_user is a real, evidence-bearing action (it sets
+			// NewEvidence below) but is deliberately excluded from the live
+			// tool-call budget: asking the user is not a rate-limited
+			// workspace action the way reads/writes/commands are — see
+			// TestAskUserAgentPauseAndLiveResume.
+			if result.Call.Tool != tools.ToolAskUser {
+				budgetCount++
+			}
+		}
 		kind := agent.ErrorKind("")
 		if result.Err != nil {
 			kind = classifyToolError(result, denied)
@@ -1201,13 +1435,14 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		if result.Err == nil && result.Call.Tool == tools.ToolAskUser {
 			summary = askUserEvidenceSummary(result.Output)
 		}
+		detail := toolCallDetail(result.Call)
 		record := agent.ToolCallRecord{
-			ID: result.Call.ID, Name: result.Call.Tool, Detail: toolCallDetail(result.Call), Succeeded: result.Err == nil,
-			ErrorKind: kind, Summary: summary,
+			ID: result.Call.ID, Name: result.Call.Tool, Detail: detail, Succeeded: result.Err == nil,
+			ErrorKind: kind, Summary: summary, Status: status,
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
 		if result.Err != nil {
-			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewError(kind, result.Call.Tool, result.Err))
+			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))
 		}
 		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) &&
 			strings.TrimSpace(result.Call.Path) != "" && !tools.IsNoChangeDiff(result.Diff) {
@@ -1224,11 +1459,29 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 				Summary: map[bool]string{true: "command passed", false: "command failed"}[result.Err == nil],
 			})
 		}
+		if status == agent.ActionExecuted && result.Err == nil && isObservableReadTool(result.Call.Tool) && strings.TrimSpace(result.Output) != "" {
+			cycle := 1
+			if m.agentLoop.run != nil {
+				cycle = m.agentLoop.run.Cycle
+			}
+			_, evictedView, evicted := m.agentLoop.observations.Put(result.Call.Tool, detail, cycle, result.Output, true)
+			if evicted {
+				m.recordEvictedObservation(evictedView.ResourceLabel())
+			}
+		}
 	}
+	m.agentLoop.liveToolCalls += budgetCount
 	if denied {
 		m.agentLoop.execution.NeedsUserInput = true
 	}
-	m.agentLoop.execution.NewEvidence = true
+	// A batch that was entirely blocked/rejected before anything ran (and
+	// was not itself a denial the user actively chose) produced no new
+	// observation: evidenceCount stays 0 and NewEvidence must not be set, or
+	// a synthetic no-progress block would count as the very progress it
+	// exists to detect the absence of.
+	if evidenceCount > 0 || denied {
+		m.agentLoop.execution.NewEvidence = true
+	}
 }
 
 // askUserEvidenceSummary keeps a narrowly useful fact for verification
@@ -1359,7 +1612,7 @@ func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd 
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResultsCount(results, false, 0)
+	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.appendTerminalToolResults(results)
 	m.toolErr += len(results)
 	run := m.agentLoop.run
@@ -1459,6 +1712,12 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
+	// A resumed run's observation cache starts empty: retained excerpts are
+	// process-local and never persisted, so there is nothing to restore, and
+	// starting empty is always the safe default (see agent.ObservationCache's
+	// doc comment).
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.agentLoop.evictedResourceKeys = nil
 	m.agentOn = true
 	if !msg.run.HasCriteria() {
 		return m, tea.Batch(m.persistAgentRun(), m.startAgentContract())

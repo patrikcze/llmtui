@@ -274,6 +274,9 @@ type Model struct {
 	// survives native tool continuations so /debug last can show one complete
 	// call/result lifecycle, but starts fresh for a new user turn.
 	toolCallDiagnostics []provider.ToolCallDiagnostic
+	// toolRecoveryFeedback is a one-request protocol reminder after a dropped
+	// pseudo-call. It never contains model output or arguments.
+	toolRecoveryFeedback string
 	// lastPersonalAppsResult survives a lastDebug reset (every request-prep
 	// path replaces lastDebug wholesale); each debugInfo{} construction site
 	// copies it back in. See sendToolResults.
@@ -1054,7 +1057,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolOK++
 			}
 		}
-		m.recordAgentToolResultsCount(msg.results, false, len(msg.observed))
+		m.recordAgentToolResultsCount(msg.results, false, msg.statuses)
 		if m.cfg.Tools.NoProgress.Enabled {
 			m.progress.observeResults(msg.observed)
 		}
@@ -1567,7 +1570,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	for i, call := range calls {
 		results[i] = tools.Result{Call: call, Err: err}
 	}
-	m.recordAgentToolResultsCount(results, false, 0)
+	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.toolErr += len(results)
 	m.notice = "Repeated tool call blocked: no new evidence"
 
@@ -1603,10 +1606,10 @@ func (m *Model) denyPendingTools() tea.Cmd {
 	m.advanceToolRound()
 	m.complete(turnOutcomeToolContinuation)
 	denied := tools.DeniedResults(calls)
-	results, _ := plan.mergeResults(denied)
+	results, _, _ := plan.mergeResults(denied)
 	m.toolErr += len(results)
 	m.notice = fmt.Sprintf("✗ denied %d tool call(s)", len(calls))
-	m.recordAgentToolResultsCount(results, true, 0)
+	m.recordAgentToolResultsCount(results, true, uniformActionStatuses(len(results), agent.ActionDenied))
 	return m.sendToolResults(results)
 }
 
@@ -1831,7 +1834,7 @@ func (m *Model) resolveBudget(choice int) tea.Cmd {
 		return m.startPlannedToolBatch(plan)
 	}
 	limited := tools.LimitResults(calls, m.toolMaxIter())
-	results, _ := plan.mergeResults(limited)
+	results, _, _ := plan.mergeResults(limited)
 	m.toolErr += len(results)
 	m.notice = "⚒ asking the model for its final answer without tools"
 	return m.sendToolResults(results)
@@ -2222,6 +2225,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.stream, m.streamGen)
 	case provider.EventDone:
 		m.recordToolCallDiagnostics(msg.event.ToolCallDiagnostics...)
+		pseudoRecovery := m.visiblePseudoCallRecoveryDecision(
+			msg.event.ToolCallDiagnostics, msg.event.ToolCalls, msg.event.Truncated, msg.event.MalformedToolCall,
+		)
+		m.recordToolRecovery(pseudoRecovery)
 		// A backend can fail to parse the model's tool-call attempt into
 		// structured ToolCalls and instead leak the raw, still-tokenized
 		// attempt into content (see openai.looksLikeUnparsedToolCall). That
@@ -2233,6 +2240,13 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// content is suppressed at the source.
 		malformedToolCall := msg.event.MalformedToolCall && len(msg.event.ToolCalls) == 0
 		if malformedToolCall {
+			m.streamBuf.Reset()
+		}
+		if pseudoRecovery.Reason != "" {
+			// A pseudo-call is diagnostic evidence only. Drop the provider text
+			// before finishStream can persist it. A scheduled retry receives one
+			// schema-bound reminder; an exhausted budget still never promotes raw
+			// text, inferred arguments, or approval into execution state.
 			m.streamBuf.Reset()
 		}
 		emptyToolContinuation := !malformedToolCall && m.toolDepth > 0 && m.streamBuf.Len() == 0 && len(msg.event.ToolCalls) == 0
@@ -2272,6 +2286,12 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if msg.event.Truncated {
 			m.recordAgentTruncation()
 		}
+		if pseudoRecovery.Allowed() {
+			m.toolRecoveryFeedback = visiblePseudoCallRecoveryFeedback
+			m.notice = "provider emitted a visible tool envelope without a structured call — retrying once through the normal tool path"
+			m.refreshViewport()
+			return m, m.continueChat()
+		}
 		if malformedToolCall {
 			// This is usually a one-off backend parsing hiccup (observed:
 			// LM Studio's Harmony parser losing track partway through a
@@ -2279,7 +2299,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// while using native tools, retry through the fenced protocol so
 			// the attempt does not repeat the same failing backend conversion.
 			// Otherwise give it exactly one fresh attempt at the same round.
-			if m.claimMalformedToolRetry() {
+			malformedRecovery := m.claimToolRecovery(provider.ToolRecoveryMalformedCall)
+			m.recordToolRecovery(malformedRecovery)
+			if malformedRecovery.Allowed() {
+				m.malformedToolCallRetried = true
 				if m.toolsNative {
 					m.rejectNativeToolCapability()
 					m.notice = "model's native tool call could not be parsed by the backend — retrying with the prompt-based protocol"
@@ -2305,7 +2328,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// one-off sampling event, so give it exactly one fresh attempt
 			// at the same round (same accumulated history, nothing resent)
 			// before treating it as a real failure.
-			if m.claimEmptyContinuationRetry() {
+			emptyRecovery := m.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
+			m.recordToolRecovery(emptyRecovery)
+			if emptyRecovery.Allowed() {
+				m.emptyContinuationRetried = true
 				m.notice = "model returned an empty completion after tool execution — retrying once"
 				m.refreshViewport()
 				return m, m.continueChat()
@@ -2377,8 +2403,17 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case provider.EventError:
-		if name, ok := m.hiddenMCPToolRecoveryName(msg.event.Err); ok && m.claimHiddenToolRecovery() {
-			m.discloseTools([]string{name})
+		if name, ok := m.hiddenMCPToolRecoveryName(msg.event.Err); ok {
+			decision := m.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
+			m.recordToolRecovery(decision)
+			if !decision.Allowed() {
+				m.streamFailed(msg.event.Err)
+				return m, m.persistAgentRun()
+			}
+			if disclosed := m.discloseTools([]string{name}); len(disclosed) == 0 {
+				m.streamFailed(fmt.Errorf("MCP tool %q could not be disclosed within the current context budget; use tool_search to refine the capability", name))
+				return m, m.persistAgentRun()
+			}
 			m.discardFailedStreamForRecovery()
 			m.notice = fmt.Sprintf("model requested hidden MCP tool %q — retrying with its schema", name)
 			m.refreshViewport()

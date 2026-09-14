@@ -108,7 +108,7 @@ func (m *Model) answerAskUser(answer string) tea.Cmd {
 		"grants_authorization": false,
 	})
 	result := tools.Result{Call: call, Output: string(payload)}
-	m.recordAgentToolResultsCount([]tools.Result{result}, false, 0)
+	m.recordAgentToolResultsCount([]tools.Result{result}, false, []agent.ActionStatus{agent.ActionExecuted})
 	m.toolOK++
 	return tea.Batch(m.sendToolResults([]tools.Result{result}), m.persistAgentRun())
 }
