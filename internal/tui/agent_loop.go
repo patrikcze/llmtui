@@ -657,6 +657,20 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		return m, m.persistAgentRun()
 	}
 	contract := msg.out.Contract
+	// Contracting has no tool protocol of its own. When the executor can ask
+	// the user, a contract-stage clarification would duplicate that executor
+	// interaction: the contract cannot use or prove the answer, whereas the
+	// executor's ask_user result is ordered evidence for the eventual write.
+	// Keep the free-text contract pause only for configurations where asking is
+	// genuinely unavailable. The two criteria preserve both parts of the
+	// request for semantic verification without treating the model's proposed
+	// question or options as controller-owned facts.
+	if contract.NeedsUserInput && m.contractCanDelegateUserInput() {
+		contract = agentverify.Contract{Criteria: []string{
+			"obtain the user input needed to complete the original request using ask_user",
+			"complete the original request using the user's answer",
+		}}
+	}
 	if contract.NeedsUserInput {
 		if err := run.WaitForContractInput(contract.Question, time.Now()); err != nil {
 			m.failVerifiedRun(err)
@@ -684,6 +698,19 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 	m.syncAgentDebug()
 	persist := m.persistAgentRun()
 	return m, tea.Batch(persist, m.startInitialAgentCycle(run.Request, m.agentLoop.initialImages))
+}
+
+// contractCanDelegateUserInput reports whether a contract-stage question can
+// safely be deferred to the executor. The capsule is derived from the same
+// eligible tool set used when the contract request was made, so it cannot
+// claim that a disabled or unavailable ask_user tool exists.
+func (m *Model) contractCanDelegateUserInput() bool {
+	for _, capability := range m.contractCapabilityCapsule().Available {
+		if capability == "ask_user" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) startInitialAgentCycle(request string, images []provider.Image) tea.Cmd {

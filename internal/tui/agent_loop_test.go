@@ -357,15 +357,14 @@ func TestContractAssistanceShadowTrackerActivatesAndResetsOnModelSwitch(t *testi
 	}
 }
 
-// TestVerifiedAgentContractClarificationSurfacesInsteadOfParking covers the
-// deterministic /agent park observed with gemma-4-e4b on "read the file I
-// mentioned…": the tool-free contract model correctly wants clarification but
-// also returns a provisional `criteria` decomposition. The run must ask the
-// user which file — not park with an internal error — and must not run any
-// tool before the answer arrives. Supplying the answer re-establishes the
-// contract and the run proceeds.
-func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T) {
+// TestVerifiedAgentContractClarificationDelegatesToAskUser covers the
+// clarification case observed with gemma-4-e4b on "read the file I
+// mentioned…". When ask_user is available, the tool-free contract must defer
+// the question to the executor, which can associate the answer with later
+// evidence instead of opening a second controller-owned prompt.
+func TestVerifiedAgentContractClarificationDelegatesToAskUser(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-file", Name: tools.ToolAskUser, Arguments: `{"question":"Which file did you mean?"}`}}},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
 		agentScriptStep{text: "report.md heading is Q3 report."},
 		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
@@ -386,36 +385,91 @@ func TestVerifiedAgentContractClarificationSurfacesInsteadOfParking(t *testing.T
 	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
 
 	run := m.agentLoop.run
-	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || run.Cycle != 0 || run.HasCriteria() {
-		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at contract/cycle 0",
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageExecutor || run.Cycle != 1 || !run.HasCriteria() {
+		t.Fatalf("run = {status:%s stage:%s cycle:%d criteria:%d}, want needs_user_input at executor/cycle 1",
 			run.Status, run.Stage, run.Cycle, len(run.Criteria))
 	}
-	if m.errText != "" {
-		t.Fatalf("errText = %q, want contract input rendered as a question instead of an error", m.errText)
+	if got := m.agentContractInputQuestion(); got != "" {
+		t.Fatalf("contract input question = %q, want executor-owned ask_user only", got)
 	}
-	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
-		t.Fatalf("contract input question = %q, want the model's clarifying question", got)
-	}
-	m.refreshViewport()
-	if got := m.viewport.View(); !strings.Contains(got, "agent needs your input") || !strings.Contains(got, "Which file did you mean?") {
-		t.Fatalf("contract input was not rendered above the composer: %q", got)
-	}
-	if m.overlayOpen || m.picker.pickerKind == pickerAgentQuestion {
-		t.Fatalf("contract clarification opened an option picker for ungrounded choices: %+v", m.picker)
+	if m.pendingAsk == nil {
+		t.Fatal("executor did not request the missing file")
 	}
 	if run.ToolCalls != 0 {
-		t.Fatalf("tool calls = %d before clarification, want 0", run.ToolCalls)
+		t.Fatalf("tool calls = %d before executor clarification, want 0", run.ToolCalls)
 	}
 
 	runID := run.ID
-	m.input.SetValue("report.md")
-	driveAgentCommands(t, m, m.send())
+	driveAgentCommands(t, m, m.answerAskUser("report.md"))
 
 	if m.agentLoop.run.ID != runID || m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("after answer: run = %+v, want the same run completed", m.agentLoop.run)
 	}
-	if m.agentLoop.run.ContractInput != "report.md" {
-		t.Fatalf("ContractInput = %q, want the user's answer", m.agentLoop.run.ContractInput)
+	if m.agentLoop.run.ContractInput != "" {
+		t.Fatalf("ContractInput = %q, want executor answer kept out of contract state", m.agentLoop.run.ContractInput)
+	}
+}
+
+func TestVerifiedAgentContractClarificationWithoutAskUserUsesContractInput(t *testing.T) {
+	m, prov := configureAgentTestModel(t)
+	prov.contractReplies = []string{`{"criteria":[],"needs_user_input":true,"question":"Which file did you mean?","user_options":[]}`}
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || run.Cycle != 0 {
+		t.Fatalf("run = %+v, want contract-stage input pause without ask_user", run)
+	}
+	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
+		t.Fatalf("contract input question = %q", got)
+	}
+	if m.pendingAsk != nil {
+		t.Fatalf("pending ask = %+v, want no executor ask_user", m.pendingAsk)
+	}
+}
+
+// TestVerifiedAgentDelegatesContractClarificationToAskUser keeps a
+// contract-stage model from asking the same question that the executor can
+// ask with evidence. The contract is tool-free, so only the executor can
+// bind the selected answer to the later workspace mutation.
+func TestVerifiedAgentDelegatesContractClarificationToAskUser(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{
+			ID: "choose-content", Name: tools.ToolAskUser,
+			Arguments: `{"question":"Should choice.txt contain alpha or beta?","choices":["alpha","beta"]}`,
+		}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{
+			ID: "write-choice", Name: tools.ToolWriteFile,
+			Arguments: `{"path":"choice.txt","content":"beta"}`,
+		}}},
+		agentScriptStep{text: "choice.txt contains the selected value."},
+	)
+	prov.contractReplies = []string{`{"criteria":[],"needs_user_input":true,"question":"Should choice.txt contain alpha or beta?","user_options":["alpha","beta"]}`}
+	m.cfg.Agent.Verifier.Mode = "deterministic"
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Create choice.txt, but first ask whether it should contain alpha or beta.", nil))
+
+	if m.pendingAsk == nil || !m.overlayOpen {
+		t.Fatalf("contract clarification did not reach executor ask_user: pending=%+v overlay=%v", m.pendingAsk, m.overlayOpen)
+	}
+	if got := m.agentContractInputQuestion(); got != "" {
+		t.Fatalf("contract input question = %q, want executor-owned ask_user only", got)
+	}
+	if m.agentLoop.run.Stage != agent.StageExecutor || m.agentLoop.run.Cycle != 1 {
+		t.Fatalf("run = %+v, want executor cycle one paused on ask_user", m.agentLoop.run)
+	}
+
+	driveAgentCommands(t, m, m.answerAskUser("beta"))
+
+	if run := m.agentLoop.run; run.Status != agent.DecisionDone || run.Cycle != 1 {
+		t.Fatalf("run = %+v, want one-cycle completion", run)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests = %d, want contract + ask + write + completion", len(prov.requests))
 	}
 }
 
