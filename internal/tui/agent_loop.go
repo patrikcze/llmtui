@@ -92,6 +92,26 @@ type agentLoopState struct {
 	// silent loss. Bounded the same way (oldest dropped first) so it cannot
 	// grow with run length.
 	evictedResourceKeys []string
+	// contractAssistance is the Phase 4 measured-assistance shadow tracker
+	// for the task-contract control stage: content-free counters of
+	// attributable control-format failures versus successes, scoped to the
+	// session (persists across runs so a per-run "one contract call" stage
+	// can still accumulate a pattern) and reset whenever the selected model
+	// changes (see contractAssistanceModel). contractAssistanceActive
+	// mirrors whether the most recent agent.ChooseAssistance call
+	// recommended a hint, so the next call can apply the success-window
+	// hysteresis. Neither field currently changes any request — see
+	// agent.Assistance's doc comment; both exist purely for /debug
+	// observability ahead of a measured "auto" rollout.
+	contractAssistance       agent.BehaviorStats
+	contractAssistanceActive bool
+	// contractAssistanceModel is the model identity contractAssistance was
+	// last measured against. recordContractAssistanceOutcome resets the
+	// counters whenever the live selected model no longer matches this,
+	// rather than hooking every one of the several sites that can change
+	// m.model (profile load, /model, config reload, demo mode) — see §8:
+	// "Switching model ... resets incompatible measurements."
+	contractAssistanceModel string
 }
 
 // maxEvictedResourceKeys bounds evictedResourceKeys the same way
@@ -470,6 +490,13 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.liveToolCalls = 0
 	m.agentLoop.observations = agent.NewObservationCache()
 	m.agentLoop.evictedResourceKeys = nil
+	// contractAssistance is deliberately NOT reset here: it is a
+	// session-lifetime measurement (see its doc comment), not a per-run one
+	// — a threshold of "two consecutive format failures" could otherwise
+	// never accumulate evidence across the many runs a single
+	// contract-per-run stage produces. recordContractAssistanceOutcome
+	// itself resets it whenever it observes m.model has changed since the
+	// last recorded attempt.
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(id))
@@ -515,12 +542,77 @@ func (m *Model) startAgentContract() tea.Cmd {
 	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(runID))
 	m.syncAgentDebug()
 	m.refreshViewport()
+	capabilities := m.contractCapabilityCapsule()
 	return func() tea.Msg {
 		out, err := agentverify.EstablishContract(ctx, m.prov, agentverify.Config{
 			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
-		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput})
+		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput, Capabilities: capabilities})
 		return agentContractMsg{runID: runID, gen: gen, out: out, err: err}
 	}
+}
+
+// contractCapabilityCapsule derives the small, closed-vocabulary capability
+// capsule passed to EstablishContract (see agentverify.CapabilityCapsule's
+// doc comment). It is built from the same eligible-tool catalog the rest of
+// the tool pipeline uses, but reduced to category labels only — never a raw
+// tool name, schema, or MCP/skill-provided description, which could carry
+// untrusted instructions into a stage that has no approval gate.
+func (m *Model) contractCapabilityCapsule() agentverify.CapabilityCapsule {
+	eligibleNames := make(map[string]bool)
+	for _, spec := range m.eligibleToolSpecs() {
+		eligibleNames[spec.Name] = true
+	}
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if eligibleNames[name] {
+				return true
+			}
+		}
+		return false
+	}
+	category := func(available bool, label string, capsule *agentverify.CapabilityCapsule) {
+		if available {
+			capsule.Available = append(capsule.Available, label)
+		} else {
+			capsule.Unavailable = append(capsule.Unavailable, label)
+		}
+	}
+	capsule := agentverify.CapabilityCapsule{WorkspaceAccess: m.toolsOn && m.toolRunner != nil}
+	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob), "read_files", &capsule)
+	category(has(tools.ToolWriteFile, tools.ToolEditFile), "write_files", &capsule)
+	category(has(tools.ToolRunCommand), "run_commands", &capsule)
+	category(has(tools.ToolWebSearch, tools.ToolWebFetch), "web_access", &capsule)
+	category(m.mcpRegistry != nil && len(mcpToolSpecs(m.mcpRegistry)) > 0, "mcp_tools", &capsule)
+	if has(tools.ToolAskUser) {
+		capsule.Available = append(capsule.Available, "ask_user")
+	}
+	return capsule
+}
+
+// recordContractAssistanceOutcome updates the Phase 4 shadow behavior stats
+// (see agentLoopState.contractAssistance's doc comment) for one completed
+// task-contract request and recomputes the current Assistance
+// recommendation into m.lastDebug for `/debug last`. Only an attributable
+// control-format failure (the contract parked after exhausting its own
+// internal malformed-JSON repair) counts as a format failure; every other
+// outcome — including a genuine success — counts as a success, so a
+// permission/timeout/budget failure never inflates the format-failure
+// streak. This never changes a request; see the field's doc comment.
+func (m *Model) recordContractAssistanceOutcome(err error) {
+	if m.agentLoop == nil {
+		return
+	}
+	if m.agentLoop.contractAssistanceModel != m.model {
+		m.agentLoop.contractAssistance = agent.BehaviorStats{}
+		m.agentLoop.contractAssistanceActive = false
+		m.agentLoop.contractAssistanceModel = m.model
+	}
+	formatFailure := err != nil && errors.Is(err, agent.ErrMalformedControl)
+	m.agentLoop.contractAssistance.RecordControlAttempt(formatFailure)
+	assistance := agent.ChooseAssistance(m.agentLoop.contractAssistance, m.agentLoop.contractAssistanceActive)
+	m.agentLoop.contractAssistanceActive = assistance.Hint
+	m.lastDebug.AssistanceHint = assistance.Hint
+	m.lastDebug.AssistanceReason = string(assistance.Reason)
 }
 
 func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
@@ -542,6 +634,7 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 	if raw := strings.TrimSpace(msg.out.Raw); raw != "" {
 		m.lastDebug.AgentContractRaw = truncateAgentText(raw, 2048)
 	}
+	m.recordContractAssistanceOutcome(msg.err)
 	if msg.err != nil {
 		var runErr agent.RunError
 		if !errors.As(msg.err, &runErr) {

@@ -867,6 +867,9 @@ func (m *Model) debugOverlay() string {
 	if d.AgentContractRaw != "" {
 		m.kv(&b, "contract raw", terminaltext.Sanitize(normalizeWhitespace(d.AgentContractRaw)))
 	}
+	if d.AssistanceReason != "" {
+		m.kv(&b, "assistance (shadow)", fmt.Sprintf("hint=%v reason=%s", d.AssistanceHint, d.AssistanceReason))
+	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
 		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")

@@ -316,6 +316,52 @@ func TestVerifierRequestsStructuredOutputWhenSupported(t *testing.T) {
 	}
 }
 
+// modelCapabilityClient is a minimal fake whose reported capability depends
+// on the selected model, like the embedded runtime or a per-model config
+// override — recordingClient's fixed caps field cannot express this.
+type modelCapabilityClient struct {
+	recordingClient
+	perModel map[string]provider.Capabilities
+}
+
+func (c *modelCapabilityClient) CapabilitiesFor(model string) provider.Capabilities {
+	return c.perModel[model]
+}
+
+// TestVerifierUsesSelectedModelCapabilitiesNotProviderWide is the Phase 4
+// fix for finding #6 in .claude/tasks/plans/llmtui-agent-evolution.md §4:
+// the verifier previously admitted structured output using only the
+// provider-wide Capabilities() report, ignoring a client that resolves
+// support per selected model. A provider-wide "supported" default must not
+// leak a constraint to a model the client reports as unsupported, and vice
+// versa.
+func TestVerifierUsesSelectedModelCapabilitiesNotProviderWide(t *testing.T) {
+	client := &modelCapabilityClient{
+		recordingClient: recordingClient{
+			reply: validReply("passed"),
+			caps:  provider.Capabilities{StructuredOutput: provider.CapabilitySupported}, // provider-wide default: supported
+		},
+		perModel: map[string]provider.Capabilities{
+			"weak-model":   {StructuredOutput: provider.CapabilityUnsupported}, // this model: not supported
+			"strong-model": {StructuredOutput: provider.CapabilitySupported},
+		},
+	}
+	if _, err := Verify(context.Background(), client, Config{Model: "weak-model", Timeout: time.Second}, Input{}); err != nil {
+		t.Fatal(err)
+	}
+	if constraint := client.requests[0].ResponseConstraint; constraint != nil {
+		t.Fatalf("weak-model constraint = %+v, want none: the selected model reports no structured-output support despite the provider-wide default", constraint)
+	}
+
+	client.requests = nil
+	if _, err := Verify(context.Background(), client, Config{Model: "strong-model", Timeout: time.Second}, Input{}); err != nil {
+		t.Fatal(err)
+	}
+	if constraint := client.requests[0].ResponseConstraint; constraint == nil {
+		t.Fatal("strong-model constraint = nil, want a response constraint for a model that reports support")
+	}
+}
+
 // TestVerifierRetriesUnconstrainedOnProviderRejection guards against a
 // backend that self-reports StructuredOutput support but actually rejects
 // response_format as a request error (not malformed control JSON) — the

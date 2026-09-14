@@ -72,6 +72,13 @@ type debugInfo struct {
 	// task-contract request, kept so a contract park is diagnosable in
 	// `/debug last` rather than only showing an opaque error string.
 	AgentContractRaw string
+	// AssistanceHint and AssistanceReason are the Phase 4 measured-assistance
+	// shadow tracker's current recommendation for the task-contract stage
+	// (see agentLoopState.contractAssistance) — diagnostic only; neither
+	// currently changes any request. AssistanceReason is one of
+	// agent.AssistanceReason's fixed values.
+	AssistanceHint   bool
+	AssistanceReason string
 	// PersonalAppsResult is the bounded, already-sanitized Output of the most
 	// recent personal_apps tool call — the exact JSON (outcomes, codes,
 	// detail messages) the model itself received. A live investigation found

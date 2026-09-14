@@ -136,8 +136,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		Stream:      false,
 		Reasoning:   verifierReasoning(cfg.Model),
 	}
-	if reporter, ok := client.(interface{ Capabilities() provider.Capabilities }); ok &&
-		reporter.Capabilities().StructuredOutput == provider.CapabilitySupported {
+	if resolveCapabilities(client, cfg.Model).StructuredOutput == provider.CapabilitySupported {
 		req.ResponseConstraint = &provider.ResponseConstraint{
 			Name: "llmtui_verification", Grammar: jsonGBNF, GrammarRoot: "root",
 			JSONSchema: json.RawMessage(verifierJSONSchema), Strict: true,
@@ -176,6 +175,26 @@ func verifierReasoning(model string) string {
 		return "low"
 	}
 	return "off"
+}
+
+// resolveCapabilities mirrors provider.CapabilitiesFor's selected-model
+// resolution (prefer a model-specific report, then a provider-wide one, then
+// conservative defaults) without requiring the full provider.Provider
+// interface, so this package's minimal Client works with any client
+// implementing either capability-reporting interface — real providers and
+// test fakes alike. Previously both call sites checked only the
+// provider-wide Capabilities(), so a backend whose real capability depends
+// on the selected model (the embedded runtime, or a per-model override) was
+// judged by the wrong report — see finding #6 in
+// .claude/tasks/plans/llmtui-agent-evolution.md §4.
+func resolveCapabilities(client Client, model string) provider.Capabilities {
+	if reporter, ok := client.(provider.ModelCapabilityReporter); ok {
+		return reporter.CapabilitiesFor(model)
+	}
+	if reporter, ok := client.(provider.CapabilityReporter); ok {
+		return reporter.Capabilities()
+	}
+	return provider.DefaultCapabilities()
 }
 
 // isProviderRejection reports whether err is a request-level provider

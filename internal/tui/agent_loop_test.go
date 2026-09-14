@@ -254,6 +254,34 @@ func TestVerifiedAgentPinsTaskContractBeforeExecutor(t *testing.T) {
 	}
 }
 
+// TestVerifiedAgentContractCarriesCapabilityCapsule is the Phase 4 test for
+// the small capability capsule added to contract input: with tools enabled,
+// the contract request's payload must report read_files as available (and,
+// with no MCP servers connected, mcp_tools as unavailable) so contracting
+// can tell "achievable via a read" apart from "genuinely needs the user".
+func TestVerifiedAgentContractCarriesCapabilityCapsule(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "Completed the requested task."},
+		agentScriptStep{text: verifierJSON("passed", "contract satisfied", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("complete the requested task", nil))
+
+	contractPayload := prov.requests[0].Messages[1].Content
+	if !strings.Contains(contractPayload, `"workspace_access":true`) {
+		t.Fatalf("contract payload missing workspace_access: %s", contractPayload)
+	}
+	if !strings.Contains(contractPayload, `"available":["read_files","write_files","run_commands"`) {
+		t.Fatalf("contract payload missing expected available categories: %s", contractPayload)
+	}
+	if !strings.Contains(contractPayload, `"unavailable":["web_access","mcp_tools"]`) {
+		t.Fatalf("contract payload missing expected unavailable categories: %s", contractPayload)
+	}
+}
+
 func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
 	m := newTestModel(t)
 	prov := &scriptedAgentProvider{contractReplies: []string{"not JSON", "still not JSON"}}
@@ -277,6 +305,55 @@ func TestVerifiedAgentMalformedContractParksBeforeExecutor(t *testing.T) {
 		if len(req.Tools) != 0 {
 			t.Fatalf("contract request exposed tools: %+v", req.Tools)
 		}
+	}
+}
+
+// TestContractAssistanceShadowTrackerActivatesAndResetsOnModelSwitch is the
+// Phase 4 test for the measured-assistance shadow tracker: it must
+// accumulate evidence across runs on the same model (a per-run reset would
+// never let a threshold of 2 accumulate, since each run makes one contract
+// call), recommend a hint only once the threshold is reached, and reset
+// when the selected model changes — all without altering the fixed contract
+// prompt or request shape (shadow only, per agent.Assistance's doc
+// comment).
+func TestContractAssistanceShadowTrackerActivatesAndResetsOnModelSwitch(t *testing.T) {
+	m := newTestModel(t)
+	prov := &scriptedAgentProvider{}
+	m.prov = prov
+	m.model = "flaky-model"
+	m.agentOn = true
+	m.cfg.Agent.Verifier.Timeout = "1s"
+	m.cfg.Agent.Verifier.MaxTokens = 256
+	m.cfg.Agent.Persist = false
+	m.agentLoop.store = nil
+
+	prov.contractReplies = []string{"not JSON", "still not JSON"}
+	driveAgentCommands(t, m, m.startVerifiedRun("first bounded task", nil))
+	if m.agentLoop.run.Status != agent.DecisionParked {
+		t.Fatalf("run 1 status = %s, want parked", m.agentLoop.run.Status)
+	}
+	if m.lastDebug.AssistanceHint {
+		t.Fatalf("assistance hint after one format failure = true, want false (below threshold): %+v", m.lastDebug)
+	}
+
+	prov.contractReplies = []string{"not JSON again", "still not JSON"}
+	driveAgentCommands(t, m, m.startVerifiedRun("second bounded task", nil))
+	if m.agentLoop.run.Status != agent.DecisionParked {
+		t.Fatalf("run 2 status = %s, want parked", m.agentLoop.run.Status)
+	}
+	if !m.lastDebug.AssistanceHint || m.lastDebug.AssistanceReason != string(agent.AssistanceFormatHint) {
+		t.Fatalf("assistance after two consecutive format failures = %+v, want an active hint", m.lastDebug)
+	}
+	contractPrompt := prov.requests[len(prov.requests)-2].Messages[0].Content
+	if !strings.Contains(contractPrompt, "You establish a task contract before an agent may execute. Return only a small, stable decomposition") {
+		t.Fatalf("shadow tracking altered the contract prompt: %s", contractPrompt)
+	}
+
+	m.model = "different-model"
+	prov.contractReplies = []string{`{"criteria":["ok"],"needs_user_input":false,"question":"","user_options":[]}`}
+	driveAgentCommands(t, m, m.startVerifiedRun("third bounded task on a different model", nil))
+	if m.lastDebug.AssistanceHint {
+		t.Fatalf("assistance hint after switching models = true, want the switch to reset accumulated evidence: %+v", m.lastDebug)
 	}
 }
 
