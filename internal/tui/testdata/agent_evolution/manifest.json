@@ -17,11 +17,6 @@
       "limitation": "A visible pseudo-tool envelope is diagnosed but does not become an executable call."
     },
     {
-      "id": "context/projected_observation",
-      "kind": "characterization",
-      "limitation": "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle."
-    },
-    {
       "id": "operation/started_outcome_unknown",
       "kind": "safety",
       "limitation": "An interrupted durable side effect remains unknown and must not be replayed automatically."

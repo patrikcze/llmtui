@@ -460,11 +460,14 @@ func TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence(t *testing.T) {
 	}
 }
 
-// TestAgentEvolutionCompletedObservationProjectionCharacterization records
-// that the current cross-cycle projection removes raw tool output. This is an
-// intentional context bound today; Phase 3 will add a referenceable view for
-// observations needed by later work.
-func TestAgentEvolutionCompletedObservationProjectionCharacterization(t *testing.T) {
+// TestProjectCompletedAgentHistoryRemovesRawToolOutput guards the raw
+// transcript-projection half of the fix Phase 3 completed: the projected
+// history itself must still never carry a completed cycle's raw tool
+// output — only the bounded, labeled internal/agent.ObservationCache excerpt
+// surfaced via agentDirective is allowed to preserve a fact from it across
+// cycles now (see TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle
+// and TestAgentDirectiveReportsEvictedObservations for that channel).
+func TestProjectCompletedAgentHistoryRemovesRawToolOutput(t *testing.T) {
 	const heading = "UNIQUE_Q3_HEADING"
 	projected := projectCompletedAgentHistory([]provider.Message{
 		{Role: provider.RoleUser, Content: "Read report.md."},
@@ -477,14 +480,6 @@ func TestAgentEvolutionCompletedObservationProjectionCharacterization(t *testing
 			t.Fatalf("projected history retained raw observation: %+v", projected)
 		}
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "context/projected_observation",
-		Verdict:    "observation_projected_away",
-		Executed:   []string{tools.ToolReadFile},
-		Requests:   0,
-		Tokens:     0,
-		Limitation: "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle.",
-	})
 }
 
 // TestVerifiedAgentContractParkRecordsRawOutput proves a genuine contract
@@ -910,8 +905,18 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 	if hasToolMessage || hasToolCallMessage {
 		t.Fatalf("cycle 2 request still carries cycle 1's raw tool exchange: %+v", cycle2Request.Messages)
 	}
-	if strings.Contains(got.String(), "cycle-one-marker.txt") {
-		t.Fatalf("cycle 2 request leaked cycle 1's raw tool result content:\n%s", got.String())
+	// Cycle 1's raw tool-call/tool-result transcript is gone (asserted
+	// above), but Phase 3's retained-observation cache still surfaces a
+	// small, explicitly labeled excerpt of what list_dir actually returned,
+	// so cycle 2 need not reread it to recall this fact. This is a bounded,
+	// deliberate exception to "no raw tool content across cycles" — it must
+	// appear only inside the labeled "Retained observations" line, never as
+	// a second, unlabeled copy elsewhere in the request.
+	if !strings.Contains(got.String(), "Retained observations") {
+		t.Fatalf("cycle 2 request lost the retained-observations section:\n%s", got.String())
+	}
+	if n := strings.Count(got.String(), "cycle-one-marker.txt"); n != 1 {
+		t.Fatalf("cycle-one-marker.txt appeared %d times in cycle 2's request, want exactly one (the labeled retained observation):\n%s", n, got.String())
 	}
 	// agentContinueDirective is expected here: it's cycle 2's OWN triggering
 	// message (startNextAgentCycle dispatches it to begin cycle 2), not
@@ -929,6 +934,87 @@ func TestVerifiedAgentProjectsCompletedCycleToolTrafficNotCurrentCycle(t *testin
 	// re-hitting an already-failed one across consecutive cycles).
 	if !strings.Contains(got.String(), "tried: "+tools.ToolListDir+" succeeded") {
 		t.Fatalf("cycle 2 request lost the prior cycle's tool-call recap:\n%s", got.String())
+	}
+}
+
+// TestAgentDirectiveExcludesWebAndMCPObservations proves the Phase 3
+// retained-observation cache is scoped to workspace-local read tools only:
+// web_fetch and MCP results already carry an untrusted.Frame wrapper baked
+// into their Output (see internal/tools/web.go and mcp_tools.go), and
+// truncating that framed string to a bounded excerpt could cut through its
+// closing marker, so neither is ever cached.
+func TestAgentDirectiveExcludesWebAndMCPObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run := newAgentVerificationTestRun(t, m, "inspect a page", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "fetch-1", Tool: tools.ToolWebFetch, Path: "https://example.com"}, Output: "WEB_MARKER content"},
+		{Call: tools.Call{ID: "mcp-1", Tool: "mcp__srv__read", MCPServer: "srv", MCPTool: "read"}, Output: "MCP_MARKER content"},
+	}, false, uniformActionStatuses(2, agent.ActionExecuted))
+	_ = run
+
+	directive := m.agentDirective()
+	if strings.Contains(directive, "WEB_MARKER") || strings.Contains(directive, "MCP_MARKER") {
+		t.Fatalf("directive retained a web/MCP observation: %s", directive)
+	}
+}
+
+// TestAgentDirectiveExcludesLocalContextObservations proves volatile
+// local_context results (time, clipboard, etc.) are never retained as a
+// durable cross-cycle fact — matching the same exclusion progressLedger
+// already applies to local_context (see progress.go's planBatch).
+func TestAgentDirectiveExcludesLocalContextObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "what time is it", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "time-1", Tool: tools.ToolLocalContext, ContextKind: "time"}, Output: "VOLATILE_TIME_MARKER"},
+	}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	directive := m.agentDirective()
+	if strings.Contains(directive, "VOLATILE_TIME_MARKER") {
+		t.Fatalf("directive retained a volatile local_context observation: %s", directive)
+	}
+}
+
+// TestAgentDirectiveDoesNotRetainFailedReads proves a failed or denied read
+// never becomes a retained observation — only a genuine successful
+// execution is a fact worth recalling.
+func TestAgentDirectiveDoesNotRetainFailedReads(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "read a missing file", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.recordAgentToolResultsCount([]tools.Result{
+		{Call: tools.Call{ID: "read-1", Tool: tools.ToolReadFile, Path: "missing.md"}, Err: errors.New("not found")},
+	}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if _, ok := m.agentLoop.observations.Latest("read_file\x1fmissing.md"); ok {
+		t.Fatal("a failed read must not be retained as an observation")
+	}
+}
+
+// TestAgentDirectiveReportsEvictedObservations proves the Phase 3 omission
+// manifest: once the bounded observation cache overflows, agentDirective
+// names the dropped resource explicitly rather than silently losing it —
+// so a model can tell "never read" apart from "read, but no longer
+// retained; reread if you still need it."
+func TestAgentDirectiveReportsEvictedObservations(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	newAgentVerificationTestRun(t, m, "inspect many files", nil, agent.ExecutionResult{})
+	m.agentLoop.observations = agent.NewObservationCache()
+	for i := 0; i < agent.MaxObservations+1; i++ {
+		path := fmt.Sprintf("file-%02d.txt", i)
+		m.recordAgentToolResultsCount([]tools.Result{
+			{Call: tools.Call{ID: fmt.Sprintf("read-%d", i), Tool: tools.ToolReadFile, Path: path}, Output: "content"},
+		}, false, uniformActionStatuses(1, agent.ActionExecuted))
+	}
+
+	directive := m.agentDirective()
+	if !strings.Contains(directive, "no longer retained") {
+		t.Fatalf("directive did not report an omission after cache overflow:\n%s", directive)
+	}
+	if !strings.Contains(directive, "read_file(file-00.txt)") {
+		t.Fatalf("directive did not name the specific evicted resource:\n%s", directive)
 	}
 }
 

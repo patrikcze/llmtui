@@ -78,6 +78,42 @@ type agentLoopState struct {
 	// same run-level ceiling agent.Decide would eventually enforce at a
 	// cycle boundary — without waiting for that boundary to be reached.
 	liveToolCalls int
+	// observations is a bounded, process-local cache of what workspace-local
+	// read tools actually returned, so a later cycle can recall a fact
+	// projectCompletedAgentHistory already stripped from the raw transcript
+	// without rereading it. Never persisted — see agent.ObservationCache's
+	// doc comment. Reset per run in startVerifiedRun; nil is a safe,
+	// functionally empty default (every method on a nil *ObservationCache is
+	// a no-op), so code before a run starts need not nil-check it.
+	observations *agent.ObservationCache
+	// evictedResourceKeys names resources whose retained observation was
+	// dropped from the bounded cache to make room for a newer one — the
+	// omission manifest: an explicit "this became unavailable", not a
+	// silent loss. Bounded the same way (oldest dropped first) so it cannot
+	// grow with run length.
+	evictedResourceKeys []string
+}
+
+// maxEvictedResourceKeys bounds evictedResourceKeys the same way
+// agent.MaxObservations bounds the cache it tracks evictions from.
+const maxEvictedResourceKeys = agent.MaxObservations
+
+// recordEvictedObservation appends a newly evicted resource key to the
+// run's omission manifest, dropping the oldest entry once full and never
+// duplicating a key that's already recorded.
+func (m *Model) recordEvictedObservation(resourceKey string) {
+	if m.agentLoop == nil || resourceKey == "" {
+		return
+	}
+	for _, existing := range m.agentLoop.evictedResourceKeys {
+		if existing == resourceKey {
+			return
+		}
+	}
+	m.agentLoop.evictedResourceKeys = append(m.agentLoop.evictedResourceKeys, resourceKey)
+	if len(m.agentLoop.evictedResourceKeys) > maxEvictedResourceKeys {
+		m.agentLoop.evictedResourceKeys = m.agentLoop.evictedResourceKeys[1:]
+	}
 }
 
 type agentVerificationMsg struct {
@@ -432,6 +468,8 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.initialImages = append([]provider.Image(nil), images...)
 	m.resetAgentContext()
 	m.agentLoop.liveToolCalls = 0
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.agentLoop.evictedResourceKeys = nil
 	m.agentLoop.persistErr = nil
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · establishing task contract", shortRunID(id))
@@ -714,8 +752,24 @@ func (m *Model) agentDirective() string {
 			}
 		}
 	}
+	if recent := m.agentLoop.observations.Recent(maxDirectiveObservations); len(recent) > 0 {
+		b.WriteString("Retained observations from earlier reads this run (already available — do not reread solely to recover these):\n")
+		for _, view := range recent {
+			fmt.Fprintf(&b, "- %s\n", view.FormatExcerpt())
+		}
+	}
+	if len(m.agentLoop.evictedResourceKeys) > 0 {
+		fmt.Fprintf(&b, "Observations no longer retained (dropped from the bounded cache — reread if still needed): %s\n",
+			strings.Join(m.agentLoop.evictedResourceKeys, ", "))
+	}
 	return truncateAgentText(b.String(), maxAgentDirectiveBytes)
 }
+
+// maxDirectiveObservations bounds how many retained observations
+// agentDirective surfaces per request, independent of agent.MaxObservations
+// (the cache's own, larger retention bound) — the directive is a small
+// working-context excerpt, not a dump of everything still cached.
+const maxDirectiveObservations = 4
 
 func (m *Model) agentContextSources() []string {
 	sources := []string{"system_prompt", "current_user_request", "conversation_history", "provider_capabilities"}
@@ -1148,6 +1202,27 @@ func (m *Model) recordAgentTruncation() {
 	m.agentLoop.execution.NewEvidence = true
 }
 
+// isObservableReadTool reports whether a tool's successful Output is safe to
+// retain verbatim (bounded) in agent.ObservationCache for cross-cycle recall
+// via agentDirective. Scoped to workspace-local read tools whose results
+// already flow into the ordinary tool-result transcript unframed — the same
+// trust boundary this package already applies to them (see
+// internal/tools/web.go and mcp_tools.go, which wrap web/MCP/personal-apps
+// output in untrusted.Frame precisely because it is not workspace-local).
+// Excluding those here avoids re-embedding a framed string as a bounded
+// excerpt, which could truncate through its closing marker. Mutating tools
+// (write_file, edit_file) are excluded too: their evidence is already
+// captured via ChangedFiles, and an observation cache exists to avoid
+// rereading, not to double up on write evidence.
+func isObservableReadTool(tool string) bool {
+	switch tool {
+	case tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob, tools.ToolRunCommand:
+		return true
+	default:
+		return false
+	}
+}
+
 // toolCallDetail extracts the one argument most useful for recognizing
 // "I already tried this exact thing" across agent cycles — a URL, file
 // path, or search pattern. Deliberately narrow: unlike those, a
@@ -1257,6 +1332,16 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 				Name: truncateAgentText(strings.TrimSpace(result.Call.Body), 256), Passed: result.Err == nil,
 				Summary: map[bool]string{true: "command passed", false: "command failed"}[result.Err == nil],
 			})
+		}
+		if status == agent.ActionExecuted && result.Err == nil && isObservableReadTool(result.Call.Tool) && strings.TrimSpace(result.Output) != "" {
+			cycle := 1
+			if m.agentLoop.run != nil {
+				cycle = m.agentLoop.run.Cycle
+			}
+			_, evictedView, evicted := m.agentLoop.observations.Put(result.Call.Tool, detail, cycle, result.Output, true)
+			if evicted {
+				m.recordEvictedObservation(evictedView.ResourceLabel())
+			}
 		}
 	}
 	m.agentLoop.liveToolCalls += budgetCount
@@ -1501,6 +1586,12 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
+	// A resumed run's observation cache starts empty: retained excerpts are
+	// process-local and never persisted, so there is nothing to restore, and
+	// starting empty is always the safe default (see agent.ObservationCache's
+	// doc comment).
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.agentLoop.evictedResourceKeys = nil
 	m.agentOn = true
 	if !msg.run.HasCriteria() {
 		return m, tea.Batch(m.persistAgentRun(), m.startAgentContract())
