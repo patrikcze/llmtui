@@ -236,6 +236,30 @@ func TestVerifierNewEvidenceClaimClampedToMechanicalRecord(t *testing.T) {
 	}
 }
 
+// TestTestCriterionHasNoFreshnessRelationToChangedFiles is a Phase 0
+// characterization fixture. The current state model can record that a test
+// passed and that a file changed, but has no ordering or dependency relation
+// to invalidate the test when the file changes later.
+func TestTestCriterionHasNoFreshnessRelationToChangedFiles(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "go test passes",
+		Kind:   CriterionTestResult,
+		Target: "go test ./...",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
+		ChangedFiles: []string{"main.go"},
+	}, 1)
+
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("criterion = %+v, want current test-result satisfaction", run.Criteria[0])
+	}
+	if run.Criteria[0].Target != "go test ./..." {
+		t.Fatalf("criterion target = %q", run.Criteria[0].Target)
+	}
+}
+
 func TestEvaluateDeterministic(t *testing.T) {
 	cases := []struct {
 		name       string

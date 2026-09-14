@@ -42,6 +42,36 @@ func TestOperationLogRecoversStartedAndCompletedCalls(t *testing.T) {
 	}
 }
 
+// TestStartedOperationOutcomeRemainsUnknownAfterRecovery documents the
+// boundary a future receipt model must preserve: a journalled intent without
+// completion proves neither that the side effect ran nor that it did not.
+func TestStartedOperationOutcomeRemainsUnknownAfterRecovery(t *testing.T) {
+	dir := t.TempDir()
+	call := tools.Call{ID: "unknown-outcome", Tool: tools.ToolRunCommand, Body: "send once"}
+	log, err := OpenOperationLog(dir, "session-unknown-outcome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision, err := log.Begin(call); err != nil || decision.State != OperationNew {
+		t.Fatalf("begin = %+v, %v", decision, err)
+	}
+
+	recovered, err := OpenOperationLog(dir, "session-unknown-outcome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := recovered.Begin(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.State != OperationStarted {
+		t.Fatalf("recovered state = %v, want started/unknown", decision.State)
+	}
+	if decision.Succeeded {
+		t.Fatal("started operation must not be reported as successful")
+	}
+}
+
 func TestOperationLogDoesNotPersistSensitiveCallContent(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenOperationLog(dir, "session-secret-test")

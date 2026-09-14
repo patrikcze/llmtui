@@ -44,6 +44,26 @@ func TestPruneRecoveredToolErrorsKeepsUnrecoveredAndNonToolErrors(t *testing.T) 
 	}
 }
 
+// TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName is a Phase 0
+// characterization fixture. A failed read of one path is treated as
+// recovered by a later successful read of another path because the current
+// recovery key is only the tool name. Phase 1 must change this expectation.
+func TestRecoveredToolErrorsCurrentlyMatchOnlyByToolName(t *testing.T) {
+	exec := ExecutionResult{
+		ToolCalls: []ToolCallRecord{
+			{Name: "read_file", Detail: "missing.md", Succeeded: false, ErrorKind: ErrorToolExecution},
+			{Name: "read_file", Detail: "other.md", Succeeded: true},
+		},
+		Errors: []RunError{{Kind: ErrorToolExecution, Op: "read_file", Message: "read missing.md: not found"}},
+	}
+
+	PruneRecoveredToolErrors(&exec)
+
+	if len(exec.Errors) != 0 {
+		t.Fatalf("errors = %+v, want current tool-name-only recovery to prune the failed read", exec.Errors)
+	}
+}
+
 func TestMechanicallyCompleteIgnoresRecoveredFailure(t *testing.T) {
 	recovered := ExecutionResult{
 		Summary: "asked and wrote",

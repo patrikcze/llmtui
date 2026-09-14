@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "contract/ambiguous_reference",
+      "kind": "live_evaluation",
+      "limitation": "The real endpoint result is model-specific and reported only when explicitly configured."
+    },
+    {
+      "id": "contract/named_missing_file",
+      "kind": "live_evaluation",
+      "limitation": "The real endpoint result is model-specific and reported only when explicitly configured."
+    },
+    {
+      "id": "contract/omitted_deliverable",
+      "kind": "characterization",
+      "limitation": "A contract that names only an atomic read can complete a multi-part request without producing the omitted artifact."
+    },
+    {
+      "id": "progress/synthetic_new_evidence",
+      "kind": "characterization",
+      "limitation": "A synthetic blocked result currently sets the cycle NewEvidence flag although no call executed."
+    },
+    {
+      "id": "output/pseudo_tool_call",
+      "kind": "characterization",
+      "limitation": "A visible pseudo-tool envelope is diagnosed but does not become an executable call."
+    },
+    {
+      "id": "context/projected_observation",
+      "kind": "characterization",
+      "limitation": "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle."
+    },
+    {
+      "id": "recovery/unrelated_same_tool",
+      "kind": "characterization",
+      "limitation": "Recovery currently matches a later success by tool name rather than the failed resource or invocation."
+    },
+    {
+      "id": "verification/stale_check_after_edit",
+      "kind": "characterization",
+      "limitation": "A passing test result has no dependency or freshness relation to a later changed file."
+    },
+    {
+      "id": "operation/started_outcome_unknown",
+      "kind": "safety",
+      "limitation": "An interrupted durable side effect remains unknown and must not be replayed automatically."
+    }
+  ]
+}

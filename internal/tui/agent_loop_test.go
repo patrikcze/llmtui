@@ -20,10 +20,11 @@ import (
 )
 
 type agentScriptStep struct {
-	text      string
-	toolCalls []provider.ToolCall
-	err       error
-	truncated bool
+	text                string
+	toolCalls           []provider.ToolCall
+	toolCallDiagnostics []provider.ToolCallDiagnostic
+	err                 error
+	truncated           bool
 }
 
 type scriptedAgentProvider struct {
@@ -76,7 +77,7 @@ func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatReque
 	if step.text != "" {
 		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: step.text}
 	}
-	events <- provider.ChatEvent{Type: provider.EventDone, ToolCalls: step.toolCalls, Truncated: step.truncated, Usage: &provider.Usage{
+	events <- provider.ChatEvent{Type: provider.EventDone, ToolCalls: step.toolCalls, ToolCallDiagnostics: step.toolCallDiagnostics, Truncated: step.truncated, Usage: &provider.Usage{
 		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
 	}}
 	close(events)
@@ -364,6 +365,107 @@ func TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay(t *testing.T)
 	if len(prov.requests) != 3 {
 		t.Fatalf("requests = %d, want contract plus executor/tool continuation and no semantic replay", len(prov.requests))
 	}
+}
+
+// TestAgentEvolutionOmittedContractDeliverableCharacterization freezes a
+// Phase 0 limitation, not a desired completion policy. The contract names an
+// exact read despite a request that also requires a write. The current
+// controller can complete after the read because it has no way to represent
+// the omitted deliverable. Phase 2 must invert this expectation.
+func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-report", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
+		agentScriptStep{text: "The heading is Q3 report."},
+	)
+	prov.contractReplies = []string{`{"criteria":["Read the file report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/report.md", []byte("# Q3 report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read report.md and write its heading to result.txt.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone {
+		t.Fatalf("status = %q, want current completion after the lone contracted read", run.Status)
+	}
+	if _, err := os.Stat(root + "/result.txt"); !os.IsNotExist(err) {
+		t.Fatalf("result.txt = %v, want omitted artifact to remain absent", err)
+	}
+	reportEvolutionScenario(t, evolutionScenarioReport{
+		ID:         "contract/omitted_deliverable",
+		Verdict:    string(run.Status),
+		Executed:   []string{tools.ToolReadFile},
+		Requests:   len(prov.requests),
+		Tokens:     run.PromptTokens + run.CompletionTokens,
+		Limitation: "A contract that names only an atomic read can complete a multi-part request without producing the omitted artifact.",
+	})
+}
+
+// TestAgentEvolutionSyntheticNewEvidenceCharacterization records the current
+// disagreement between live tool-call accounting and the cycle-level progress
+// flag. The blocked result is intentionally synthetic: no call executed.
+func TestAgentEvolutionSyntheticNewEvidenceCharacterization(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("synthetic-evidence", "inspect report", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("inspect report", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.recordAgentToolResultsCount([]tools.Result{{
+		Call: tools.Call{ID: "blocked-read", Tool: tools.ToolReadFile, Path: "report.md"},
+		Err:  errors.New("repeated tool call blocked: no new evidence"),
+	}}, false, 0)
+
+	if m.agentLoop.liveToolCalls != 0 {
+		t.Fatalf("live tool calls = %d, want synthetic result to charge no execution", m.agentLoop.liveToolCalls)
+	}
+	if !m.agentLoop.execution.NewEvidence {
+		t.Fatal("NewEvidence = false, want current synthetic-result behavior captured")
+	}
+	reportEvolutionScenario(t, evolutionScenarioReport{
+		ID:         "progress/synthetic_new_evidence",
+		Verdict:    "new_evidence=true",
+		Executed:   []string{},
+		Requests:   0,
+		Tokens:     0,
+		Limitation: "A synthetic blocked result currently sets the cycle NewEvidence flag although no call executed.",
+	})
+}
+
+// TestAgentEvolutionCompletedObservationProjectionCharacterization records
+// that the current cross-cycle projection removes raw tool output. This is an
+// intentional context bound today; Phase 3 will add a referenceable view for
+// observations needed by later work.
+func TestAgentEvolutionCompletedObservationProjectionCharacterization(t *testing.T) {
+	const heading = "UNIQUE_Q3_HEADING"
+	projected := projectCompletedAgentHistory([]provider.Message{
+		{Role: provider.RoleUser, Content: "Read report.md."},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "read-report", Name: tools.ToolReadFile}}},
+		{Role: provider.RoleTool, ToolCallID: "read-report", ToolName: tools.ToolReadFile, Content: "# " + heading},
+		{Role: provider.RoleAssistant, Content: "I read the report."},
+	})
+	for _, message := range projected {
+		if strings.Contains(message.Content, heading) {
+			t.Fatalf("projected history retained raw observation: %+v", projected)
+		}
+	}
+	reportEvolutionScenario(t, evolutionScenarioReport{
+		ID:         "context/projected_observation",
+		Verdict:    "observation_projected_away",
+		Executed:   []string{tools.ToolReadFile},
+		Requests:   0,
+		Tokens:     0,
+		Limitation: "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle.",
+	})
 }
 
 // TestVerifiedAgentContractParkRecordsRawOutput proves a genuine contract
