@@ -791,8 +791,12 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// Criteria resolved from controller-observed evidence do not need a
 	// semantic verifier, regardless of verification mode. Sending a verifier
 	// that intentionally cannot see raw read_file output merely invites it to
-	// replay an already-proven atomic action.
-	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 {
+	// replay an already-proven atomic action. This shortcut is only safe when
+	// contract coverage is justified: a contract that pinned a single
+	// criterion for a request whose own text names an unaddressed mutating
+	// step (see agent.AgentRun.ContractCoverageJustified) may have omitted a
+	// deliverable, so that case still falls through to a real semantic pass.
+	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 && run.ContractCoverageJustified() {
 		return syntheticResult(agent.VerificationResult{
 			Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
 			Evidence: []string{"criteria ledger resolved"}, Confidence: 1,

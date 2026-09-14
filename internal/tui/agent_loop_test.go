@@ -367,15 +367,22 @@ func TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay(t *testing.T)
 	}
 }
 
-// TestAgentEvolutionOmittedContractDeliverableCharacterization freezes a
-// Phase 0 limitation, not a desired completion policy. The contract names an
-// exact read despite a request that also requires a write. The current
-// controller can complete after the read because it has no way to represent
-// the omitted deliverable. Phase 2 must invert this expectation.
-func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) {
+// TestAgentEvolutionContractCoverageGapForcesSemanticVerification is the
+// Phase 2 fix for a previously characterized gap (see git history for
+// TestAgentEvolutionOmittedContractDeliverableCharacterization): a contract
+// that pins only an exact-read criterion for a request whose own text also
+// names an unaddressed write no longer completes on the mechanical
+// all-resolved shortcut. A real semantic verifier pass catches the missing
+// artifact, drives a second cycle that produces it, and only then does the
+// run complete.
+func TestAgentEvolutionContractCoverageGapForcesSemanticVerification(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-report", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
 		agentScriptStep{text: "The heading is Q3 report."},
+		agentScriptStep{text: verifierJSON("failed", "result.txt was never written", "write the heading to result.txt", true, true)},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-result", Name: tools.ToolWriteFile, Arguments: `{"path":"result.txt","content":"Q3 report"}`}}},
+		agentScriptStep{text: "Wrote the heading to result.txt."},
+		agentScriptStep{text: verifierJSON("passed", "result.txt now contains the heading", "", false, false)},
 	)
 	prov.contractReplies = []string{`{"criteria":["Read the file report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
 	root := t.TempDir()
@@ -390,20 +397,34 @@ func TestAgentEvolutionOmittedContractDeliverableCharacterization(t *testing.T) 
 	driveAgentCommands(t, m, m.startVerifiedRun("Read report.md and write its heading to result.txt.", nil))
 
 	run := m.agentLoop.run
-	if run.Status != agent.DecisionDone {
-		t.Fatalf("status = %q, want current completion after the lone contracted read", run.Status)
+	if run.Status != agent.DecisionDone || run.Cycle != 2 {
+		t.Fatalf("run = %+v, want two-cycle completion after the write", run)
 	}
-	if _, err := os.Stat(root + "/result.txt"); !os.IsNotExist(err) {
-		t.Fatalf("result.txt = %v, want omitted artifact to remain absent", err)
+	if data, err := os.ReadFile(root + "/result.txt"); err != nil || string(data) != "Q3 report" {
+		t.Fatalf("result.txt = %q, %v, want the previously omitted artifact written", data, err)
 	}
-	reportEvolutionScenario(t, evolutionScenarioReport{
-		ID:         "contract/omitted_deliverable",
-		Verdict:    string(run.Status),
-		Executed:   []string{tools.ToolReadFile},
-		Requests:   len(prov.requests),
-		Tokens:     run.PromptTokens + run.CompletionTokens,
-		Limitation: "A contract that names only an atomic read can complete a multi-part request without producing the omitted artifact.",
-	})
+	if len(prov.requests) != 7 {
+		t.Fatalf("requests = %d, want contract + 2x(executor/tool-continuation/verifier) = 7", len(prov.requests))
+	}
+}
+
+// TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts
+// proves the Phase 2 coverage guard is narrowly scoped: a single pinned
+// criterion for a request that names no unaddressed mutating verb — even
+// one using "and" — still takes the mechanical shortcut, unchanged from
+// before. This is the same scenario as
+// TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay, asserted
+// here directly against agent.AgentRun.ContractCoverageJustified to pin the
+// guard's exact boundary.
+func TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts(t *testing.T) {
+	run, err := agent.NewRun("coverage-guard", "Read the file I mentioned and give me its heading.", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.PinTypedCriteria([]agent.CriterionSpec{{Text: "Read the file report.md", Kind: agent.CriterionSemantic}})
+	if !run.ContractCoverageJustified() {
+		t.Fatal("ContractCoverageJustified = false, want a non-mutating single criterion to still shortcut")
+	}
 }
 
 // TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence is the Phase 1 fix

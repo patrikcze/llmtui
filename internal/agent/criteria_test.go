@@ -236,11 +236,11 @@ func TestVerifierNewEvidenceClaimClampedToMechanicalRecord(t *testing.T) {
 	}
 }
 
-// TestTestCriterionHasNoFreshnessRelationToChangedFiles is a Phase 0
-// characterization fixture. The current state model can record that a test
-// passed and that a file changed, but has no ordering or dependency relation
-// to invalidate the test when the file changes later.
-func TestTestCriterionHasNoFreshnessRelationToChangedFiles(t *testing.T) {
+// TestTestCriterionSatisfiedByFreshSameCycleEvidence proves the Phase 2
+// freshness fix does not penalize the ordinary edit-then-verify sequence: a
+// test that passes in the same cycle as a file change is evidence about the
+// current workspace state, not stale evidence about an earlier one.
+func TestTestCriterionSatisfiedByFreshSameCycleEvidence(t *testing.T) {
 	run, _ := newTestRun(t, DefaultLimits())
 	run.PinTypedCriteria([]CriterionSpec{{
 		Text:   "go test passes",
@@ -253,10 +253,94 @@ func TestTestCriterionHasNoFreshnessRelationToChangedFiles(t *testing.T) {
 	}, 1)
 
 	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("criterion = %+v, want current test-result satisfaction", run.Criteria[0])
+		t.Fatalf("criterion = %+v, want same-cycle test-result satisfaction", run.Criteria[0])
 	}
 	if run.Criteria[0].Target != "go test ./..." {
 		t.Fatalf("criterion target = %q", run.Criteria[0].Target)
+	}
+}
+
+// TestTestCriterionGoesStaleAfterLaterCycleChangesAFile is the Phase 2 fix
+// for a previously characterized gap (see git history for
+// TestTestCriterionHasNoFreshnessRelationToChangedFiles): a test criterion
+// satisfied in one cycle no longer stays satisfied forever once a later
+// cycle changes a file — the prior proof is about a workspace version that
+// no longer exists.
+func TestTestCriterionGoesStaleAfterLaterCycleChangesAFile(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "go test passes",
+		Kind:   CriterionTestResult,
+		Target: "go test ./...",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		TestsRun: []TestResult{{Name: "go test ./...", Passed: true}},
+	}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("cycle 1 criterion = %+v, want satisfied", run.Criteria[0])
+	}
+
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ChangedFiles: []string{"main.go"},
+	}, 2)
+
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("cycle 2 criterion = %+v, want stale (pending) after the later edit", run.Criteria[0])
+	}
+	if run.Criteria[0].Note == "" {
+		t.Fatal("stale criterion note = \"\", want an explicit invalidation reason")
+	}
+}
+
+// TestTestCriterionReSatisfiedWhenLaterCycleAlsoReruns proves invalidation
+// and re-evaluation happen in the same pass: a later cycle that both changes
+// a file and reruns the test immediately re-satisfies the criterion with
+// fresh evidence rather than requiring an extra cycle.
+func TestTestCriterionReSatisfiedWhenLaterCycleAlsoReruns(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "go test passes",
+		Kind:   CriterionTestResult,
+		Target: "go test ./...",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		TestsRun: []TestResult{{Name: "go test ./...", Passed: true}},
+	}, 1)
+
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ChangedFiles: []string{"main.go"},
+		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
+	}, 2)
+
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("cycle 2 criterion = %+v, want fresh rerun to re-satisfy immediately", run.Criteria[0])
+	}
+	if run.Criteria[0].UpdatedCycle != 2 {
+		t.Fatalf("updated cycle = %d, want 2", run.Criteria[0].UpdatedCycle)
+	}
+}
+
+// TestFileStateCriterionUnaffectedByStaleness proves the conservative
+// invalidation is scoped to test-result and command-exit criteria: a
+// file-state criterion is about the file's current content, so a later edit
+// must still resolve it normally rather than being treated as invalidating
+// its own evidence.
+func TestFileStateCriterionUnaffectedByStaleness(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "result.txt is written",
+		Kind:   CriterionFileState,
+		Target: "result.txt",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{ChangedFiles: []string{"result.txt"}}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("cycle 1 criterion = %+v, want satisfied", run.Criteria[0])
+	}
+
+	run.ApplyDeterministicCriteria(ExecutionResult{ChangedFiles: []string{"unrelated.go"}}, 2)
+
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("cycle 2 criterion = %+v, want file-state criteria unaffected by unrelated later edits", run.Criteria[0])
 	}
 }
 

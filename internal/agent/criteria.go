@@ -194,7 +194,16 @@ func (r *AgentRun) ApplyDeterministicCriteria(execution ExecutionResult, cycle i
 	for i := range r.Criteria {
 		criterion := &r.Criteria[i]
 		if criterion.Status == CriterionSatisfied || criterion.Status == CriterionNotApplicable {
-			continue
+			if !staleAfterMutation(*criterion, execution, cycle) {
+				continue
+			}
+			// A relevant mutation in a later cycle invalidates this
+			// criterion's prior proof: a check supports only the workspace
+			// version it inspected. Fall through so this same cycle's own
+			// evidence, if any, can immediately re-satisfy it fresh — an
+			// edit-then-rerun sequence in one cycle is not stale.
+			criterion.Status = CriterionPending
+			criterion.Note = "stale: a file changed after this check last passed"
 		}
 		matched, passed, note := evaluateCriterion(*criterion, execution)
 		if !matched {
@@ -206,6 +215,30 @@ func (r *AgentRun) ApplyDeterministicCriteria(execution ExecutionResult, cycle i
 		}
 		criterion.Note = truncate(note, 256)
 		criterion.UpdatedCycle = cycle
+	}
+}
+
+// staleAfterMutation reports whether a previously satisfied or
+// not-applicable mechanical criterion must be treated as unproven again
+// because a later cycle changed a file. A check is evidence about the
+// workspace version it inspected, not a permanent fact — see
+// .claude/tasks/plans/llmtui-agent-evolution.md §11.3. This package has no
+// per-file test-coverage mapping, so invalidation is deliberately
+// conservative: any file change in a strictly later cycle invalidates any
+// test-result or command-exit criterion, regardless of which file changed.
+// File-state criteria are about the file's current content — a further edit
+// answers rather than invalidates them, and evaluateCriterion already
+// re-checks the latest ChangedFiles each cycle. User-input criteria are
+// unaffected: a later file edit does not un-supply an answer already given.
+func staleAfterMutation(criterion Criterion, execution ExecutionResult, cycle int) bool {
+	if cycle <= criterion.UpdatedCycle || len(execution.ChangedFiles) == 0 {
+		return false
+	}
+	switch criterion.Kind {
+	case CriterionTestResult, CriterionCommandExit:
+		return true
+	default:
+		return false
 	}
 }
 

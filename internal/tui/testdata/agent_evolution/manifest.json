@@ -12,11 +12,6 @@
       "limitation": "The real endpoint result is model-specific and reported only when explicitly configured."
     },
     {
-      "id": "contract/omitted_deliverable",
-      "kind": "characterization",
-      "limitation": "A contract that names only an atomic read can complete a multi-part request without producing the omitted artifact."
-    },
-    {
       "id": "output/pseudo_tool_call",
       "kind": "characterization",
       "limitation": "A visible pseudo-tool envelope is diagnosed but does not become an executable call."
@@ -25,11 +20,6 @@
       "id": "context/projected_observation",
       "kind": "characterization",
       "limitation": "Completed-cycle projection removes raw tool observations, leaving no exact observation reference for a later cycle."
-    },
-    {
-      "id": "verification/stale_check_after_edit",
-      "kind": "characterization",
-      "limitation": "A passing test result has no dependency or freshness relation to a later changed file."
     },
     {
       "id": "operation/started_outcome_unknown",
