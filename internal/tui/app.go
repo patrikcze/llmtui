@@ -785,6 +785,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if model, cmd, handled := m.updateStopButtonClick(msg); handled {
 			return model, cmd
 		}
+		if model, cmd, handled := m.updateReasoningClick(msg); handled {
+			return model, cmd
+		}
 		// A text-selection drag that started in the chat viewport (see
 		// beginSelection) finalizes here — copies to the clipboard if it
 		// covers more than a single cell. A release that never started a
@@ -1324,6 +1327,52 @@ func (m *Model) updatePickerClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, 
 		}
 	}
 	return m, nil, false
+}
+
+// reasoningZoneID is the bubblezone ID for a settled message's "+/- Thought"
+// header, indexed like pickerRowZoneID since a long transcript can show
+// several of them on screen at once.
+func reasoningZoneID(i int) string {
+	return "reasoning-" + strconv.Itoa(i)
+}
+
+// liveReasoningZoneID marks the in-progress turn's reasoning header (see
+// renderLiveTail) — a single, fixed zone like stopButtonZoneID, since only
+// one turn can be streaming at a time.
+const liveReasoningZoneID = "reasoning-live"
+
+// updateReasoningClick handles a left-click release on a "+/- Thought"
+// header, toggling m.showReasoning exactly like /thoughts show|hide. A
+// header sits inside the same viewport region beginSelection/extendSelection
+// use for click-drag text selection, so a real drag that merely passes over
+// a header must still finalize as a selection — only a plain click (release
+// position equal to where the button went down) toggles.
+func (m *Model) updateReasoningClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.Button != tea.MouseLeft {
+		return m, nil, false
+	}
+	hit := zone.Get(liveReasoningZoneID).InBounds(msg)
+	if !hit {
+		for i := range m.session.Messages {
+			if zone.Get(reasoningZoneID(i)).InBounds(msg) {
+				hit = true
+				break
+			}
+		}
+	}
+	if !hit {
+		return m, nil, false
+	}
+	if z := zone.Get(chatViewportZoneID); m.sel.selecting && z != nil {
+		x, y := clampToZone(z, msg.X, msg.Y)
+		if x != m.sel.selStartX || y != m.sel.selStartY {
+			return m, nil, false
+		}
+	}
+	m.clearSelection()
+	m.showReasoning = !m.showReasoning
+	m.refreshViewport()
+	return m, nil, true
 }
 
 // stopButtonZoneID marks the stop button shown while generating (see
@@ -2897,8 +2946,8 @@ func (m *Model) settledTranscriptCached() string {
 // that key doesn't capture.
 func (m *Model) renderSettledTranscript() string {
 	var b strings.Builder
-	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
-		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
+	appendReasoning := func(zoneID, reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(zoneID, reasoning, streaming, duration))
 		b.WriteString("\n\n")
 	}
 
@@ -2984,7 +3033,7 @@ func (m *Model) renderSettledTranscript() string {
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			if msg.Reasoning != "" {
-				appendReasoning(msg.Reasoning, false, msg.ReasoningDuration)
+				appendReasoning(reasoningZoneID(i), msg.Reasoning, false, msg.ReasoningDuration)
 			}
 			content := msg.Content
 			if !m.toolsShowOutput {
@@ -3049,7 +3098,7 @@ func (m *Model) renderSettledTranscript() string {
 func (m *Model) renderLiveTail() string {
 	var b strings.Builder
 	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
-		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
+		b.WriteString(m.renderReasoning(liveReasoningZoneID, reasoning, streaming, duration))
 		b.WriteString("\n\n")
 	}
 

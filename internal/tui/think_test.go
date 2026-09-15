@@ -168,7 +168,7 @@ func TestPromptRailAndReasoningVisibility(t *testing.T) {
 	if strings.Contains(view, "private scratch work") {
 		t.Fatalf("hidden reasoning remained visible:\n%s", view)
 	}
-	if !strings.Contains(view, "+ Thought · /thoughts show") {
+	if !strings.Contains(view, "+ Thought · click or /thoughts show") {
 		t.Fatalf("hidden reasoning lacks recovery hint:\n%s", view)
 	}
 }

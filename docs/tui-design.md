@@ -36,6 +36,15 @@ chat transcript — the transcript is normally reachable only by mouse wheel.
 returns them to the composer. A pending tool approval and busy-state
 cancellation (`Esc`) still take priority over this mode.
 
+Each reasoning block's `+`/`-` `Thought` header is clickable: it toggles
+`ui.show_reasoning` for the whole session, the same as `/thoughts show|hide`.
+The header renders in the accent color (bold, not underlined — see
+`renderReasoning`'s comment for why) so it reads as interactive against the
+muted reasoning body. A click there sits inside the same viewport region
+click-drag text selection uses, so only a plain click (no movement between
+press and release) toggles; a real drag that happens to pass over or end on
+a header still finalizes as a text selection.
+
 ## Components
 
 Status bar, provider/model badges, token meter, usage sparkline, bar chart
