@@ -52,11 +52,15 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 
 	wantAsk := true
 	wantDecompose := false
+	workspaceCapabilities := agentverify.CapabilityCapsule{
+		WorkspaceAccess: true,
+		Available:       []string{"read_files", "write_files", "ask_user"},
+	}
 	contract := RunContractMatrix(context.Background(), p, model, RunConfig{Trials: trials, MaxTokens: 4096, Timeout: 2 * time.Minute}, []ContractCase{
-		{ID: "contract/ambiguous_reference", Task: "Read the file I mentioned and give me its heading.", WantAsk: &wantAsk},
-		{ID: "contract/named_missing_file", Task: "Read absent.md and summarize it.", WantAsk: &wantAsk},
+		{ID: "contract/ambiguous_reference", Task: "Read the file I mentioned and give me its heading.", WantAsk: &wantAsk, Capabilities: workspaceCapabilities},
+		{ID: "contract/named_missing_file", Task: "Read absent.md and summarize it.", WantAsk: &wantDecompose, Capabilities: workspaceCapabilities},
 		{ID: "contract/clear_multipart", Task: "Read report.md and write its heading to result.txt.", WantAsk: &wantDecompose,
-			Capabilities: agentverify.CapabilityCapsule{WorkspaceAccess: true, Available: []string{"read_files", "write_files"}}},
+			Capabilities: workspaceCapabilities},
 	})
 	conformance := RunConformanceMatrix(context.Background(), p, model, streaming, RunConfig{Trials: trials, Timeout: 2 * time.Minute})
 
