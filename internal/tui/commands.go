@@ -337,7 +337,10 @@ func (m *Model) openOverlay(content string) {
 	m.clearPicker()
 	m.overlayOpen = true
 	m.viewport.SetContent(content)
-	m.viewport.GotoTop()
+	// Keep the selected row reachable as the user moves through a long list.
+	// Picker rows can have a header above them, so this is deliberately a
+	// conservative lower bound rather than a fragile exact line calculation.
+	m.viewport.SetYOffset(max(0, m.picker.pickerIdx-m.viewport.Height()+1))
 }
 
 func (m *Model) closeOverlay() {

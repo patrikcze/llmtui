@@ -2744,6 +2744,8 @@ func (m *Model) refreshViewport() {
 	if !m.ready || m.overlayOpen {
 		return
 	}
+	followingBottom := m.viewport.AtBottom()
+	previousOffset := m.viewport.YOffset()
 	var b strings.Builder
 	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
 		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
@@ -2927,7 +2929,11 @@ func (m *Model) refreshViewport() {
 	}
 
 	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
-	m.viewport.GotoBottom()
+	if followingBottom {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(previousOffset)
+	}
 }
 
 // renderToolDiff colorizes a write_file display diff: Create()/Update()
