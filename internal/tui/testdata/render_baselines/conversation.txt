@@ -1,0 +1,8 @@
+┃ Explain the renderer contract.
+
+- Thought
+Check the rendering boundary first.
+
+The transcript is sanitized before it is styled.
+
+Long Markdown remains readable.

@@ -1,0 +1,4 @@
+- Thought
+Inspecting the current frame.
+
+Partial answer from the provider.
