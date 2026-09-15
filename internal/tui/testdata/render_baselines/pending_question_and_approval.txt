@@ -1,0 +1,11 @@
+? assistant needs your input
+Which environment should receive the release?
+
+⚒ write file
+    deployments/production.yaml (14 bytes)
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, allow these exact actions for 15 minutes
+  3. No
+↑/↓ select · enter confirm · esc cancels · y/a/n shortcuts

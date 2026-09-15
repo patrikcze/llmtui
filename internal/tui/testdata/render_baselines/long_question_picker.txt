@@ -1,0 +1,9 @@
+agent needs your input
+
+Choose the source with the most useful operational context.
+
+▸ internal/tui/render_baseline_test.go
+  docs/architecture/package-map.md
+  the very long provider model identifier used for acceptance testing
+
+↑/↓ pick · enter confirm · esc type a custom answer instead

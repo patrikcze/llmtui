@@ -1,0 +1,12 @@
+┃ Inspect both tool protocols.
+
+⚒ list_dir
+
+● read_file internal/tui/app.go
+✗ write theme.go (3 bytes)
+
+  ⎿ package tui
+
+  ⎿ Update(theme.go) — added 1 line(s), removed 1 line(s)
+      - old
+      + new
