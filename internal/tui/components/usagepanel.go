@@ -19,9 +19,11 @@ type UsagePanelData struct {
 
 // UsagePanel renders the token usage sparkline with totals underneath.
 func UsagePanel(t styles.Theme, d UsagePanelData, width int) string {
-	inner := width - 4 // panel border + padding
+	outer := max(width, t.Panel.GetHorizontalFrameSize()+1)
+	inner := outer - t.Panel.GetHorizontalFrameSize()
 	if inner < 8 {
 		inner = 8
+		outer = inner + t.Panel.GetHorizontalFrameSize()
 	}
 
 	chart := t.ChartBar.Render(Sparkline(d.TokenHistory, inner, d.ASCIIOnly))
@@ -33,7 +35,7 @@ func UsagePanel(t styles.Theme, d UsagePanelData, width int) string {
 	stats := t.ChartLabel.Render(truncate(label, inner))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, chart, stats)
-	return t.Panel.Width(width - 2).Render(content)
+	return t.Panel.Width(outer).Render(content)
 }
 
 func truncate(s string, w int) string {
