@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
@@ -183,5 +185,21 @@ func TestSettledTranscriptCacheMatchesUncachedRender(t *testing.T) {
 
 	if cached != fresh {
 		t.Error("cached settled transcript differs from an uncached render of identical state")
+	}
+}
+
+func TestStreamingViewportSectionsMatchWholeWidthRender(t *testing.T) {
+	m := newTestModel(t)
+	buildBenchSession(m, 3, true)
+	m.thinking = true
+	m.streamBuf.WriteString("live answer")
+
+	settled := m.settledTranscriptCached()
+	live := m.renderLiveTail()
+	want := lipgloss.NewStyle().Width(m.viewport.Width()).Render(settled + live)
+	m.refreshViewport()
+
+	if got := m.viewport.GetContent(); got != want {
+		t.Fatalf("section-wise viewport render changed content:\nwant %q\n got %q", want, got)
 	}
 }

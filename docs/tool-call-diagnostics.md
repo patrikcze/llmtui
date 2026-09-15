@@ -105,3 +105,18 @@ If a probe yields suspected censoring, preserve the displayed metadata and
 compare the model's expected template/tool format with the server's configured
 parser. Do not paste a detected response into a tool block, disable approval,
 or treat a successful HTTP response as evidence that the action was executed.
+
+For repeated live measurements, use the opt-in matrix in
+`internal/eval`:
+
+```bash
+LLMTUI_EVAL_BASE_URL=http://127.0.0.1:1234/v1 \
+LLMTUI_EVAL_MODEL=your-model \
+LLMTUI_EVAL_ENDPOINT_TYPE=openai_compatible \
+go test -count=1 ./internal/eval -run '^TestLiveEvaluationMatrix$' -v
+```
+
+It repeats the same harmless `conformance_echo` probe, reports native-call,
+name, argument, ID, streaming, correlation, bounded recovery, token, and
+timing fields, and writes JSONL when `LLMTUI_EVAL_OUTPUT` is supplied. Missing
+endpoint/model configuration skips the test; it is never part of normal CI.
