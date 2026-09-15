@@ -81,8 +81,8 @@ go test -count=1 ./internal/eval -run '^TestLiveEvaluationMatrix$' -v
 Use `LLMTUI_EVAL_ENDPOINT_TYPE=ollama` for Ollama and its native API. Set
 `LLMTUI_EVAL_TRIALS` to change repetition and `LLMTUI_EVAL_STREAM=false` to
 probe non-streaming behavior. The report contains one metadata record, one
-bounded record per contract/conformance trial, and a denominator-preserving
-conformance summary. It records repair/recovery counts, status fields, token
+bounded record per contract/conformance trial, and denominator-preserving
+contract and conformance summaries. It records repair/recovery counts, status fields, token
 usage when the provider supplies it, and elapsed time; it does not record
 fixture task text, raw responses, credentials, tool arguments/results, or
 reasoning. A recovery probe is a fresh harmless observation and never executes

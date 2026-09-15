@@ -251,12 +251,39 @@ func conformanceSucceeded(report provider.ToolCallConformance) bool {
 
 // Summary is a denominator-preserving aggregate for a conformance matrix.
 type Summary struct {
+	ContractTrials    int `json:"contract_trials"`
+	ContractCorrect   int `json:"contract_correct"`
+	ContractIncorrect int `json:"contract_incorrect"`
+	ContractUnknown   int `json:"contract_unknown"`
+	ContractRepairs   int `json:"contract_repairs"`
 	Trials            int `json:"trials"`
 	NativeSuccess     int `json:"native_success"`
 	Malformed         int `json:"malformed_or_censored"`
 	RecoveryRequired  int `json:"recovery_required"`
 	RecoverySucceeded int `json:"recovery_succeeded"`
 	CorrelationFailed int `json:"correlation_failed"`
+}
+
+// SummarizeContract aggregates labeled contract outcomes while preserving
+// unknown/error denominators. A nil Correct value is not counted as correct or
+// incorrect because the fixture may intentionally omit a gold label.
+func SummarizeContract(trials []ContractTrial) Summary {
+	var summary Summary
+	summary.ContractTrials = len(trials)
+	for _, trial := range trials {
+		switch {
+		case trial.Correct == nil:
+			summary.ContractUnknown++
+		case *trial.Correct:
+			summary.ContractCorrect++
+		default:
+			summary.ContractIncorrect++
+		}
+		if trial.RepairRequired {
+			summary.ContractRepairs++
+		}
+	}
+	return summary
 }
 
 // SummarizeConformance aggregates statuses without interpreting a missing

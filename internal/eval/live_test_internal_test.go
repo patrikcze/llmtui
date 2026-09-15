@@ -80,6 +80,17 @@ func TestRunConformanceMatrixRecordsBoundedRecovery(t *testing.T) {
 	}
 }
 
+func TestSummarizeContractPreservesOutcomeDenominators(t *testing.T) {
+	correct, incorrect := true, false
+	summary := SummarizeContract([]ContractTrial{
+		{Correct: &correct}, {Correct: &incorrect}, {RepairRequired: true},
+	})
+	if summary.ContractTrials != 3 || summary.ContractCorrect != 1 || summary.ContractIncorrect != 1 ||
+		summary.ContractUnknown != 1 || summary.ContractRepairs != 1 {
+		t.Fatalf("summary=%+v", summary)
+	}
+}
+
 func TestValidateMetadataRejectsCredentialLikeValues(t *testing.T) {
 	if err := ValidateMetadata(Metadata{Provider: "Bearer secret"}); err == nil {
 		t.Fatal("credential-like metadata was accepted")

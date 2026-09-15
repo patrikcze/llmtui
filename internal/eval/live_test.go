@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/agentverify"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/ollama"
 	"github.com/patrikcze/llmtui/internal/provider/openai"
@@ -54,7 +55,8 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 	contract := RunContractMatrix(context.Background(), p, model, RunConfig{Trials: trials, MaxTokens: 4096, Timeout: 2 * time.Minute}, []ContractCase{
 		{ID: "contract/ambiguous_reference", Task: "Read the file I mentioned and give me its heading.", WantAsk: &wantAsk},
 		{ID: "contract/named_missing_file", Task: "Read absent.md and summarize it.", WantAsk: &wantAsk},
-		{ID: "contract/clear_multipart", Task: "Read report.md and write its heading to result.txt.", WantAsk: &wantDecompose},
+		{ID: "contract/clear_multipart", Task: "Read report.md and write its heading to result.txt.", WantAsk: &wantDecompose,
+			Capabilities: agentverify.CapabilityCapsule{WorkspaceAccess: true, Available: []string{"read_files", "write_files"}}},
 	})
 	conformance := RunConformanceMatrix(context.Background(), p, model, streaming, RunConfig{Trials: trials, Timeout: 2 * time.Minute})
 
@@ -68,7 +70,14 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := Report{Metadata: metadata, Contract: contract, Conformance: conformance}
-	report.Summary = SummarizeConformance(conformance)
+	report.Summary = SummarizeContract(contract)
+	conformanceSummary := SummarizeConformance(conformance)
+	report.Summary.Trials = conformanceSummary.Trials
+	report.Summary.NativeSuccess = conformanceSummary.NativeSuccess
+	report.Summary.Malformed = conformanceSummary.Malformed
+	report.Summary.RecoveryRequired = conformanceSummary.RecoveryRequired
+	report.Summary.RecoverySucceeded = conformanceSummary.RecoverySucceeded
+	report.Summary.CorrelationFailed = conformanceSummary.CorrelationFailed
 
 	path := os.Getenv("LLMTUI_EVAL_OUTPUT")
 	ephemeral := false
