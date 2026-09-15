@@ -38,7 +38,7 @@ func TestClickDragSelectsAndCopiesText(t *testing.T) {
 
 func TestClickDragSelectsInsideDebugOverlay(t *testing.T) {
 	m := newTestModel(t)
-	m.openOverlay("debug detail\nsecond line")
+	m.openOverlay(func() string { return "debug detail\nsecond line" })
 
 	m.View() // triggers zone.Scan(), registering the viewport's bounds
 	z := waitForZone(t, chatViewportZoneID)

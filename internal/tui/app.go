@@ -159,6 +159,15 @@ type Model struct {
 	sel         selectionState
 	notice      string
 	overlayOpen bool
+	// transcriptFocused is the F6 keyboard-only transcript navigation mode:
+	// while true, paging keys scroll the chat viewport instead of reaching
+	// the composer. See the tea.KeyPressMsg case in Update.
+	transcriptFocused bool
+	// overlayRender rebuilds the currently open static overlay's content at
+	// the model's current width; resize() re-invokes it so overlays reflow
+	// instead of staying stale (picker overlays reflow via renderPicker
+	// instead, keyed on m.picker.pickerKind).
+	overlayRender func() string
 	// picker holds the arrow-key picker overlay state (see pickerState).
 	picker pickerState
 	// visionInfoByID caches model metadata from the last successful ListModels
@@ -786,6 +795,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlayOpen {
 			return m.updateOverlay(msg)
 		}
+		// F6 toggles a keyboard-only transcript navigation mode: paging keys
+		// scroll the chat instead of the composer, until F6 (or any other
+		// key) returns them there. Checked before every other binding below
+		// but after the overlay/approval checks above, which must still own
+		// the keyboard first.
+		if msg.String() == "f6" {
+			m.transcriptFocused = !m.transcriptFocused
+			return m, nil
+		}
+		if m.transcriptFocused {
+			switch msg.String() {
+			case "up", "down", "pgup", "pgdown":
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			case "home":
+				m.viewport.GotoTop()
+				return m, nil
+			case "end":
+				m.viewport.GotoBottom()
+				return m, nil
+			default:
+				// Any other key exits transcript focus and falls through to
+				// the normal handling below, so esc (busy-state
+				// cancellation), enter (send), ctrl+c (quit), and ordinary
+				// typing are never shadowed by this mode.
+				m.transcriptFocused = false
+			}
+		}
 		// Bubble Tea v2 decodes enhanced keyboard input itself, so supported
 		// terminals deliver Shift+Enter as a regular KeyPressMsg instead of
 		// the raw CSI fallback handled above.
@@ -1018,7 +1056,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doctorResultMsg:
 		m.notice = ""
-		m.openOverlay(m.doctorOverlay(msg.report))
+		m.openOverlay(func() string { return m.doctorOverlay(msg.report) })
 		return m, nil
 
 	case mcpConnectMsg:
@@ -2727,6 +2765,20 @@ func (m *Model) resize(w, h int) {
 			m.renderer = r
 		}
 	}
+	// refreshViewport() is a no-op while an overlay owns the viewport (see
+	// its own guard), so a resize would otherwise leave overlay content
+	// stale at whatever width it was opened at. Reflow it explicitly:
+	// picker overlays rebuild through renderPicker (which also keeps the
+	// selection visible), static overlays through the render func openOverlay
+	// stored for exactly this.
+	if m.overlayOpen {
+		if m.picker.pickerKind != pickerNone {
+			m.renderPicker()
+		} else if m.overlayRender != nil {
+			m.viewport.SetContent(m.overlayRender())
+		}
+		return
+	}
 	m.refreshViewport()
 }
 
@@ -3222,7 +3274,10 @@ func (m *Model) render() string {
 	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
 	status := m.statusView()
 
-	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
+	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit · F6 transcript")
+	if m.transcriptFocused {
+		help = m.theme.HelpFooter.Render("↑/↓ · pgup/pgdn · home/end scroll transcript · F6 composer")
+	}
 	if m.notice != "" {
 		help = noticeBadge(m.theme, m.notice).Render(terminaltext.Sanitize(m.notice))
 	}

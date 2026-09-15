@@ -22,11 +22,11 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(m.skillsStatusOverlay())
+		m.openOverlay(func() string { return m.skillsStatusOverlay() })
 	case "list":
 		m.openSkillsPicker()
 	case "active":
-		m.openOverlay(m.skillsActiveOverlay())
+		m.openOverlay(func() string { return m.skillsActiveOverlay() })
 	case "inspect":
 		if rest == "" {
 			return m.fail("usage: /skills inspect <id> (see /skills list)")
@@ -35,7 +35,7 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail(err.Error())
 		}
-		m.openOverlay(m.skillsInspectOverlay(s))
+		m.openOverlay(func() string { return m.skillsInspectOverlay(s) })
 	case "use", "activate":
 		return m.skillsUse(rest)
 	case "disable", "deactivate", "unuse":
@@ -55,7 +55,7 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 			m.refreshViewport()
 		}
 	case "paths":
-		m.openOverlay(m.skillsPathsOverlay())
+		m.openOverlay(func() string { return m.skillsPathsOverlay() })
 	default:
 		return m.fail("usage: /skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]")
 	}
@@ -346,14 +346,14 @@ func cmdPlugins(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(m.pluginsListOverlay())
+		m.openOverlay(func() string { return m.pluginsListOverlay() })
 	case "list":
 		m.openPluginsPicker()
 	case "inspect":
 		if rest == "" {
 			return m.fail("usage: /plugins inspect <id> (see /plugins list)")
 		}
-		m.openOverlay(m.pluginsInspectOverlay(rest))
+		m.openOverlay(func() string { return m.pluginsInspectOverlay(rest) })
 	case "enable":
 		if rest == "" {
 			return m.fail("usage: /plugins enable <id>")
@@ -389,7 +389,7 @@ func cmdPlugins(m *Model, args string) tea.Cmd {
 			m.refreshViewport()
 		}
 	case "paths":
-		m.openOverlay(m.skillsPathsOverlay())
+		m.openOverlay(func() string { return m.skillsPathsOverlay() })
 	default:
 		return m.fail("usage: /plugins [status|list|inspect <id>|enable <id>|disable <id>|reload|paths]")
 	}

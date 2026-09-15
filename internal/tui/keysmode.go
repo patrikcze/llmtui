@@ -24,7 +24,7 @@ func (m *Model) enterKeysMode(raw bool) {
 	m.keys.keysMode = true
 	m.keys.keysRaw = raw
 	m.keys.keyLog = nil
-	m.openOverlay(m.keysOverlay())
+	m.openOverlay(func() string { return m.keysOverlay() })
 }
 
 // logKey records one received key event and refreshes the inspector.
