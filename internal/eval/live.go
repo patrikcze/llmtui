@@ -193,6 +193,7 @@ type AgentTrial struct {
 	Cycles           int           `json:"cycles"`
 	NeedsUserInput   bool          `json:"needs_user_input"`
 	FalseSuccess     bool          `json:"false_success"`
+	ErrorCategory    string        `json:"error_category,omitempty"`
 	Elapsed          time.Duration `json:"elapsed_ns"`
 }
 

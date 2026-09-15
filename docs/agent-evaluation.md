@@ -4,6 +4,12 @@ The agent-runtime changes are calibrated with deterministic fixtures first and
 with live endpoints only when a person explicitly configures one. This avoids
 treating one local model, template, or sampling run as a universal result.
 
+The live evaluation files are retained as developer-only measurement tooling,
+not product behavior. They are opt-in, never part of normal CI, and must stay
+bounded to configured local endpoints and disposable workspaces. Keep them
+beside the code so future runtime changes can be measured reproducibly; do not
+enable them by default or use their results as universal model claims.
+
 ## Current baseline
 
 `TestAgentEvolutionSyntheticMatrix` drives the shared contract → executor →
@@ -102,11 +108,12 @@ go test -count=1 ./internal/tui -run '^TestLiveAgentMatrix$' -v
 It repeats synthetic read, missing-path/ask, and temporary-write/confirmation
 fixtures through the real contract → executor → tool → verifier path. It
 records first-action class, final result, verifier verdict, tool/provider
-request counts, token use, recovery requests, cycles, and elapsed time. The
-driver resolves only the fixture's synthetic answer/approval and stops at
-unresolved user input; it never enables personal-app or production MCP
-actions. Both live tests skip unless the endpoint and model are explicitly
-configured.
+request counts, token use, recovery requests, cycles, bounded driver errors,
+and elapsed time. The driver resolves only the fixture's synthetic
+answer/approval and never enables personal-app or production MCP actions. A
+bounded driver failure is written to the report before the test fails, so
+partial measurements remain inspectable. Both live tests skip unless the
+endpoint and model are explicitly configured.
 
 Compare `off` and `shadow` first. A future `auto` mode is eligible only after
 it improves its declared target without new unsafe execution, approval

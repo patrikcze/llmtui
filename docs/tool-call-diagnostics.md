@@ -106,8 +106,10 @@ compare the model's expected template/tool format with the server's configured
 parser. Do not paste a detected response into a tool block, disable approval,
 or treat a successful HTTP response as evidence that the action was executed.
 
-For repeated live measurements, use the opt-in matrix in
-`internal/eval`:
+For repeated live measurements, use the developer-only, opt-in matrix in
+`internal/eval`. These tests are retained in the repository as measurement
+tooling, never run in normal CI, and never route a probe through the host
+executor:
 
 ```bash
 LLMTUI_EVAL_BASE_URL=http://127.0.0.1:1234/v1 \

@@ -87,6 +87,7 @@ func TestLiveAgentMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := eval.Report{Metadata: metadata}
+	var driverFailures []string
 	for _, fixture := range cases {
 		for trial := 1; trial <= trials; trial++ {
 			started := time.Now()
@@ -117,9 +118,13 @@ func TestLiveAgentMatrix(t *testing.T) {
 			}
 
 			beforeRequests := counted.requestCount()
-			driveLiveAgent(t, m, m.startVerifiedRun(fixture.request, nil), fixture.answer, fixture.approval)
+			driverError := driveLiveAgent(t, m, m.startVerifiedRun(fixture.request, nil), fixture.answer, fixture.approval)
 			row := liveAgentTrial(fixture, trial, m, counted.requestCount()-beforeRequests, time.Since(started))
+			row.ErrorCategory = driverError
 			report.Agent = append(report.Agent, row)
+			if driverError != "" {
+				driverFailures = append(driverFailures, fixture.id+"/"+strconv.Itoa(trial)+": "+driverError)
+			}
 			t.Logf("scenario=%s trial=%d action=%s final=%s tools=%d requests=%d elapsed=%s",
 				fixture.id, trial, row.ObservedAction, row.FinalResult, row.ToolCalls, row.ProviderRequests, time.Duration(row.Elapsed).Round(time.Millisecond))
 		}
@@ -141,6 +146,9 @@ func TestLiveAgentMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("live agent matrix: trials=%d report=%s", len(report.Agent), path)
+	if len(driverFailures) > 0 {
+		t.Fatalf("live agent driver failures (report retained): %s", strings.Join(driverFailures, "; "))
+	}
 }
 
 type countingProvider struct {
@@ -162,7 +170,7 @@ func (p *countingProvider) requestCount() int {
 	return p.requests
 }
 
-func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval string) {
+func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval string) string {
 	t.Helper()
 	queue := []tea.Cmd{first}
 	for steps := 0; steps < 300; steps++ {
@@ -185,7 +193,7 @@ func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval stri
 		}
 		if m.pendingAsk != nil {
 			if answer == "" {
-				return
+				return "unresolved_user_input"
 			}
 			m.input.SetValue(answer)
 			_, next := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -197,7 +205,7 @@ func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval stri
 		}
 		if len(m.pendingCalls) > 0 {
 			if approval == "" {
-				return
+				return "unresolved_approval"
 			}
 			code := rune(approval[0])
 			_, next := m.Update(tea.KeyPressMsg{Code: code, Text: approval})
@@ -208,11 +216,11 @@ func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval stri
 			continue
 		}
 		if !m.agentRunActive() && !m.thinking {
-			return
+			return ""
 		}
-		return
+		return "driver_idle_while_run_active"
 	}
-	t.Fatal("live agent driver exceeded 300 bounded events")
+	return "driver_event_limit"
 }
 
 func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, elapsed time.Duration) eval.AgentTrial {

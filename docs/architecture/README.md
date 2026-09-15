@@ -14,9 +14,10 @@ comments, but this file is authoritative.
   defines the deterministic baseline and the opt-in live-endpoint procedure;
   it does not treat synthetic fixture success as a model-quality claim.
 
-Baseline: `master`, Go 1.27, ~36 internal packages. Verify version-sensitive
-details (the embedded runtime pin, dependency versions) against the source —
-`internal/runtime/pin.json`, `go.mod` — not this document.
+Current inventory: 38 internal Go packages plus `cmd/llmtui` (39 Go packages
+total), Go 1.27. Verify version-sensitive details (the embedded runtime pin,
+dependency versions) against the source — `internal/runtime/pin.json`,
+`go.mod` — not this document. Refresh the package inventory with `go list ./...`.
 
 ---
 
@@ -75,6 +76,7 @@ The seven layers, top to bottom:
 | Providers | `provider`, `provider/{ollama,openai,embedded,mock}`, `provider/embedded/llamart` | The `Provider` contract and its implementations; `llamart` is the only package that touches native code |
 | Runtime / self-management | `runtime`, `selfupdate` | llama.cpp library install/verify; llmtui binary self-update |
 | Prompt / conversation / agent | `chat`, `prompt`, `contextmgr`, `modelprofile`, `agent`, `agentverify` | Compose requests, keep them inside the context window, and run bounded verified `/agent` cycles |
+| Developer evaluation | `eval` | Opt-in repeated contract/conformance measurements and bounded JSONL reports; never part of normal runtime or CI |
 | Retrieval / memory / storage | `memory`, `rag`, `memoryindex`, `history`, `cache` | User preferences, workspace keyword index, the retrieval facade, session/usage/journal persistence, the response cache |
 | Tools / safety | `tools`, `toolapi`, `web`, `mcp`, `skill`, `untrusted`, `terminaltext`, `terminalmath`, `clipboard`, `procutil` | The workspace tool engine and every guardrail around it |
 | TUI | `tui`, `tui/components`, `tui/styles` | One Bubble Tea `Model` split by concern; most of the codebase's size lives here |
@@ -424,7 +426,9 @@ the 2026-07-19 full review (all prior findings remediated). Highlights:
   `internal/provider/embedded/llamart` integration tests
   (`LLMTUI_TEST_GGUF` / `YZMA_LIB` / `LLMTUI_TEST_CPU`);
   `internal/agentverify/contract_eval_test.go`
-  (`LLMTUI_EVAL_BASE_URL` / `LLMTUI_EVAL_MODEL`).
+  (`LLMTUI_EVAL_BASE_URL` / `LLMTUI_EVAL_MODEL`); and the developer-only
+  repeated contract/conformance and full-loop harnesses in `internal/eval`
+  and `internal/tui/live_agent_eval_test.go` with the same endpoint variables.
 - CI gates on `gofmt` (zero output), `go vet`, `golangci-lint` (0 issues),
   `govulncheck`, and a race-detector run over the agent / MCP / provider /
   tools / TUI subset. A green `go test ./...` does **not** exercise native
