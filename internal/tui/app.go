@@ -166,6 +166,7 @@ type Model struct {
 	operationLog    *history.OperationLog
 	operationLogErr error
 	inputLines      int
+	layout          layoutMetrics
 	ctrlCAt         time.Time
 	quitting        bool
 
@@ -2070,18 +2071,10 @@ func (m *Model) syncInputHeight() {
 // below minChatRows (which would overflow and break the layout). On a tall
 // terminal the box can grow generously; on a short one it stays modest.
 func (m *Model) maxInputLines() int {
-	const minChatRows = 4
-	attach := 0
-	if len(m.attachments) > 0 {
-		attach = 1
+	if m.layout.inputMaxLines > 0 {
+		return m.layout.inputMaxLines
 	}
-	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help)
-	// - activity. Solve for the largest lines keeping vpHeight >= minChatRows.
-	max := m.height - 7 - len(m.suggest.sugs) - m.statusLines - attach - minChatRows - m.activityHeight()
-	if max < 1 {
-		max = 1
-	}
-	return max
+	return 1
 }
 
 // copyLastReply copies the most recent assistant text (or the in-flight
@@ -2680,28 +2673,18 @@ func (m *Model) relayout() {
 
 func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
-
-	if m.statusLines < 1 {
-		m.statusLines = 1
-	}
+	m.layout = m.layoutFor(w, h, m.statusLines)
 	// Let the textarea calculate its height from the same cell-width-aware
 	// wrapping it uses to render. SetWidth triggers that recalculation.
 	m.input.MaxHeight = m.maxInputLines()
-	m.input.SetWidth(w - 6)
+	m.input.SetWidth(max(1, w-m.theme.InputPanel.GetHorizontalFrameSize()-2))
 	m.inputLines = m.input.Height()
-
-	// Layout: viewport fills space above the live activity region, usage
-	// panel (4), suggestion popup, input (border + content rows, +1 when
-	// attachment chips are shown), status bar (1 row, or 2 when wrapped),
-	// and help footer (1).
-	inputHeight := 2 + m.inputLines
-	if len(m.attachments) > 0 {
-		inputHeight++
-	}
-	vpHeight := h - 4 - len(m.suggest.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
+	statusLines := statusLineCount(m.statusView())
+	m.statusLines = statusLines
+	m.layout = m.layoutFor(w, h, statusLines)
+	m.input.MaxHeight = m.maxInputLines()
+	m.inputLines = m.input.Height()
+	vpHeight := m.viewportHeightFor(m.inputLines)
 	if !m.ready {
 		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
 		m.ready = true
@@ -3098,52 +3081,32 @@ func (m *Model) render() string {
 		return "loading…"
 	}
 
-	usage := components.UsagePanel(m.theme, components.UsagePanelData{
-		TokenHistory: m.session.TokenHistory(),
-		PromptTotal:  m.session.TotalPromptTokens,
-		ReplyTotal:   m.session.TotalCompletionTokens,
-		Estimated:    m.session.AnyEstimated,
-	}, m.width)
+	usage := ""
+	if m.layout.showUsage {
+		usage = components.UsagePanel(m.theme, components.UsagePanelData{
+			TokenHistory: m.session.TokenHistory(),
+			PromptTotal:  m.session.TotalPromptTokens,
+			ReplyTotal:   m.session.TotalCompletionTokens,
+			Estimated:    m.session.AnyEstimated,
+		}, m.width)
+	}
 
 	inputContent := m.input.View()
 	if len(m.attachments) > 0 {
-		chips := make([]string, len(m.attachments))
-		for i, img := range m.attachments {
-			chips[i] = m.theme.Badge.Render(fmt.Sprintf("⌗ image %d", i+1)) +
-				m.theme.HelpFooter.Render(fmt.Sprintf(" %.0f KB · ctrl+x remove", float64(len(img.Data))/1024))
+		if m.layout.compact && len(m.attachments) > 1 {
+			inputContent = m.theme.Badge.Render(fmt.Sprintf("⌗ %d images", len(m.attachments))) +
+				m.theme.HelpFooter.Render(" · ctrl+x remove last") + "\n" + inputContent
+		} else {
+			chips := make([]string, len(m.attachments))
+			for i, img := range m.attachments {
+				chips[i] = m.theme.Badge.Render(fmt.Sprintf("⌗ image %d", i+1)) +
+					m.theme.HelpFooter.Render(fmt.Sprintf(" %.0f KB · ctrl+x remove", float64(len(img.Data))/1024))
+			}
+			inputContent = strings.Join(chips, "   ") + "\n" + inputContent
 		}
-		inputContent = strings.Join(chips, "   ") + "\n" + inputContent
 	}
 	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
-
-	prof, _ := m.activeProfile()
-	profileLabel := prof.Name
-	if m.profileMode == "auto" || m.profileMode == "" {
-		profileLabel = "auto/" + prof.Name
-	}
-	ctxWindow, _ := m.contextWindow()
-	status := components.StatusBar(m.theme, components.StatusBarData{
-		Provider:     terminaltext.Sanitize(m.prov.Name()),
-		Model:        terminaltext.Sanitize(m.model),
-		Connected:    m.connected,
-		DemoMode:     m.demoMode,
-		TotalTokens:  m.session.TotalTokens(),
-		LastTPS:      m.lastTPS,
-		Estimated:    m.session.AnyEstimated,
-		Profile:      terminaltext.Sanitize(profileLabel),
-		PromptMode:   m.effectivePromptMode(),
-		Template:     terminaltext.Sanitize(m.template),
-		ContextUsed:  contextmgr.EstimateTokens(m.session.Messages),
-		ContextLimit: ctxWindow,
-		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
-		SummaryOn:    m.summary != "",
-		ToolsOn:      m.toolsOn,
-		WebOn:        m.webOn,
-	}, m.width)
-	if lines := strings.Count(status, "\n") + 1; lines != m.statusLines {
-		m.statusLines = lines
-		m.relayout()
-	}
+	status := m.statusView()
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
@@ -3188,8 +3151,10 @@ func (m *Model) render() string {
 	if verifierActivity := m.renderVerifierActivity(); verifierActivity != "" {
 		sections = append(sections, verifierActivity)
 	}
-	sections = append(sections, usage)
-	if len(m.suggest.sugs) > 0 {
+	if usage != "" {
+		sections = append(sections, usage)
+	}
+	if m.layout.suggestionRows > 0 {
 		sections = append(sections, m.suggestionsView())
 	}
 	sections = append(sections, inputView, status,
