@@ -57,7 +57,8 @@ func FormatElapsed(d time.Duration) string {
 func WorkingLine(t styles.Theme, frame int, verb, elapsed, tokens string, ascii, animated bool) string {
 	verbStyle := t.Spinner.Bold(true)
 	if animated {
-		verbStyle = lipgloss.NewStyle().Foreground(workPulse[frame%len(workPulse)]).Bold(true)
+		pulse := WorkPulse(t)
+		verbStyle = lipgloss.NewStyle().Foreground(pulse[frame%len(pulse)]).Bold(true)
 		verb += "…"
 	}
 	parts := []string{elapsed}

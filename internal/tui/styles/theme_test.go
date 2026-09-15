@@ -35,7 +35,7 @@ func TestBuiltInThemesHaveNoEmptyColors(t *testing.T) {
 		colors := map[string]color.Color{
 			"Accent": theme.Accent, "Subtle": theme.Subtle, "Text": theme.Text,
 			"Faint": theme.Faint, "Good": theme.Good, "Bad": theme.Bad,
-			"PanelEdge": theme.PanelEdge, "UserEdge": theme.UserEdge,
+			"Warning": theme.Warning, "PanelEdge": theme.PanelEdge, "UserEdge": theme.UserEdge,
 		}
 		for field, c := range colors {
 			if c == nil {
@@ -43,4 +43,42 @@ func TestBuiltInThemesHaveNoEmptyColors(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Warning must read as its own state, not a recolored Bad or Accent — it is
+// the color behind attention/approval badges (BadgeWarn), and collapsing it
+// onto an existing color would silently make approvals look like errors (or
+// like ordinary activity) again.
+func TestBuiltInThemesWarningIsDistinct(t *testing.T) {
+	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+		if sameColor(theme.Warning, theme.Bad) {
+			t.Errorf("%s: Warning resolves to the same color as Bad", theme.Name)
+		}
+		if sameColor(theme.Warning, theme.Accent) {
+			t.Errorf("%s: Warning resolves to the same color as Accent", theme.Name)
+		}
+		if sameColor(theme.Warning, theme.Good) {
+			t.Errorf("%s: Warning resolves to the same color as Good", theme.Name)
+		}
+	}
+}
+
+// BadgeWarn and BadgeErr must render distinctly: BadgeWarn marks
+// attention/approval states, BadgeErr marks actual failures/denials. Before
+// this split both drew on Bad, so a pending approval and a denied tool call
+// were visually identical.
+func TestBadgeWarnAndBadgeErrAreDistinct(t *testing.T) {
+	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+		warnFg := theme.BadgeWarn.GetForeground()
+		errFg := theme.BadgeErr.GetForeground()
+		if sameColor(warnFg, errFg) {
+			t.Errorf("%s: BadgeWarn and BadgeErr render with the same color", theme.Name)
+		}
+	}
+}
+
+func sameColor(a, b color.Color) bool {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
 }

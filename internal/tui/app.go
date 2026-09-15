@@ -318,6 +318,12 @@ func New(opts Options) *Model {
 	// with the light/dark pair actually resolved for this terminal.
 	taStyles := textarea.DefaultStyles(styles.IsDark())
 	taStyles.Focused.CursorLine = lipgloss.NewStyle()
+	// The textarea is only ever focused in this single-composer TUI (never
+	// blurred), so only the Focused state needs to follow the chosen theme
+	// instead of Bubbles' built-in dark/light defaults.
+	taStyles.Focused.Text = lipgloss.NewStyle().Foreground(t.Text)
+	taStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(t.Accent)
+	taStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(t.Faint)
 	ta.SetStyles(taStyles)
 	ta.Focus()
 
@@ -3116,7 +3122,7 @@ func (m *Model) render() string {
 
 	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
-		help = m.theme.BadgeOK.Render(terminaltext.Sanitize(m.notice))
+		help = noticeBadge(m.theme, m.notice).Render(terminaltext.Sanitize(m.notice))
 	}
 	if len(m.pendingCalls) > 0 {
 		if m.pendingBudget {

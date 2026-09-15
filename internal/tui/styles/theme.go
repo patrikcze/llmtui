@@ -46,6 +46,7 @@ type Theme struct {
 	Faint     color.Color
 	Good      color.Color
 	Bad       color.Color
+	Warning   color.Color
 	PanelEdge color.Color
 	UserEdge  color.Color
 
@@ -58,6 +59,7 @@ type Theme struct {
 	Badge          lipgloss.Style
 	BadgeOK        lipgloss.Style
 	BadgeWarn      lipgloss.Style
+	BadgeErr       lipgloss.Style
 	Panel          lipgloss.Style
 	InputPanel     lipgloss.Style
 	PromptRail     lipgloss.Style
@@ -73,7 +75,7 @@ type Theme struct {
 // newTheme builds every derived style from one base palette, so each theme
 // only has to declare its eight colors — the styling built on top of them
 // (borders, weights, italics) stays identical and in one place.
-func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, userEdge adaptiveColor) Theme {
+func newTheme(name string, accent, subtle, text, faint, good, bad, warning, panelEdge, userEdge adaptiveColor) Theme {
 	pick := lipgloss.LightDark(IsDark())
 	resolve := func(c adaptiveColor) color.Color {
 		return pick(lipgloss.Color(c.Light), lipgloss.Color(c.Dark))
@@ -87,6 +89,7 @@ func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, us
 		Faint:     resolve(faint),
 		Good:      resolve(good),
 		Bad:       resolve(bad),
+		Warning:   resolve(warning),
 		PanelEdge: resolve(panelEdge),
 		UserEdge:  resolve(userEdge),
 	}
@@ -99,7 +102,11 @@ func newTheme(name string, accent, subtle, text, faint, good, bad, panelEdge, us
 	t.StatusValue = lipgloss.NewStyle().Foreground(t.Text)
 	t.Badge = lipgloss.NewStyle().Foreground(t.Text).Bold(true)
 	t.BadgeOK = lipgloss.NewStyle().Foreground(t.Good).Bold(true)
-	t.BadgeWarn = lipgloss.NewStyle().Foreground(t.Bad).Bold(true)
+	// BadgeWarn marks attention/approval states (pending confirmation, budget
+	// limits, demo/offline) — Warning, not Bad, so a state that merely needs
+	// the user's attention doesn't read as a failure.
+	t.BadgeWarn = lipgloss.NewStyle().Foreground(t.Warning).Bold(true)
+	t.BadgeErr = lipgloss.NewStyle().Foreground(t.Bad).Bold(true)
 	t.Panel = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.PanelEdge).
@@ -133,6 +140,7 @@ func ClaudeInspired() Theme {
 		adaptiveColor{Light: "#A8A29B", Dark: "#57534E"}, // Faint
 		adaptiveColor{Light: "#3D7A45", Dark: "#7CBF85"}, // Good
 		adaptiveColor{Light: "#B03A30", Dark: "#E07870"}, // Bad
+		adaptiveColor{Light: "#8A7211", Dark: "#D4B94A"}, // Warning: gold, distinct from the orange accent
 		adaptiveColor{Light: "#D6D0C8", Dark: "#3F3B37"}, // PanelEdge
 		adaptiveColor{Light: "#2563B8", Dark: "#58A6FF"}, // UserEdge: blue, pops against the warm accent
 	)
@@ -147,6 +155,7 @@ func Midnight() Theme {
 		adaptiveColor{Light: "#A0A6B5", Dark: "#4A4F5E"}, // Faint
 		adaptiveColor{Light: "#2F7A52", Dark: "#6FCB93"}, // Good: clean green, kept distinct from indigo
 		adaptiveColor{Light: "#C13B3B", Dark: "#F0827A"}, // Bad: warm red, unambiguous against the cool palette
+		adaptiveColor{Light: "#8A6A1E", Dark: "#E3B34F"}, // Warning: warm amber, stands out against the cool palette
 		adaptiveColor{Light: "#D2D5DE", Dark: "#363B4A"}, // PanelEdge: dark slate border
 		adaptiveColor{Light: "#0E7C86", Dark: "#4FD1D9"}, // UserEdge: cyan, pops against the indigo accent
 	)
@@ -161,6 +170,7 @@ func Forest() Theme {
 		adaptiveColor{Light: "#A6A38C", Dark: "#54523F"}, // Faint
 		adaptiveColor{Light: "#2E7D4F", Dark: "#7ED9A0"}, // Good: brighter forest green, distinct from the mossy accent
 		adaptiveColor{Light: "#B33A2E", Dark: "#E58579"}, // Bad: terracotta red
+		adaptiveColor{Light: "#A85D12", Dark: "#E8994F"}, // Warning: warm orange, distinct from the amber user rail
 		adaptiveColor{Light: "#D6D2BE", Dark: "#43412F"}, // PanelEdge: dark moss border
 		adaptiveColor{Light: "#A6740A", Dark: "#E8B84B"}, // UserEdge: warm amber/gold, pops against the olive accent
 	)
