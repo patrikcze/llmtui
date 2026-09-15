@@ -71,8 +71,10 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 	report.Summary = SummarizeConformance(conformance)
 
 	path := os.Getenv("LLMTUI_EVAL_OUTPUT")
+	ephemeral := false
 	if path == "" {
 		path = t.TempDir() + "/llmtui-live-evaluation.jsonl"
+		ephemeral = true
 	}
 	file, err := os.Create(path)
 	if err != nil {
@@ -84,6 +86,12 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if ephemeral {
+		t.Logf("live evaluation: contract_trials=%d conformance_trials=%d native_success=%d/%d recovery=%d/%d report=%s (ephemeral; set LLMTUI_EVAL_OUTPUT to retain)",
+			len(contract), len(conformance), report.Summary.NativeSuccess, report.Summary.Trials,
+			report.Summary.RecoverySucceeded, report.Summary.RecoveryRequired, path)
+		return
 	}
 	t.Logf("live evaluation: contract_trials=%d conformance_trials=%d native_success=%d/%d recovery=%d/%d report=%s",
 		len(contract), len(conformance), report.Summary.NativeSuccess, report.Summary.Trials,

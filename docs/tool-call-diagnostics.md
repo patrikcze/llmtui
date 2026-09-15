@@ -113,6 +113,7 @@ For repeated live measurements, use the opt-in matrix in
 LLMTUI_EVAL_BASE_URL=http://127.0.0.1:1234/v1 \
 LLMTUI_EVAL_MODEL=your-model \
 LLMTUI_EVAL_ENDPOINT_TYPE=openai_compatible \
+LLMTUI_EVAL_OUTPUT=/tmp/llmtui-live-evaluation.jsonl \
 go test -count=1 ./internal/eval -run '^TestLiveEvaluationMatrix$' -v
 ```
 
@@ -120,3 +121,5 @@ It repeats the same harmless `conformance_echo` probe, reports native-call,
 name, argument, ID, streaming, correlation, bounded recovery, token, and
 timing fields, and writes JSONL when `LLMTUI_EVAL_OUTPUT` is supplied. Missing
 endpoint/model configuration skips the test; it is never part of normal CI.
+If `LLMTUI_EVAL_OUTPUT` is omitted, the test writes to `t.TempDir()` and the
+report is deleted when the test exits.
