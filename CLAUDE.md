@@ -5,17 +5,20 @@ Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
 in-process. Local-first: no telemetry, no network call the user did not
 configure. Audience: developers running models on their own machine.
 
-This is a mature ~36-package codebase, not a scaffold. Read the code before
-changing it.
+This is a mature 39-package Go codebase (38 internal packages plus the
+`cmd/llmtui` entry point), not a scaffold. Read the code before changing it;
+refresh the exact inventory with `go list ./...` and see
+`docs/architecture/package-map.md` for the maintained map.
 
 ## Commands
 
-All verified passing on `master` @ `93e5092`, Go 1.27.0, macOS arm64.
+These are the repository gates; run them against the current revision. Go 1.27
+and macOS arm64 are the local reference environment, but timings vary.
 
 ```bash
 make build                # go build -ldflags … -o llmtui ./cmd/llmtui
 make check                # fmt + vet + lint + test-race — run before committing
-go test -count=1 ./...    # full suite; ~35s
+go test -count=1 ./...    # full suite; duration varies by machine
 go vet ./...
 gofmt -l .                # must print nothing (CI fails on any output)
 golangci-lint run ./...   # config .golangci.yml (schema v2); currently 0 issues

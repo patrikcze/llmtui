@@ -96,6 +96,7 @@ cycle owns context. They never stop work automatically.
 | `/memory inspect <id>` | Show one record's kind, scope, trust, review state, and timestamps |
 | `/memory search <query>` | Search eligible user/project/episode/run/RAG sources under the configured budget |
 | `/memory explain <query>` | Show score components, token costs, selected hits, and content-free rejection reasons |
+| `/memory status` | Show retrieval state, stored-record counts, last retrieval tiers, and active-context budget |
 | `/memory remove <id>` · `/memory clear` | Remove one record; `clear` clears user preferences only |
 | `/memory on` / `/memory off` | Toggle for this session |
 

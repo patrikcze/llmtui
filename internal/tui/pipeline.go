@@ -128,6 +128,7 @@ type memoryRetrievalDiagnostics struct {
 	TotalTokens     int
 	MaxTokens       int
 	TierTokens      map[string]int
+	TierHits        map[string]int
 	KindCounts      map[string]int
 	RejectedReasons map[string]int
 }
@@ -500,10 +501,13 @@ func buildMemoryRetrievalDiagnostics(
 	diagnostic := memoryRetrievalDiagnostics{
 		Enabled: true, Duration: duration, Selected: len(result.Hits),
 		TotalTokens: result.TotalTokens, MaxTokens: maxTokens,
-		TierTokens: map[string]int{}, KindCounts: map[string]int{}, RejectedReasons: map[string]int{},
+		TierTokens: map[string]int{}, TierHits: map[string]int{},
+		KindCounts: map[string]int{}, RejectedReasons: map[string]int{},
 	}
 	for _, hit := range result.Hits {
-		diagnostic.TierTokens[memoryTierName(hit.Item.Kind)] += hit.Tokens
+		tier := memoryTierName(hit.Item.Kind)
+		diagnostic.TierTokens[tier] += hit.Tokens
+		diagnostic.TierHits[tier]++
 		diagnostic.KindCounts[string(hit.Item.Kind)]++
 	}
 	for _, rejected := range result.Rejected {

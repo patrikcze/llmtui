@@ -31,6 +31,7 @@ files are replaced atomically and use owner-only directory/file permissions
 /memory remove <id>
 /memory search <query>
 /memory explain <query>
+/memory status
 /memory on | /memory off
 ```
 
@@ -45,6 +46,13 @@ disable agent verification, or remove the agent's bounded cycle memory and run
 persistence; those are controller state used to execute and resume `/agent on`.
 Explicit list, inspect, search, remove, and add commands remain available while
 automatic prompt injection is off.
+
+`/memory on` means eligible stored records may participate in retrieval for the
+current session. It does not automatically remember conversation text. Use
+`/memory add` to create a durable user/project record, or `/save` to save a
+session episode when history saving is enabled. `/memory status` shows compact
+stored-record counts, last-retrieval counts by tier, and the active-context
+token budget without displaying record contents.
 
 Explicit `/save` or Ctrl+S creates or refreshes a compact episode. Automatic
 quit saves refresh it only when `memory.episodic.capture: true`; otherwise a

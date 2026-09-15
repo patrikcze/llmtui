@@ -15,7 +15,7 @@ import (
 )
 
 const memoryUsage = "/memory [on|off|add user <text>|add project <architecture|convention|decision> <text>|" +
-	"list [user|project|episode|run]|inspect <id>|remove <id>|search <query>|explain <query>]"
+	"status|list [user|project|episode|run]|inspect <id>|remove <id>|search <query>|explain <query>]"
 
 func cmdMemory(m *Model, args string) tea.Cmd {
 	if m.memStore == nil && m.projectStore == nil {
@@ -31,10 +31,12 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		m.openOverlay(func() string { return m.memoryListOverlay(scope) })
 	case "on":
 		m.memEnabled = true
-		m.notice = "local memory enabled for this session"
+		m.notice = "memory retrieval enabled for this session; nothing is stored automatically — use /memory add or /save"
 	case "off":
 		m.memEnabled = false
-		m.notice = "local memory disabled for this session"
+		m.notice = "memory retrieval disabled for this session; stored records remain unchanged"
+	case "status":
+		m.openOverlay(func() string { return m.memoryStatusOverlay() })
 	case "add":
 		return cmdMemoryAdd(m, rest)
 	case "inspect":
@@ -206,6 +208,93 @@ func (m *Model) memoryListOverlay(scope string) string {
 		"/memory add · /memory inspect <id> · /memory search <query> · /memory remove <id> · /memory on|off",
 	))
 	return m.overlayFooter(&b)
+}
+
+func (m *Model) memoryStatusOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("memory status") + "\n\n")
+	retrievalOn := m.memEnabled && m.cfg.Memory.Retrieval.Enabled
+	m.kv(&b, "memory retrieval", onOff(retrievalOn))
+	b.WriteString("  " + m.theme.SystemNote.Render("ON allows eligible stored records to participate in this session; it does not remember conversation text automatically.") + "\n")
+
+	b.WriteString("\n" + m.theme.UserLabel.Render("stored") + "\n")
+	writeMemoryStatusCount(&b, "user preferences", m.userMemoryCount())
+	writeMemoryStatusCount(&b, "project records", m.projectMemoryCount())
+	writeMemoryStatusCount(&b, "saved episodes", m.episodeMemoryCount())
+	writeMemoryStatusCount(&b, "current agent-run", m.agentRunMemoryCount())
+
+	b.WriteString("\n" + m.theme.UserLabel.Render("last retrieval") + "\n")
+	last := m.lastDebug.MemoryRetrieval
+	for _, tier := range []string{"user", "project", "episode", "agent", "source"} {
+		writeMemoryStatusCount(&b, tier, last.TierHits[tier])
+	}
+	if last.Selected == 0 {
+		b.WriteString("  " + m.theme.SystemNote.Render("none yet — send a message or use /memory explain <query>") + "\n")
+	}
+
+	b.WriteString("\n" + m.theme.UserLabel.Render("active context") + "\n")
+	maxTokens := last.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = m.memoryRetrievalPolicy().MaxTokens
+	}
+	m.kv(&b, "tokens", fmt.Sprintf("%d / %d", last.TotalTokens, maxTokens))
+	b.WriteString("\n" + m.theme.SystemNote.Render("/memory add creates durable records · /save creates a session episode when enabled") + "\n")
+	return m.overlayFooter(&b)
+}
+
+func writeMemoryStatusCount(b *strings.Builder, label string, count int) {
+	fmt.Fprintf(b, "  %-18s %d\n", label, count)
+}
+
+func (m *Model) userMemoryCount() int {
+	if m.memStore == nil {
+		return 0
+	}
+	snippets, err := m.memStore.Load()
+	if err != nil {
+		return 0
+	}
+	return len(snippets)
+}
+
+func (m *Model) projectMemoryCount() int {
+	if m.projectStore == nil {
+		return 0
+	}
+	records, err := m.projectStore.Load()
+	if err != nil {
+		return 0
+	}
+	return len(records)
+}
+
+func (m *Model) episodeMemoryCount() int {
+	if m.historyDir == "" || m.projectID == "" {
+		return 0
+	}
+	metas, err := history.List(m.historyDir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, meta := range metas {
+		session, err := history.Load(m.historyDir, meta.Name)
+		if err == nil && session.Episode != nil && session.Episode.ProjectID == m.projectID {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *Model) agentRunMemoryCount() int {
+	if m.agentLoop == nil || m.agentLoop.run == nil {
+		return 0
+	}
+	hits, err := m.agentRunMemorySource().Search(context.Background(), memoryindex.Query{RunID: m.agentRunID()})
+	if err != nil {
+		return 0
+	}
+	return len(hits)
 }
 
 func (m *Model) writeAgentRunMemoryList(b *strings.Builder) {

@@ -64,9 +64,10 @@ type Contract struct {
 // ContractOutput returns the validated contract and usage for run accounting.
 // Raw is bounded and intended only for caller-controlled, redacted diagnostics.
 type ContractOutput struct {
-	Contract Contract
-	Usage    *provider.Usage
-	Raw      string
+	Contract       Contract
+	Usage          *provider.Usage
+	Raw            string
+	RepairRequired bool
 }
 
 // EstablishContract performs one bounded, fresh-context, tool-free request to
@@ -117,6 +118,7 @@ func EstablishContract(ctx context.Context, client Client, cfg Config, input Con
 	}
 	req.Messages = contractRepairMessages(string(payload))
 	repaired, repairErr := requestContract(callCtx, client, req, cfg.AdmitRequest)
+	repaired.RepairRequired = true
 	repaired.Usage = mergeUsage(first.Usage, repaired.Usage)
 	return repaired, repairErr
 }

@@ -646,6 +646,7 @@ internal/cache/           local response cache (/cache)
 internal/contextmgr/      context-window budgeting + heuristic summaries
 internal/agent/           provider-neutral verified-run state, policy, memory
 internal/agentverify/     fresh-context provider verifier adapter
+internal/eval/            opt-in developer evaluation and JSONL reporting
 internal/memory/          opt-in user preference snippets (/memory)
 internal/memoryindex/     unified retrieval + typed project memory (/memory)
 internal/modelprofile/    per-model-family tuning profiles (/profile)
