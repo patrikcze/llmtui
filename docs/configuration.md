@@ -544,8 +544,11 @@ with `/math on|off`. Currency (`$100`), escaped dollars (`\$100`), inline code,
 and fenced code blocks are left alone; an expression that cannot be rendered
 safely (including inside a Markdown table cell) is kept as its original LaTeX.
 
-The remaining `ui` keys (`use_nerd_font`, `animations`, `show_usage_chart`,
-`show_token_stats`, `compact_mode`) are reserved for future use. The
+`ui.show_usage_chart` controls the persistent usage sparkline when the terminal
+has room for it. `ui.show_token_stats` controls session-token and speed
+telemetry in the status area. `ui.compact_mode` forces compact status and
+attachment chrome at every terminal width. `use_nerd_font` remains reserved;
+`animations` controls live spinner animation. The
 `privacy` section is declarative — the behaviors it describes (local-first,
 key redaction) are hardcoded and not configurable off; see
 [security.md](security.md).

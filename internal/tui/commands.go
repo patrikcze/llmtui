@@ -643,8 +643,9 @@ func (m *Model) historyOverlay() string {
 
 // suggestionsView renders the command popup shown above the input.
 func (m *Model) suggestionsView() string {
-	lines := make([]string, len(m.suggest.sugs))
-	for i, c := range m.suggest.sugs {
+	limit := min(len(m.suggest.sugs), m.layout.suggestionRows)
+	lines := make([]string, limit)
+	for i, c := range m.suggest.sugs[:limit] {
 		usage := fmt.Sprintf("%-20s", c.usage)
 		if i == m.suggest.sugIdx {
 			lines[i] = m.theme.UserLabel.Render(" ▸ "+usage) + m.theme.StatusValue.Render(c.desc)
