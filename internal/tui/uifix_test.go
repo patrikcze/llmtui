@@ -91,6 +91,39 @@ func TestTypingDoesNotScrollViewport(t *testing.T) {
 	}
 }
 
+func TestStreamingRefreshPreservesReaderPosition(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	for i := 0; i < 60; i++ {
+		m.session.AddAssistant(fmt.Sprintf("settled line %d", i))
+	}
+	m.refreshViewport()
+	m.viewport.GotoTop()
+	before := m.viewport.YOffset()
+	m.thinking = true
+	m.streamBuf.WriteString("new streamed text")
+	m.refreshViewport()
+	if got := m.viewport.YOffset(); got != before {
+		t.Errorf("refresh moved reader from offset %d to %d", before, got)
+	}
+}
+
+func TestStreamingRefreshFollowsBottom(t *testing.T) {
+	m := newTestModel(t)
+	m.resize(80, 24)
+	for i := 0; i < 60; i++ {
+		m.session.AddAssistant(fmt.Sprintf("settled line %d", i))
+	}
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+	m.thinking = true
+	m.streamBuf.WriteString("new streamed text")
+	m.refreshViewport()
+	if !m.viewport.AtBottom() {
+		t.Error("refresh did not keep a bottom-following reader at the bottom")
+	}
+}
+
 // A long pasted prompt outgrows the input box's max height (bounded so the
 // chat viewport never starves below its minimum rows — see
 // (*Model).maxInputLines); bubbles/v2's textarea already has PageUp/PageDown

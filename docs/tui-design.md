@@ -22,9 +22,28 @@ Top to bottom, always full-screen (alt-screen mode):
 Overlays (`/help`, `/usage`, `/doctor`, pickers, …) render inside the
 viewport area, scroll with `↑`/`↓`/`PgUp`/`PgDn`, and close with `Esc`,
 `Enter`, or `q`. The `/models` and `/providers` pickers instead use `↑`/`↓`
-to move the selection, `Enter` to switch, and `Esc` to cancel. While an
-overlay is open, async events (stream progress, health results) never
-overwrite it; the chat re-renders on close.
+to move the selection, `Enter` to switch, and `Esc` to cancel; navigating a
+long picker list keeps the selected row scrolled into view instead of
+resetting to the top. While an overlay is open, async events (stream
+progress, health results) never overwrite it; a resize rebuilds its content
+at the new width instead of leaving it stale, and the chat re-renders on
+close.
+
+Ordinary typed keys, including `PgUp`/`PgDn`, go to the composer, not the
+chat transcript — the transcript is normally reachable only by mouse wheel.
+`F6` toggles a keyboard-only transcript navigation mode: `↑`/`↓`/`PgUp`/
+`PgDn`/`Home`/`End` scroll the chat instead, until `F6` (or any other key)
+returns them to the composer. A pending tool approval and busy-state
+cancellation (`Esc`) still take priority over this mode.
+
+Each reasoning block's `+`/`-` `Thought` header is clickable: it toggles
+`ui.show_reasoning` for the whole session, the same as `/thoughts show|hide`.
+The header renders in the accent color (bold, not underlined — see
+`renderReasoning`'s comment for why) so it reads as interactive against the
+muted reasoning body. A click there sits inside the same viewport region
+click-drag text selection uses, so only a plain click (no movement between
+press and release) toggles; a real drag that happens to pass over or end on
+a header still finalizes as a text selection.
 
 ## Components
 

@@ -8,32 +8,22 @@ import (
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
 
-// pulse palettes cycle once per spinner tick to give buttons a soft glow.
-var (
-	stopPulse = resolvePulse([][2]string{
-		{"#B03A30", "#E07870"},
-		{"#C4544A", "#EE9089"},
-		{"#D96E64", "#F7ABA4"},
-		{"#C4544A", "#EE9089"},
-	})
-	workPulse = resolvePulse([][2]string{
-		{"#B4551F", "#E58E54"},
-		{"#C96830", "#EFA470"},
-		{"#DE7C42", "#F8BA8E"},
-		{"#C96830", "#EFA470"},
-	})
-)
+// WorkPulse returns the current theme's four-frame "in progress" breathing
+// gradient, built from the theme's own Accent so the animation follows
+// whichever theme is active instead of one hardcoded hue.
+func WorkPulse(t styles.Theme) []color.Color {
+	return pulseFrom(t.Accent)
+}
 
-// resolvePulse is the local stand-in for lipgloss v1's removed
-// AdaptiveColor: each {Light, Dark} pair is resolved once via
-// styles.IsDark instead of per-render.
-func resolvePulse(pairs [][2]string) []color.Color {
-	pick := lipgloss.LightDark(styles.IsDark())
-	colors := make([]color.Color, len(pairs))
-	for i, p := range pairs {
-		colors[i] = pick(lipgloss.Color(p[0]), lipgloss.Color(p[1]))
+// pulseFrom derives a four-frame breathing gradient (base, brighter,
+// brightest, brighter) from a single theme color.
+func pulseFrom(base color.Color) []color.Color {
+	return []color.Color{
+		base,
+		lipgloss.Lighten(base, 0.18),
+		lipgloss.Lighten(base, 0.35),
+		lipgloss.Lighten(base, 0.18),
 	}
-	return colors
 }
 
 // PulseButton renders a small glowing action chip, e.g. "▣ stop · esc".
@@ -45,7 +35,8 @@ func PulseButton(t styles.Theme, icon, label string, palette []color.Color, fram
 	return edge.Render("⟨") + body.Render(icon+" "+label) + edge.Render("⟩")
 }
 
-// StopButton renders the pulsing stop control shown while generating.
+// StopButton renders the pulsing stop control shown while generating, using
+// the theme's Bad color so the "stop" glow follows the active theme.
 func StopButton(t styles.Theme, frame int) string {
-	return PulseButton(t, "▣", "stop · esc", stopPulse, frame)
+	return PulseButton(t, "▣", "stop · esc", pulseFrom(t.Bad), frame)
 }

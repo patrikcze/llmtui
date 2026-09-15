@@ -139,7 +139,7 @@ func TestHealthCheckFailureRules(t *testing.T) {
 // content of an open overlay.
 func TestAsyncEventsDoNotStompOverlay(t *testing.T) {
 	m := newTestModel(t)
-	m.openOverlay("OVERLAY-MARKER")
+	m.openOverlay(func() string { return "OVERLAY-MARKER" })
 
 	m.Update(healthMsg{err: nil, provider: m.prov.Name(), initial: false})
 	m.thinking = true

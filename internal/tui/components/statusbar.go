@@ -11,22 +11,24 @@ import (
 
 // StatusBarData is everything the status bar displays.
 type StatusBarData struct {
-	Provider     string
-	Model        string
-	Connected    bool
-	DemoMode     bool
-	TotalTokens  int
-	LastTPS      float64
-	Estimated    bool
-	ContextUsed  int
-	ContextLimit int
-	Profile      string
-	PromptMode   string
-	Template     string
-	CacheOn      bool
-	SummaryOn    bool
-	ToolsOn      bool
-	WebOn        bool
+	Provider       string
+	Model          string
+	Connected      bool
+	DemoMode       bool
+	TotalTokens    int
+	LastTPS        float64
+	Estimated      bool
+	ContextUsed    int
+	ContextLimit   int
+	Profile        string
+	PromptMode     string
+	Template       string
+	CacheOn        bool
+	SummaryOn      bool
+	ToolsOn        bool
+	WebOn          bool
+	ShowTokenStats bool
+	Compact        bool
 }
 
 // StatusBar renders the status bar: one line when everything fits, two rows
@@ -77,16 +79,16 @@ func statusParts(t styles.Theme, d StatusBarData) []string {
 		t.StatusKey.Render("model ") + t.StatusValue.Render(d.Model),
 	}
 
-	if d.Profile != "" {
+	if !d.Compact && d.Profile != "" {
 		parts = append(parts, t.StatusKey.Render("profile ")+t.StatusValue.Render(d.Profile))
 	}
-	if d.PromptMode != "" {
+	if !d.Compact && d.PromptMode != "" {
 		parts = append(parts, t.StatusKey.Render("prompt ")+t.StatusValue.Render(d.PromptMode))
 	}
-	if d.Template != "" {
+	if !d.Compact && d.Template != "" {
 		parts = append(parts, t.StatusKey.Render("template ")+t.StatusValue.Render(d.Template))
 	}
-	if d.ContextLimit > 0 {
+	if !d.Compact && d.ContextLimit > 0 {
 		ctx := FormatTokens(d.ContextUsed) + "/" + FormatTokens(d.ContextLimit)
 		if d.SummaryOn {
 			ctx += "·sum"
@@ -103,13 +105,15 @@ func statusParts(t styles.Theme, d StatusBarData) []string {
 		parts = append(parts, t.StatusKey.Render("web ")+t.BadgeOK.Render("on"))
 	}
 
-	tokens := fmt.Sprintf("%d tok", d.TotalTokens)
-	if d.Estimated {
-		tokens += "~"
-	}
-	parts = append(parts, t.StatusKey.Render("session ")+t.StatusValue.Render(tokens))
-	if d.LastTPS > 0 {
-		parts = append(parts, t.StatusKey.Render("speed ")+t.StatusValue.Render(fmt.Sprintf("%.1f tok/s", d.LastTPS)))
+	if d.ShowTokenStats {
+		tokens := fmt.Sprintf("%d tok", d.TotalTokens)
+		if d.Estimated {
+			tokens += "~"
+		}
+		parts = append(parts, t.StatusKey.Render("session ")+t.StatusValue.Render(tokens))
+		if d.LastTPS > 0 {
+			parts = append(parts, t.StatusKey.Render("speed ")+t.StatusValue.Render(fmt.Sprintf("%.1f tok/s", d.LastTPS)))
+		}
 	}
 	return parts
 }

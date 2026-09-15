@@ -43,21 +43,10 @@ func newToolActivity(calls []tools.Call, gen int) *toolActivity {
 	return &toolActivity{entries: entries, startedAt: time.Now(), gen: gen}
 }
 
-// maxActivityRows caps the live region so a huge batch can't squeeze the
-// transcript out of view; the overflow collapses into one "+N more" line.
-const maxActivityRows = 6
-
 // activityHeight is the number of terminal rows the live region occupies,
 // so resize()/maxInputLines can budget for it.
 func (m *Model) activityHeight() int {
-	height := m.verifierActivityHeight()
-	if m.activity == nil {
-		return height
-	}
-	if n := len(m.activity.entries); n <= maxActivityRows {
-		return height + n
-	}
-	return height + maxActivityRows + 1
+	return m.activityRowsForHeight(m.height)
 }
 
 func (m *Model) verifierActivityHeight() int {
@@ -97,9 +86,10 @@ func (m *Model) renderActivity() string {
 	glyph := components.SpinnerFrame(m.frame, false, m.cfg.UI.Animations)
 	entries := m.activity.entries
 	overflow := 0
-	if len(entries) > maxActivityRows {
-		overflow = len(entries) - maxActivityRows
-		entries = entries[:maxActivityRows]
+	limit := activityEntryLimit(m.height)
+	if len(entries) > limit {
+		overflow = len(entries) - limit
+		entries = entries[:limit]
 	}
 	var b strings.Builder
 	for i, e := range entries {

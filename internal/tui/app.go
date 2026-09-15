@@ -149,10 +149,25 @@ type Model struct {
 	frame                int
 	renderWidth          int
 	mouseEnabled         bool
+	// transcriptCache holds the last rendered settled history, reused across
+	// refreshViewport calls whose transcriptCacheKey is unchanged (see
+	// settledTranscriptCached).
+	transcriptCache      string
+	transcriptCacheKey   transcriptCacheKey
+	transcriptCacheValid bool
 	// Click-drag text selection over the chat transcript (see selectionState).
 	sel         selectionState
 	notice      string
 	overlayOpen bool
+	// transcriptFocused is the F6 keyboard-only transcript navigation mode:
+	// while true, paging keys scroll the chat viewport instead of reaching
+	// the composer. See the tea.KeyPressMsg case in Update.
+	transcriptFocused bool
+	// overlayRender rebuilds the currently open static overlay's content at
+	// the model's current width; resize() re-invokes it so overlays reflow
+	// instead of staying stale (picker overlays reflow via renderPicker
+	// instead, keyed on m.picker.pickerKind).
+	overlayRender func() string
 	// picker holds the arrow-key picker overlay state (see pickerState).
 	picker pickerState
 	// visionInfoByID caches model metadata from the last successful ListModels
@@ -166,6 +181,7 @@ type Model struct {
 	operationLog    *history.OperationLog
 	operationLogErr error
 	inputLines      int
+	layout          layoutMetrics
 	ctrlCAt         time.Time
 	quitting        bool
 
@@ -317,6 +333,12 @@ func New(opts Options) *Model {
 	// with the light/dark pair actually resolved for this terminal.
 	taStyles := textarea.DefaultStyles(styles.IsDark())
 	taStyles.Focused.CursorLine = lipgloss.NewStyle()
+	// The textarea is only ever focused in this single-composer TUI (never
+	// blurred), so only the Focused state needs to follow the chosen theme
+	// instead of Bubbles' built-in dark/light defaults.
+	taStyles.Focused.Text = lipgloss.NewStyle().Foreground(t.Text)
+	taStyles.Focused.Prompt = lipgloss.NewStyle().Foreground(t.Accent)
+	taStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(t.Faint)
 	ta.SetStyles(taStyles)
 	ta.Focus()
 
@@ -378,7 +400,7 @@ func New(opts Options) *Model {
 // since it described the old conversation. Used by /history load and by
 // --resume/--continue at startup.
 func (m *Model) adoptSession(name string, s history.Session) {
-	m.session.Messages = s.Messages
+	m.session.SetMessages(s.Messages)
 	m.session.Stats = nil
 	m.session.TotalPromptTokens = s.Prompt
 	m.session.TotalCompletionTokens = s.Reply
@@ -763,6 +785,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if model, cmd, handled := m.updateStopButtonClick(msg); handled {
 			return model, cmd
 		}
+		if model, cmd, handled := m.updateReasoningClick(msg); handled {
+			return model, cmd
+		}
 		// A text-selection drag that started in the chat viewport (see
 		// beginSelection) finalizes here — copies to the clipboard if it
 		// covers more than a single cell. A release that never started a
@@ -772,6 +797,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.overlayOpen {
 			return m.updateOverlay(msg)
+		}
+		// F6 toggles a keyboard-only transcript navigation mode: paging keys
+		// scroll the chat instead of the composer, until F6 (or any other
+		// key) returns them there. Checked before every other binding below
+		// but after the overlay/approval checks above, which must still own
+		// the keyboard first.
+		if msg.String() == "f6" {
+			m.transcriptFocused = !m.transcriptFocused
+			return m, nil
+		}
+		if m.transcriptFocused {
+			switch msg.String() {
+			case "up", "down", "pgup", "pgdown":
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			case "home":
+				m.viewport.GotoTop()
+				return m, nil
+			case "end":
+				m.viewport.GotoBottom()
+				return m, nil
+			default:
+				// Any other key exits transcript focus and falls through to
+				// the normal handling below, so esc (busy-state
+				// cancellation), enter (send), ctrl+c (quit), and ordinary
+				// typing are never shadowed by this mode.
+				m.transcriptFocused = false
+			}
 		}
 		// Bubble Tea v2 decodes enhanced keyboard input itself, so supported
 		// terminals deliver Shift+Enter as a regular KeyPressMsg instead of
@@ -1005,7 +1059,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doctorResultMsg:
 		m.notice = ""
-		m.openOverlay(m.doctorOverlay(msg.report))
+		m.openOverlay(func() string { return m.doctorOverlay(msg.report) })
 		return m, nil
 
 	case mcpConnectMsg:
@@ -1273,6 +1327,52 @@ func (m *Model) updatePickerClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, 
 		}
 	}
 	return m, nil, false
+}
+
+// reasoningZoneID is the bubblezone ID for a settled message's "+/- Thought"
+// header, indexed like pickerRowZoneID since a long transcript can show
+// several of them on screen at once.
+func reasoningZoneID(i int) string {
+	return "reasoning-" + strconv.Itoa(i)
+}
+
+// liveReasoningZoneID marks the in-progress turn's reasoning header (see
+// renderLiveTail) — a single, fixed zone like stopButtonZoneID, since only
+// one turn can be streaming at a time.
+const liveReasoningZoneID = "reasoning-live"
+
+// updateReasoningClick handles a left-click release on a "+/- Thought"
+// header, toggling m.showReasoning exactly like /thoughts show|hide. A
+// header sits inside the same viewport region beginSelection/extendSelection
+// use for click-drag text selection, so a real drag that merely passes over
+// a header must still finalize as a selection — only a plain click (release
+// position equal to where the button went down) toggles.
+func (m *Model) updateReasoningClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.Button != tea.MouseLeft {
+		return m, nil, false
+	}
+	hit := zone.Get(liveReasoningZoneID).InBounds(msg)
+	if !hit {
+		for i := range m.session.Messages {
+			if zone.Get(reasoningZoneID(i)).InBounds(msg) {
+				hit = true
+				break
+			}
+		}
+	}
+	if !hit {
+		return m, nil, false
+	}
+	if z := zone.Get(chatViewportZoneID); m.sel.selecting && z != nil {
+		x, y := clampToZone(z, msg.X, msg.Y)
+		if x != m.sel.selStartX || y != m.sel.selStartY {
+			return m, nil, false
+		}
+	}
+	m.clearSelection()
+	m.showReasoning = !m.showReasoning
+	m.refreshViewport()
+	return m, nil, true
 }
 
 // stopButtonZoneID marks the stop button shown while generating (see
@@ -1653,7 +1753,7 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// can show what changed (display only; the model sees FormatResults).
 	if diff := tools.CollectDiffs(results); diff != "" {
 		if n := len(m.session.Messages); n > 0 && m.session.Messages[n-1].Role == provider.RoleUser {
-			m.session.Messages[n-1].Display = diff
+			m.session.SetLastDisplay(diff)
 		}
 	}
 	return cmd
@@ -1857,7 +1957,7 @@ func (m *Model) retryLast() tea.Cmd {
 	if n := len(m.session.Messages); n > 0 {
 		last := m.session.Messages[n-1]
 		if last.Role == provider.RoleUser && last.Content == m.lastUserMsg {
-			m.session.Messages = m.session.Messages[:n-1]
+			m.session.DropLast()
 		}
 	}
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
@@ -2070,18 +2170,10 @@ func (m *Model) syncInputHeight() {
 // below minChatRows (which would overflow and break the layout). On a tall
 // terminal the box can grow generously; on a short one it stays modest.
 func (m *Model) maxInputLines() int {
-	const minChatRows = 4
-	attach := 0
-	if len(m.attachments) > 0 {
-		attach = 1
+	if m.layout.inputMaxLines > 0 {
+		return m.layout.inputMaxLines
 	}
-	// resize(): vpHeight = h - 4(usage) - sugs - (2+lines) - status - 1(help)
-	// - activity. Solve for the largest lines keeping vpHeight >= minChatRows.
-	max := m.height - 7 - len(m.suggest.sugs) - m.statusLines - attach - minChatRows - m.activityHeight()
-	if max < 1 {
-		max = 1
-	}
-	return max
+	return 1
 }
 
 // copyLastReply copies the most recent assistant text (or the in-flight
@@ -2680,28 +2772,18 @@ func (m *Model) relayout() {
 
 func (m *Model) resize(w, h int) {
 	m.width, m.height = w, h
-
-	if m.statusLines < 1 {
-		m.statusLines = 1
-	}
+	m.layout = m.layoutFor(w, h, m.statusLines)
 	// Let the textarea calculate its height from the same cell-width-aware
 	// wrapping it uses to render. SetWidth triggers that recalculation.
 	m.input.MaxHeight = m.maxInputLines()
-	m.input.SetWidth(w - 6)
+	m.input.SetWidth(max(1, w-m.theme.InputPanel.GetHorizontalFrameSize()-2))
 	m.inputLines = m.input.Height()
-
-	// Layout: viewport fills space above the live activity region, usage
-	// panel (4), suggestion popup, input (border + content rows, +1 when
-	// attachment chips are shown), status bar (1 row, or 2 when wrapped),
-	// and help footer (1).
-	inputHeight := 2 + m.inputLines
-	if len(m.attachments) > 0 {
-		inputHeight++
-	}
-	vpHeight := h - 4 - len(m.suggest.sugs) - inputHeight - m.statusLines - 1 - m.activityHeight()
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
+	statusLines := statusLineCount(m.statusView())
+	m.statusLines = statusLines
+	m.layout = m.layoutFor(w, h, statusLines)
+	m.input.MaxHeight = m.maxInputLines()
+	m.inputLines = m.input.Height()
+	vpHeight := m.viewportHeightFor(m.inputLines)
 	if !m.ready {
 		m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(vpHeight))
 		m.ready = true
@@ -2732,6 +2814,20 @@ func (m *Model) resize(w, h int) {
 			m.renderer = r
 		}
 	}
+	// refreshViewport() is a no-op while an overlay owns the viewport (see
+	// its own guard), so a resize would otherwise leave overlay content
+	// stale at whatever width it was opened at. Reflow it explicitly:
+	// picker overlays rebuild through renderPicker (which also keeps the
+	// selection visible), static overlays through the render func openOverlay
+	// stored for exactly this.
+	if m.overlayOpen {
+		if m.picker.pickerKind != pickerNone {
+			m.renderPicker()
+		} else if m.overlayRender != nil {
+			m.viewport.SetContent(m.overlayRender())
+		}
+		return
+	}
 	m.refreshViewport()
 }
 
@@ -2761,9 +2857,97 @@ func (m *Model) refreshViewport() {
 	if !m.ready || m.overlayOpen {
 		return
 	}
+	followingBottom := m.viewport.AtBottom()
+	previousOffset := m.viewport.YOffset()
+
 	var b strings.Builder
-	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
-		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
+	b.WriteString(m.settledTranscriptCached())
+	b.WriteString(m.renderLiveTail())
+
+	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
+	if followingBottom {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(previousOffset)
+	}
+}
+
+// transcriptCacheKey covers everything renderSettledTranscript's output can
+// depend on. Any field left out here is a correctness bug: the cache would
+// go stale and show old content. session.Rev() alone is not enough — it
+// only tells us the message set changed, not how the change should render.
+type transcriptCacheKey struct {
+	rev              int
+	width            int
+	theme            string
+	markdown         bool
+	math             bool
+	showReasoning    bool
+	toolsShowOutput  bool
+	demoMode         bool
+	toolsOn          bool
+	toolsRoot        string
+	toolsAutoApprove bool
+	ragOn            bool
+	ragLen           int
+	activityLive     bool
+}
+
+func (m *Model) settledTranscriptKey() transcriptCacheKey {
+	toolsOn := m.toolsOn && m.toolRunner != nil
+	root := ""
+	if toolsOn {
+		root = m.toolRunner.Root()
+	}
+	ragOn := m.ragOn && m.ragIndex != nil
+	ragLen := 0
+	if ragOn {
+		ragLen = m.ragIndex.Len()
+	}
+	return transcriptCacheKey{
+		rev:              m.session.Rev(),
+		width:            m.width,
+		theme:            m.theme.Name,
+		markdown:         m.cfg.UI.Markdown,
+		math:             m.cfg.UI.Math.Enabled,
+		showReasoning:    m.showReasoning,
+		toolsShowOutput:  m.toolsShowOutput,
+		demoMode:         m.demoMode,
+		toolsOn:          toolsOn,
+		toolsRoot:        root,
+		toolsAutoApprove: m.toolsAutoApprove,
+		ragOn:            ragOn,
+		ragLen:           ragLen,
+		activityLive:     m.activity != nil,
+	}
+}
+
+// settledTranscriptCached returns the rendered settled history (every
+// completed message plus the standing banners), reusing the previous
+// render whenever nothing it depends on has changed. Settled history is
+// re-rendered on every streaming delta otherwise — at a few hundred
+// messages that costs hundreds of milliseconds and tens of thousands of
+// allocations per keystroke-equivalent tick (see BenchmarkRefreshViewport).
+func (m *Model) settledTranscriptCached() string {
+	key := m.settledTranscriptKey()
+	if m.transcriptCacheValid && key == m.transcriptCacheKey {
+		return m.transcriptCache
+	}
+	out := m.renderSettledTranscript()
+	m.transcriptCache = out
+	m.transcriptCacheKey = key
+	m.transcriptCacheValid = true
+	return out
+}
+
+// renderSettledTranscript renders every completed message plus the
+// standing banners (demo mode, tools/RAG disclosures). It must depend only
+// on state covered by transcriptCacheKey — nothing here should read a field
+// that key doesn't capture.
+func (m *Model) renderSettledTranscript() string {
+	var b strings.Builder
+	appendReasoning := func(zoneID, reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(zoneID, reasoning, streaming, duration))
 		b.WriteString("\n\n")
 	}
 
@@ -2849,7 +3033,7 @@ func (m *Model) refreshViewport() {
 			b.WriteString("\n\n")
 		case provider.RoleAssistant:
 			if msg.Reasoning != "" {
-				appendReasoning(msg.Reasoning, false, msg.ReasoningDuration)
+				appendReasoning(reasoningZoneID(i), msg.Reasoning, false, msg.ReasoningDuration)
 			}
 			content := msg.Content
 			if !m.toolsShowOutput {
@@ -2903,6 +3087,21 @@ func (m *Model) refreshViewport() {
 		}
 	}
 
+	return b.String()
+}
+
+// renderLiveTail renders everything that changes on every streaming delta:
+// the in-progress reasoning/answer, error text, pending questions, and the
+// approval prompt. Deliberately not cached — it is already small (at most
+// one message's worth of content), so re-rendering it every call is cheap
+// and keeps it always current.
+func (m *Model) renderLiveTail() string {
+	var b strings.Builder
+	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(liveReasoningZoneID, reasoning, streaming, duration))
+		b.WriteString("\n\n")
+	}
+
 	if m.thinking {
 		if m.progressText != "" {
 			b.WriteString(m.theme.SystemNote.Render("provider · " + m.progressText))
@@ -2943,8 +3142,7 @@ func (m *Model) refreshViewport() {
 		b.WriteString(m.renderApprovalPrompt())
 	}
 
-	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
-	m.viewport.GotoBottom()
+	return b.String()
 }
 
 // renderToolDiff colorizes a write_file display diff: Create()/Update()
@@ -3098,56 +3296,39 @@ func (m *Model) render() string {
 		return "loading…"
 	}
 
-	usage := components.UsagePanel(m.theme, components.UsagePanelData{
-		TokenHistory: m.session.TokenHistory(),
-		PromptTotal:  m.session.TotalPromptTokens,
-		ReplyTotal:   m.session.TotalCompletionTokens,
-		Estimated:    m.session.AnyEstimated,
-	}, m.width)
+	usage := ""
+	if m.layout.showUsage {
+		usage = components.UsagePanel(m.theme, components.UsagePanelData{
+			TokenHistory: m.session.TokenHistory(),
+			PromptTotal:  m.session.TotalPromptTokens,
+			ReplyTotal:   m.session.TotalCompletionTokens,
+			Estimated:    m.session.AnyEstimated,
+		}, m.width)
+	}
 
 	inputContent := m.input.View()
 	if len(m.attachments) > 0 {
-		chips := make([]string, len(m.attachments))
-		for i, img := range m.attachments {
-			chips[i] = m.theme.Badge.Render(fmt.Sprintf("⌗ image %d", i+1)) +
-				m.theme.HelpFooter.Render(fmt.Sprintf(" %.0f KB · ctrl+x remove", float64(len(img.Data))/1024))
+		if m.layout.compact && len(m.attachments) > 1 {
+			inputContent = m.theme.Badge.Render(fmt.Sprintf("⌗ %d images", len(m.attachments))) +
+				m.theme.HelpFooter.Render(" · ctrl+x remove last") + "\n" + inputContent
+		} else {
+			chips := make([]string, len(m.attachments))
+			for i, img := range m.attachments {
+				chips[i] = m.theme.Badge.Render(fmt.Sprintf("⌗ image %d", i+1)) +
+					m.theme.HelpFooter.Render(fmt.Sprintf(" %.0f KB · ctrl+x remove", float64(len(img.Data))/1024))
+			}
+			inputContent = strings.Join(chips, "   ") + "\n" + inputContent
 		}
-		inputContent = strings.Join(chips, "   ") + "\n" + inputContent
 	}
 	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
+	status := m.statusView()
 
-	prof, _ := m.activeProfile()
-	profileLabel := prof.Name
-	if m.profileMode == "auto" || m.profileMode == "" {
-		profileLabel = "auto/" + prof.Name
+	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit · F6 transcript")
+	if m.transcriptFocused {
+		help = m.theme.HelpFooter.Render("↑/↓ · pgup/pgdn · home/end scroll transcript · F6 composer")
 	}
-	ctxWindow, _ := m.contextWindow()
-	status := components.StatusBar(m.theme, components.StatusBarData{
-		Provider:     terminaltext.Sanitize(m.prov.Name()),
-		Model:        terminaltext.Sanitize(m.model),
-		Connected:    m.connected,
-		DemoMode:     m.demoMode,
-		TotalTokens:  m.session.TotalTokens(),
-		LastTPS:      m.lastTPS,
-		Estimated:    m.session.AnyEstimated,
-		Profile:      terminaltext.Sanitize(profileLabel),
-		PromptMode:   m.effectivePromptMode(),
-		Template:     terminaltext.Sanitize(m.template),
-		ContextUsed:  contextmgr.EstimateTokens(m.session.Messages),
-		ContextLimit: ctxWindow,
-		CacheOn:      m.responseCache != nil && m.responseCache.Enabled(),
-		SummaryOn:    m.summary != "",
-		ToolsOn:      m.toolsOn,
-		WebOn:        m.webOn,
-	}, m.width)
-	if lines := strings.Count(status, "\n") + 1; lines != m.statusLines {
-		m.statusLines = lines
-		m.relayout()
-	}
-
-	help := m.theme.HelpFooter.Render("/ commands · /help shortcuts · enter send · ctrl+y copy · ctrl+o select · ctrl+c ×2 quit")
 	if m.notice != "" {
-		help = m.theme.BadgeOK.Render(terminaltext.Sanitize(m.notice))
+		help = noticeBadge(m.theme, m.notice).Render(terminaltext.Sanitize(m.notice))
 	}
 	if len(m.pendingCalls) > 0 {
 		if m.pendingBudget {
@@ -3188,8 +3369,10 @@ func (m *Model) render() string {
 	if verifierActivity := m.renderVerifierActivity(); verifierActivity != "" {
 		sections = append(sections, verifierActivity)
 	}
-	sections = append(sections, usage)
-	if len(m.suggest.sugs) > 0 {
+	if usage != "" {
+		sections = append(sections, usage)
+	}
+	if m.layout.suggestionRows > 0 {
 		sections = append(sections, m.suggestionsView())
 	}
 	sections = append(sections, inputView, status,

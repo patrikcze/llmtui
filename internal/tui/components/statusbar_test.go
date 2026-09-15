@@ -12,18 +12,19 @@ import (
 
 func statusData() StatusBarData {
 	return StatusBarData{
-		Provider:     "ollama",
-		Model:        "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M",
-		Connected:    true,
-		TotalTokens:  494140,
-		LastTPS:      15.2,
-		ContextUsed:  5700,
-		ContextLimit: 32800,
-		Profile:      "auto/qwen",
-		PromptMode:   "coding",
-		CacheOn:      true,
-		ToolsOn:      true,
-		WebOn:        true,
+		Provider:       "ollama",
+		Model:          "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M",
+		Connected:      true,
+		TotalTokens:    494140,
+		LastTPS:        15.2,
+		ContextUsed:    5700,
+		ContextLimit:   32800,
+		Profile:        "auto/qwen",
+		PromptMode:     "coding",
+		CacheOn:        true,
+		ToolsOn:        true,
+		WebOn:          true,
+		ShowTokenStats: true,
 	}
 }
 

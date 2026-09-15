@@ -28,7 +28,7 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		if !validMemoryListScope(scope) {
 			return m.fail("usage: /memory list [user|project|episode|run]")
 		}
-		m.openOverlay(m.memoryListOverlay(scope))
+		m.openOverlay(func() string { return m.memoryListOverlay(scope) })
 	case "on":
 		m.memEnabled = true
 		m.notice = "local memory enabled for this session"
@@ -45,18 +45,33 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail(err.Error())
 		}
-		m.openOverlay(overlay)
+		// Re-run on resize so the overlay reflows at the new width, falling
+		// back to the content already shown if the entry became unreadable
+		// in between (rare — resize shouldn't be able to fail where open
+		// just succeeded).
+		m.openOverlay(func() string {
+			if o, err := m.memoryInspectOverlay(rest); err == nil {
+				return o
+			}
+			return overlay
+		})
 	case "remove":
 		return cmdMemoryRemove(m, rest)
 	case "search", "explain":
 		if rest == "" {
 			return m.fail("usage: /memory " + sub + " <query>")
 		}
-		overlay, err := m.memorySearchOverlay(rest, sub == "explain")
+		explain := sub == "explain"
+		overlay, err := m.memorySearchOverlay(rest, explain)
 		if err != nil {
 			return m.fail("memory " + sub + ": " + err.Error())
 		}
-		m.openOverlay(overlay)
+		m.openOverlay(func() string {
+			if o, err := m.memorySearchOverlay(rest, explain); err == nil {
+				return o
+			}
+			return overlay
+		})
 	case "clear":
 		if m.memStore == nil {
 			return m.fail("user memory is not configured")

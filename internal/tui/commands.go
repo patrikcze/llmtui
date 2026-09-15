@@ -84,7 +84,7 @@ func slashCommands() []slashCommand {
 	return []slashCommand{
 		// --- Chat ---
 		{name: "help", usage: "/help [topic]", desc: "show keys and commands, grouped by category", category: "Chat", run: func(m *Model, args string) tea.Cmd {
-			m.openOverlay(m.helpOverlay(args))
+			m.openOverlay(func() string { return m.helpOverlay(args) })
 			return nil
 		}},
 		{name: "copy", usage: "/copy", desc: "copy the last reply to the clipboard", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
@@ -182,7 +182,7 @@ func slashCommands() []slashCommand {
 		// --- Session ---
 		{name: "usage", usage: "/usage [session|last|reset|export]", desc: "usage dashboard: charts, models, cache, streaks", category: "Session", run: cmdUsage},
 		{name: "stats", usage: "/stats", desc: "per-exchange session statistics", category: "Session", run: func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(m.statsOverlay())
+			m.openOverlay(func() string { return m.statsOverlay() })
 			return nil
 		}},
 		{name: "save", usage: "/save", desc: "save this session to the history directory", category: "Session", run: func(m *Model, _ string) tea.Cmd {
@@ -333,15 +333,23 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 }
 
 // openOverlay shows scrollable content in the viewport area until Esc.
-func (m *Model) openOverlay(content string) {
+// render is retained and re-invoked by resize() so overlay content reflows
+// to the new width instead of staying stale at whatever width it was opened
+// at. render must only reformat state the model already holds — it must not
+// perform new I/O (re-reading files, re-querying a provider/MCP server) on
+// every resize; overlay builders that fetch data do so once, at open time,
+// same as before this existed.
+func (m *Model) openOverlay(render func() string) {
 	m.clearPicker()
 	m.overlayOpen = true
-	m.viewport.SetContent(content)
+	m.overlayRender = render
+	m.viewport.SetContent(render())
 	m.viewport.GotoTop()
 }
 
 func (m *Model) closeOverlay() {
 	m.overlayOpen = false
+	m.overlayRender = nil
 	m.clearPicker()
 	m.refreshViewport()
 }
@@ -410,6 +418,28 @@ func selectedIndex(items []string, selected string) int {
 	return 0
 }
 
+// pickerHeaderLines is how many lines precede the first item row in each
+// picker kind's overlay body (title + blank line, plus an optional column
+// header and/or a picker-specific prompt line + blank). It must track each
+// pickerXxxOverlay function's preamble: renderPicker uses it to compute
+// which line holds the selected row, so keeping the selection visible on
+// navigation depends on it staying accurate.
+var pickerHeaderLines = map[pickerKind]int{
+	pickerModel:          2,
+	pickerProvider:       2,
+	pickerProfile:        2,
+	pickerSkill:          3,
+	pickerPlugin:         3,
+	pickerAgentQuestion:  4,
+	pickerAgentPromotion: 4,
+}
+
+// renderPicker rebuilds the picker overlay and scrolls just enough to keep
+// the selected row in view — both on first open (the active item may not be
+// index 0) and on every arrow-key navigation. It previously called
+// GotoTop() unconditionally after every render, which reset a large list's
+// scroll position back to the top on every keypress and could leave the
+// selection entirely off-screen.
 func (m *Model) renderPicker() {
 	var content string
 	switch m.picker.pickerKind {
@@ -429,7 +459,11 @@ func (m *Model) renderPicker() {
 		content = m.agentPromotionPickerOverlay()
 	}
 	m.viewport.SetContent(content)
-	m.viewport.GotoTop()
+	if header, ok := pickerHeaderLines[m.picker.pickerKind]; ok {
+		m.viewport.EnsureVisible(header+m.picker.pickerIdx, 0, 0)
+	} else {
+		m.viewport.GotoTop()
+	}
 }
 
 func (m *Model) helpOverlay(topic string) string {
@@ -454,6 +488,7 @@ func (m *Model) helpOverlay(topic string) string {
 			{"ctrl+v", "paste image from clipboard (vision models)"},
 			{"ctrl+x", "remove last pasted image"},
 			{"ctrl+u", "clear the whole prompt box"},
+			{"f6", "toggle keyboard transcript navigation (↑/↓/pgup/pgdn/home/end)"},
 			{"esc", "stop generation · close this overlay"},
 			{"ctrl+l", "clear conversation"},
 			{"↑/↓", "recall submitted input (empty composer) · command suggestions · multiline cursor"},
@@ -643,8 +678,9 @@ func (m *Model) historyOverlay() string {
 
 // suggestionsView renders the command popup shown above the input.
 func (m *Model) suggestionsView() string {
-	lines := make([]string, len(m.suggest.sugs))
-	for i, c := range m.suggest.sugs {
+	limit := min(len(m.suggest.sugs), m.layout.suggestionRows)
+	lines := make([]string, limit)
+	for i, c := range m.suggest.sugs[:limit] {
 		usage := fmt.Sprintf("%-20s", c.usage)
 		if i == m.suggest.sugIdx {
 			lines[i] = m.theme.UserLabel.Render(" ▸ "+usage) + m.theme.StatusValue.Render(c.desc)
