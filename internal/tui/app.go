@@ -149,6 +149,12 @@ type Model struct {
 	frame                int
 	renderWidth          int
 	mouseEnabled         bool
+	// transcriptCache holds the last rendered settled history, reused across
+	// refreshViewport calls whose transcriptCacheKey is unchanged (see
+	// settledTranscriptCached).
+	transcriptCache      string
+	transcriptCacheKey   transcriptCacheKey
+	transcriptCacheValid bool
 	// Click-drag text selection over the chat transcript (see selectionState).
 	sel         selectionState
 	notice      string
@@ -385,7 +391,7 @@ func New(opts Options) *Model {
 // since it described the old conversation. Used by /history load and by
 // --resume/--continue at startup.
 func (m *Model) adoptSession(name string, s history.Session) {
-	m.session.Messages = s.Messages
+	m.session.SetMessages(s.Messages)
 	m.session.Stats = nil
 	m.session.TotalPromptTokens = s.Prompt
 	m.session.TotalCompletionTokens = s.Reply
@@ -1660,7 +1666,7 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 	// can show what changed (display only; the model sees FormatResults).
 	if diff := tools.CollectDiffs(results); diff != "" {
 		if n := len(m.session.Messages); n > 0 && m.session.Messages[n-1].Role == provider.RoleUser {
-			m.session.Messages[n-1].Display = diff
+			m.session.SetLastDisplay(diff)
 		}
 	}
 	return cmd
@@ -1864,7 +1870,7 @@ func (m *Model) retryLast() tea.Cmd {
 	if n := len(m.session.Messages); n > 0 {
 		last := m.session.Messages[n-1]
 		if last.Role == provider.RoleUser && last.Content == m.lastUserMsg {
-			m.session.Messages = m.session.Messages[:n-1]
+			m.session.DropLast()
 		}
 	}
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
@@ -2752,6 +2758,92 @@ func (m *Model) refreshViewport() {
 	}
 	followingBottom := m.viewport.AtBottom()
 	previousOffset := m.viewport.YOffset()
+
+	var b strings.Builder
+	b.WriteString(m.settledTranscriptCached())
+	b.WriteString(m.renderLiveTail())
+
+	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
+	if followingBottom {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(previousOffset)
+	}
+}
+
+// transcriptCacheKey covers everything renderSettledTranscript's output can
+// depend on. Any field left out here is a correctness bug: the cache would
+// go stale and show old content. session.Rev() alone is not enough — it
+// only tells us the message set changed, not how the change should render.
+type transcriptCacheKey struct {
+	rev              int
+	width            int
+	theme            string
+	markdown         bool
+	math             bool
+	showReasoning    bool
+	toolsShowOutput  bool
+	demoMode         bool
+	toolsOn          bool
+	toolsRoot        string
+	toolsAutoApprove bool
+	ragOn            bool
+	ragLen           int
+	activityLive     bool
+}
+
+func (m *Model) settledTranscriptKey() transcriptCacheKey {
+	toolsOn := m.toolsOn && m.toolRunner != nil
+	root := ""
+	if toolsOn {
+		root = m.toolRunner.Root()
+	}
+	ragOn := m.ragOn && m.ragIndex != nil
+	ragLen := 0
+	if ragOn {
+		ragLen = m.ragIndex.Len()
+	}
+	return transcriptCacheKey{
+		rev:              m.session.Rev(),
+		width:            m.width,
+		theme:            m.theme.Name,
+		markdown:         m.cfg.UI.Markdown,
+		math:             m.cfg.UI.Math.Enabled,
+		showReasoning:    m.showReasoning,
+		toolsShowOutput:  m.toolsShowOutput,
+		demoMode:         m.demoMode,
+		toolsOn:          toolsOn,
+		toolsRoot:        root,
+		toolsAutoApprove: m.toolsAutoApprove,
+		ragOn:            ragOn,
+		ragLen:           ragLen,
+		activityLive:     m.activity != nil,
+	}
+}
+
+// settledTranscriptCached returns the rendered settled history (every
+// completed message plus the standing banners), reusing the previous
+// render whenever nothing it depends on has changed. Settled history is
+// re-rendered on every streaming delta otherwise — at a few hundred
+// messages that costs hundreds of milliseconds and tens of thousands of
+// allocations per keystroke-equivalent tick (see BenchmarkRefreshViewport).
+func (m *Model) settledTranscriptCached() string {
+	key := m.settledTranscriptKey()
+	if m.transcriptCacheValid && key == m.transcriptCacheKey {
+		return m.transcriptCache
+	}
+	out := m.renderSettledTranscript()
+	m.transcriptCache = out
+	m.transcriptCacheKey = key
+	m.transcriptCacheValid = true
+	return out
+}
+
+// renderSettledTranscript renders every completed message plus the
+// standing banners (demo mode, tools/RAG disclosures). It must depend only
+// on state covered by transcriptCacheKey — nothing here should read a field
+// that key doesn't capture.
+func (m *Model) renderSettledTranscript() string {
 	var b strings.Builder
 	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
 		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
@@ -2894,6 +2986,21 @@ func (m *Model) refreshViewport() {
 		}
 	}
 
+	return b.String()
+}
+
+// renderLiveTail renders everything that changes on every streaming delta:
+// the in-progress reasoning/answer, error text, pending questions, and the
+// approval prompt. Deliberately not cached — it is already small (at most
+// one message's worth of content), so re-rendering it every call is cheap
+// and keeps it always current.
+func (m *Model) renderLiveTail() string {
+	var b strings.Builder
+	appendReasoning := func(reasoning string, streaming bool, duration time.Duration) {
+		b.WriteString(m.renderReasoning(reasoning, streaming, duration))
+		b.WriteString("\n\n")
+	}
+
 	if m.thinking {
 		if m.progressText != "" {
 			b.WriteString(m.theme.SystemNote.Render("provider · " + m.progressText))
@@ -2934,12 +3041,7 @@ func (m *Model) refreshViewport() {
 		b.WriteString(m.renderApprovalPrompt())
 	}
 
-	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
-	if followingBottom {
-		m.viewport.GotoBottom()
-	} else {
-		m.viewport.SetYOffset(previousOffset)
-	}
+	return b.String()
 }
 
 // renderToolDiff colorizes a write_file display diff: Create()/Update()

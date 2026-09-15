@@ -16,7 +16,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/provider/mock"
 )
 
-func newTestModel(t *testing.T) *Model {
+func newTestModel(t testing.TB) *Model {
 	t.Helper()
 	cfg := &config.Config{
 		Chat: config.ChatConfig{
