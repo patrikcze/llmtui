@@ -36,14 +36,21 @@ func TestContractStageAgainstRealEndpoint(t *testing.T) {
 		name       string
 		task       string
 		scenarioID string
-		// wantAsk is the documented expectation for the ambiguous prompts;
+		// wantAsk is the documented expectation for the ambiguous prompt;
 		// a mismatch is logged, not failed, because the point of the probe is
 		// to measure model behaviour.
-		wantAsk bool
+		wantAsk      bool
+		capabilities agentverify.CapabilityCapsule
 	}{
-		{"ambiguous_reference", "Read the file I mentioned and give me its heading.", "contract/ambiguous_reference", true},
-		{"named_missing_file", "Read absent.md and summarize it.", "contract/named_missing_file", true},
-		{"clear_multipart", "Read report.md and write its heading to result.txt.", "contract/omitted_deliverable", false},
+		{"ambiguous_reference", "Read the file I mentioned and give me its heading.", "contract/ambiguous_reference", true, agentverify.CapabilityCapsule{
+			WorkspaceAccess: true, Available: []string{"read_files", "write_files", "ask_user"},
+		}},
+		{"named_missing_file", "Read absent.md and summarize it.", "contract/named_missing_file", false, agentverify.CapabilityCapsule{
+			WorkspaceAccess: true, Available: []string{"read_files", "write_files", "ask_user"},
+		}},
+		{"clear_multipart", "Read report.md and write its heading to result.txt.", "contract/omitted_deliverable", false, agentverify.CapabilityCapsule{
+			WorkspaceAccess: true, Available: []string{"read_files", "write_files", "ask_user"},
+		}},
 	}
 
 	for _, tc := range cases {
@@ -53,7 +60,7 @@ func TestContractStageAgainstRealEndpoint(t *testing.T) {
 			defer cancel()
 			out, err := agentverify.EstablishContract(ctx, p,
 				agentverify.Config{Model: model, MaxTokens: 12288, Timeout: 2 * time.Minute},
-				agentverify.ContractInput{Task: tc.task})
+				agentverify.ContractInput{Task: tc.task, Capabilities: tc.capabilities})
 
 			switch {
 			case err != nil && errors.Is(err, agent.ErrMalformedControl):

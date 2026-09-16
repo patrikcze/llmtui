@@ -492,6 +492,36 @@ func TestMemoryOverlaysSanitizeStoredTerminalContent(t *testing.T) {
 	}
 }
 
+func TestMemoryStatusExplainsRetrievalWithoutAutomaticStorage(t *testing.T) {
+	m := newTestModel(t)
+	if _, err := m.memStore.Add("prefer compact examples"); err != nil {
+		t.Fatal(err)
+	}
+	m.lastDebug.MemoryRetrieval = memoryRetrievalDiagnostics{
+		Enabled: true, Selected: 2, TotalTokens: 120, MaxTokens: 1800,
+		TierHits: map[string]int{"user": 1, "source": 1},
+	}
+	status := m.memoryStatusOverlay()
+	for _, want := range []string{"memory retrieval", "user preferences", "1", "last retrieval", "source", "120 / 1800", "does not remember conversation text automatically"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("memory status missing %q:\n%s", want, status)
+		}
+	}
+	if strings.Contains(status, "prefer compact examples") {
+		t.Fatal("memory status exposed stored content")
+	}
+}
+
+func TestMemoryOnNoticeExplainsSessionOnlyRetrieval(t *testing.T) {
+	m := newTestModel(t)
+	runCommand(m, "/memory on")
+	for _, want := range []string{"memory retrieval enabled", "nothing is stored automatically", "/memory add", "/save"} {
+		if !strings.Contains(m.notice, want) {
+			t.Errorf("notice missing %q: %q", want, m.notice)
+		}
+	}
+}
+
 func TestMemoryListEpisodeAndRunTiers(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()

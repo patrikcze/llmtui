@@ -945,7 +945,7 @@ func (m *Model) debugOverlay() string {
 	}
 
 	if len(d.MemoryHits) > 0 {
-		b.WriteString("\n" + m.theme.UserLabel.Render("memory retrieval (unified)") + "\n")
+		b.WriteString("\n" + m.theme.UserLabel.Render("active context retrieval") + "\n")
 		for _, h := range d.MemoryHits {
 			fmt.Fprintf(&b, "  %s\n", m.theme.StatusValue.Render(
 				fmt.Sprintf("%s · %s · score %.2f", h.Item.Kind, h.Item.ID, h.Score)))
@@ -967,6 +967,18 @@ func (m *Model) debugOverlay() string {
 				parts = append(parts, fmt.Sprintf("%s=%d", key, d.MemoryRetrieval.TierTokens[key]))
 			}
 			m.kv(&b, "tier tokens", strings.Join(parts, " · "))
+		}
+		if len(d.MemoryRetrieval.TierHits) > 0 {
+			keys := make([]string, 0, len(d.MemoryRetrieval.TierHits))
+			for key := range d.MemoryRetrieval.TierHits {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, key := range keys {
+				parts = append(parts, fmt.Sprintf("%s=%d", key, d.MemoryRetrieval.TierHits[key]))
+			}
+			m.kv(&b, "tier hits", strings.Join(parts, " · "))
 		}
 		if len(d.MemoryRetrieval.RejectedReasons) > 0 {
 			keys := make([]string, 0, len(d.MemoryRetrieval.RejectedReasons))

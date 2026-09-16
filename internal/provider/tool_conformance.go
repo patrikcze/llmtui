@@ -32,6 +32,9 @@ type ToolCallConformance struct {
 	SuspectedCensoring   bool
 	FailureBoundary      ToolCallStage
 	Detail               string
+	Requests             int
+	PromptTokens         int
+	CompletionTokens     int
 }
 
 const conformanceProbeToken = "llmtui-tool-conformance-v1"
@@ -65,6 +68,8 @@ func ProbeNativeToolCalls(ctx context.Context, p Provider, model string, streami
 	if err != nil {
 		return report, err
 	}
+	report.Requests = 1
+	addProbeUsage(&report, done.Usage)
 	for _, event := range done.ToolCallDiagnostics {
 		if event.Classification == ToolCallSuspectedCensored || event.Classification == ToolCallIncompleteStream || event.Classification == ToolCallProviderParseError {
 			report.SuspectedCensoring = true
@@ -108,12 +113,23 @@ func ProbeNativeToolCalls(ctx context.Context, p Provider, model string, streami
 		Message{Role: RoleAssistant, ToolCalls: []ToolCall{call}},
 		Message{Role: RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: `{"probe_token":"` + conformanceProbeToken + `"}`},
 	)
-	if _, err := awaitProbeDone(ctx, p, followup); err != nil {
+	continued, err := awaitProbeDone(ctx, p, followup)
+	if err != nil {
 		report.ResultCorrelation, report.Detail = ConformanceFail, "provider rejected correlated tool result"
 		return report, nil
 	}
+	report.Requests++
+	addProbeUsage(&report, continued.Usage)
 	report.ResultCorrelation = ConformancePass
 	return report, nil
+}
+
+func addProbeUsage(report *ToolCallConformance, usage *Usage) {
+	if usage == nil {
+		return
+	}
+	report.PromptTokens += usage.PromptTokens
+	report.CompletionTokens += usage.CompletionTokens
 }
 
 func awaitProbeDone(ctx context.Context, p Provider, request ChatRequest) (ChatEvent, error) {

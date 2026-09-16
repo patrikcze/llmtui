@@ -34,11 +34,10 @@ type AgentEvidenceSnapshot struct {
 	Success bool
 }
 
-// AgentRunSource projects a snapshot of one live AgentRun into hits. It is
-// a real, tested Source implementation but — per the plan's global
-// constraints — is never registered into the Retriever composition the app
-// builds; nothing in this task wires it into the TUI. A later phase owns
-// that wiring.
+// AgentRunSource projects a snapshot of one live AgentRun into hits. It is a
+// real, tested Source implementation. The TUI may register it for the
+// active run; callers remain responsible for deciding whether run-local
+// evidence belongs in a particular prompt projection.
 type AgentRunSource struct {
 	Snapshot func() (AgentRunSnapshot, bool) // false = no active run
 }

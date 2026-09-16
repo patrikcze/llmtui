@@ -155,6 +155,15 @@ type Model struct {
 	transcriptCache      string
 	transcriptCacheKey   transcriptCacheKey
 	transcriptCacheValid bool
+	// transcriptViewportCache is the settled transcript after the outer
+	// width-constraining Lip Gloss render. Keeping this separately from the
+	// semantic settledTranscript cache means a live delta only width-renders
+	// the live tail; the immutable history is not walked again before it is
+	// handed to the viewport.
+	transcriptViewportCache      string
+	transcriptViewportLines      []string
+	transcriptViewportCacheKey   transcriptCacheKey
+	transcriptViewportCacheValid bool
 	// Click-drag text selection over the chat transcript (see selectionState).
 	sel         selectionState
 	notice      string
@@ -2860,11 +2869,29 @@ func (m *Model) refreshViewport() {
 	followingBottom := m.viewport.AtBottom()
 	previousOffset := m.viewport.YOffset()
 
-	var b strings.Builder
-	b.WriteString(m.settledTranscriptCached())
-	b.WriteString(m.renderLiveTail())
+	live := m.renderLiveTail()
+	settledLines := m.settledTranscriptViewportLinesCached()
+	lines := settledLines
+	// The outer Width render is line-local. Rendering only this mutable
+	// section preserves the old layout while avoiding a second pass over the
+	// complete settled transcript on every provider delta. SetContentLines also
+	// avoids joining the immutable lines into one large temporary string.
+	if live != "" {
+		liveLines := strings.Split(renderViewportWidth(m.viewport.Width(), live), "\n")
+		settledCount := len(settledLines)
+		if settledCount > 0 {
+			// The final settled line is the padded empty line produced by the
+			// second trailing newline in renderSettledTranscript. Once live
+			// content follows, the single Width render would use that line as
+			// the separator before live, so drop only the terminal empty row.
+			settledCount--
+		}
+		lines = make([]string, 0, settledCount+len(liveLines))
+		lines = append(lines, settledLines[:settledCount]...)
+		lines = append(lines, liveLines...)
+	}
 
-	m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(b.String()))
+	m.viewport.SetContentLines(lines)
 	if followingBottom {
 		m.viewport.GotoBottom()
 	} else {
@@ -2938,6 +2965,39 @@ func (m *Model) settledTranscriptCached() string {
 	m.transcriptCacheKey = key
 	m.transcriptCacheValid = true
 	return out
+}
+
+// settledTranscriptViewportCached returns the settled history after the
+// layout pass that used to be applied to the entire settled-plus-live
+// transcript. The semantic render and the width render have separate caches:
+// a live streaming delta invalidates neither one.
+func (m *Model) settledTranscriptViewportCached() string {
+	key := m.settledTranscriptKey()
+	if m.transcriptViewportCacheValid && key == m.transcriptViewportCacheKey {
+		return m.transcriptViewportCache
+	}
+	out := renderViewportWidth(m.viewport.Width(), m.settledTranscriptCached())
+	m.transcriptViewportCache = out
+	m.transcriptViewportLines = strings.Split(out, "\n")
+	m.transcriptViewportCacheKey = key
+	m.transcriptViewportCacheValid = true
+	return out
+}
+
+func (m *Model) settledTranscriptViewportLinesCached() []string {
+	_ = m.settledTranscriptViewportCached()
+	return m.transcriptViewportLines
+}
+
+// renderViewportWidth preserves the old whole-document Width render for a
+// non-empty section. Lip Gloss renders an empty string as one full-width blank
+// line, which would create an artificial leading/trailing row when settled
+// history and live content are rendered independently.
+func renderViewportWidth(width int, content string) string {
+	if content == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Width(width).Render(content)
 }
 
 // renderSettledTranscript renders every completed message plus the

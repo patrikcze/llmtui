@@ -80,12 +80,64 @@ func BenchmarkRefreshViewport(b *testing.B) {
 // live tail, with a large settled history that has not changed at all.
 func BenchmarkRefreshViewportStreamingDelta(b *testing.B) {
 	for _, n := range []int{10, 100, 500} {
+		for _, delta := range []string{"answer", "reasoning"} {
+			b.Run(fmt.Sprintf("settled=%d/%s", n, delta), func(b *testing.B) {
+				m := newTestModel(b)
+				m.cfg.UI.Markdown = true
+				buildBenchSession(m, n, true)
+				m.thinking = true
+				m.refreshViewport()
+				b.ResetTimer()
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					if delta == "reasoning" {
+						m.reasoningBuf.WriteString("x")
+					} else {
+						m.streamBuf.WriteString("x")
+					}
+					m.refreshViewport()
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkRefreshViewportResize measures the required resize path separately
+// from streaming. A resize invalidates the settled layout cache by design and
+// must reflow the complete transcript exactly once for the new width.
+func BenchmarkRefreshViewportResize(b *testing.B) {
+	for _, n := range []int{10, 100, 500} {
+		b.Run(fmt.Sprintf("messages=%d", n), func(b *testing.B) {
+			m := newTestModel(b)
+			m.cfg.UI.Markdown = true
+			buildBenchSession(m, n, true)
+			m.refreshViewport()
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				width := 80
+				if i%2 == 1 {
+					width = 100
+				}
+				m.resize(width, 24)
+			}
+		})
+	}
+}
+
+// BenchmarkRefreshViewportActiveScroll keeps the user away from the bottom
+// while a live tail changes. The refresh must preserve the reading offset and
+// still avoid re-rendering settled history.
+func BenchmarkRefreshViewportActiveScroll(b *testing.B) {
+	for _, n := range []int{10, 100, 500} {
 		b.Run(fmt.Sprintf("settled=%d", n), func(b *testing.B) {
 			m := newTestModel(b)
 			m.cfg.UI.Markdown = true
 			buildBenchSession(m, n, true)
 			m.thinking = true
 			m.refreshViewport()
+			m.viewport.GotoBottom()
+			m.viewport.PageUp()
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {

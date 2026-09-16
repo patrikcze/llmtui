@@ -150,7 +150,7 @@ func slashCommands() []slashCommand {
 
 		// --- Memory ---
 		{
-			name: "memory", usage: "/memory [on|off|add|list|inspect|remove|search|explain]",
+			name: "memory", usage: "/memory [on|off|add|list|status|inspect|remove|search|explain]",
 			desc: "typed local memory (opt-in)", category: "Memory", run: cmdMemory,
 		},
 

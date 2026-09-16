@@ -4,6 +4,12 @@ The agent-runtime changes are calibrated with deterministic fixtures first and
 with live endpoints only when a person explicitly configures one. This avoids
 treating one local model, template, or sampling run as a universal result.
 
+The live evaluation files are retained as developer-only measurement tooling,
+not product behavior. They are opt-in, never part of normal CI, and must stay
+bounded to configured local endpoints and disposable workspaces. Keep them
+beside the code so future runtime changes can be measured reproducibly; do not
+enable them by default or use their results as universal model claims.
+
 ## Current baseline
 
 `TestAgentEvolutionSyntheticMatrix` drives the shared contract → executor →
@@ -66,6 +72,48 @@ backend/runtime version, template, sampling and seed support, context window,
 tool-schema hash, approval mode, assistance setting, warm/cold load state, and
 whether the run was skipped. Keep cold-load latency separate from inference
 latency.
+
+The reusable live contract/conformance matrix is also opt-in and defaults to
+five trials per fixture:
+
+```bash
+LLMTUI_EVAL_BASE_URL=http://127.0.0.1:1234/v1 \
+LLMTUI_EVAL_MODEL=your-model \
+LLMTUI_EVAL_ENDPOINT_TYPE=openai_compatible \
+LLMTUI_EVAL_OUTPUT=/tmp/llmtui-evaluation.jsonl \
+go test -count=1 ./internal/eval -run '^TestLiveEvaluationMatrix$' -v
+```
+
+Use `LLMTUI_EVAL_ENDPOINT_TYPE=ollama` for Ollama and its native API. Set
+`LLMTUI_EVAL_TRIALS` to change repetition and `LLMTUI_EVAL_STREAM=false` to
+probe non-streaming behavior. The report contains one metadata record, one
+bounded record per contract/conformance trial, and denominator-preserving
+contract and conformance summaries. It records repair/recovery counts, status fields, token
+usage when the provider supplies it, and elapsed time; it does not record
+fixture task text, raw responses, credentials, tool arguments/results, or
+reasoning. A recovery probe is a fresh harmless observation and never executes
+the provider's call.
+
+The full controller loop has a separate opt-in matrix using the same endpoint
+variables and disposable workspaces:
+
+```bash
+LLMTUI_EVAL_BASE_URL=http://127.0.0.1:1234/v1 \
+LLMTUI_EVAL_MODEL=your-model \
+LLMTUI_EVAL_ENDPOINT_TYPE=openai_compatible \
+LLMTUI_EVAL_OUTPUT=/tmp/llmtui-live-agent.jsonl \
+go test -count=1 ./internal/tui -run '^TestLiveAgentMatrix$' -v
+```
+
+It repeats synthetic read, missing-path/ask, and temporary-write/confirmation
+fixtures through the real contract → executor → tool → verifier path. It
+records first-action class, final result, verifier verdict, tool/provider
+request counts, token use, recovery requests, cycles, bounded driver errors,
+and elapsed time. The driver resolves only the fixture's synthetic
+answer/approval and never enables personal-app or production MCP actions. A
+bounded driver failure is written to the report before the test fails, so
+partial measurements remain inspectable. Both live tests skip unless the
+endpoint and model are explicitly configured.
 
 Compare `off` and `shadow` first. A future `auto` mode is eligible only after
 it improves its declared target without new unsafe execution, approval
