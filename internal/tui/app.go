@@ -28,6 +28,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/clipboard"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/memory"
@@ -123,6 +124,9 @@ type Model struct {
 	episode  *history.Episode
 	renderer *glamour.TermRenderer
 	turnRuntime
+	// entities is ephemeral session runtime state. It is never serialized as
+	// history, memory, cache content, or agent-run state.
+	entities *entity.Registry
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -382,6 +386,12 @@ func New(opts Options) *Model {
 		inputLines:   1,
 		exit:         exitSummaryState{startedAt: time.Now()},
 		turnRuntime:  newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
+		entities: entity.NewRegistry(entity.Limits{
+			MaxEntities:       cfg.Entities.MaxSessionEntities,
+			MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
+			MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
+			MaxFullExpansions: cfg.Entities.MaxFullExpansions,
+		}),
 
 		memEnabled:    cfg.Memory.Enabled,
 		profileMode:   profileMode,
@@ -421,6 +431,7 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.episode = cloneEpisode(s.Episode)
 	m.configureOperationLog()
 	m.summary = ""
+	m.resetEntities()
 	m.workspaceSkillApprovals = nil
 	m.approvalPolicy.Clear()
 	// Restore session-scoped skills, re-resolving each against the current
@@ -438,6 +449,12 @@ func (m *Model) adoptSession(name string, s history.Session) {
 // runtime (/profile, /context strategy, /memory on|off) are left alone.
 func (m *Model) rebuildFromConfig() {
 	cfg := m.cfg
+	m.entities = entity.NewRegistry(entity.Limits{
+		MaxEntities:       cfg.Entities.MaxSessionEntities,
+		MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
+		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
+		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
+	})
 	if !m.reasoningDisplaySet {
 		m.showReasoning = cfg.UI.ShowReasoning
 	}
@@ -1519,6 +1536,9 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if cmd, handled := m.handleAskUserBatch(calls); handled {
 		return cmd
 	}
+	if cmd, handled := m.handleEntityDetailsBatch(calls); handled {
+		return cmd
+	}
 	if cmd, handled := m.handleToolSearchBatch(calls); handled {
 		return cmd
 	}
@@ -1715,6 +1735,7 @@ func (m *Model) denyPendingTools() tea.Cmd {
 }
 
 func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
+	results = m.registerResultEntities(results)
 	// Results must reach the model, not a stale cached reply.
 	m.bypassCache = true
 	// Kept on the model, not directly on lastDebug: every path below

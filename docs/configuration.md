@@ -196,6 +196,29 @@ Dots map to underscores for environment variables, for example
 
 See [memory.md](memory.md) for storage, ranking, promotion, and trust behavior.
 
+### `entities`
+
+Ephemeral runtime entities keep bounded references to selected file, web, and
+MCP tool results. They are held in memory for the current session only; they
+are not saved to history, cache, memory, or agent evidence. The default is
+enabled because the feature is read-only and bounded:
+
+```yaml
+entities:
+  enabled: true
+  max_session_entities: 256
+  max_payload_bytes: 65536
+  max_total_payload_bytes: 4194304
+  max_context_tokens: 1200
+  max_full_expansions: 8
+```
+
+`max_context_tokens` limits compact references included in each prompt and
+`max_full_expansions` limits full detail lookups per request. Use `/entities
+status`, `/entities list`, and `/entities inspect <id>` for local,
+payload-free diagnostics. See
+[`architecture/entity-context-runtime.md`](architecture/entity-context-runtime.md).
+
 ### `agent`
 
 Optional bounded multi-cycle execution with a pre-execution task contract and

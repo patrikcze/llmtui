@@ -6,6 +6,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/config"
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/skill"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -80,6 +81,9 @@ func (m *Model) activeSkillIDs() []string {
 func (m *Model) endAgentRun() {
 	if m.agentRunActive() {
 		return
+	}
+	if m.entities != nil && m.agentLoop != nil && m.agentLoop.run != nil {
+		m.entities.ReleaseScope(entity.ScopeAgentRun, m.agentLoop.run.ID)
 	}
 	m.agentContextSummary = agentScopedSummary{}
 	m.releaseAgentContext()

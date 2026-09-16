@@ -14,7 +14,7 @@ comments, but this file is authoritative.
   defines the deterministic baseline and the opt-in live-endpoint procedure;
   it does not treat synthetic fixture success as a model-quality claim.
 
-Current inventory: 38 internal Go packages plus `cmd/llmtui` (39 Go packages
+Current inventory: 40 internal Go packages plus `cmd/llmtui` (41 Go packages
 total), Go 1.27. Verify version-sensitive details (the embedded runtime pin,
 dependency versions) against the source — `internal/runtime/pin.json`,
 `go.mod` — not this document. Refresh the package inventory with `go list ./...`.
@@ -264,6 +264,12 @@ inspectable **sections** (system prompt, chat template, model hints, session
 summary, memory, active skills, RAG context) with the user's raw message
 appended last, verbatim. `Mode` is `minimal` / `balanced` / `coding`. Details:
 [`../prompt-composition.md`](../prompt-composition.md).
+
+The same composer can add a bounded `Entity Context` section from the
+session-local `internal/entity` registry. Entity references are ephemeral,
+opaque, and structurally framed as untrusted data; full details arrive only
+through the controller-owned `get_entity_details` capability. See
+[`entity-context-runtime.md`](entity-context-runtime.md).
 
 `internal/contextmgr` keeps the conversation inside the model's window —
 token estimation, truncation, summarisation — invoked from

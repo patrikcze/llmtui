@@ -34,6 +34,10 @@ func newTestModel(t testing.TB) *Model {
 				AgentTokens: 512, SourceTokens: 768,
 			},
 		},
+		Entities: config.EntitiesConfig{
+			Enabled: true, MaxSessionEntities: 256, MaxPayloadBytes: 64 * 1024,
+			MaxTotalPayloadBytes: 4 * 1024 * 1024, MaxContextTokens: 1200, MaxFullExpansions: 8,
+		},
 		Prompt: config.PromptConfig{
 			Mode:                   "balanced",
 			IncludeSessionSummary:  true,

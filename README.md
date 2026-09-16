@@ -645,6 +645,7 @@ internal/app/             config → provider factory
 internal/chat/            session state + usage statistics
 internal/cache/           local response cache (/cache)
 internal/contextmgr/      context-window budgeting + heuristic summaries
+internal/entity/          bounded ephemeral runtime entities (opaque IDs)
 internal/agent/           provider-neutral verified-run state, policy, memory
 internal/agentverify/     fresh-context provider verifier adapter
 internal/eval/            opt-in developer evaluation and JSONL reporting

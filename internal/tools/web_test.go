@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/web"
 )
@@ -69,6 +70,9 @@ func TestWebSearchFormatsResults(t *testing.T) {
 	if !strings.Contains(res.Output, "1. First — https://a.example") || !strings.Contains(res.Output, "alpha") {
 		t.Errorf("output:\n%s", res.Output)
 	}
+	if len(res.Entities) != 2 || res.Entities[0].Kind != entity.KindWebResult || res.Entities[0].Metadata.URL != "https://a.example" {
+		t.Fatalf("web result entities = %+v", res.Entities)
+	}
 }
 
 func TestWebSearchClampsMax(t *testing.T) {
@@ -114,6 +118,9 @@ func TestWebFetchFormatsPage(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "# Doc") {
 		t.Errorf("content missing:\n%s", res.Output)
+	}
+	if len(res.Entities) != 1 || res.Entities[0].Kind != entity.KindWebPage || res.Entities[0].Metadata.StatusCode != 200 {
+		t.Fatalf("web page entities = %+v", res.Entities)
 	}
 }
 

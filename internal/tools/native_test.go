@@ -12,8 +12,8 @@ import (
 
 func TestSpecsAreValidJSONSchemas(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 10 {
-		t.Fatalf("specs = %d, want 10", len(specs))
+	if len(specs) != 11 {
+		t.Fatalf("specs = %d, want 11", len(specs))
 	}
 	names := map[string]bool{}
 	for _, s := range specs {

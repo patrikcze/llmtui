@@ -4,7 +4,7 @@ A layer-by-layer tour of every Go package under `internal/`, plus a
 cross-check for apparent duplication (the same noun — *skill*, *memory*,
 *tool*, *runtime* — showing up in several packages).
 
-Current inventory: 39 Go packages (38 under `internal/` plus `cmd/llmtui`),
+Current inventory: 41 Go packages (40 under `internal/` plus `cmd/llmtui`),
 about 106k Go LOC including tests, measured 2026-09-15. Use `go list ./...`
 for the exact package inventory; keep this file in sync with the one-line list
 in the README's "Package layout" section. File lists below name production
@@ -18,7 +18,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
                     └──> internal/tui ──────────> everything else
 ```
 
-- `internal/tui` is the hub: it directly imports 28 internal packages in the
+- `internal/tui` is the hub: it directly imports 29 internal packages in the
   current inventory.
 - `internal/provider` is the most-imported shared leaf, with 14 direct package
   importers in the current inventory.
@@ -60,6 +60,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | Package | Purpose | Files |
 |---|---|---|
 | `internal/chat` | Plain conversation state + usage stats. | `session.go` |
+| `internal/entity` | Bounded session-local runtime entity registry with opaque IDs, progressive detail resolution, deterministic eviction, expiration, and retention scopes. See `docs/architecture/entity-context-runtime.md`. | `entity.go`, `registry.go` |
 | `internal/prompt` | Builds provider-ready messages from inspectable **sections** (system, template, model hints, summary, memory, skills, RAG). Core rule: the raw user message is never rewritten. `Mode` = minimal / balanced / coding. See `docs/prompt-composition.md`. | `compose.go` |
 | `internal/contextmgr` | Keeps the conversation inside the model's context window — token estimation, truncation, summarization. Special-cases `local_context` tool output as volatile (keeps a provenance marker, drops the payload). See `docs/context-management.md`. | `contextmgr.go` |
 | `internal/modelprofile` | Per-model-family default tuning (context window, temperature, prompt style, JSON-mode support). Built-ins + config overrides. | `profile.go` |
@@ -85,7 +86,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 
 | Package | Purpose | Notable files |
 |---|---|---|
-| `internal/tools` | The workspace tool engine. `tools.go` (fenced-block protocol + `Runner`, workspace confinement), `native.go` (same tools as OpenAI/Ollama function specs), `registry.go` (single capability catalog + `SafetyClass`), `guardrails.go` (the command classifier — auto vs ask vs deny), `file_edit.go` / ranged read (surgical `edit_file`, ranged `read_file`), `search.go` (shell-free glob/grep), `diff.go` (display-only write diffs), `local_context.go` (time, clipboard, env — volatile observations), `web.go` (thin wrapper over `internal/web`), `personal_apps.go` (explicit personal-app operation routing), `ask_user.go` (control-flow barrier tool), and `tool_search.go` (discovery + ranking). See `docs/tools-architecture.md` and the "Workspace Tool Safety Invariants" in `CLAUDE.md`. | `tools.go`, `guardrails.go`, `local_context.go`, `native.go`, `search.go`, `file_edit.go`, `personal_apps.go`, `tool_search.go` |
+| `internal/tools` | The workspace tool engine. `tools.go` (fenced-block protocol + `Runner`, workspace confinement), `native.go` (same tools as OpenAI/Ollama function specs), `registry.go` (single capability catalog + `SafetyClass`), `guardrails.go` (the command classifier — auto vs ask vs deny), `file_edit.go` / ranged read (surgical `edit_file`, ranged `read_file`), `search.go` (shell-free glob/grep), `diff.go` (display-only write diffs), `local_context.go` (time, clipboard, env — volatile observations), `web.go` (thin wrapper over `internal/web` plus entity adapters), `entity_details.go` (bounded controller lookup arguments), `personal_apps.go` (explicit personal-app operation routing), `ask_user.go` (control-flow barrier tool), and `tool_search.go` (discovery + ranking). See `docs/tools-architecture.md` and the "Workspace Tool Safety Invariants" in `CLAUDE.md`. | `tools.go`, `guardrails.go`, `local_context.go`, `native.go`, `search.go`, `file_edit.go`, `entity_details.go`, `personal_apps.go`, `tool_search.go` |
 | `internal/toolapi` | Read-only HTTP server exposing the *active* tool catalog (name / description / safety / approval / schema) — for external inspection (e.g. an editor), not execution. See `docs/tool-registry.md`. | `server.go` |
 | `internal/web` | The actual internet access: DuckDuckGo search (no key) + page fetch with readable-content extraction. `ssrf.go` blocks private / CGNAT / link-local / multicast / etc. ranges. | `web.go`, `fetch.go`, `search.go`, `ssrf.go` |
 | `internal/mcp` | Model Context Protocol: config + `Client` interface + `registry.go` (server state tracking) + `stdio.go` (concrete subprocess transport, SIGTERM → SIGKILL reaping, frame-size bounds). Nothing starts a subprocess on its own. See `docs/mcp.md`. | `mcp.go`, `registry.go`, `stdio.go`, `mock.go` |
@@ -139,6 +140,7 @@ pipeline where every layer has one job.
 | `internal/skill/` | The only engine: discovery, parsing, validation, activation state. |
 | `internal/app/skills.go` | Two functions: config → `skill.Options`. Exists specifically to stop the TUI and `doctor` from each writing their own translation. |
 | `internal/tui/skills.go` | `Model` methods: "is skill-loading available this turn?", render active skills for the prompt composer. |
+| `internal/tui/entity_context.go` | Bridges the entity registry to prompt records, tool-result registration, controller-owned detail resolution, agent scope release, and `/entities` diagnostics. |
 | `internal/tui/commands_skills.go` | The `/skills` slash command + its pickers / overlays. |
 | `internal/tools/*skill*` | The `skill_load` agent tool (model-driven activation) — rides the normal tool loop. |
 | `internal/history` (imports `skill`) | Episode records store which skills were active. |

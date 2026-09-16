@@ -58,6 +58,11 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 		cfg.Memory.Retrieval.SourceTokens != 768 {
 		t.Fatalf("memory retrieval tier defaults = %+v", cfg.Memory.Retrieval)
 	}
+	if !cfg.Entities.Enabled || cfg.Entities.MaxSessionEntities != 256 ||
+		cfg.Entities.MaxPayloadBytes != 64*1024 || cfg.Entities.MaxTotalPayloadBytes != 4*1024*1024 ||
+		cfg.Entities.MaxContextTokens != 1200 || cfg.Entities.MaxFullExpansions != 8 {
+		t.Fatalf("entity defaults = %+v", cfg.Entities)
+	}
 }
 
 func TestConfigFileOverridesDefaults(t *testing.T) {
