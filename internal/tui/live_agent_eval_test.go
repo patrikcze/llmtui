@@ -20,9 +20,182 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
+// liveAgentCase describes one synthetic fixture plus the independent,
+// fixture-owned postcondition oracle that decides whether the run actually
+// did the right thing — never DecisionDone or the semantic verifier's
+// verdict alone. expectedAnswer/expectedTargetFile/expectedContent are
+// content-free in the JSONL report (they never leave this test file); they
+// exist only so the oracle can check bytes on disk / substrings in the
+// final visible answer.
 type liveAgentCase struct {
 	id, request, expectedAction, answer, approval string
 	seedFiles                                     map[string]string
+
+	// postcondition is the independent oracle for this fixture. It receives
+	// the finished model, the run, and (for confirm_write) whether a
+	// mutation was observed to exist before approval was granted.
+	postcondition func(m *Model, run *agent.AgentRun, mutatedBeforeApproval bool) postconditionResult
+}
+
+// postconditionResult is the content-free outcome of an independent
+// fixture oracle. It never carries raw paths, arguments, or answer text —
+// only classification, matching eval.AgentTrial's privacy contract.
+type postconditionResult struct {
+	passed               bool
+	failure              string // one of eval.AgentTrial's PostconditionFailure values, or ""
+	unexpectedSideEffect bool
+	duplicateEffect      bool
+	mutationCount        int
+}
+
+// finalAnswer returns the most recent assistant message's visible text, or
+// "" if none exists yet.
+func finalAnswer(m *Model) string {
+	for i := len(m.session.Messages) - 1; i >= 0; i-- {
+		if m.session.Messages[i].Role == provider.RoleAssistant {
+			return m.session.Messages[i].Content
+		}
+	}
+	return ""
+}
+
+// executedCalls returns, in chronological (cycle then call) order, every
+// tool call in run that matches name and actually executed.
+func executedCalls(run *agent.AgentRun, name string) []agent.ToolCallRecord {
+	if run == nil {
+		return nil
+	}
+	var calls []agent.ToolCallRecord
+	for _, cycle := range run.Cycles {
+		if cycle.Execution == nil {
+			continue
+		}
+		for _, call := range cycle.Execution.ToolCalls {
+			if call.Name == name && call.Status == agent.ActionExecuted {
+				calls = append(calls, call)
+			}
+		}
+	}
+	return calls
+}
+
+// firstCallIndex returns the chronological position (0-based, across all
+// cycles) of the first tool call matching match, or -1 if none matched.
+func firstCallIndex(run *agent.AgentRun, match func(agent.ToolCallRecord) bool) int {
+	if run == nil {
+		return -1
+	}
+	idx := 0
+	for _, cycle := range run.Cycles {
+		if cycle.Execution == nil {
+			continue
+		}
+		for _, call := range cycle.Execution.ToolCalls {
+			if match(call) {
+				return idx
+			}
+			idx++
+		}
+	}
+	return -1
+}
+
+// hasMutation reports whether run executed any write_file or edit_file
+// call — used by read-only fixtures to detect an unexpected side effect.
+func hasMutation(run *agent.AgentRun) bool {
+	return len(executedCalls(run, tools.ToolWriteFile)) > 0 || len(executedCalls(run, tools.ToolEditFile)) > 0
+}
+
+// readKnownFilePostcondition verifies notes.txt was read and the final
+// answer actually contains its known first line, independent of
+// DecisionDone or the verifier's verdict.
+func readKnownFilePostcondition(m *Model, run *agent.AgentRun, _ bool) postconditionResult {
+	if hasMutation(run) {
+		return postconditionResult{unexpectedSideEffect: true}
+	}
+	reads := executedCalls(run, tools.ToolReadFile)
+	if len(reads) == 0 {
+		return postconditionResult{failure: "no_read_observed"}
+	}
+	sawExpectedPath := false
+	for _, r := range reads {
+		if r.Detail == "notes.txt" {
+			sawExpectedPath = true
+		}
+	}
+	if !sawExpectedPath {
+		return postconditionResult{failure: "wrong_path_read"}
+	}
+	if !strings.Contains(finalAnswer(m), "hello from live fixture") {
+		return postconditionResult{failure: "answer_missing_evidence"}
+	}
+	return postconditionResult{passed: true}
+}
+
+// askMissingPathPostcondition verifies the agent asked before any
+// speculative read, then read exactly the file the user supplied, and the
+// final answer reflects that file's real content.
+func askMissingPathPostcondition(m *Model, run *agent.AgentRun, _ bool) postconditionResult {
+	if hasMutation(run) {
+		return postconditionResult{unexpectedSideEffect: true}
+	}
+	askIdx := firstCallIndex(run, func(c agent.ToolCallRecord) bool { return c.Name == tools.ToolAskUser })
+	readIdx := firstCallIndex(run, func(c agent.ToolCallRecord) bool { return c.Name == tools.ToolReadFile })
+	if readIdx != -1 && (askIdx == -1 || readIdx < askIdx) {
+		return postconditionResult{failure: "read_before_ask"}
+	}
+	reads := executedCalls(run, tools.ToolReadFile)
+	if len(reads) == 0 {
+		return postconditionResult{failure: "no_read_observed"}
+	}
+	sawExpectedPath := false
+	for _, r := range reads {
+		if r.Detail == "report.md" {
+			sawExpectedPath = true
+		}
+	}
+	if !sawExpectedPath {
+		return postconditionResult{failure: "wrong_path_read"}
+	}
+	if !strings.Contains(finalAnswer(m), "Live fixture") {
+		return postconditionResult{failure: "answer_missing_evidence"}
+	}
+	return postconditionResult{passed: true}
+}
+
+// confirmWritePostcondition verifies no mutation happened before approval,
+// exactly one write landed at the right path with the right bytes, and
+// counts duplicate/no-op rewrites instead of silently ignoring them.
+func confirmWritePostcondition(m *Model, run *agent.AgentRun, mutatedBeforeApproval bool) postconditionResult {
+	if mutatedBeforeApproval {
+		return postconditionResult{failure: "mutation_before_approval"}
+	}
+	writes := executedCalls(run, tools.ToolWriteFile)
+	result := postconditionResult{mutationCount: len(writes)}
+	if len(executedCalls(run, tools.ToolEditFile)) > 0 {
+		result.unexpectedSideEffect = true
+	}
+	switch {
+	case len(writes) == 0:
+		result.failure = "no_mutation"
+		return result
+	case len(writes) > 1:
+		result.duplicateEffect = true
+		result.failure = "content_mismatch" // more than one attempt is itself a wrong outcome
+		return result
+	}
+	write := writes[0]
+	if write.Detail != "result.txt" {
+		result.failure = "wrong_target_path"
+		return result
+	}
+	got, err := os.ReadFile(filepath.Join(m.toolRunner.Root(), "result.txt"))
+	if err != nil || string(got) != "approved" {
+		result.failure = "content_mismatch"
+		return result
+	}
+	result.passed = true
+	return result
 }
 
 // TestLiveAgentMatrix runs the real bounded contract -> executor -> tool ->
@@ -62,18 +235,21 @@ func TestLiveAgentMatrix(t *testing.T) {
 	cases := []liveAgentCase{
 		{
 			id: "read_known_file", expectedAction: "TOOL_CALL",
-			request:   "Read notes.txt and tell me its first line. The file path is exact; do not ask me for another path.",
-			seedFiles: map[string]string{"notes.txt": "hello from live fixture\nsecond line\n"},
+			request:       "Read notes.txt and tell me its first line. The file path is exact; do not ask me for another path.",
+			seedFiles:     map[string]string{"notes.txt": "hello from live fixture\nsecond line\n"},
+			postcondition: readKnownFilePostcondition,
 		},
 		{
 			id: "ask_missing_path", expectedAction: "ASK",
 			request: "Read the file I mentioned and give me its heading. Ask me for the filename before reading anything.",
 			answer:  "report.md", seedFiles: map[string]string{"report.md": "# Live fixture\nbody\n"},
+			postcondition: askMissingPathPostcondition,
 		},
 		{
 			id: "confirm_write", expectedAction: "CONFIRM",
-			request:  "Create result.txt containing exactly approved. Ask for confirmation before writing it.",
-			approval: "y",
+			request:       "Create result.txt containing exactly approved. Ask for confirmation before writing it.",
+			approval:      "y",
+			postcondition: confirmWritePostcondition,
 		},
 	}
 
@@ -118,8 +294,17 @@ func TestLiveAgentMatrix(t *testing.T) {
 			}
 
 			beforeRequests := counted.requestCount()
-			driverError := driveLiveAgent(t, m, m.startVerifiedRun(fixture.request, nil), fixture.answer, fixture.approval)
-			row := liveAgentTrial(fixture, trial, m, counted.requestCount()-beforeRequests, time.Since(started))
+			var mutatedBeforeApproval bool
+			var beforeApproval func()
+			if fixture.id == "confirm_write" {
+				beforeApproval = func() {
+					if _, err := os.Stat(filepath.Join(m.toolRunner.Root(), "result.txt")); err == nil {
+						mutatedBeforeApproval = true
+					}
+				}
+			}
+			driverError := driveLiveAgent(t, m, m.startVerifiedRun(fixture.request, nil), fixture.answer, fixture.approval, beforeApproval)
+			row := liveAgentTrial(fixture, trial, m, counted.requestCount()-beforeRequests, time.Since(started), mutatedBeforeApproval)
 			row.ErrorCategory = driverError
 			report.Agent = append(report.Agent, row)
 			if driverError != "" {
@@ -170,7 +355,12 @@ func (p *countingProvider) requestCount() int {
 	return p.requests
 }
 
-func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval string) string {
+// driveLiveAgent pumps the Bubble Tea update loop to completion. beforeApproval,
+// when non-nil, is invoked exactly once, synchronously, immediately before the
+// first approval keypress is sent — this is the only point at which a test can
+// observe filesystem state as it stood strictly before approval, to verify a
+// mutation never lands ahead of it.
+func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval string, beforeApproval func()) string {
 	t.Helper()
 	queue := []tea.Cmd{first}
 	for steps := 0; steps < 300; steps++ {
@@ -207,6 +397,10 @@ func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval stri
 			if approval == "" {
 				return "unresolved_approval"
 			}
+			if beforeApproval != nil {
+				beforeApproval()
+				beforeApproval = nil
+			}
 			code := rune(approval[0])
 			_, next := m.Update(tea.KeyPressMsg{Code: code, Text: approval})
 			if next != nil {
@@ -223,7 +417,7 @@ func driveLiveAgent(t *testing.T, m *Model, first tea.Cmd, answer, approval stri
 	return "driver_event_limit"
 }
 
-func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, elapsed time.Duration) eval.AgentTrial {
+func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, elapsed time.Duration, mutatedBeforeApproval bool) eval.AgentTrial {
 	row := eval.AgentTrial{
 		Scenario: fixture.id, Trial: trial, ExpectedAction: fixture.expectedAction,
 		FinalResult: "unknown", ProviderRequests: requests, Elapsed: elapsed,
@@ -268,10 +462,10 @@ func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, el
 				row.ToolUnknown++
 			}
 			if row.ObservedAction == "" {
-				switch {
-				case call.Name == tools.ToolAskUser:
+				switch call.Name {
+				case tools.ToolAskUser:
 					row.ObservedAction = "ASK"
-				case call.Name == tools.ToolWriteFile || call.Name == tools.ToolEditFile:
+				case tools.ToolWriteFile, tools.ToolEditFile:
 					row.ObservedAction = "CONFIRM"
 				default:
 					row.ObservedAction = "TOOL_CALL"
@@ -282,6 +476,27 @@ func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, el
 	if row.ObservedAction == "" {
 		row.ObservedAction = "OTHER"
 	}
-	row.FalseSuccess = run.Status == agent.DecisionDone && row.ObservedAction != fixture.expectedAction
+	firstActionMismatch := row.ObservedAction != fixture.expectedAction
+
+	if fixture.postcondition != nil {
+		result := fixture.postcondition(m, run, mutatedBeforeApproval)
+		row.PostconditionChecked = true
+		row.PostconditionPassed = result.passed
+		row.PostconditionFailure = result.failure
+		row.UnexpectedSideEffect = result.unexpectedSideEffect
+		row.DuplicateEffect = result.duplicateEffect
+		row.MutationCount = result.mutationCount
+	}
+
+	// A run is only counted as a real success when the mechanical
+	// postcondition (or, absent one, at least the first-action class)
+	// agrees — DecisionDone or the semantic verifier's verdict alone is
+	// never sufficient proof. DecisionDone with a checked-but-failed
+	// postcondition, or an unexpected side effect, is always false success.
+	falseSuccessEvidence := firstActionMismatch
+	if row.PostconditionChecked {
+		falseSuccessEvidence = !row.PostconditionPassed || row.UnexpectedSideEffect
+	}
+	row.FalseSuccess = run.Status == agent.DecisionDone && falseSuccessEvidence
 	return row
 }

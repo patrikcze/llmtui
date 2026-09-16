@@ -215,9 +215,12 @@ trigger → contract → (rules_load → executor → verifier → memory_write 
    outrank a verifier verdict; a retry with no changed objective, strategy,
    context, or new evidence is rejected.
 
-Promotion of a verified outcome to project memory happens only after a
-verifier-passed completion and an explicit user category selection (the picker
-defaults to skip).
+Promotion of a verified outcome to project memory happens automatically after
+a verifier-passed completion — no interactive prompt. The category
+(architecture/convention/decision) is inferred deterministically from the
+run's objective and execution summary (`tui.classifyProjectMemoryCategory`,
+word-boundary keyword matching, never a model call); the completion notice
+names the category and record ID. See [`../memory.md`](../memory.md).
 
 Run limits (`agent.max_cycles`, `max_tool_calls`, `max_tokens`,
 `max_elapsed`, `max_repeated_failures`) are in `agent.Limits`; runs persist to

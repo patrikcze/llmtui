@@ -3,7 +3,11 @@
 // config; built-ins cover common families.
 package modelprofile
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/patrikcze/llmtui/internal/provider"
+)
 
 // Profile describes how to treat one family of models.
 type Profile struct {
@@ -110,26 +114,11 @@ func Match(profiles []Profile, modelID string) (Profile, bool) {
 // unrelated models. Digits are deliberately allowed to sit directly against
 // the pattern: model IDs routinely attach a version number with no
 // separator ("qwen3", "llama3.1", "gemma3"), and that must keep matching.
+// Delegates to provider.MatchesWordBoundary — see that doc comment for why
+// this stays a separate, broader matcher from provider's narrow GPT-OSS
+// family check rather than one merged package.
 func matchesSegment(id, pat string) bool {
-	idx := 0
-	for {
-		i := strings.Index(id[idx:], pat)
-		if i < 0 {
-			return false
-		}
-		start := idx + i
-		end := start + len(pat)
-		beforeOK := start == 0 || !isLetter(id[start-1])
-		afterOK := end == len(id) || !isLetter(id[end])
-		if beforeOK && afterOK {
-			return true
-		}
-		idx = start + 1
-	}
-}
-
-func isLetter(b byte) bool {
-	return b >= 'a' && b <= 'z'
+	return provider.MatchesWordBoundary(id, pat)
 }
 
 // ByName finds a profile by exact name, for `/profile set <name>`.

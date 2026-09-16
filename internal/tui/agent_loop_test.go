@@ -736,9 +736,6 @@ func TestVerifiedAgentMemoryOffSuppressesPromotion(t *testing.T) {
 	cmdMemory(m, "off")
 	driveAgentCommands(t, m, m.startVerifiedRun("make the bounded change", nil))
 
-	if m.picker.pickerKind != pickerNone || m.overlayOpen {
-		t.Fatalf("memory-off completion opened promotion picker: kind=%v overlay=%v", m.picker.pickerKind, m.overlayOpen)
-	}
 	if err := m.promoteAgentOutcome("decision"); err == nil || !strings.Contains(err.Error(), "memory is disabled") {
 		t.Fatalf("promotion while memory is off returned %v", err)
 	}
@@ -747,11 +744,15 @@ func TestVerifiedAgentMemoryOffSuppressesPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(records) != 0 {
-		t.Fatalf("memory-off promotion wrote records: %+v", records)
+		t.Fatalf("memory-off completion auto-promoted records: %+v", records)
 	}
 }
 
-func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
+// TestVerifiedAgentAutoPromotesOutcome locks in the no-interruption
+// behavior the interactive promotion picker previously required: a
+// verifier-passed run must save its outcome to project memory the moment
+// it completes, with no keypress, and the completion notice must say so.
+func TestVerifiedAgentAutoPromotesOutcome(t *testing.T) {
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{text: "Implemented the bounded change."},
 		agentScriptStep{text: verifierJSON("passed", "observable criteria passed", "", false, false)},
@@ -763,28 +764,24 @@ func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("completion auto-promoted records: %+v", records)
-	}
-
-	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	records, err = m.projectStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(records) != 1 {
-		t.Fatalf("promoted records = %+v", records)
+		t.Fatalf("completion did not auto-promote exactly one record: %+v", records)
 	}
 	record := records[0]
 	if record.Kind != memoryindex.KindProjectDecision || record.Review != memoryindex.ReviewApproved || record.Trust != memoryindex.TrustModelProposed {
-		t.Fatalf("promoted record = %+v", record)
+		t.Fatalf("auto-promoted record = %+v", record)
 	}
 	if record.SourceRunID != m.agentLoop.run.ID || record.SourceCycle != m.agentLoop.run.Cycle {
 		t.Fatalf("promotion provenance = %+v", record)
 	}
 	if !strings.Contains(record.Text, "observable criteria passed") {
 		t.Fatalf("promotion omitted passed verification: %q", record.Text)
+	}
+	if !strings.Contains(m.notice, "saved as project decision") {
+		t.Fatalf("completion notice did not mention the auto-save: %q", m.notice)
+	}
+	if m.overlayOpen {
+		t.Fatalf("auto-promotion must not open an interactive overlay")
 	}
 	inspect, err := m.memoryInspectOverlay(record.ID)
 	if err != nil {
@@ -795,26 +792,22 @@ func TestVerifiedAgentPromotionRequiresExplicitSelection(t *testing.T) {
 	}
 }
 
-func TestAgentPromotionSkipAndEscapeWriteNothing(t *testing.T) {
-	for _, action := range []string{"skip", "escape"} {
-		t.Run(action, func(t *testing.T) {
-			m, _ := configureAgentTestModel(t,
-				agentScriptStep{text: "done"},
-				agentScriptStep{text: verifierJSON("passed", "passed", "", false, false)},
-			)
-			m.memEnabled = true
-			driveAgentCommands(t, m, m.startVerifiedRun("task", nil))
-			key := tea.KeyPressMsg{Code: tea.KeyEnter}
-			if action == "escape" {
-				key = tea.KeyPressMsg{Code: tea.KeyEsc}
-			}
-			m.Update(key)
-			records, err := m.projectStore.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(records) != 0 {
-				t.Fatalf("%s wrote records: %+v", action, records)
+func TestClassifyProjectMemoryCategory(t *testing.T) {
+	tests := []struct {
+		name      string
+		objective string
+		summary   string
+		want      string
+	}{
+		{"architecture signal", "extract a shared package boundary", "", "architecture"},
+		{"convention signal", "enforce a naming convention across handlers", "", "convention"},
+		{"no signal defaults to decision", "make the bounded change", "ran the requested fix", "decision"},
+		{"word boundary not a substring match", "the player object moved", "", "decision"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyProjectMemoryCategory(tc.objective, tc.summary); got != tc.want {
+				t.Errorf("classifyProjectMemoryCategory(%q, %q) = %q, want %q", tc.objective, tc.summary, got, tc.want)
 			}
 		})
 	}
@@ -1899,11 +1892,15 @@ func TestVerifiedAgentQuestionWithOptionsOpensPickerAndResumes(t *testing.T) {
 	_, enterCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	driveAgentCommands(t, m, enterCmd)
 
-	if m.picker.pickerKind != pickerAgentPromotion {
-		t.Fatalf("pickerKind = %v, want pickerAgentPromotion after completed resume", m.picker.pickerKind)
-	}
 	if m.agentLoop.run.ID != runID || m.agentLoop.run.Cycle != 2 || m.agentLoop.run.Status != agent.DecisionDone {
 		t.Fatalf("selecting an option did not resume the same run: %+v", m.agentLoop.run)
+	}
+	records, err := m.projectStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("completion after resume did not auto-promote exactly one record: %+v", records)
 	}
 }
 

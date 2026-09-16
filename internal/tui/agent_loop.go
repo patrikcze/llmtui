@@ -365,38 +365,71 @@ func (m *Model) agentQuestionPickerOverlay() string {
 	return b.String()
 }
 
-func (m *Model) openAgentPromotionPicker() {
-	if !m.agentPromotionAvailable() {
-		return
-	}
-	m.picker.pickerKind = pickerAgentPromotion
-	m.picker.pickerHeader = "Promote this verified outcome to project memory?"
-	m.picker.pickerItems = []string{"architecture", "convention", "decision", "skip"}
-	m.picker.pickerIdx = len(m.picker.pickerItems) - 1
-	m.overlayOpen = true
-	m.renderPicker()
-}
-
 func (m *Model) agentPromotionAvailable() bool {
 	return m.memEnabled && m.projectStore != nil && m.agentLoop != nil && m.agentLoop.run != nil &&
 		m.agentLoop.run.Status == agent.DecisionDone
 }
 
-func (m *Model) agentPromotionPickerOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("verified outcome") + "\n\n")
-	b.WriteString(m.theme.UserLabel.Render(m.picker.pickerHeader) + "\n\n")
-	for index, option := range m.picker.pickerItems {
-		marker := "  "
-		label := m.theme.SystemNote.Render(option)
-		if index == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(option)
-		}
-		b.WriteString(zone.Mark(pickerRowZoneID(index), marker+label) + "\n")
+// autoPromoteAgentOutcome silently saves a verified agent outcome to
+// project memory when eligible, with no interactive prompt — the user
+// found the previous "promote to project memory?" picker interrupted
+// every completed run. classifyProjectMemoryCategory decides the bucket
+// automatically; promoteAgentOutcome sets m.notice on success so
+// completion is still visible without requiring a keypress. It leaves
+// m.notice (already set to the plain completion line by its caller)
+// untouched when promotion does not apply — memory off, no project
+// store, or no verifier-passed cycle. A misclassification or unwanted
+// save is not destructive: /memory remove <id> undoes it, and
+// /memory off disables future auto-saves.
+func (m *Model) autoPromoteAgentOutcome() {
+	if !m.agentPromotionAvailable() {
+		return
 	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ choose · enter confirm · esc keep run-local only"))
-	return b.String()
+	cycle := m.agentLoop.run.LatestCycle()
+	if cycle == nil || cycle.Execution == nil || cycle.Verification == nil || cycle.Verification.Verdict != agent.VerificationPassed {
+		return
+	}
+	category := classifyProjectMemoryCategory(cycle.Objective, cycle.Execution.Summary)
+	_ = m.promoteAgentOutcome(category)
+}
+
+// classifyProjectMemoryCategory infers which project-memory category
+// ("architecture", "convention", or "decision") a verified agent outcome
+// belongs to, from its objective and execution summary. Deterministic
+// keyword matching on word boundaries (provider.MatchesWordBoundary) —
+// consistent with llmtui's other local-first, non-ML classification (BM25
+// retrieval, model-family detection) — not a model call, so auto-
+// promotion stays instantaneous and its reasoning stays auditable.
+// Defaults to "decision", the most general bucket (a choice was made and
+// its outcome verified), when neither a stronger architecture nor
+// convention signal is present.
+func classifyProjectMemoryCategory(objective, summary string) string {
+	text := strings.ToLower(objective + " " + summary)
+	if matchesAnySignalWord(text, architectureSignalWords) {
+		return "architecture"
+	}
+	if matchesAnySignalWord(text, conventionSignalWords) {
+		return "convention"
+	}
+	return "decision"
+}
+
+var architectureSignalWords = []string{
+	"architecture", "package", "layer", "layering", "dependency", "dependencies",
+	"structure", "module", "component", "boundary", "interface", "abstraction",
+}
+
+var conventionSignalWords = []string{
+	"convention", "style", "naming", "lint", "format", "standard", "guideline", "pattern",
+}
+
+func matchesAnySignalWord(text string, words []string) bool {
+	for _, w := range words {
+		if provider.MatchesWordBoundary(text, w) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) promoteAgentOutcome(category string) error {
@@ -456,7 +489,8 @@ func (m *Model) promoteAgentOutcome(category string) error {
 	if err != nil {
 		return err
 	}
-	m.notice = "promoted verified outcome as project " + category + " (" + record.ID + ")"
+	m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed · saved as project %s (%s)",
+		shortRunID(run.ID), run.Cycle, category, record.ID)
 	return nil
 }
 
@@ -1209,7 +1243,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, tea.Batch(persist, m.startNextAgentCycle(stop.NextObjective))
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
-		m.openAgentPromotionPicker()
+		m.autoPromoteAgentOutcome()
 	case agent.DecisionNeedsUserInput:
 		if len(result.UserOptions) > 0 {
 			m.openAgentQuestionPicker(stop.Reason, result.UserOptions)
@@ -1380,6 +1414,23 @@ func toolCallDetail(call tools.Call) string {
 		}
 		return ""
 	}
+}
+
+// countToolOutcomes tallies how many results succeeded vs failed, for the
+// TUI-only exit-summary counters (Model.toolOK/toolErr). It is a distinct
+// concern from recordAgentToolResultsCount's evidence ledger below — that
+// one is gated on an active agent run and classifies by ActionStatus, not
+// Result.Err — so the two are kept separate rather than merged into one
+// gated writer.
+func countToolOutcomes(results []tools.Result) (ok, failed int) {
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+		} else {
+			ok++
+		}
+	}
+	return ok, failed
 }
 
 // uniformActionStatuses builds a same-status slice for a batch every one of

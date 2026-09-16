@@ -686,13 +686,12 @@ func resolveLibraryDir(opts embedded.Options) (string, error) {
 		return "", err
 	}
 
-	// Log warnings if any (version mismatches, legacy directory, etc.)
-	for _, warning := range res.Warnings {
-		// TODO: Once we have structured logging, log these warnings properly
-		// For now they're just noted in the resolution result
-		_ = warning
-	}
-
+	// res.Warnings (version mismatches, legacy directory, etc.) are not
+	// surfaced here: there is no logger (see CLAUDE.md's Logging
+	// convention), and this function runs on every embedded-provider
+	// construction, not just a diagnostic invocation. `llmtui doctor`
+	// performs the same resolution and prints these warnings — that is the
+	// sanctioned place to check for them, proactively and on demand.
 	return res.Dir, nil
 }
 

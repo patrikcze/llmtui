@@ -8,10 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/patrikcze/llmtui/internal/redact"
 )
 
 const (
@@ -24,13 +25,6 @@ var (
 	ErrRunNotFound = errors.New("agent run not found")
 	// ErrCorruptRun is returned for invalid, unsupported, or oversized state.
 	ErrCorruptRun = errors.New("corrupt agent run state")
-)
-
-var (
-	secretAssignmentPattern = regexp.MustCompile(`(?i)((?:token|secret|password|passwd|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;}]+`)
-	bearerPattern           = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
-	keyPattern              = regexp.MustCompile(`\b(?:sk|ghp|github_pat)-[A-Za-z0-9_-]{8,}\b`)
-	privateKeyPattern       = regexp.MustCompile(`(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----`)
 )
 
 // Store persists bounded run state. Implementations must be safe for use by
@@ -364,7 +358,7 @@ func redactJSONStrings(value any) {
 	case map[string]any:
 		for key, item := range typed {
 			if text, ok := item.(string); ok {
-				typed[key] = redactSecrets(text)
+				typed[key] = redact.Secrets(text)
 				continue
 			}
 			redactJSONStrings(item)
@@ -372,17 +366,10 @@ func redactJSONStrings(value any) {
 	case []any:
 		for i, item := range typed {
 			if text, ok := item.(string); ok {
-				typed[i] = redactSecrets(text)
+				typed[i] = redact.Secrets(text)
 				continue
 			}
 			redactJSONStrings(item)
 		}
 	}
-}
-
-func redactSecrets(value string) string {
-	value = privateKeyPattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
-	value = bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = secretAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
-	return keyPattern.ReplaceAllString(value, "[REDACTED KEY]")
 }

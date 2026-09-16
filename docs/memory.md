@@ -79,11 +79,18 @@ Project records created by commands are user-authored and approved. The store
 can hold model proposals in a pending-review state, but pending records are not
 searchable or injected into prompts.
 
-When memory is enabled, a verifier-passed agent run offers a picker that defaults
-to `skip`. Choosing architecture, convention, or decision explicitly promotes
-one bounded outcome. The durable record remains `model_proposed` trust with
-approved review state and preserves source run/cycle provenance. Memory-off,
-failed, parked, cancelled, or unverified runs are never promoted automatically.
+When memory is enabled, a verifier-passed agent run automatically saves one
+bounded outcome to project memory — no interactive prompt. The category
+(architecture, convention, or decision) is inferred from the run's objective
+and execution summary by deterministic keyword matching (never a model call),
+defaulting to `decision` — the most general bucket — when neither a stronger
+architecture nor convention signal is present. The completion notice names the
+category and record ID so the save is visible without an interruption. The
+durable record remains `model_proposed` trust with approved review state and
+preserves source run/cycle provenance, exactly as an explicit promotion would.
+Memory-off, failed, parked, cancelled, or unverified runs are never promoted.
+An unwanted or misclassified save is not destructive: `/memory remove <id>`
+deletes it, and `/memory off` stops future auto-saves for the session.
 
 Default retrieval settings:
 

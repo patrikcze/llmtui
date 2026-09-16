@@ -77,7 +77,6 @@ const (
 	pickerSkill
 	pickerPlugin
 	pickerAgentQuestion
-	pickerAgentPromotion
 )
 
 func slashCommands() []slashCommand {
@@ -426,13 +425,12 @@ func selectedIndex(items []string, selected string) int {
 // which line holds the selected row, so keeping the selection visible on
 // navigation depends on it staying accurate.
 var pickerHeaderLines = map[pickerKind]int{
-	pickerModel:          2,
-	pickerProvider:       2,
-	pickerProfile:        2,
-	pickerSkill:          3,
-	pickerPlugin:         3,
-	pickerAgentQuestion:  4,
-	pickerAgentPromotion: 4,
+	pickerModel:         2,
+	pickerProvider:      2,
+	pickerProfile:       2,
+	pickerSkill:         3,
+	pickerPlugin:        3,
+	pickerAgentQuestion: 4,
 }
 
 // renderPicker rebuilds the picker overlay and scrolls just enough to keep
@@ -456,8 +454,6 @@ func (m *Model) renderPicker() {
 		content = m.pluginsPickerOverlay()
 	case pickerAgentQuestion:
 		content = m.agentQuestionPickerOverlay()
-	case pickerAgentPromotion:
-		content = m.agentPromotionPickerOverlay()
 	}
 	m.viewport.SetContent(content)
 	if header, ok := pickerHeaderLines[m.picker.pickerKind]; ok {

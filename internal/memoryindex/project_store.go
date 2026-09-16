@@ -10,11 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/redact"
 )
 
 const (
@@ -34,17 +35,6 @@ var (
 	// ErrProjectStoreFull means adding another record would exceed the
 	// bounded project-memory record count.
 	ErrProjectStoreFull = errors.New("memoryindex: project store full")
-)
-
-var (
-	projectSecretAssignmentPattern = regexp.MustCompile(
-		`(?i)((?:token|secret|password|passwd|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;}]+`,
-	)
-	projectBearerPattern     = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
-	projectKeyPattern        = regexp.MustCompile(`\b(?:sk|ghp|github_pat)-[A-Za-z0-9_-]{8,}\b`)
-	projectPrivateKeyPattern = regexp.MustCompile(
-		`(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----`,
-	)
 )
 
 // ReviewState controls whether a project record participates in normal
@@ -202,7 +192,7 @@ func (s *ProjectStore) add(
 	sourceCycle int,
 	tags []string,
 ) (ProjectRecord, error) {
-	text = redactProjectSecrets(strings.TrimSpace(text))
+	text = redact.Secrets(strings.TrimSpace(text))
 	if text == "" {
 		return ProjectRecord{}, fmt.Errorf("add project record: text is empty")
 	}
@@ -516,11 +506,4 @@ func cleanProjectTags(tags []string) []string {
 		}
 	}
 	return cleaned
-}
-
-func redactProjectSecrets(value string) string {
-	value = projectPrivateKeyPattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
-	value = projectBearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = projectSecretAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
-	return projectKeyPattern.ReplaceAllString(value, "[REDACTED KEY]")
 }

@@ -1120,13 +1120,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.relayout()
-		for _, res := range msg.results {
-			if res.Err != nil {
-				m.toolErr++
-			} else {
-				m.toolOK++
-			}
-		}
+		ok, failed := countToolOutcomes(msg.results)
+		m.toolOK += ok
+		m.toolErr += failed
 		m.recordAgentToolResultsCount(msg.results, false, msg.statuses)
 		if m.cfg.Tools.NoProgress.Enabled {
 			m.progress.observeResults(msg.observed)
@@ -1281,17 +1277,6 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.answerAskUser(selection)
 			}
 			return m, m.resumeVerifiedRunWithInput(selection, nil)
-		}
-		if kind == pickerAgentPromotion {
-			if selection == "skip" {
-				m.notice = "verified agent outcome not promoted"
-				return m, nil
-			}
-			if err := m.promoteAgentOutcome(selection); err != nil {
-				m.errText = "agent outcome promotion: " + err.Error()
-				m.refreshViewport()
-			}
-			return m, nil
 		}
 		if m.busy() {
 			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"

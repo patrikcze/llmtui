@@ -187,7 +187,15 @@ type MathConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 }
 
-// PrivacyConfig holds local-first privacy settings.
+// PrivacyConfig holds local-first privacy settings. LocalFirst and
+// RedactAPIKeysInLogs are declarative only: the behaviors they name
+// (no network call the user did not configure; secrets never appear in
+// logs, cache keys, command env, or --debug output) are hardcoded
+// elsewhere in the codebase and enforced unconditionally, not gated by
+// these fields — see docs/security.md. They exist so a user's config.yaml
+// states the guarantee explicitly; setting either to false has no effect.
+// StorePrompts is the one field in this struct that actually gates
+// behavior (agent-run persistence — see docs/configuration.md).
 type PrivacyConfig struct {
 	LocalFirst          bool `mapstructure:"local_first" yaml:"local_first"`
 	RedactAPIKeysInLogs bool `mapstructure:"redact_api_keys_in_logs" yaml:"redact_api_keys_in_logs"`
@@ -235,7 +243,6 @@ type MemoryRetrievalConfig struct {
 // PromptConfig configures prompt composition.
 type PromptConfig struct {
 	Mode                   string `mapstructure:"mode" yaml:"mode"`
-	ShowDebug              bool   `mapstructure:"show_debug" yaml:"show_debug"`
 	IncludeSessionSummary  bool   `mapstructure:"include_session_summary" yaml:"include_session_summary"`
 	IncludeLocalMemory     bool   `mapstructure:"include_local_memory" yaml:"include_local_memory"`
 	IncludeModelHints      bool   `mapstructure:"include_model_hints" yaml:"include_model_hints"`
@@ -888,7 +895,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.retrieval.source_tokens", 768)
 
 	v.SetDefault("prompt.mode", "balanced")
-	v.SetDefault("prompt.show_debug", false)
 	v.SetDefault("prompt.include_session_summary", true)
 	v.SetDefault("prompt.include_local_memory", true)
 	v.SetDefault("prompt.include_model_hints", true)
@@ -1116,7 +1122,6 @@ memory:
 # Prompt composition: helpers are visible via /prompt composed.
 prompt:
   mode: balanced # minimal | balanced | coding | strict
-  show_debug: false
   include_session_summary: true
   include_local_memory: true
   include_model_hints: true

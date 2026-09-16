@@ -53,18 +53,44 @@ func ResolveModelProtocol(modelID, architecture string) ModelProtocol {
 
 func modelFamily(value string) ModelFamily {
 	normalized := strings.Trim(strings.ToLower(value), " \t\r\n")
-	for start := 0; start < len(normalized); start++ {
-		if !strings.HasPrefix(normalized[start:], "gpt-oss") {
-			continue
-		}
-		end := start + len("gpt-oss")
-		beforeOK := start == 0 || !asciiLetter(normalized[start-1])
-		afterOK := end == len(normalized) || !asciiLetter(normalized[end])
-		if beforeOK && afterOK {
-			return ModelFamilyGPTOSS
-		}
+	if MatchesWordBoundary(normalized, "gpt-oss") {
+		return ModelFamilyGPTOSS
 	}
 	return ModelFamilyUnknown
+}
+
+// MatchesWordBoundary reports whether pattern occurs in text with no ASCII
+// letter directly attached on either side. Plain strings.Contains would let
+// "coder" match "encoder", or "gpt-oss" match a hypothetical "gpt-osso",
+// silently misrouting an unrelated model. Digits are deliberately allowed to
+// sit directly against the pattern, since model IDs routinely attach a
+// version number with no separator ("qwen3", "llama3.1", "gpt-oss20b").
+//
+// Shared by this package's own narrow, safety-critical family detection
+// (only ModelFamilyGPTOSS, gating Harmony leak detection) and
+// internal/modelprofile's broader per-family tuning-default matcher
+// (context window, temperature, prompt style, six-plus families) — two
+// independently scoped matchers with different callers and different
+// stakes that happen to need the same boundary algorithm. Do not fold
+// modelprofile's family list or this package's Harmony protocol handling
+// into one package: that would couple a cosmetic-defaults concern to a
+// leak-detection safety boundary for no benefit.
+func MatchesWordBoundary(text, pattern string) bool {
+	idx := 0
+	for {
+		i := strings.Index(text[idx:], pattern)
+		if i < 0 {
+			return false
+		}
+		start := idx + i
+		end := start + len(pattern)
+		beforeOK := start == 0 || !asciiLetter(text[start-1])
+		afterOK := end == len(text) || !asciiLetter(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		idx = start + 1
+	}
 }
 
 func asciiLetter(value byte) bool {

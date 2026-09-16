@@ -54,8 +54,10 @@ secrets (`/memory add` reminds you).
 Retrieved memory is reference data, not authorization. The unified Active
 Context marks source/scope/trust/freshness and frames every record separately;
 it cannot grant tools, network access, or prove that an agent action succeeded.
-Agent outcomes become project records only after a verifier-passed completion
-and an explicit category selection; the picker defaults to skip.
+Agent outcomes become project records only after a verifier-passed completion,
+saved automatically with a deterministically inferred category (never a model
+call) and named in the completion notice; `/memory remove <id>` undoes an
+unwanted save and `/memory off` stops future ones.
 
 ## Hardening details
 

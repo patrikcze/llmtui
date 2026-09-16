@@ -33,6 +33,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
+      - name: Lint
+        run: golangci-lint run ./...
+
       - name: Test (fresh, uncached)
         run: go test -count=1 ./...
 

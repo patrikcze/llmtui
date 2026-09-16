@@ -195,6 +195,22 @@ type AgentTrial struct {
 	FalseSuccess     bool          `json:"false_success"`
 	ErrorCategory    string        `json:"error_category,omitempty"`
 	Elapsed          time.Duration `json:"elapsed_ns"`
+
+	// The fields below are independent, fixture-defined postconditions —
+	// deterministic filesystem/answer checks the driver performs itself,
+	// never derived from DecisionDone or the semantic verifier's verdict.
+	// They stay content-free: a classification/count, never a raw path,
+	// argument, or excerpt.
+	PostconditionChecked bool `json:"postcondition_checked,omitempty"`
+	PostconditionPassed  bool `json:"postcondition_passed,omitempty"`
+	// PostconditionFailure is one of: "answer_missing_evidence",
+	// "no_read_observed", "read_before_ask", "wrong_path_read",
+	// "mutation_before_approval", "wrong_target_path", "content_mismatch",
+	// "no_mutation", or "" when the postcondition passed.
+	PostconditionFailure string `json:"postcondition_failure,omitempty"`
+	UnexpectedSideEffect bool   `json:"unexpected_side_effect,omitempty"`
+	DuplicateEffect      bool   `json:"duplicate_effect,omitempty"`
+	MutationCount        int    `json:"mutation_count,omitempty"`
 }
 
 // RunConformanceMatrix repeats the existing harmless provider probe. A

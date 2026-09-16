@@ -403,13 +403,13 @@ func (r *Runtime) decode(ctx context.Context, tokens []llama.Token) error {
 	}
 	code, err := llama.Decode(r.lctx, llama.BatchGetOne(tokens))
 	if err != nil {
-		return fmt.Errorf("decode tokens: %w", err)
+		return fmt.Errorf("decode tokens: %w%s", err, nativeLogTail(3))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if code != 0 {
-		return fmt.Errorf("decode tokens: llama.cpp returned status %d", code)
+		return fmt.Errorf("decode tokens: llama.cpp returned status %d%s", code, nativeLogTail(3))
 	}
 	return nil
 }
