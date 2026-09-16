@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/redact"
 	"github.com/patrikcze/llmtui/internal/skill"
 )
 
@@ -23,17 +23,6 @@ const (
 	maxEpisodeOutcomeBytes  = 2048
 	maxEpisodeListItems     = 16
 	maxEpisodeListItemBytes = 512
-)
-
-var (
-	episodeSecretAssignmentPattern = regexp.MustCompile(
-		`(?i)((?:token|secret|password|passwd|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;}]+`,
-	)
-	episodeBearerPattern     = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
-	episodeKeyPattern        = regexp.MustCompile(`\b(?:sk|ghp|github_pat)-[A-Za-z0-9_-]{8,}\b`)
-	episodePrivateKeyPattern = regexp.MustCompile(
-		`(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----`,
-	)
 )
 
 // Episode is a compact, retrieval-safe record derived from visible session
@@ -139,7 +128,7 @@ func BuildEpisode(s Session) *Episode {
 }
 
 func episodeText(value string, maxBytes int) string {
-	value = strings.Join(strings.Fields(redactEpisodeSecrets(value)), " ")
+	value = strings.Join(strings.Fields(redact.Secrets(value)), " ")
 	if len(value) <= maxBytes {
 		return value
 	}
@@ -148,13 +137,6 @@ func episodeText(value string, maxBytes int) string {
 		value = value[:len(value)-1]
 	}
 	return strings.TrimSpace(value)
-}
-
-func redactEpisodeSecrets(value string) string {
-	value = episodePrivateKeyPattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
-	value = episodeBearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = episodeSecretAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
-	return episodeKeyPattern.ReplaceAllString(value, "[REDACTED KEY]")
 }
 
 func episodeList(values []string) []string {
