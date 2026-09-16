@@ -1120,13 +1120,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.relayout()
-		for _, res := range msg.results {
-			if res.Err != nil {
-				m.toolErr++
-			} else {
-				m.toolOK++
-			}
-		}
+		ok, failed := countToolOutcomes(msg.results)
+		m.toolOK += ok
+		m.toolErr += failed
 		m.recordAgentToolResultsCount(msg.results, false, msg.statuses)
 		if m.cfg.Tools.NoProgress.Enabled {
 			m.progress.observeResults(msg.observed)

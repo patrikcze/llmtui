@@ -1382,6 +1382,23 @@ func toolCallDetail(call tools.Call) string {
 	}
 }
 
+// countToolOutcomes tallies how many results succeeded vs failed, for the
+// TUI-only exit-summary counters (Model.toolOK/toolErr). It is a distinct
+// concern from recordAgentToolResultsCount's evidence ledger below — that
+// one is gated on an active agent run and classifies by ActionStatus, not
+// Result.Err — so the two are kept separate rather than merged into one
+// gated writer.
+func countToolOutcomes(results []tools.Result) (ok, failed int) {
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+		} else {
+			ok++
+		}
+	}
+	return ok, failed
+}
+
 // uniformActionStatuses builds a same-status slice for a batch every one of
 // whose results shares one classification (a whole-batch denial, ledger
 // block, or budget rejection never mixes with a genuinely executed call —
