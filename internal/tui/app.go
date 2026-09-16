@@ -1278,17 +1278,6 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.resumeVerifiedRunWithInput(selection, nil)
 		}
-		if kind == pickerAgentPromotion {
-			if selection == "skip" {
-				m.notice = "verified agent outcome not promoted"
-				return m, nil
-			}
-			if err := m.promoteAgentOutcome(selection); err != nil {
-				m.errText = "agent outcome promotion: " + err.Error()
-				m.refreshViewport()
-			}
-			return m, nil
-		}
 		if m.busy() {
 			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"
 			m.refreshViewport()
