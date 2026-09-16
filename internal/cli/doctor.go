@@ -91,6 +91,16 @@ func newDoctorCmd(r *Root) *cobra.Command {
 						// library files actually load.
 						warn(fmt.Sprintf("%s runtime %s: %s, unverified override (%s)", name, pin.LlamaTag, resolution.TierName, resolution.Dir))
 					}
+					// resolution.Warnings (version-mismatch/manifest notes) can be
+					// non-empty independent of the Verified branch above — surface
+					// them too, since this is the one sanctioned diagnostic surface
+					// for runtime resolution and they were previously computed but
+					// never shown anywhere.
+					if resolveErr == nil {
+						for _, w := range resolution.Warnings {
+							warn(fmt.Sprintf("%s runtime: %s", name, w))
+						}
+					}
 				}
 				prov, err := app.BuildProvider(name, pc, r.cfg.Network)
 				if err != nil {
