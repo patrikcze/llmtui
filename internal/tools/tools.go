@@ -28,6 +28,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/procutil"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
@@ -66,6 +67,9 @@ const (
 	// decodes and validates in full; Runner does no parsing of its own beyond
 	// a size check. See personal_apps.go.
 	ToolPersonalApps = "personal_apps"
+	// ToolGetEntityDetails is a read-only controller capability. The TUI
+	// resolves it against its session-local entity registry.
+	ToolGetEntityDetails = "get_entity_details"
 )
 
 // read_file optional line-range bounds. DefaultReadLimit applies when a range
@@ -150,6 +154,11 @@ type Call struct {
 	ContextKind string
 	// SearchQuery carries tool_search's deterministic local capability query.
 	SearchQuery string
+	// EntityIDs and EntityLevel carry get_entity_details' controller-only
+	// request. They are validated before the TUI resolves them.
+	EntityIDs     [MaxEntityDetailsIDs]string
+	EntityIDCount int
+	EntityLevel   string
 	// Question, Choices, and AllowText carry ask_user's bounded interaction
 	// request. They are controller state, not approval or execution authority.
 	Question    string
@@ -171,10 +180,11 @@ type Call struct {
 // rendering of what a write_file changed (see RenderWriteDiff); it is shown
 // in the TUI but never sent to the model.
 type Result struct {
-	Call   Call
-	Output string
-	Diff   string
-	Err    error
+	Call     Call
+	Output   string
+	Diff     string
+	Err      error
+	Entities []entity.Candidate
 }
 
 // fenceOpen matches a tool block opener: 3+ backticks, "tool", name, optional path.
@@ -227,6 +237,8 @@ func Parse(reply string) []Call {
 						decodeLocalContextBody(&call)
 					case ToolSearch:
 						decodeToolSearchBody(&call)
+					case ToolGetEntityDetails:
+						decodeEntityDetailsBody(&call)
 					case ToolReadFile:
 						decodeReadFileBody(&call)
 					case ToolEditFile:
@@ -429,6 +441,9 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.listDir(c.Path)
 	case ToolReadFile:
 		res.Output, res.Err = r.readFile(c.Path, c.Offset, c.Limit)
+		if res.Err == nil && !IsSecretPath(c.Path) {
+			res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
+		}
 	case ToolEditFile:
 		res.Output, res.Diff, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
 	case ToolGlob:
@@ -440,9 +455,9 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolRunCommand:
 		res.Output, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
-		res.Output, res.Err = r.webSearch(ctx, c)
+		res.Output, res.Entities, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
-		res.Output, res.Err = r.webFetch(ctx, c)
+		res.Output, res.Entities, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, res.Err = r.skillLoad(c)
 	case ToolAskUser:
@@ -451,6 +466,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Err = r.localContext(ctx, c)
 	case ToolSearch:
 		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
+	case ToolGetEntityDetails:
+		res.Err = errors.New("get_entity_details is handled by the controller and cannot be executed by the tool runner")
 	case ToolPersonalApps:
 		res.Output, res.Err = r.personalApps(ctx, c)
 	default:
@@ -458,6 +475,23 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
 	}
 	return res
+}
+
+func fileEntityCandidate(c Call, output string) entity.Candidate {
+	return entity.Candidate{
+		Kind: entity.KindFile,
+		Provenance: entity.Provenance{
+			Source:    "workspace",
+			Operation: ToolReadFile,
+			Reference: c.Path,
+			CallID:    c.ID,
+		},
+		Label:    c.Path,
+		Metadata: entity.Metadata{Path: c.Path, SizeBytes: len(output)},
+		Trust:    entity.TrustWorkspaceUntrusted,
+		Scope:    entity.ScopeSession,
+		Payload:  output,
+	}
 }
 
 // ErrUnknownTool marks a call whose tool name matched nothing. Callers that
@@ -1089,6 +1123,8 @@ func (r *Runner) NeedsApproval(c Call) bool {
 		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
 	case ToolSearch:
 		return false
+	case ToolGetEntityDetails:
+		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
 	case ToolReadFile, ToolGrep:
@@ -1279,6 +1315,8 @@ func (c Call) Describe() string {
 		return "local_context: " + c.ContextKind
 	case ToolSearch:
 		return fmt.Sprintf("tool_search: %q", c.SearchQuery)
+	case ToolGetEntityDetails:
+		return fmt.Sprintf("get_entity_details: %d %s", c.EntityIDCount, c.EntityLevel)
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)
 	case ToolWriteFile:

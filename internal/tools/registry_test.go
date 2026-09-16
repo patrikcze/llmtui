@@ -183,6 +183,11 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"open_item","arguments":{"item_id":"msg_1"}}`}}},
 		},
+		{
+			name:     ToolGetEntityDetails,
+			approval: "no (read-only runtime lookup)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolGetEntityDetails, EntityIDs: [MaxEntityDetailsIDs]string{"ent_00001"}, EntityIDCount: 1}, want: false}},
+		},
 	}
 
 	registry := DefaultRegistry()

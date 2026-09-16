@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -134,6 +135,21 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	)
 	if out.IsError {
 		res.Err = errors.New(mcpErrorSummary(content))
+	} else {
+		res.Entities = []entity.Candidate{{
+			Kind: entity.KindMCPResult,
+			Provenance: entity.Provenance{
+				Source:    "mcp:" + c.MCPServer,
+				Operation: c.MCPTool,
+				Reference: c.MCPServer + "/" + c.MCPTool,
+				CallID:    c.ID,
+			},
+			Label:    c.MCPServer + "/" + c.MCPTool,
+			Metadata: entity.Metadata{SizeBytes: len(content)},
+			Trust:    entity.TrustMCPUntrusted,
+			Scope:    entity.ScopeSession,
+			Payload:  content,
+		}}
 	}
 	return res
 }

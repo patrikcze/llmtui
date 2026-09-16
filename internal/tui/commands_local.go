@@ -20,6 +20,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/prompt"
@@ -821,6 +822,94 @@ func (m *Model) toolCallDiagnosticsOverlay() string {
 	return m.overlayFooter(&b)
 }
 
+// --- /entities ------------------------------------------------------------
+
+func cmdEntities(m *Model, args string) tea.Cmd {
+	sub, rest := splitArgs(args)
+	switch sub {
+	case "", "status":
+		m.openOverlay(func() string { return m.entityStatusOverlay() })
+	case "list":
+		m.openOverlay(func() string { return m.entityListOverlay() })
+	case "inspect":
+		id, extra := splitArgs(rest)
+		if id == "" || extra != "" {
+			return m.fail("usage: /entities inspect <id>")
+		}
+		m.openOverlay(func() string { return m.entityInspectOverlay(id) })
+	default:
+		return m.fail("usage: /entities [status|list|inspect <id>]")
+	}
+	return nil
+}
+
+func (m *Model) entityStatusOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("entities") + "\n\n")
+	if !m.entitiesEnabled() {
+		b.WriteString(m.theme.SystemNote.Render("entity context runtime is disabled") + "\n")
+		return m.overlayFooter(&b)
+	}
+	s := m.entities.Stats()
+	m.kv(&b, "enabled", "yes")
+	m.kv(&b, "entities", fmt.Sprintf("%d / %d", s.Entities, s.MaxEntities))
+	m.kv(&b, "payload bytes", fmt.Sprintf("%d / %d", s.PayloadBytes, s.MaxTotalPayload))
+	m.kv(&b, "representation", fmt.Sprintf("minimal (full expansions this request: %d / %d)", s.ExpandedThisReq, s.MaxFullExpansions))
+	m.kv(&b, "context budget", fmt.Sprintf("%d tokens", m.cfg.Entities.MaxContextTokens))
+	b.WriteString("\n" + m.theme.SystemNote.Render("/entities list · /entities inspect <id>"))
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) entityListOverlay() string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("entities — list") + "\n\n")
+	if !m.entitiesEnabled() {
+		b.WriteString(m.theme.SystemNote.Render("entity context runtime is disabled") + "\n")
+		return m.overlayFooter(&b)
+	}
+	views := m.entities.MinimalViews(16 * 1024)
+	if len(views) == 0 {
+		b.WriteString(m.theme.SystemNote.Render("no live entities") + "\n")
+		return m.overlayFooter(&b)
+	}
+	for _, view := range views {
+		fmt.Fprintf(&b, "  %s  %-12s %s · %s\n", m.theme.StatusValue.Render(view.ID.String()), view.Kind, view.Label, view.Source)
+	}
+	return m.overlayFooter(&b)
+}
+
+func (m *Model) entityInspectOverlay(rawID string) string {
+	var b strings.Builder
+	b.WriteString(m.theme.Badge.Render("entities — inspect") + "\n\n")
+	if !m.entitiesEnabled() {
+		b.WriteString(m.theme.SystemNote.Render("entity context runtime is disabled") + "\n")
+		return m.overlayFooter(&b)
+	}
+	resolution := m.entities.Resolve(rawID, entity.LevelMinimal)
+	if resolution.Status != entity.StatusOK {
+		b.WriteString(m.theme.ErrorText.Render(fmt.Sprintf("%s: %s", resolution.Status, resolution.Error)) + "\n")
+		return m.overlayFooter(&b)
+	}
+	view := resolution.View
+	m.kv(&b, "id", view.ID.String())
+	m.kv(&b, "kind", string(view.Kind))
+	m.kv(&b, "label", view.Label)
+	m.kv(&b, "source", view.Source)
+	m.kv(&b, "trust", string(view.Trust))
+	m.kv(&b, "scope", string(view.Scope))
+	m.kv(&b, "digest", view.Digest)
+	if view.Metadata.Path != "" {
+		m.kv(&b, "path", view.Metadata.Path)
+	}
+	if view.Metadata.URL != "" {
+		m.kv(&b, "url", view.Metadata.URL)
+	}
+	if view.Metadata.SizeBytes > 0 {
+		m.kv(&b, "size", fmt.Sprintf("%d bytes", view.Metadata.SizeBytes))
+	}
+	return m.overlayFooter(&b)
+}
+
 func (m *Model) startToolCallConformanceProbe() tea.Cmd {
 	if m.thinking || m.busy() {
 		return m.fail("tool-call conformance probe is available only while chat is idle")
@@ -890,11 +979,12 @@ func (m *Model) debugOverlay() string {
 	}
 	m.kv(&b, "context", ctxLine)
 	if d.Estimate.Total > 0 {
-		m.kv(&b, "request estimate", fmt.Sprintf("total %s · system %s · messages %s · tool schemas %s · reserve %s",
+		m.kv(&b, "request estimate", fmt.Sprintf("total %s · system %s · messages %s · tool schemas %s · entities %s · reserve %s",
 			components.FormatTokens(d.Estimate.Total),
 			components.FormatTokens(d.Estimate.System),
 			components.FormatTokens(d.Estimate.Messages),
 			components.FormatTokens(d.Estimate.Tools),
+			components.FormatTokens(d.Estimate.EntityContext),
 			components.FormatTokens(d.Estimate.Reserve)))
 		m.kv(&b, "message counts", fmt.Sprintf("request %d · summarized/omitted %d · recent %d",
 			d.MessageCount, d.Estimate.OlderCount, d.Estimate.RecentCount))

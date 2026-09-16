@@ -240,6 +240,17 @@ type MemoryRetrievalConfig struct {
 	SourceTokens     int  `mapstructure:"source_tokens" yaml:"source_tokens"`
 }
 
+// EntitiesConfig bounds the optional session-local Entity Context Runtime.
+// Entity data is ephemeral and is never written to history or memory.
+type EntitiesConfig struct {
+	Enabled              bool `mapstructure:"enabled" yaml:"enabled"`
+	MaxSessionEntities   int  `mapstructure:"max_session_entities" yaml:"max_session_entities"`
+	MaxPayloadBytes      int  `mapstructure:"max_payload_bytes" yaml:"max_payload_bytes"`
+	MaxTotalPayloadBytes int  `mapstructure:"max_total_payload_bytes" yaml:"max_total_payload_bytes"`
+	MaxContextTokens     int  `mapstructure:"max_context_tokens" yaml:"max_context_tokens"`
+	MaxFullExpansions    int  `mapstructure:"max_full_expansions" yaml:"max_full_expansions"`
+}
+
 // PromptConfig configures prompt composition.
 type PromptConfig struct {
 	Mode                   string `mapstructure:"mode" yaml:"mode"`
@@ -635,6 +646,7 @@ type Config struct {
 	Privacy         PrivacyConfig                 `mapstructure:"privacy" yaml:"privacy"`
 	Cache           CacheConfig                   `mapstructure:"cache" yaml:"cache"`
 	Memory          MemoryConfig                  `mapstructure:"memory" yaml:"memory"`
+	Entities        EntitiesConfig                `mapstructure:"entities" yaml:"entities"`
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
 	Agent           AgentConfig                   `mapstructure:"agent" yaml:"agent"`
@@ -894,6 +906,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.retrieval.agent_tokens", 512)
 	v.SetDefault("memory.retrieval.source_tokens", 768)
 
+	v.SetDefault("entities.enabled", true)
+	v.SetDefault("entities.max_session_entities", 256)
+	v.SetDefault("entities.max_payload_bytes", 64*1024)
+	v.SetDefault("entities.max_total_payload_bytes", 4*1024*1024)
+	v.SetDefault("entities.max_context_tokens", 1200)
+	v.SetDefault("entities.max_full_expansions", 8)
+
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.include_session_summary", true)
 	v.SetDefault("prompt.include_local_memory", true)
@@ -1118,6 +1137,16 @@ memory:
   path: "~/.local/share/llmtui/memory.yaml"
   max_snippets: 100
   auto_extract: false
+
+# Ephemeral runtime entities keep bounded references to useful tool results.
+# They are not saved to history or promoted to durable memory.
+entities:
+  enabled: true
+  max_session_entities: 256
+  max_payload_bytes: 65536
+  max_total_payload_bytes: 4194304
+  max_context_tokens: 1200
+  max_full_expansions: 8
 
 # Prompt composition: helpers are visible via /prompt composed.
 prompt:

@@ -235,15 +235,16 @@ func (m *Model) effectivePromptMode() string {
 }
 
 type requestTokenEstimate struct {
-	System       int
-	Messages     int
-	Tools        int
-	Total        int
-	Window       int
-	Reserve      int
-	OlderCount   int
-	RecentCount  int
-	SummaryToken int
+	System        int
+	Messages      int
+	Tools         int
+	EntityContext int
+	Total         int
+	Window        int
+	Reserve       int
+	OlderCount    int
+	RecentCount   int
+	SummaryToken  int
 }
 
 // preparedRequest is an immutable snapshot of everything that influences a
@@ -428,6 +429,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 				}
 			}
 			instructions += m.fencedDynamicToolInstructions()
+			if m.entitiesEnabled() {
+				instructions += "\n" + tools.EntityDetailsInstructions
+			}
 		}
 		if m.personalApps != nil {
 			instructions += "\n\n" + tools.PersonalAppsInstructions
@@ -476,6 +480,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			EpisodeMemory:    episodeMemory,
 			ActiveContext:    activeContext,
 			UseActiveContext: m.cfg.Memory.Retrieval.Enabled,
+			Entities:         m.entityPromptRecords(),
 			RetrievedContext: retrieved,
 			Skills:           m.promptSkills(),
 			SkillCatalog:     m.promptSkillCatalog(),
@@ -655,6 +660,11 @@ func estimatePrepared(out prompt.Output, specs []provider.ToolSpec, window, rese
 			est.System += tokens
 		} else {
 			est.Messages += tokens
+		}
+	}
+	for _, section := range out.Sections {
+		if section.Title == "Entity Context" {
+			est.EntityContext += provider.EstimateTokens(section.Content)
 		}
 	}
 	est.Total = est.System + est.Messages + est.Tools
@@ -1201,6 +1211,9 @@ func toolSpecsFingerprint(specs []provider.ToolSpec) string {
 // provider (with retry). Used by send() and /retry.
 func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	defer m.syncAgentDebug()
+	if m.entities != nil {
+		m.entities.BeginRequest()
+	}
 	if !strings.HasPrefix(raw, tools.ResultsPrefix) {
 		m.toolCallDiagnostics = nil
 		m.toolRecoveryFeedback = ""
@@ -1360,6 +1373,15 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 		return nil
 	}
 	specs := tools.Specs()
+	if !m.entitiesEnabled() {
+		filtered := specs[:0]
+		for _, spec := range specs {
+			if spec.Name != tools.ToolGetEntityDetails {
+				filtered = append(filtered, spec)
+			}
+		}
+		specs = filtered
+	}
 	if m.webOn {
 		specs = append(specs, tools.WebSpecs()...)
 	}
@@ -1458,6 +1480,9 @@ func (m *Model) buildRequestWithTools(messages []provider.Message, specs []provi
 // the cache is not consulted: the conversation simply continues.
 func (m *Model) continueChat() tea.Cmd {
 	defer m.syncAgentDebug()
+	if m.entities != nil {
+		m.entities.BeginRequest()
+	}
 	m.bypassCache = false // consumed: continuations never touch the cache
 	prepared, err := m.prepareRequest("", nil, true)
 	if err != nil {

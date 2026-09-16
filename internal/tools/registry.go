@@ -95,16 +95,17 @@ func (r *Registry) EnabledList(sources map[string]bool) []CapabilityInfo {
 
 // safetyForBuiltin maps the built-in tools to their safety class.
 var safetyForBuiltin = map[string]SafetyClass{
-	ToolListDir:      SafetyReadOnly,
-	ToolReadFile:     SafetyReadOnly,
-	ToolGlob:         SafetyReadOnly,
-	ToolGrep:         SafetyReadOnly,
-	ToolWriteFile:    SafetyWorkspaceWrite,
-	ToolEditFile:     SafetyWorkspaceWrite,
-	ToolRunCommand:   SafetyCommand,
-	ToolAskUser:      SafetyReadOnly,
-	ToolLocalContext: SafetyReadOnly,
-	ToolSearch:       SafetyReadOnly,
+	ToolListDir:          SafetyReadOnly,
+	ToolReadFile:         SafetyReadOnly,
+	ToolGlob:             SafetyReadOnly,
+	ToolGrep:             SafetyReadOnly,
+	ToolWriteFile:        SafetyWorkspaceWrite,
+	ToolEditFile:         SafetyWorkspaceWrite,
+	ToolRunCommand:       SafetyCommand,
+	ToolAskUser:          SafetyReadOnly,
+	ToolLocalContext:     SafetyReadOnly,
+	ToolSearch:           SafetyReadOnly,
+	ToolGetEntityDetails: SafetyReadOnly,
 	// skill_load only changes prompt state inside the app: no file, command,
 	// or network effect, and no permission grant.
 	ToolSkillLoad: SafetyReadOnly,
@@ -116,19 +117,20 @@ var safetyForBuiltin = map[string]SafetyClass{
 
 // approvalForTool is the static approval policy per tool.
 var approvalForTool = map[string]string{
-	ToolListDir:      "no",
-	ToolReadFile:     "ask for secret files",
-	ToolGlob:         "no",
-	ToolGrep:         "ask for an explicit secret file",
-	ToolWriteFile:    "ask",
-	ToolEditFile:     "ask",
-	ToolRunCommand:   "ask unless read-only",
-	ToolWebSearch:    "no for ordinary queries; ask for bulk or opaque ones",
-	ToolWebFetch:     "ask",
-	ToolSkillLoad:    "no",
-	ToolAskUser:      "no (never authorizes another tool)",
-	ToolLocalContext: "ask for clipboard; otherwise no",
-	ToolSearch:       "no (discovery only)",
+	ToolListDir:          "no",
+	ToolReadFile:         "ask for secret files",
+	ToolGlob:             "no",
+	ToolGrep:             "ask for an explicit secret file",
+	ToolWriteFile:        "ask",
+	ToolEditFile:         "ask",
+	ToolRunCommand:       "ask unless read-only",
+	ToolWebSearch:        "no for ordinary queries; ask for bulk or opaque ones",
+	ToolWebFetch:         "ask",
+	ToolSkillLoad:        "no",
+	ToolAskUser:          "no (never authorizes another tool)",
+	ToolLocalContext:     "ask for clipboard; otherwise no",
+	ToolSearch:           "no (discovery only)",
+	ToolGetEntityDetails: "no (read-only runtime lookup)",
 	// personal_apps: see personalAppsApprovalText below, used directly in
 	// DefaultRegistry — this map is keyed by native tool Name, and
 	// personal_apps now registers one entry per operation.

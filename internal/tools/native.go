@@ -139,25 +139,40 @@ func Specs() []provider.ToolSpec {
 				"additionalProperties": false
 			}`),
 		},
+		{
+			Name:        ToolGetEntityDetails,
+			Description: "Expand bounded details for known ephemeral entities by their opaque IDs. This is read-only; unknown, expired, or unavailable entities are reported without inventing content.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"entity_ids": {"type": "array", "items": {"type": "string", "pattern": "^ent_[0-9]{5}$"}, "minItems": 1, "maxItems": 8},
+					"level": {"type": "string", "enum": ["identifier", "minimal", "full"]}
+				},
+				"required": ["entity_ids"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 }
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path       string `json:"path"`
-	Content    string `json:"content"`
-	Command    string `json:"command"`
-	Query      string `json:"query"`
-	URL        string `json:"url"`
-	MaxResults int    `json:"max_results"`
-	Skill      string `json:"skill"`
-	Pattern    string `json:"pattern"`
-	Glob       string `json:"glob"`
-	Freshness  string `json:"freshness_token"`
-	Offset     int    `json:"offset"`
-	Limit      int    `json:"limit"`
-	OldText    string `json:"old_text"`
-	NewText    string `json:"new_text"`
+	Path       string   `json:"path"`
+	Content    string   `json:"content"`
+	Command    string   `json:"command"`
+	Query      string   `json:"query"`
+	URL        string   `json:"url"`
+	MaxResults int      `json:"max_results"`
+	Skill      string   `json:"skill"`
+	Pattern    string   `json:"pattern"`
+	Glob       string   `json:"glob"`
+	Freshness  string   `json:"freshness_token"`
+	Offset     int      `json:"offset"`
+	Limit      int      `json:"limit"`
+	OldText    string   `json:"old_text"`
+	NewText    string   `json:"new_text"`
+	EntityIDs  []string `json:"entity_ids"`
+	Level      string   `json:"level"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -284,6 +299,24 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 				} else {
 					c.SearchQuery, c.Max = args.Query, args.MaxResults
 					if err := ValidateToolSearchCall(&c); err != nil {
+						c.InputErr = err.Error()
+					}
+				}
+			}
+			out = append(out, c)
+			continue
+		}
+		if tc.Name == ToolGetEntityDetails {
+			if len(tc.Arguments) > MaxEntityDetailsPayloadBytes {
+				c.InputErr = fmt.Sprintf("get_entity_details arguments exceed the %d byte limit", MaxEntityDetailsPayloadBytes)
+			} else {
+				var args entityDetailsArgs
+				if err := decodeOneJSONObject(tc.Arguments, &args); err != nil {
+					c.InputErr = err.Error()
+				} else {
+					setEntityIDs(&c, args.EntityIDs)
+					c.EntityLevel = args.Level
+					if err := ValidateEntityDetailsCall(&c); err != nil {
 						c.InputErr = err.Error()
 					}
 				}

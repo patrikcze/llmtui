@@ -5,7 +5,7 @@ Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
 in-process. Local-first: no telemetry, no network call the user did not
 configure. Audience: developers running models on their own machine.
 
-This is a mature 39-package Go codebase (38 internal packages plus the
+This is a mature 41-package Go codebase (40 internal packages plus the
 `cmd/llmtui` entry point), not a scaffold. Read the code before changing it;
 refresh the exact inventory with `go list ./...` and see
 `docs/architecture/package-map.md` for the maintained map.
@@ -179,6 +179,8 @@ them **and add a regression test for the specific case it touches**:
 - `Update` must never block; long work returns a `tea.Cmd`.
 - Optional subsystems (tools, web, RAG, MCP, memory, agent) are **off by
   default** and a broken/disabled one must not block normal chat startup.
+  The bounded entity runtime is enabled by default but remains inert unless
+  tools are active; it is transient and must not block normal chat startup.
 - Declaring an MCP server starts nothing; only an explicit connect launches a
   subprocess.
 - `internal/tui/app.go` (~3000 LOC), `commands_local.go` (~1800),
