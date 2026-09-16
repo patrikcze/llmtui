@@ -207,7 +207,9 @@ type Model struct {
 	// provider+model. One incapable model must not disable native tools for a
 	// different model or provider for the rest of the session.
 	nativeToolRejections map[string]bool
-	toolsShowOutput      bool // show full tool output instead of one-line summaries
+	toolsShowOutput      bool         // show full tool output instead of one-line summaries
+	toolOutputExpanded   map[int]bool // per-message overrides of toolsShowOutput
+	toolOutputRevision   int          // invalidates both transcript render caches
 	toolRunner           *tools.Runner
 	toolOK               int         // executed tool calls (exit summary)
 	toolErr              int         // failed or denied tool calls (exit summary)
@@ -410,6 +412,7 @@ func New(opts Options) *Model {
 // --resume/--continue at startup.
 func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.SetMessages(s.Messages)
+	m.resetToolOutput()
 	m.session.Stats = nil
 	m.session.TotalPromptTokens = s.Prompt
 	m.session.TotalCompletionTokens = s.Reply
@@ -794,6 +797,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if model, cmd, handled := m.updateStopButtonClick(msg); handled {
 			return model, cmd
 		}
+		if model, cmd, handled := m.updateToolOutputClick(msg); handled {
+			return model, cmd
+		}
 		if model, cmd, handled := m.updateReasoningClick(msg); handled {
 			return model, cmd
 		}
@@ -878,6 +884,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+l":
 			m.session.Clear()
+			m.resetToolOutput()
 			m.refreshViewport()
 			return m, nil
 		case "ctrl+u":
@@ -2904,20 +2911,21 @@ func (m *Model) refreshViewport() {
 // go stale and show old content. session.Rev() alone is not enough — it
 // only tells us the message set changed, not how the change should render.
 type transcriptCacheKey struct {
-	rev              int
-	width            int
-	theme            string
-	markdown         bool
-	math             bool
-	showReasoning    bool
-	toolsShowOutput  bool
-	demoMode         bool
-	toolsOn          bool
-	toolsRoot        string
-	toolsAutoApprove bool
-	ragOn            bool
-	ragLen           int
-	activityLive     bool
+	rev                int
+	width              int
+	theme              string
+	markdown           bool
+	math               bool
+	showReasoning      bool
+	toolsShowOutput    bool
+	toolOutputRevision int
+	demoMode           bool
+	toolsOn            bool
+	toolsRoot          string
+	toolsAutoApprove   bool
+	ragOn              bool
+	ragLen             int
+	activityLive       bool
 }
 
 func (m *Model) settledTranscriptKey() transcriptCacheKey {
@@ -2932,20 +2940,21 @@ func (m *Model) settledTranscriptKey() transcriptCacheKey {
 		ragLen = m.ragIndex.Len()
 	}
 	return transcriptCacheKey{
-		rev:              m.session.Rev(),
-		width:            m.width,
-		theme:            m.theme.Name,
-		markdown:         m.cfg.UI.Markdown,
-		math:             m.cfg.UI.Math.Enabled,
-		showReasoning:    m.showReasoning,
-		toolsShowOutput:  m.toolsShowOutput,
-		demoMode:         m.demoMode,
-		toolsOn:          toolsOn,
-		toolsRoot:        root,
-		toolsAutoApprove: m.toolsAutoApprove,
-		ragOn:            ragOn,
-		ragLen:           ragLen,
-		activityLive:     m.activity != nil,
+		rev:                m.session.Rev(),
+		width:              m.width,
+		theme:              m.theme.Name,
+		markdown:           m.cfg.UI.Markdown,
+		math:               m.cfg.UI.Math.Enabled,
+		showReasoning:      m.showReasoning,
+		toolsShowOutput:    m.toolsShowOutput,
+		toolOutputRevision: m.toolOutputRevision,
+		demoMode:           m.demoMode,
+		toolsOn:            toolsOn,
+		toolsRoot:          root,
+		toolsAutoApprove:   m.toolsAutoApprove,
+		ragOn:              ragOn,
+		ragLen:             ragLen,
+		activityLive:       m.activity != nil,
 	}
 }
 
@@ -3066,15 +3075,7 @@ func (m *Model) renderSettledTranscript() string {
 			// model sees everything, the human sees one line per call
 			// (/tools output shows the full text).
 			if strings.HasPrefix(msg.Content, tools.ResultsPrefix) {
-				if m.toolsShowOutput {
-					b.WriteString(m.theme.SystemNote.Render("⚒ tools"))
-					b.WriteString("\n")
-					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
-					b.WriteString("\n")
-				} else {
-					b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(tools.CollapseResults(msg.Content))))
-					b.WriteString("\n")
-				}
+				b.WriteString(m.renderToolOutput(i, msg))
 				if msg.Display != "" {
 					b.WriteString(m.renderToolDiff(msg.Display))
 				}
@@ -3111,12 +3112,12 @@ func (m *Model) renderSettledTranscript() string {
 			liveBatch := m.activity != nil && i == len(m.session.Messages)-1
 			if !liveBatch {
 				for _, c := range tools.CallsFromNative(msg.ToolCalls) {
-					line, style := "⚒ "+c.Describe(), m.theme.SystemNote
+					line, style := "⚒ Tool: "+c.Describe(), m.transcriptCaptionStyle()
 					if hasErr, ok := toolCallErr[c.ID]; ok {
 						if hasErr {
-							line, style = "✗ "+c.Describe(), errGlyph
+							line, style = "✗ Tool: "+c.Describe(), errGlyph.Bold(true)
 						} else {
-							line, style = "● "+c.Describe(), okGlyph
+							line, style = "● Tool: "+c.Describe(), okGlyph.Bold(true)
 						}
 					}
 					b.WriteString(style.Render(terminaltext.Sanitize(line)))
@@ -3127,21 +3128,9 @@ func (m *Model) renderSettledTranscript() string {
 				b.WriteString("\n")
 			}
 		case provider.RoleTool:
-			// Native tool results attach under their call, Claude-Code
-			// style. A write_file renders its diff; everything else is one
-			// summary line per call unless /tools output asked for more.
-			switch {
-			case msg.Display != "":
+			b.WriteString(m.renderToolOutput(i, msg))
+			if msg.Display != "" {
 				b.WriteString(m.renderToolDiff(msg.Display))
-			case m.toolsShowOutput:
-				b.WriteString(m.theme.SystemNote.Render("  ⎿ " + terminaltext.Sanitize(msg.ToolName)))
-				b.WriteString("\n")
-				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(msg.Content)))
-				b.WriteString("\n")
-			default:
-				b.WriteString(m.theme.SystemNote.Render(terminaltext.Sanitize(
-					"  ⎿ " + tools.SummarizeOutput(msg.Content))))
-				b.WriteString("\n")
 			}
 			b.WriteString("\n")
 		}
@@ -3224,7 +3213,7 @@ func (m *Model) renderToolDiff(display string) string {
 	for _, l := range lines {
 		switch {
 		case strings.HasPrefix(l, "Create(") || strings.HasPrefix(l, "Update("):
-			b.WriteString(m.theme.SystemNote.Render("  ⎿ ") + m.theme.StatusValue.Render(l))
+			b.WriteString(m.theme.ReasoningText.Render("  ⎿  ") + m.theme.StatusValue.Render(l))
 		case strings.HasPrefix(l, "+"):
 			b.WriteString(add.Render("      " + l))
 		case strings.HasPrefix(l, "-"):

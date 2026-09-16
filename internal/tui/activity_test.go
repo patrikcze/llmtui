@@ -78,7 +78,7 @@ func TestActivityClearsWhenResultsLandAndGlyphsSettle(t *testing.T) {
 	}
 	// While running, the transcript must not duplicate the live region's
 	// call line (the static ⚒ form is suppressed for the running batch).
-	if strings.Contains(m.render(), "⚒ jiraWorklog: session_start") {
+	if strings.Contains(m.render(), "⚒ Tool: jiraWorklog: session_start") {
 		t.Error("running batch should suppress the transcript's static ⚒ line")
 	}
 
@@ -94,7 +94,7 @@ func TestActivityClearsWhenResultsLandAndGlyphsSettle(t *testing.T) {
 	if m.activityHeight() != 0 {
 		t.Errorf("activityHeight = %d after settle, want 0", m.activityHeight())
 	}
-	if !strings.Contains(m.render(), "● jiraWorklog: session_start") {
+	if !strings.Contains(m.render(), "● Tool: jiraWorklog: session_start") {
 		t.Error("settled ok call should render with ● in the transcript")
 	}
 }
@@ -151,13 +151,13 @@ func TestSettledGlyphsFromToolResults(t *testing.T) {
 	m.refreshViewport()
 	view := m.render()
 	// Describe() renders these as "read_file a.txt" and "write b.txt (…)".
-	if !strings.Contains(view, "● read_file a.txt") {
+	if !strings.Contains(view, "● Tool: read_file a.txt") {
 		t.Error("ok call should render with ●")
 	}
-	if !strings.Contains(view, "✗ write b.txt") {
+	if !strings.Contains(view, "✗ Tool: write b.txt") {
 		t.Error("failed call should render with ✗")
 	}
-	if strings.Contains(view, "⚒ read_file") || strings.Contains(view, "⚒ write b.txt") {
+	if strings.Contains(view, "⚒ Tool: read_file") || strings.Contains(view, "⚒ Tool: write b.txt") {
 		t.Error("settled calls should not keep the neutral ⚒ glyph")
 	}
 }

@@ -472,9 +472,10 @@ what it already has — the turn never dead-ends in an error.
 - While tools are on, a standing banner in the chat shows the exact
   directory the model can act on and the approval mode.
 - Tool activity renders compactly, Claude-Code style: one line per action
-  (`⚒ run: ls -la`) and one line per result (`⎿ 24 lines of output`);
+  (`⚒ Tool: run: ls -la`) and one line per result (`⎿  + 24 lines of output`);
   errors show a concise actionable first line. `/tools output` toggles the
-  complete output for inspection. The model always receives the complete
+  complete output for inspection. Click an output summary to expand just that
+  result, including the executed tool’s full arguments. The model always receives the complete
   sanitized text — collapsing is display only.
 - **File writes show a diff**, Claude-Code style: `Create(file)` lists the
   new content, `Update(file)` shows added/removed counts and a

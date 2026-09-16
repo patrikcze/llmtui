@@ -1167,6 +1167,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 			return m.fail("/history clear is unavailable while a reply is streaming — esc to stop it first")
 		}
 		m.session.Clear()
+		m.resetToolOutput()
 		m.summary = ""
 		m.refreshViewport()
 		m.notice = "conversation cleared"
@@ -1340,6 +1341,7 @@ func cmdTools(m *Model, args string) tea.Cmd {
 		m.notice = "⚒ tool approvals set to auto — writes and commands run without asking"
 	case "output":
 		m.toolsShowOutput = !m.toolsShowOutput
+		m.resetToolOutput()
 		if m.toolsShowOutput {
 			m.notice = "⚒ showing full tool output (/tools output to collapse again)"
 		} else {

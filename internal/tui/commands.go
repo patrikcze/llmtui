@@ -92,6 +92,7 @@ func slashCommands() []slashCommand {
 		}},
 		{name: "clear", usage: "/clear", desc: "clear the conversation", category: "Chat", blockWhileThinking: true, run: func(m *Model, _ string) tea.Cmd {
 			m.session.Clear()
+			m.resetToolOutput()
 			m.summary = ""
 			m.refreshViewport()
 			return nil

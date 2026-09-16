@@ -45,6 +45,12 @@ click-drag text selection uses, so only a plain click (no movement between
 press and release) toggles; a real drag that happens to pass over or end on
 a header still finalizes as a text selection.
 
+Tool results use the same bold caption style. Click the `⎿  +` output
+summary to expand that result and inspect its full arguments and output;
+click again to collapse it. Other results stay unchanged. `/tools output`
+resets individual choices and toggles all output. Dragging across a caption
+still selects text, and expansion keeps the current scroll position.
+
 ## Components
 
 Status bar, provider/model badges, token meter, usage sparkline, bar chart

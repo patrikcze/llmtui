@@ -96,7 +96,8 @@ func (m *Model) renderActivity() string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(m.theme.Spinner.Render(glyph) + " " + m.theme.SystemNote.Render(terminaltext.Sanitize(e.call.Describe())))
+		caption := m.transcriptCaptionStyle().Render(terminaltext.Sanitize("Tool: " + e.call.Describe()))
+		b.WriteString(m.theme.Spinner.Render(glyph) + " " + caption)
 	}
 	if overflow > 0 {
 		b.WriteString("\n" + m.theme.SystemNote.Render(fmt.Sprintf("  … +%d more call(s)", overflow)))

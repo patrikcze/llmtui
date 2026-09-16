@@ -57,7 +57,7 @@ func (m *Model) renderReasoning(zoneID, reasoning string, streaming bool, durati
 	if !m.showReasoning {
 		header += " · click or /thoughts show"
 	}
-	headerStyle := lipgloss.NewStyle().Foreground(m.theme.Accent).Bold(true)
+	headerStyle := m.transcriptCaptionStyle()
 	styledHeader := zone.Mark(zoneID, headerStyle.Render(header))
 	if !m.showReasoning {
 		return styledHeader
@@ -81,4 +81,9 @@ func formatThoughtDuration(d time.Duration) string {
 
 func (m *Model) renderAnswer(answer string) string {
 	return m.theme.AnswerText.Render(strings.TrimRight(answer, "\n"))
+}
+
+// transcriptCaptionStyle keeps expandable thoughts and tool results consistent.
+func (m *Model) transcriptCaptionStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(m.theme.Accent).Bold(true)
 }
