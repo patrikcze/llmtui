@@ -46,6 +46,8 @@ from connected MCP servers. Model providers do not need to query the endpoint.
 
 ## How it works
 
+![llmtui modern interface](images/llmtui-modern.gif)
+
 At heart, llmtui is a loop between **you**, a **local LLM**, and — when you turn
 them on — **tools** that can touch your workspace. The model never touches your
 disk or network directly: it only ever emits text (and, optionally, structured
