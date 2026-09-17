@@ -44,7 +44,8 @@ const visionObservationSchema = `{
           "summary": {"type": "string", "maxLength": 2048},
           "observations": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 2048}},
           "visible_text": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 2048}},
-          "limitations": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 2048}}
+          "limitations": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 2048}},
+          "box_2d": {"type": "array", "maxItems": 4, "items": {"type": "number"}}
         },
         "required": ["summary", "observations", "visible_text", "limitations"],
         "additionalProperties": false
@@ -93,6 +94,11 @@ type visionCaptureResult struct {
 	Observations []string `json:"observations"`
 	VisibleText  []string `json:"visible_text"`
 	Limitations  []string `json:"limitations"`
+	// Box2D is an optional Gemma vision grounding field. It is accepted so a
+	// useful textual observation is not discarded, but it is not persisted
+	// until its coordinate convention is validated and represented in the
+	// entity schema.
+	Box2D json.RawMessage `json:"box_2d,omitempty"`
 }
 
 type visionCaptureWire struct {
@@ -443,6 +449,7 @@ func boundedVisionError(err error) string {
 }
 
 func normalizeVisionObservation(result visionCaptureResult) (string, error) {
+	result.Box2D = nil
 	result.Summary = boundedVisionString(result.Summary)
 	result.Observations = boundedVisionStrings(result.Observations, maxVisionItems)
 	result.VisibleText = boundedVisionStrings(result.VisibleText, maxVisionItems)

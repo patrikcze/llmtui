@@ -83,7 +83,7 @@ func completeVisionObservation(t *testing.T, m *Model, image provider.Image) {
 }
 
 func TestVisionObservationCaptureRegistersAndReplacesRawImage(t *testing.T) {
-	prov := &visionObservationTestProvider{response: `{"observations":[{"summary":"pricing screenshot","observations":["512 GB — 24 990 Kč"],"visible_text":["512 GB"],"limitations":[]}]}`}
+	prov := &visionObservationTestProvider{response: `{"observations":[{"summary":"pricing screenshot","observations":["512 GB — 24 990 Kč"],"visible_text":["512 GB"],"limitations":[],"box_2d":[10,20,30,40]}]}`}
 	m := newVisionObservationTestModel(t, prov)
 	image := provider.Image{Data: []byte("png-bytes"), MIME: "image/png"}
 	completeVisionObservation(t, m, image)
@@ -99,6 +99,9 @@ func TestVisionObservationCaptureRegistersAndReplacesRawImage(t *testing.T) {
 	if view.Status != entity.StatusOK || view.View.Trust != entity.TrustVisionModelDerived ||
 		!strings.Contains(view.View.Payload, "24 990 Kč") {
 		t.Fatalf("captured entity = %+v", view)
+	}
+	if strings.Contains(view.View.Payload, "box_2d") {
+		t.Fatalf("model-specific grounding field leaked into entity payload: %s", view.View.Payload)
 	}
 	if m.session.Messages[len(m.session.Messages)-1].Content != "normal answer preserved" {
 		t.Fatal("normal answer was not preserved")
