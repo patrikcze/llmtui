@@ -141,14 +141,15 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGetEntityDetails,
-			Description: "Expand bounded details for known ephemeral entities by their opaque IDs. This is read-only; unknown, expired, or unavailable entities are reported without inventing content.",
+			Description: "Find previously stored runtime data by name or topic keywords using query (up to 8 minimal candidates), or expand exact entity_ids with level. Use exactly one selector. Query never returns full payloads: choose matching IDs before expanding. Read-only, current session only; call alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
+					"query": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Name, path, URL, or topic keywords to find stored entities without knowing IDs. Returns minimal candidates only."},
 					"entity_ids": {"type": "array", "items": {"type": "string", "pattern": "^ent_[0-9]{5}$"}, "minItems": 1, "maxItems": 8},
 					"level": {"type": "string", "enum": ["identifier", "minimal", "full"]}
 				},
-				"required": ["entity_ids"],
+				"oneOf": [{"required": ["entity_ids"]}, {"required": ["query"]}],
 				"additionalProperties": false
 			}`),
 		},
@@ -316,6 +317,7 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 				} else {
 					setEntityIDs(&c, args.EntityIDs)
 					c.EntityLevel = args.Level
+					c.SearchQuery = args.Query
 					if err := ValidateEntityDetailsCall(&c); err != nil {
 						c.InputErr = err.Error()
 					}

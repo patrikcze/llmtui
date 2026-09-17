@@ -1,10 +1,47 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/patrikcze/llmtui/internal/provider"
 )
+
+func TestEntityDetailsQueryProtocols(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		name := "fenced"
+		if native {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name  string
+				args  string
+				valid bool
+			}{
+				{name: "topic", args: `{"query":"release notes"}`, valid: true},
+				{name: "minimal", args: `{"query":"release notes","level":"minimal"}`, valid: true},
+				{name: "mixed selectors", args: `{"query":"notes","entity_ids":["ent_00001"]}`},
+				{name: "query cannot expand", args: `{"query":"notes","level":"full"}`},
+				{name: "empty", args: `{"query":" "}`},
+				{name: "oversized", args: `{"query":"` + strings.Repeat("a", 513) + `"}`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					calls := Parse("```tool get_entity_details\n" + tc.args + "\n```")
+					if native {
+						calls = CallsFromNative([]provider.ToolCall{{ID: "lookup", Name: ToolGetEntityDetails, Arguments: tc.args}})
+					}
+					if len(calls) != 1 || (calls[0].InputErr == "") != tc.valid {
+						t.Fatalf("calls = %+v, want valid=%v", calls, tc.valid)
+					}
+					if tc.valid && calls[0].EntityLevel != "minimal" {
+						t.Fatalf("query level = %q", calls[0].EntityLevel)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestEntityDetailsFencedCallIsBoundedAndNormalized(t *testing.T) {
 	calls := Parse("```tool get_entity_details\n{\"entity_ids\":[\"ent_00001\"],\"level\":\"MINIMAL\"}\n```")

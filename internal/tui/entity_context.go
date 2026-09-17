@@ -27,14 +27,10 @@ func (m *Model) resetEntities() {
 }
 
 func (m *Model) entityPromptRecords() []prompt.EntityRecord {
-	if !m.entitiesEnabled() {
+	if !m.entityToolsAvailable() {
 		return nil
 	}
-	maxTokens := m.cfg.Entities.MaxContextTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultEntityContextTokens
-	}
-	maxBytes := maxTokens
+	maxBytes := m.entityContextTokenBudget()
 	if maxBytes <= int(^uint(0)>>2) {
 		maxBytes *= 4
 	} else {
@@ -55,6 +51,17 @@ func (m *Model) entityPromptRecords() []prompt.EntityRecord {
 		})
 	}
 	return records
+}
+
+func (m *Model) entityToolsAvailable() bool {
+	return m.entitiesEnabled() && m.toolsOn && m.toolRunner != nil
+}
+
+func (m *Model) entityContextTokenBudget() int {
+	if m.cfg != nil && m.cfg.Entities.MaxContextTokens > 0 {
+		return m.cfg.Entities.MaxContextTokens
+	}
+	return defaultEntityContextTokens
 }
 
 func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
@@ -98,7 +105,9 @@ func appendEntityReferences(output string, views []entity.View) string {
 }
 
 type entityDetailsWire struct {
-	Entities []entityResolutionWire `json:"entities"`
+	Entities     []entityResolutionWire `json:"entities"`
+	TotalMatches *int                   `json:"total_matches,omitempty"`
+	Truncated    bool                   `json:"truncated,omitempty"`
 }
 
 type entityResolutionWire struct {
@@ -189,6 +198,14 @@ func (m *Model) resolveEntityDetails(call tools.Call) string {
 	ids := call.EntityIDs[:call.EntityIDCount]
 	resolutions := m.entities.ResolveMany(ids, level, tools.MaxEntityDetailsIDs)
 	wire := entityDetailsWire{Entities: make([]entityResolutionWire, 0, len(resolutions))}
+	if call.SearchQuery != "" {
+		views, total := m.entities.Search(call.SearchQuery, tools.MaxEntityDetailsIDs)
+		wire.TotalMatches = &total
+		wire.Truncated = total > len(views)
+		for _, view := range views {
+			resolutions = append(resolutions, entity.Resolution{ID: view.ID.String(), Status: entity.StatusOK, View: view})
+		}
+	}
 	for _, resolution := range resolutions {
 		item := entityResolutionWire{ID: resolution.ID, Status: resolution.Status, Error: resolution.Error}
 		if resolution.Status == entity.StatusOK {

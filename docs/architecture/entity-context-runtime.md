@@ -41,13 +41,26 @@ them, appends compact references alongside the result sent to the model, and
 keeps native and fenced protocols aligned. The controller handles
 `get_entity_details`; the generic runner cannot execute it.
 
-`internal/prompt` adds an `Entity Context` section when live references exist.
+`internal/prompt` adds an `Entity Context` protocol section in every prompt mode
+while tools and ECR are enabled, even when no references fit the recent shortlist.
+The complete section, including metadata and untrusted framing, is bounded by
+`entities.max_context_tokens` using the existing token estimator. A budget too
+small for the protocol omits the section; the tool schema still describes lookup.
 It uses the same untrusted framing policy as RAG, web, and MCP data. The raw
 user message remains verbatim and last. Entity context is independent of
 `memoryindex`: entities are transient runtime observations, not preferences,
 project facts, episodes, or retrieval records. Context compaction may omit an
 entity from the prompt; the registry is still the authority for a later valid
-ID until eviction or expiry.
+ID until eviction or expiry. The shortlist is based on recency, not semantic
+retrieval. A model can discover omitted entities through `get_entity_details`
+with `{"query":"name or topic keywords"}`. This performs a bounded,
+case-insensitive keyword scan of live labels, safe paths/URLs, previews, and
+stored payloads. Label matches rank above metadata, preview, and payload matches;
+ties use recency and then ID. It returns at most eight minimal candidates with
+`total_matches` and a `truncated` flag for partial results. It never expands
+payloads or chooses an identity on the user's behalf. The model can narrow its
+keywords if needed, then expand an exact returned ID. No embeddings, network
+calls, or additional model requests are used by the lookup itself.
 
 ## Agent relationship
 
@@ -84,10 +97,20 @@ minimal metadata and never dumps the payload. No telemetry leaves the process.
 
 ## Example
 
-After a web search, the model receives a compact result reference such as
-`ent_00001` and may ask for `get_entity_details` with that exact ID. A stale
-or malformed ID returns a status instead of triggering a new search or
-inventing missing fields.
+You can say “What did the release notes say about migration?” without supplying
+an entity ID. The model matches the recent labels/previews or calls
+`get_entity_details({"query":"release notes"})` to discover candidates. It then
+requests `{"entity_ids":["ent_00001"],"level":"full"}` using an actual returned
+ID. Query and ID selectors are mutually exclusive; query lookup supports only
+minimal detail. An empty match list means the stored data did not match those
+keywords, not that the original resource does not exist. Ambiguous results
+remain separate candidates. A stale or malformed ID returns a status instead
+of triggering a new search or inventing missing fields.
+
+This applies to previously registered tool results in the current live session.
+Durable `/memory` records and RAG chunks still use their existing retrieval
+paths; ECR does not automatically register them. Restarted/resumed sessions,
+expired entries, and evicted payloads cannot be recovered through entity lookup.
 
 ## Non-goals
 

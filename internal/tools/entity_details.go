@@ -8,14 +8,16 @@ import (
 const (
 	MaxEntityDetailsIDs          = 8
 	MaxEntityDetailsPayloadBytes = 4 * 1024
+	MaxEntityQueryBytes          = 512
 )
 
 // EntityDetailsInstructions is the fenced-protocol guidance added only when
 // the controller has enabled the entity runtime.
-const EntityDetailsInstructions = "- get_entity_details — expand known ephemeral entity IDs; the block body is one JSON object with entity_ids and optional level (identifier, minimal, or full)"
+const EntityDetailsInstructions = `- get_entity_details — find stored runtime data with {"query":"name or topic keywords"} (returns up to 8 minimal candidates), or expand exact returned IDs with {"entity_ids":["ent_00001"],"level":"full"}. Use exactly one selector. Query lookup never expands full payloads. Call it alone.`
 
 type entityDetailsArgs struct {
 	EntityIDs []string `json:"entity_ids"`
+	Query     string   `json:"query,omitempty"`
 	Level     string   `json:"level,omitempty"`
 }
 
@@ -33,6 +35,7 @@ func decodeEntityDetailsBody(call *Call) {
 	}
 	setEntityIDs(call, args.EntityIDs)
 	call.EntityLevel = args.Level
+	call.SearchQuery = args.Query
 	if err := ValidateEntityDetailsCall(call); err != nil {
 		call.InputErr = err.Error()
 	}
@@ -44,8 +47,28 @@ func ValidateEntityDetailsCall(call *Call) error {
 	if call == nil {
 		return fmt.Errorf("get_entity_details call is missing")
 	}
+	call.SearchQuery = strings.TrimSpace(call.SearchQuery)
+	call.EntityLevel = strings.ToLower(strings.TrimSpace(call.EntityLevel))
+	if call.EntityIDCount < 0 {
+		return fmt.Errorf("get_entity_details entity ID count must not be negative")
+	}
+	if call.SearchQuery != "" {
+		if call.EntityIDCount != 0 {
+			return fmt.Errorf("get_entity_details accepts query or entity_ids, not both")
+		}
+		if len(call.SearchQuery) > MaxEntityQueryBytes {
+			return fmt.Errorf("get_entity_details query exceeds %d bytes", MaxEntityQueryBytes)
+		}
+		if call.EntityLevel == "" {
+			call.EntityLevel = "minimal"
+		}
+		if call.EntityLevel != "minimal" {
+			return fmt.Errorf("get_entity_details query returns minimal candidates; use their entity_ids for other detail levels")
+		}
+		return nil
+	}
 	if call.EntityIDCount == 0 {
-		return fmt.Errorf("get_entity_details needs at least one entity_id")
+		return fmt.Errorf("get_entity_details needs a query or at least one entity_id")
 	}
 	if call.EntityIDCount > MaxEntityDetailsIDs {
 		return fmt.Errorf("get_entity_details accepts at most %d entity IDs", MaxEntityDetailsIDs)
@@ -56,7 +79,6 @@ func ValidateEntityDetailsCall(call *Call) error {
 			return fmt.Errorf("get_entity_details entity_id %d is blank", index+1)
 		}
 	}
-	call.EntityLevel = strings.ToLower(strings.TrimSpace(call.EntityLevel))
 	if call.EntityLevel == "" {
 		call.EntityLevel = "full"
 	}

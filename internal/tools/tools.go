@@ -152,7 +152,7 @@ type Call struct {
 	Freshness string
 	// ContextKind selects local_context's bounded read-only collector.
 	ContextKind string
-	// SearchQuery carries tool_search's deterministic local capability query.
+	// SearchQuery carries a local tool_search or get_entity_details query.
 	SearchQuery string
 	// EntityIDs and EntityLevel carry get_entity_details' controller-only
 	// request. They are validated before the TUI resolves them.
@@ -1316,6 +1316,9 @@ func (c Call) Describe() string {
 	case ToolSearch:
 		return fmt.Sprintf("tool_search: %q", c.SearchQuery)
 	case ToolGetEntityDetails:
+		if c.SearchQuery != "" {
+			return fmt.Sprintf("get_entity_details: %q", c.SearchQuery)
+		}
 		return fmt.Sprintf("get_entity_details: %d %s", c.EntityIDCount, c.EntityLevel)
 	case ToolRunCommand:
 		return "run: " + strings.TrimSpace(c.Body)

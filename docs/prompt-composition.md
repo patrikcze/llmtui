@@ -23,8 +23,11 @@ are separate sections you can always inspect with `/prompt preview`.
 9. **Active Context** — one versioned, ranked, token-budgeted block containing
    eligible user/project/episode/active-run/RAG records; each body has its own
    collision-checked untrusted-content boundary
-10. **Recent Messages** — recent conversation, verbatim
-11. **Raw User Message** — your text, untouched
+10. **Entity Context** — while tools and entities are enabled, the runtime lookup
+    protocol and bounded recent references; the model can look up omitted
+    entities by name/topic through `get_entity_details` before expanding IDs
+11. **Recent Messages** — recent conversation, verbatim
+12. **Raw User Message** — your text, untouched
 
 ## Modes
 
@@ -37,6 +40,8 @@ are separate sections you can always inspect with `/prompt preview`.
 
 Active skills are included in **every** mode — you activated them
 explicitly, so `minimal` and `strict` never drop them silently.
+The Entity Context tool protocol also applies in every mode while enabled;
+users refer to stored results naturally and the model handles opaque IDs.
 
 Active Context records, web results, and MCP results are wrapped in matching,
 content-derived begin/end markers before they re-enter model context. This
