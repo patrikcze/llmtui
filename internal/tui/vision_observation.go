@@ -141,12 +141,10 @@ func (m *Model) maybeStartVisionCapture() tea.Cmd {
 			}
 			continue
 		}
-		if _, ok := m.visionObservationIDs[digest]; ok {
-			// The registry may have evicted or expired the old observation. A
-			// successful capture can be deliberately repeated in that case;
-			// failed captures remain suppressed by visionObservationAttempts.
-			delete(m.visionObservationIDs, digest)
-		}
+		// The registry may have evicted or expired the old observation. A
+		// successful capture can be deliberately repeated in that case;
+		// failed captures remain suppressed by visionObservationAttempts.
+		delete(m.visionObservationIDs, digest)
 		if m.visionObservationAttempts[digest] {
 			continue
 		}
@@ -336,9 +334,7 @@ func (m *Model) rememberVisionObservation(digest string, id entity.ID) {
 	for len(m.visionObservationIDs) > limit && len(m.visionObservationOrder) > 0 {
 		oldest := m.visionObservationOrder[0]
 		m.visionObservationOrder = m.visionObservationOrder[1:]
-		if _, ok := m.visionObservationIDs[oldest]; ok {
-			delete(m.visionObservationIDs, oldest)
-		}
+		delete(m.visionObservationIDs, oldest)
 	}
 }
 
