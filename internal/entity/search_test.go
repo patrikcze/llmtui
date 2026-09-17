@@ -88,3 +88,43 @@ func TestSearchAmbiguityLimitsAndLifecycle(t *testing.T) {
 		t.Fatal("evicted data remained discoverable")
 	}
 }
+
+func TestSearchKindFilterNeverSubstitutesAnotherEvidenceClass(t *testing.T) {
+	r := NewRegistry(Limits{})
+	for _, candidate := range []Candidate{
+		{
+			Kind: KindWebResult, Provenance: Provenance{Source: "web"}, Label: "iPhone Duo Czech price",
+			Trust: TrustWebUntrusted, Scope: ScopeSession, Payload: "web price result",
+		},
+		{
+			Kind: KindVisionObservation, Provenance: Provenance{Source: "user_provided_image"}, Label: "user screenshot",
+			Trust: TrustVisionModelDerived, Scope: ScopeSession, Payload: `{"summary":"iPhone Duo Czech prices"}`,
+		},
+	} {
+		if _, err := r.Put(candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	views, total := r.SearchWithOptions(SearchOptions{
+		Query: "iPhone Duo Czech price screenshot",
+		Kinds: []Kind{KindVisionObservation},
+		Limit: 8,
+	})
+	if total != 1 || len(views) != 1 || views[0].Kind != KindVisionObservation {
+		t.Fatalf("filtered search = %+v, total=%d", views, total)
+	}
+}
+
+func TestSearchRejectsWeakLongQueryMatch(t *testing.T) {
+	r := NewRegistry(Limits{})
+	if _, err := r.Put(Candidate{
+		Kind: KindWebResult, Provenance: Provenance{Source: "web"}, Label: "unrelated page",
+		Trust: TrustWebUntrusted, Scope: ScopeSession, Payload: "screenshot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if views, total := r.Search("iPhone Duo Czech price screenshot", 8); total != 0 || len(views) != 0 {
+		t.Fatalf("weak long-query match = %+v, total=%d", views, total)
+	}
+}

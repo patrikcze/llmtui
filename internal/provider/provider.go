@@ -104,12 +104,23 @@ type Image struct {
 	MIME string // e.g. "image/png"
 }
 
+// MessageReference is ephemeral controller metadata attached to a message
+// after a runtime object has replaced a volatile attachment. Providers ignore
+// it, and history serialization excludes it; context management may retain a
+// compact provenance marker when the message becomes old.
+type MessageReference struct {
+	ID    string
+	Kind  string
+	Label string
+}
+
 // Message is a single chat message exchanged with a model. Images are
 // translated to each backend's wire format by the provider implementations.
 type Message struct {
-	Role    Role    `json:"role"`
-	Content string  `json:"content"`
-	Images  []Image `json:"-"`
+	Role       Role               `json:"role"`
+	Content    string             `json:"content"`
+	Images     []Image            `json:"-"`
+	References []MessageReference `json:"-" yaml:"-"`
 
 	// ToolCalls is set on assistant messages that request tool execution.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
