@@ -86,6 +86,8 @@ type visionObservationMsg struct {
 	err        error
 }
 
+const maxVisionErrorBytes = 512
+
 type visionCaptureResult struct {
 	Summary      string   `json:"summary"`
 	Observations []string `json:"observations"`
@@ -251,6 +253,9 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 	state.cancel()
 	if msg.err != nil || len(msg.images) != len(state.images) {
 		m.notice = "vision observation capture unavailable"
+		if msg.err != nil {
+			m.errText = boundedVisionError(msg.err)
+		}
 		if m.afterVisionCapture {
 			m.afterVisionCapture = false
 			return m.startAgentVerification()
@@ -264,6 +269,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 		payload, err := normalizeVisionObservation(result)
 		if err != nil {
 			m.notice = "vision observation capture unavailable"
+			m.errText = boundedVisionError(err)
 			if m.afterVisionCapture {
 				m.afterVisionCapture = false
 				return m.startAgentVerification()
@@ -300,6 +306,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 		})
 		if err != nil {
 			m.notice = "vision observation capture unavailable"
+			m.errText = boundedVisionError(err)
 			if m.afterVisionCapture {
 				m.afterVisionCapture = false
 				return m.startAgentVerification()
@@ -370,11 +377,14 @@ func captureVisionObservations(
 		return nil, fmt.Errorf("start vision observation capture: %w", err)
 	}
 	var response strings.Builder
+	var reasoning strings.Builder
 	done := false
 	for event := range stream {
 		switch event.Type {
 		case provider.EventDelta:
 			response.WriteString(event.Delta)
+		case provider.EventReasoning:
+			reasoning.WriteString(event.Delta)
 		case provider.EventError:
 			if event.Err == nil {
 				return nil, errors.New("vision observation capture returned an empty provider error")
@@ -390,8 +400,16 @@ func captureVisionObservations(
 	if !done {
 		return nil, errors.New("vision observation capture ended without a terminal event")
 	}
+	// Some model templates still route a constrained completion through the
+	// reasoning event even when reasoning is explicitly disabled. Accept that
+	// channel only when it contains the complete JSON response and the normal
+	// text channel is empty; any prose or mixed reasoning remains rejected.
+	responseText := response.String()
+	if strings.TrimSpace(responseText) == "" {
+		responseText = reasoning.String()
+	}
 	var decoded visionCaptureWire
-	decoder := json.NewDecoder(strings.NewReader(response.String()))
+	decoder := json.NewDecoder(strings.NewReader(responseText))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
 		return nil, fmt.Errorf("decode vision observation capture: %w", err)
@@ -407,6 +425,21 @@ func captureVisionObservations(
 		return nil, fmt.Errorf("vision observation capture returned %d images; want %d", len(decoded.Observations), len(images))
 	}
 	return decoded.Observations, nil
+}
+
+func boundedVisionError(err error) string {
+	if err == nil {
+		return "vision observation capture failed"
+	}
+	message := strings.TrimSpace(err.Error())
+	if len(message) > maxVisionErrorBytes {
+		message = message[:maxVisionErrorBytes]
+		for len(message) > 0 && !utf8.ValidString(message) {
+			message = message[:len(message)-1]
+		}
+		message = strings.TrimSpace(message) + "…"
+	}
+	return "vision observation capture failed: " + message
 }
 
 func normalizeVisionObservation(result visionCaptureResult) (string, error) {

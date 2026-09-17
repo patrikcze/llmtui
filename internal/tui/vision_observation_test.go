@@ -15,6 +15,7 @@ import (
 
 type visionObservationTestProvider struct {
 	response  string
+	reasoning string
 	err       error
 	truncated bool
 	calls     []provider.ChatRequest
@@ -37,7 +38,11 @@ func (p *visionObservationTestProvider) Chat(_ context.Context, req provider.Cha
 			events <- provider.ChatEvent{Type: provider.EventError, Err: p.err}
 			return
 		}
-		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: p.response}
+		if p.reasoning != "" {
+			events <- provider.ChatEvent{Type: provider.EventReasoning, Delta: p.reasoning}
+		} else {
+			events <- provider.ChatEvent{Type: provider.EventDelta, Delta: p.response}
+		}
 		events <- provider.ChatEvent{Type: provider.EventDone, Truncated: p.truncated}
 	}()
 	return events, nil
@@ -100,6 +105,18 @@ func TestVisionObservationCaptureRegistersAndReplacesRawImage(t *testing.T) {
 	}
 }
 
+func TestVisionObservationCaptureAcceptsStructuredReasoningChannel(t *testing.T) {
+	prov := &visionObservationTestProvider{reasoning: "{\"observations\":[{\"summary\":\"pricing screenshot\",\"observations\":[\"512 GB — 24 990 Kč\"],\"visible_text\":[\"512 GB\"],\"limitations\":[]}]}"}
+	m := newVisionObservationTestModel(t, prov)
+	image := provider.Image{Data: []byte("png-bytes"), MIME: "image/png"}
+	completeVisionObservation(t, m, image)
+
+	user := m.session.Messages[len(m.session.Messages)-2]
+	if len(user.Images) != 0 || len(user.References) != 1 {
+		t.Fatalf("structured reasoning response was not registered = %+v", user)
+	}
+}
+
 func TestVisionObservationFailurePreservesNormalAnswerAndRawImage(t *testing.T) {
 	prov := &visionObservationTestProvider{err: errors.New("vision unavailable")}
 	m := newVisionObservationTestModel(t, prov)
@@ -120,6 +137,9 @@ func TestVisionObservationFailurePreservesNormalAnswerAndRawImage(t *testing.T) 
 	}
 	if m.entities.Stats().Entities != 0 || !strings.Contains(m.notice, "unavailable") {
 		t.Fatalf("failed capture state = %+v notice=%q", m.entities.Stats(), m.notice)
+	}
+	if !strings.Contains(m.errText, "vision unavailable") {
+		t.Fatalf("capture error was not surfaced for diagnosis: %q", m.errText)
 	}
 	if m.session.Messages[len(m.session.Messages)-1].Content != "normal answer preserved" {
 		t.Fatal("normal answer was lost after capture failure")
