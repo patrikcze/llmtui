@@ -249,6 +249,8 @@ type EntitiesConfig struct {
 	MaxTotalPayloadBytes int  `mapstructure:"max_total_payload_bytes" yaml:"max_total_payload_bytes"`
 	MaxContextTokens     int  `mapstructure:"max_context_tokens" yaml:"max_context_tokens"`
 	MaxFullExpansions    int  `mapstructure:"max_full_expansions" yaml:"max_full_expansions"`
+	VisionEnabled        bool `mapstructure:"vision_enabled" yaml:"vision_enabled"`
+	VisionMaxTokens      int  `mapstructure:"vision_max_tokens" yaml:"vision_max_tokens"`
 }
 
 // PromptConfig configures prompt composition.
@@ -912,6 +914,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("entities.max_total_payload_bytes", 4*1024*1024)
 	v.SetDefault("entities.max_context_tokens", 1200)
 	v.SetDefault("entities.max_full_expansions", 8)
+	v.SetDefault("entities.vision_enabled", true)
+	v.SetDefault("entities.vision_max_tokens", 800)
 
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.include_session_summary", true)
@@ -1147,6 +1151,8 @@ entities:
   max_total_payload_bytes: 4194304
   max_context_tokens: 1200
   max_full_expansions: 8
+  vision_enabled: true
+  vision_max_tokens: 800
 
 # Prompt composition: helpers are visible via /prompt composed.
 prompt:

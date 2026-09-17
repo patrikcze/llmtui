@@ -42,6 +42,12 @@ Active skills are included in **every** mode — you activated them
 explicitly, so `minimal` and `strict` never drop them silently.
 The Entity Context tool protocol also applies in every mode while enabled;
 users refer to stored results naturally and the model handles opaque IDs.
+Entity kind and source are evidence boundaries: a web_result is never image
+evidence. For a prior screenshot, image, or photo, use get_entity_details with
+kinds=[vision_observation]; if no such entity exists, report that the old
+visual evidence is unavailable rather than reconstructing it from related
+entities. Visual observations are bounded, model-derived evidence and may
+contain extraction errors.
 
 Active Context records, web results, and MCP results are wrapped in matching,
 content-derived begin/end markers before they re-enter model context. This

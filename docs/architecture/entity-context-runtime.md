@@ -7,7 +7,7 @@ result while keeping the source data controller-owned and bounded.
 ## Purpose and data model
 
 `internal/entity` owns the low-level registry. A candidate has a typed kind
-(`file`, `web_result`, `web_page`, or `mcp_result`), provenance, a bounded
+(`file`, `web_result`, `web_page`, `mcp_result`, or `vision_observation`), provenance, a bounded
 payload, a short preview, trust label, and lifetime scope. `Registry.Put`
 returns an identifier of the form `ent_00001`; IDs contain no path, URL,
 secret, pointer, or authorization data.
@@ -62,6 +62,23 @@ payloads or chooses an identity on the user's behalf. The model can narrow its
 keywords if needed, then expand an exact returned ID. No embeddings, network
 calls, or additional model requests are used by the lookup itself.
 
+`vision_observation` records are created after a successful normal multimodal
+turn, when Entity Context tools are active, by one bounded, tool-free capture
+request through the active provider.
+The capture returns only validated model-derived text describing visible
+content; it does not use the normal answer, hidden reasoning, tools, MCP, web,
+memory, or a second provider/runtime. The entity source remains
+`user_provided_image`, and its trust is `vision_model_derived`; visual
+similarity never becomes web provenance. The attachment's byte digest, turn,
+image index, MIME, provider/model, capture version, timestamp, truncation, and
+raw-retention state remain controller-owned provenance. Raw image bytes are
+never stored in the entity or history.
+
+`get_entity_details` accepts an optional `kinds` filter. Use
+`{"query":"topic","kinds":["vision_observation"]}` when the user refers to
+a prior image. A filtered query returns no other evidence class; no matching
+visual entity means the old visual evidence is unavailable.
+
 ## Agent relationship
 
 Agent cycles reuse the same registry and can carry session-scoped references
@@ -89,6 +106,8 @@ entities:
   max_total_payload_bytes: 4194304
   max_context_tokens: 1200
   max_full_expansions: 8
+  vision_enabled: true
+  vision_max_tokens: 800
 ```
 
 `/entities status` shows bounded counters and expansion usage. `/entities

@@ -20,11 +20,13 @@ func TestEntityDetailsQueryProtocols(t *testing.T) {
 				valid bool
 			}{
 				{name: "topic", args: `{"query":"release notes"}`, valid: true},
+				{name: "visual topic", args: `{"query":"release notes screenshot","kinds":["vision_observation"]}`, valid: true},
 				{name: "minimal", args: `{"query":"release notes","level":"minimal"}`, valid: true},
 				{name: "mixed selectors", args: `{"query":"notes","entity_ids":["ent_00001"]}`},
 				{name: "query cannot expand", args: `{"query":"notes","level":"full"}`},
 				{name: "empty", args: `{"query":" "}`},
 				{name: "oversized", args: `{"query":"` + strings.Repeat("a", 513) + `"}`},
+				{name: "unknown kind", args: `{"query":"notes","kinds":["web_resultish"]}`},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					calls := Parse("```tool get_entity_details\n" + tc.args + "\n```")
@@ -62,5 +64,14 @@ func TestEntityDetailsValidationRejectsBlankIDs(t *testing.T) {
 	call := Call{Tool: ToolGetEntityDetails, EntityIDs: [MaxEntityDetailsIDs]string{"ent_00001", " "}, EntityIDCount: 2}
 	if err := ValidateEntityDetailsCall(&call); err == nil {
 		t.Fatal("blank entity ID was accepted")
+	}
+}
+
+func TestEntityDetailsKindsAreNormalizedAndBounded(t *testing.T) {
+	calls := Parse("```tool get_entity_details\n{" +
+		`"query":"screenshot","kinds":[" VISION_OBSERVATION "]` + "}\n```")
+	if len(calls) != 1 || calls[0].InputErr != "" || calls[0].EntityKindCount != 1 ||
+		calls[0].EntityKinds[0] != "vision_observation" {
+		t.Fatalf("visual kind call = %+v", calls)
 	}
 }

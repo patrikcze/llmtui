@@ -156,9 +156,11 @@ type Call struct {
 	SearchQuery string
 	// EntityIDs and EntityLevel carry get_entity_details' controller-only
 	// request. They are validated before the TUI resolves them.
-	EntityIDs     [MaxEntityDetailsIDs]string
-	EntityIDCount int
-	EntityLevel   string
+	EntityIDs       [MaxEntityDetailsIDs]string
+	EntityIDCount   int
+	EntityLevel     string
+	EntityKinds     [MaxEntityDetailsKinds]string
+	EntityKindCount int
 	// Question, Choices, and AllowText carry ask_user's bounded interaction
 	// request. They are controller state, not approval or execution authority.
 	Question    string

@@ -141,13 +141,14 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGetEntityDetails,
-			Description: "Find previously stored runtime data by name or topic keywords using query (up to 8 minimal candidates), or expand exact entity_ids with level. Use exactly one selector. Query never returns full payloads: choose matching IDs before expanding. Read-only, current session only; call alone.",
+			Description: "Find previously stored runtime data by name or topic keywords using query (up to 8 minimal candidates), optionally restricted by kinds, or expand exact entity_ids with level. Use exactly one selector. Query never returns full payloads: choose matching IDs before expanding. For prior screenshots/images use kinds=[vision_observation]; web results are not image evidence. Read-only, current session only; call alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Name, path, URL, or topic keywords to find stored entities without knowing IDs. Returns minimal candidates only."},
 					"entity_ids": {"type": "array", "items": {"type": "string", "pattern": "^ent_[0-9]{5}$"}, "minItems": 1, "maxItems": 8},
-					"level": {"type": "string", "enum": ["identifier", "minimal", "full"]}
+					"level": {"type": "string", "enum": ["identifier", "minimal", "full"]},
+					"kinds": {"type": "array", "items": {"type": "string", "enum": ["web_result", "web_page", "file", "mcp_result", "collection", "vision_observation"]}, "minItems": 1, "maxItems": 6, "description": "Optional evidence-kind filter; use vision_observation for prior image/screenshot evidence."}
 				},
 				"oneOf": [{"required": ["entity_ids"]}, {"required": ["query"]}],
 				"additionalProperties": false
@@ -174,6 +175,7 @@ type nativeArgs struct {
 	NewText    string   `json:"new_text"`
 	EntityIDs  []string `json:"entity_ids"`
 	Level      string   `json:"level"`
+	Kinds      []string `json:"kinds"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -318,6 +320,7 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 					setEntityIDs(&c, args.EntityIDs)
 					c.EntityLevel = args.Level
 					c.SearchQuery = args.Query
+					setEntityKinds(&c, args.Kinds)
 					if err := ValidateEntityDetailsCall(&c); err != nil {
 						c.InputErr = err.Error()
 					}
