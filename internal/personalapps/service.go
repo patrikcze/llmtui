@@ -245,6 +245,20 @@ func (s *Service) Execute(ctx context.Context, req Request) Result {
 	s.adapter.Lock()
 	defer s.adapter.Unlock()
 
+	// The snapshot above can be stale by the time the adapter mutex is
+	// actually granted: SetScope/Disconnect take only s.mu, not s.adapter,
+	// so a human revoking access while this call was queued behind a
+	// slower one must not have that revocation silently bypassed by
+	// authorization checked before the wait. Re-read and re-check live
+	// state now that execution is actually about to start, and hand the
+	// handlers this current snapshot rather than the pre-queue one.
+	s.mu.RLock()
+	scope, conn = s.scope, s.conn
+	s.mu.RUnlock()
+	if err := scope.CheckOperation(op, conn); err != nil {
+		return s.fail(op, err)
+	}
+
 	switch args := req.Arguments().(type) {
 	case *MailAccountsArgs:
 		return s.mailAccounts(ctx, *args, scope)
