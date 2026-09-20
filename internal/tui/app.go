@@ -294,13 +294,19 @@ type Model struct {
 	// agentContextSummary is a bounded in-memory record of the last
 	// agent-scoped summary committed to a provider request. It is never saved
 	// or used as agent state.
-	agentContextSummary agentScopedSummary
-	ctxStrategy         string
-	ctxUsed             int
-	ctxWindow           int
-	lastUserMsg         string
-	lastImages          []provider.Image
-	lastDebug           debugInfo
+	agentContextSummary       agentScopedSummary
+	ctxStrategy               string
+	ctxUsed                   int
+	ctxWindow                 int
+	lastUserMsg               string
+	lastImages                []provider.Image
+	visionCapture             *visionCaptureState
+	visionCaptureGeneration   uint64
+	visionObservationIDs      map[string]entity.ID
+	visionObservationAttempts map[string]bool
+	visionObservationOrder    []string
+	afterVisionCapture        bool
+	lastDebug                 debugInfo
 	// toolCallDiagnostics is intentionally process-local and content-free. It
 	// survives native tool continuations so /debug last can show one complete
 	// call/result lifecycle, but starts fresh for a new user turn.
@@ -392,6 +398,8 @@ func New(opts Options) *Model {
 			MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
 			MaxFullExpansions: cfg.Entities.MaxFullExpansions,
 		}),
+		visionObservationIDs:      make(map[string]entity.ID),
+		visionObservationAttempts: make(map[string]bool),
 
 		memEnabled:    cfg.Memory.Enabled,
 		profileMode:   profileMode,
@@ -455,6 +463,7 @@ func (m *Model) rebuildFromConfig() {
 		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
 		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
 	})
+	m.resetVisionObservations()
 	if !m.reasoningDisplaySet {
 		m.showReasoning = cfg.UI.ShowReasoning
 	}
@@ -1079,6 +1088,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentResumeMsg:
 		return m.handleAgentResume(msg)
 
+	case visionObservationMsg:
+		return m, m.handleVisionObservation(msg)
+
 	case clipboardImageMsg:
 		if msg.err != nil {
 			m.errText = msg.err.Error()
@@ -1421,7 +1433,7 @@ func (m *Model) busy() bool {
 	// thinking is a rendering mirror of turnModelStreaming. Include it as a
 	// fail-closed guard so an inconsistent adapter state can never permit a
 	// second dispatch or a mutating slash command.
-	return m.thinking || m.turnRuntime.busy() || m.agentVerifying()
+	return m.thinking || m.turnRuntime.busy() || m.agentVerifying() || m.visionCapture != nil
 }
 
 func (m *Model) send() tea.Cmd {
@@ -2127,6 +2139,12 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
+	case m.visionCapture != nil:
+		m.visionCapture.cancel()
+		m.visionCapture = nil
+		m.afterVisionCapture = false
+		m.notice = "vision observation capture cancelled — image retained"
+		m.refreshViewport()
 	case m.input.Value() != "":
 		m.input.Reset()
 		m.updateSuggestions()
@@ -2510,10 +2528,16 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		// completion or denial path.)
 		if len(m.pendingCalls) == 0 {
 			m.complete(turnOutcomeFinalAnswer)
+			captureCmd := m.maybeStartVisionCapture()
 			if m.agentRunActive() {
+				if captureCmd != nil {
+					m.afterVisionCapture = true
+					return m, captureCmd
+				}
 				return m, m.startAgentVerification()
 			}
 			m.endAgentRun()
+			return m, captureCmd
 		}
 		return m, nil
 	case provider.EventError:

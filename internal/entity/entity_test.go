@@ -134,6 +134,32 @@ func TestRegistryScopeReleaseAndRetention(t *testing.T) {
 	}
 }
 
+func TestVisionObservationKeepsModelTrustAndTypedProvenance(t *testing.T) {
+	r := NewRegistry(Limits{MaxPayloadBytes: 64, MaxPreviewBytes: 24})
+	want := Provenance{
+		Source: "user_provided_image", Operation: "vision_observation", AttachmentDigest: "digest",
+		MessageID: "session:3", ImageIndex: 1, MIME: "image/png", Provider: "ollama", Model: "vision-model",
+		CaptureVersion: "1", RawRetained: false,
+	}
+	view, err := r.Put(Candidate{
+		Kind: KindVisionObservation, Provenance: want, Label: "user screenshot",
+		Trust: TrustVisionModelDerived, Scope: ScopeSession, Payload: `{"summary":"prices"}`, Preview: "prices",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Kind != KindVisionObservation || view.Trust != TrustVisionModelDerived || view.Source != "user_provided_image" {
+		t.Fatalf("vision view = %+v", view)
+	}
+	item := r.items[view.ID]
+	if item == nil || item.provenance != want {
+		t.Fatalf("vision provenance = %+v, want %+v", item.provenance, want)
+	}
+	if got := r.Resolve(view.ID.String(), LevelFull); got.Status != StatusOK || got.View.Payload == "" {
+		t.Fatalf("vision full resolution = %+v", got)
+	}
+}
+
 func TestTruncateBytesRespectsByteLimit(t *testing.T) {
 	for max := 1; max <= 5; max++ {
 		got, truncated := truncateBytes("žlutý kůň", max)

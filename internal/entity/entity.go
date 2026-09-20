@@ -35,6 +35,10 @@ const (
 	KindFile       Kind = "file"
 	KindMCPResult  Kind = "mcp_result"
 	KindCollection Kind = "collection"
+	// KindVisionObservation is a bounded, model-derived description of a
+	// user-provided image. It is evidence about visible pixels, not external
+	// source provenance or durable memory.
+	KindVisionObservation Kind = "vision_observation"
 )
 
 // Level controls progressive disclosure.
@@ -54,6 +58,9 @@ const (
 	TrustWorkspaceUntrusted Trust = "workspace_untrusted"
 	TrustWebUntrusted       Trust = "web_untrusted"
 	TrustMCPUntrusted       Trust = "mcp_untrusted"
+	// TrustVisionModelDerived keeps model-derived visual evidence distinct
+	// from controller-observed attachment metadata.
+	TrustVisionModelDerived Trust = "vision_model_derived"
 )
 
 // Scope controls the intended lifetime of a record.
@@ -120,6 +127,18 @@ type Provenance struct {
 	CallID    string
 	RunID     string
 	Cycle     int
+	// Vision fields are populated only for KindVisionObservation. They remain
+	// controller-owned diagnostics and are not copied into the compact view.
+	AttachmentDigest string
+	MessageID        string
+	ImageIndex       int
+	MIME             string
+	Provider         string
+	Model            string
+	CapturedAt       time.Time
+	CaptureVersion   string
+	CaptureTruncated bool
+	RawRetained      bool
 }
 
 // Candidate is the normalized input accepted by Registry.Put.
@@ -238,6 +257,18 @@ func validCandidate(c Candidate) error {
 		return errors.New("entity needs payload or preview")
 	}
 	return nil
+}
+
+// ValidKind reports whether kind is one of the model-addressable runtime
+// entity kinds. Registry candidates remain typed strings for compatibility,
+// but controller lookup filters accept only this closed vocabulary.
+func ValidKind(kind Kind) bool {
+	switch kind {
+	case KindWebResult, KindWebPage, KindFile, KindMCPResult, KindCollection, KindVisionObservation:
+		return true
+	default:
+		return false
+	}
 }
 
 func boundedMetadata(metadata Metadata) Metadata {

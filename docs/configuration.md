@@ -211,12 +211,19 @@ entities:
   max_total_payload_bytes: 4194304
   max_context_tokens: 1200
   max_full_expansions: 8
+  vision_enabled: true
+  vision_max_tokens: 800
 ```
 
 `max_context_tokens` limits compact references included in each prompt and
 `max_full_expansions` limits full detail lookups per request. Use `/entities
 status`, `/entities list`, and `/entities inspect <id>` for local,
-payload-free diagnostics. See
+payload-free diagnostics. When Entity Context tools are active and the
+selected model supports images, each new image gets one additional bounded,
+tool-free visual observation capture. The capture stores model-derived text only; successful
+capture removes the raw image from future in-memory provider history, while a
+failed capture leaves the raw image available. vision_max_tokens is capped at
+800. See
 [`architecture/entity-context-runtime.md`](architecture/entity-context-runtime.md).
 
 ### `agent`

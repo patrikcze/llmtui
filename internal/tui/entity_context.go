@@ -24,6 +24,7 @@ func (m *Model) resetEntities() {
 	if m.entities != nil {
 		m.entities.Reset()
 	}
+	m.resetVisionObservations()
 }
 
 func (m *Model) entityPromptRecords() []prompt.EntityRecord {
@@ -199,7 +200,15 @@ func (m *Model) resolveEntityDetails(call tools.Call) string {
 	resolutions := m.entities.ResolveMany(ids, level, tools.MaxEntityDetailsIDs)
 	wire := entityDetailsWire{Entities: make([]entityResolutionWire, 0, len(resolutions))}
 	if call.SearchQuery != "" {
-		views, total := m.entities.Search(call.SearchQuery, tools.MaxEntityDetailsIDs)
+		kinds := make([]entity.Kind, 0, call.EntityKindCount)
+		for index := 0; index < call.EntityKindCount; index++ {
+			kinds = append(kinds, entity.Kind(call.EntityKinds[index]))
+		}
+		views, total := m.entities.SearchWithOptions(entity.SearchOptions{
+			Query: call.SearchQuery,
+			Kinds: kinds,
+			Limit: tools.MaxEntityDetailsIDs,
+		})
 		wire.TotalMatches = &total
 		wire.Truncated = total > len(views)
 		for _, view := range views {

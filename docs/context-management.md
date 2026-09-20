@@ -33,6 +33,15 @@ an oversized text-only user message with a bounded continuation anchor and
 preserves the original request in the summary; image turns fail explicitly
 instead of silently dropping their visual input.
 
+Captured user images have a separate ephemeral reference path. After a
+successful bounded visual observation capture, the live user message keeps its
+original text and an in-memory `vision_observation` reference while its raw
+image bytes are removed from future provider requests. When that message ages
+into the summary, the summary retains only the entity ID, kind, and bounded
+label. The complete observation is retrieved later with
+`get_entity_details`; it is not copied into every summary. If capture fails,
+the raw image is retained and no observation is claimed.
+
 If the fixed system/user prompt plus tool schemas and response reserve cannot
 fit at all, llmtui stops before contacting the provider and explains which
 overhead must be reduced. `/context` and `/debug last` show the estimated

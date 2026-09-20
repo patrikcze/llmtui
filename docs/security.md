@@ -51,6 +51,13 @@ tool arguments, and full transcripts. Both project records and episodes redact
 likely credential forms before persistence, but memory must not be used for
 secrets (`/memory add` reminds you).
 
+When Entity Context vision capture is enabled, only bounded model-derived text
+is retained in the session-local registry as a `vision_observation`. The raw
+image remains in volatile message state until successful capture, then is
+removed from future provider history. Failed capture leaves it attached; no
+visual observation is fabricated. Visual payloads are untrusted reference data
+and never become durable memory or web provenance.
+
 Retrieved memory is reference data, not authorization. The unified Active
 Context marks source/scope/trust/freshness and frames every record separately;
 it cannot grant tools, network access, or prove that an agent action succeeded.

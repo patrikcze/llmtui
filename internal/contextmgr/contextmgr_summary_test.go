@@ -135,6 +135,21 @@ func TestSummarizerNeverSummarizesRawReasoning(t *testing.T) {
 	}
 }
 
+func TestSummarizerRetainsVisualObservationMarker(t *testing.T) {
+	summary := summarize(t, 100, provider.Message{
+		Role:    provider.RoleUser,
+		Content: "Please remember this screenshot.",
+		References: []provider.MessageReference{{
+			ID: "ent_00042", Kind: "vision_observation", Label: "user screenshot — prices",
+		}},
+	})
+	for _, want := range []string{"ent_00042", "vision_observation", "user screenshot — prices"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+}
+
 func TestSummarizerIsDeterministicAcrossRebuilds(t *testing.T) {
 	history := []provider.Message{
 		{Role: provider.RoleUser, Content: "Add the time kind to internal/tools/local_context.go."},

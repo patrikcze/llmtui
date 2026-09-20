@@ -91,6 +91,10 @@ func (s *Session) SetLastDisplay(display string) {
 	}
 }
 
+// Touch marks an in-place message annotation as a session mutation. It is
+// used for ephemeral runtime references that do not change message count.
+func (s *Session) Touch() { s.rev++ }
+
 // RecordUsage folds one request's usage into the session totals and returns
 // the derived per-request stats.
 func (s *Session) RecordUsage(u provider.Usage, d time.Duration) RequestStats {
