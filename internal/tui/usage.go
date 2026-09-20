@@ -347,34 +347,35 @@ func barChartXLabels(window int, now time.Time) map[int]string {
 	return xlabels
 }
 
-// usageTabRow renders the Activity / All time / Models selector, highlighting
-// the current tab.
+// usageTabRow renders the Activity / All time / Models selector. The active
+// tab is a solid pill (theme.TabActive); the rest are plain dim text.
 func usageTabRow(theme styles.Theme, current usageTab) string {
 	tabs := []usageTab{usageTabActivity, usageTabAllTime, usageTabModels}
 	parts := make([]string, len(tabs))
 	for i, t := range tabs {
 		if t == current {
-			parts[i] = theme.UserLabel.Render(t.label())
+			parts[i] = theme.TabActive.Render(t.label())
 		} else {
-			parts[i] = theme.StatusBar.Render(t.label())
+			parts[i] = theme.StatusBar.Render(" " + t.label() + " ")
 		}
 	}
-	return strings.Join(parts, theme.StatusBar.Render(" · "))
+	return strings.Join(parts, " ")
 }
 
 // usageRangeRow renders the Full history / Last 7 days / Last 30 days
-// selector, highlighting the current selection.
+// selector. The active range is a solid pill (theme.TabActive); the rest
+// are plain dim text.
 func usageRangeRow(theme styles.Theme, current usageRange) string {
 	ranges := []usageRange{usageRangeAll, usageRangeLast7, usageRangeLast30}
 	parts := make([]string, len(ranges))
 	for i, r := range ranges {
 		if r == current {
-			parts[i] = theme.UserLabel.Render(r.label())
+			parts[i] = theme.TabActive.Render(r.label())
 		} else {
-			parts[i] = theme.StatusBar.Render(r.label())
+			parts[i] = theme.StatusBar.Render(" " + r.label() + " ")
 		}
 	}
-	return strings.Join(parts, theme.StatusBar.Render(" · "))
+	return strings.Join(parts, " ")
 }
 
 // largestSessionLabel formats largestSession's result, or a placeholder when
