@@ -913,21 +913,49 @@ func TestUsageCommandOpensDashboard(t *testing.T) {
 	if !m.overlayOpen {
 		t.Fatal("/usage should open an overlay")
 	}
+	if m.usageState.tab != usageTabActivity {
+		t.Fatalf("tab = %v, want the overlay to default to usageTabActivity", m.usageState.tab)
+	}
+	// Default tab (Activity): just the heatmap.
 	content := m.usageOverlay()
-	for _, want := range []string{"tokens per day", "activity", "mock/demo-model", "favorite model", "Less", "More"} {
+	for _, want := range []string{"activity", "Less", "More"} {
 		if !strings.Contains(content, want) {
-			t.Errorf("usage overlay missing %q", want)
+			t.Errorf("Activity tab missing %q:\n%s", want, content)
 		}
 	}
-	if !strings.Contains(content, "350") {
-		t.Errorf("usage overlay should show 350 total tokens")
+	for _, unwanted := range []string{"tokens per day", "favorite model"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("Activity tab should not show %q (that belongs to the All time tab):\n%s", unwanted, content)
+		}
+	}
+
+	// All time tab: bar chart + range-scoped stats.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.usageState.tab != usageTabAllTime {
+		t.Fatalf("tab = %v, want usageTabAllTime after one 'right'", m.usageState.tab)
+	}
+	content = m.usageOverlay()
+	for _, want := range []string{"tokens per day", "favorite model", "mock/demo-model", "350"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("All time tab missing %q:\n%s", want, content)
+		}
+	}
+
+	// Models tab: the per-model breakdown.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.usageState.tab != usageTabModels {
+		t.Fatalf("tab = %v, want usageTabModels after two 'right'", m.usageState.tab)
+	}
+	content = m.usageOverlay()
+	if !strings.Contains(content, "mock/demo-model") {
+		t.Errorf("Models tab missing the model row:\n%s", content)
 	}
 }
 
 // TestUsageOverlayRangeKeyCyclesAndWraps covers the 'r' key added to
-// updateOverlay: it must cycle all time -> last 7 days -> last 30 days ->
-// all time, updating the rendered content each time, and it must have no
-// effect once the overlay is closed (the usageState.active gate).
+// updateOverlay: it must cycle full history -> last 7 days -> last 30 days
+// -> full history, updating the rendered content each time, and it must
+// have no effect once the overlay is closed (the usageState.active gate).
 func TestUsageOverlayRangeKeyCyclesAndWraps(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()
@@ -940,8 +968,8 @@ func TestUsageOverlayRangeKeyCyclesAndWraps(t *testing.T) {
 
 	typeText(m, "/usage")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(m.viewport.View(), "all time") {
-		t.Fatalf("usage overlay should default to 'all time':\n%s", m.viewport.View())
+	if !strings.Contains(m.viewport.View(), "full history") {
+		t.Fatalf("usage overlay should default to 'full history':\n%s", m.viewport.View())
 	}
 
 	m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
@@ -965,6 +993,53 @@ func TestUsageOverlayRangeKeyCyclesAndWraps(t *testing.T) {
 	m.closeOverlay()
 	if m.usageState.active {
 		t.Fatal("closeOverlay should clear usageState.active")
+	}
+}
+
+// TestUsageOverlayTabKeysCycleBothDirectionsAndResetScroll covers the
+// left/right keys added to updateOverlay: they must cycle
+// Activity -> All time -> Models, wrap in both directions, and reset the
+// viewport scroll to the top on every switch (tab content is unrelated, so
+// an old scroll offset from a longer tab would leave a shorter one's view
+// stuck mid-page or past its end).
+func TestUsageOverlayTabKeysCycleBothDirectionsAndResetScroll(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	if err := history.AppendUsage(m.historyDir, history.UsageRecord{
+		Time: time.Now(), Provider: "mock", Model: "demo-model",
+		PromptTokens: 100, CompletionTokens: 250, DurationMS: 800,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	typeText(m, "/usage")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.usageState.tab != usageTabActivity {
+		t.Fatalf("tab = %v, want the overlay to default to usageTabActivity", m.usageState.tab)
+	}
+
+	m.viewport.SetYOffset(3)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.usageState.tab != usageTabAllTime {
+		t.Fatalf("tab = %v, want usageTabAllTime after one 'right'", m.usageState.tab)
+	}
+	if off := m.viewport.YOffset(); off != 0 {
+		t.Errorf("viewport YOffset = %d, want 0 (switching tabs should reset scroll)", off)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.usageState.tab != usageTabModels {
+		t.Fatalf("tab = %v, want usageTabModels after two 'right'", m.usageState.tab)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.usageState.tab != usageTabActivity {
+		t.Fatalf("tab = %v, want it to wrap back to usageTabActivity after three 'right'", m.usageState.tab)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.usageState.tab != usageTabModels {
+		t.Fatalf("tab = %v, want usageTabModels after one 'left' from the default Activity tab (wraps backward)", m.usageState.tab)
 	}
 }
 

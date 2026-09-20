@@ -1264,6 +1264,17 @@ func (m *Model) updateOverlay(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.overlayRender())
 			return m, nil
 		}
+	case "left", "right":
+		if m.usageState.active {
+			if msg.String() == "left" {
+				m.usageState.tab = m.usageState.tab.prev()
+			} else {
+				m.usageState.tab = m.usageState.tab.next()
+			}
+			m.viewport.SetContent(m.overlayRender())
+			m.viewport.GotoTop()
+			return m, nil
+		}
 	}
 	if msg.String() == "q" {
 		m.closeOverlay()

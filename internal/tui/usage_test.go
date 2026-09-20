@@ -11,6 +11,41 @@ import (
 	"github.com/patrikcze/llmtui/internal/history"
 )
 
+func TestUsageTabIsActivityByDefault(t *testing.T) {
+	var tab usageTab
+	if tab != usageTabActivity {
+		t.Fatalf("zero value of usageTab = %v, want usageTabActivity (a freshly opened overlay must default to it)", tab)
+	}
+}
+
+func TestUsageTabCyclingBothDirections(t *testing.T) {
+	forward := []usageTab{usageTabActivity, usageTabAllTime, usageTabModels, usageTabActivity}
+	for i := 0; i < len(forward)-1; i++ {
+		if got := forward[i].next(); got != forward[i+1] {
+			t.Errorf("%v.next() = %v, want %v", forward[i], got, forward[i+1])
+		}
+	}
+	backward := []usageTab{usageTabActivity, usageTabModels, usageTabAllTime, usageTabActivity}
+	for i := 0; i < len(backward)-1; i++ {
+		if got := backward[i].prev(); got != backward[i+1] {
+			t.Errorf("%v.prev() = %v, want %v", backward[i], got, backward[i+1])
+		}
+	}
+}
+
+func TestUsageTabLabels(t *testing.T) {
+	cases := map[usageTab]string{
+		usageTabActivity: "activity",
+		usageTabAllTime:  "all time",
+		usageTabModels:   "models",
+	}
+	for tab, want := range cases {
+		if got := tab.label(); got != want {
+			t.Errorf("%v.label() = %q, want %q", tab, got, want)
+		}
+	}
+}
+
 func TestUsageRangeCycling(t *testing.T) {
 	seq := []usageRange{usageRangeAll, usageRangeLast7, usageRangeLast30, usageRangeAll}
 	for i := 0; i < len(seq)-1; i++ {
@@ -40,7 +75,7 @@ func TestUsageRangeLabelsAndWindows(t *testing.T) {
 		barWindow    int
 		heatmapWeeks int
 	}{
-		{usageRangeAll, "all time", 30, 16},
+		{usageRangeAll, "full history", 30, 16},
 		{usageRangeLast7, "last 7 days", 7, 2},
 		{usageRangeLast30, "last 30 days", 30, 5},
 	}
@@ -183,16 +218,17 @@ func TestLargestSessionLabelHandlesNoSessions(t *testing.T) {
 	}
 }
 
-// TestUsageOverlayModelBreakdownFoldsOverflow guards maxUsageModelRows: with
-// more distinct models than that cap, the overlay must list only the top
-// ones individually and fold the rest into a single "+N more" line instead
-// of silently dropping them (the color palette used to hard-cap at 6 and
-// drop anything past it).
-func TestUsageOverlayModelBreakdownFoldsOverflow(t *testing.T) {
+// TestUsageModelsTabListsEveryModelUncapped covers the Models tab getting
+// its own dedicated screen: with more distinct models than the old shared
+// page's cap of 10, every one of them must still appear (no folding into a
+// "+N more" summary line — that behavior only made sense when the model
+// breakdown shared a page with the bar chart and heatmap).
+func TestUsageModelsTabListsEveryModelUncapped(t *testing.T) {
 	m := newTestModel(t)
 	m.historyDir = t.TempDir()
 	now := time.Now()
-	for i := 0; i < maxUsageModelRows+3; i++ {
+	const modelCount = 13
+	for i := range modelCount {
 		if err := history.AppendUsage(m.historyDir, history.UsageRecord{
 			Time: now, Provider: "mock", Model: modelName(i),
 			PromptTokens: 100 - i, CompletionTokens: 10, DurationMS: 10,
@@ -202,9 +238,21 @@ func TestUsageOverlayModelBreakdownFoldsOverflow(t *testing.T) {
 	}
 	typeText(m, "/usage")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Activity is the default tab; "left" from it wraps straight to Models
+	// (the last of the three).
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.usageState.tab != usageTabModels {
+		t.Fatalf("tab = %v, want usageTabModels after one 'left' from the default Activity tab", m.usageState.tab)
+	}
+
 	content := m.usageOverlay()
-	if !strings.Contains(content, "+3 more") {
-		t.Errorf("overlay should fold the overflow into a '+3 more' line:\n%s", content)
+	if strings.Contains(content, "more (") {
+		t.Errorf("Models tab should never fold models into a '+N more' line:\n%s", content)
+	}
+	for i := range modelCount {
+		if !strings.Contains(content, modelName(i)) {
+			t.Errorf("Models tab is missing %q, want every model listed uncapped", modelName(i))
+		}
 	}
 }
 

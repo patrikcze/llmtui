@@ -34,10 +34,6 @@ var modelDotColors = func() []color.Color {
 	return colors
 }()
 
-// maxUsageModelRows caps how many models the breakdown lists individually;
-// the rest are folded into a single "+N more" summary line.
-const maxUsageModelRows = 10
-
 // usageRange narrows the /usage overlay to a trailing window of days, or
 // usageRangeAll for the full recorded history. It is cycled with the 'r'
 // key while the overlay is open (see updateOverlay).
@@ -60,6 +56,9 @@ func (r usageRange) next() usageRange {
 	}
 }
 
+// label names r for the range row. usageRangeAll reads as "full history"
+// rather than "all time" so it never sits directly under the unrelated
+// "all time" tab and reads as a duplicate of it.
 func (r usageRange) label() string {
 	switch r {
 	case usageRangeLast7:
@@ -67,7 +66,7 @@ func (r usageRange) label() string {
 	case usageRangeLast30:
 		return "last 30 days"
 	default:
-		return "all time"
+		return "full history"
 	}
 }
 
@@ -116,15 +115,44 @@ func (r usageRange) since(now time.Time) time.Time {
 	return time.Time{}
 }
 
-// usageOverlayState holds the /usage overlay's cached data and current range
-// selection. records/metas are fetched once when the overlay opens (see
-// cmdUsage) — openOverlay's render closure is re-invoked on every resize and
-// must not perform new I/O — and re-sliced by rangeSel on every render,
-// including range-cycle keypresses.
+// usageTab selects which body /usage's shared header (active config, tab
+// row, range row) is followed by. Cycled left/right while the overlay is
+// open (see updateOverlay). usageTabActivity is the zero value, so it is
+// what a freshly opened overlay shows.
+type usageTab int
+
+const (
+	usageTabActivity usageTab = iota
+	usageTabAllTime
+	usageTabModels
+)
+
+const usageTabCount = 3
+
+func (t usageTab) next() usageTab { return (t + 1) % usageTabCount }
+func (t usageTab) prev() usageTab { return (t + usageTabCount - 1) % usageTabCount }
+
+func (t usageTab) label() string {
+	switch t {
+	case usageTabAllTime:
+		return "all time"
+	case usageTabModels:
+		return "models"
+	default:
+		return "activity"
+	}
+}
+
+// usageOverlayState holds the /usage overlay's cached data and current tab
+// and range selection. records/metas are fetched once when the overlay
+// opens (see cmdUsage) — openOverlay's render closure is re-invoked on
+// every resize and must not perform new I/O — and re-sliced by rangeSel on
+// every render, including tab- and range-cycle keypresses.
 type usageOverlayState struct {
 	active   bool
 	records  []history.UsageRecord
 	metas    []history.Meta
+	tab      usageTab
 	rangeSel usageRange
 }
 
@@ -137,7 +165,9 @@ type modelTotal struct {
 
 func (t modelTotal) total() int { return t.Prompt + t.Reply }
 
-// usageOverlay renders the /usage dashboard, scoped to m.usageState.rangeSel.
+// usageOverlay renders the /usage dashboard: a shared header (active config,
+// tab row, range row) followed by the body for m.usageState.tab, scoped to
+// m.usageState.rangeSel.
 func (m *Model) usageOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("usage") + "\n\n")
@@ -155,6 +185,7 @@ func (m *Model) usageOverlay() string {
 	now := time.Now()
 	ascii := false
 	rangeSel := m.usageState.rangeSel
+	tab := m.usageState.tab
 
 	// --- Active configuration ----------------------------------------------
 	prof, _ := m.activeProfile()
@@ -170,22 +201,50 @@ func (m *Model) usageOverlay() string {
 	}
 	b.WriteString("\n")
 
-	// --- Range selector ------------------------------------------------------
+	// --- Tab and range selectors --------------------------------------------
+	b.WriteString(usageTabRow(m.theme, tab) + "\n")
 	b.WriteString(usageRangeRow(m.theme, rangeSel) + "\n\n")
 
 	since := rangeSel.since(now)
 	records := filterRecordsSince(allRecords, since)
-	metas := filterMetasSince(m.usageState.metas, since)
-	byDay := map[string]int{}
-	for _, d := range history.AggregateByDay(records) {
-		byDay[d.Day] = d.TotalTokens()
-	}
-	byDayAll := map[string]int{}
-	for _, d := range history.AggregateByDay(allRecords) {
-		byDayAll[d.Day] = d.TotalTokens()
+	rangeMetas := filterMetasSince(m.usageState.metas, since)
+
+	switch tab {
+	case usageTabAllTime:
+		m.writeUsageAllTimeTab(&b, rangeSel, records, allRecords, rangeMetas, m.usageState.metas, now, ascii)
+	case usageTabModels:
+		m.writeUsageModelsTab(&b, records)
+	default:
+		m.writeUsageActivityTab(&b, rangeSel, records, now, ascii)
 	}
 
-	// --- Tokens per day ------------------------------------------------------
+	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close · ← → switch tab · r to cycle range"))
+	return b.String()
+}
+
+// writeUsageActivityTab renders the activity heatmap for the selected range.
+func (m *Model) writeUsageActivityTab(b *strings.Builder, rangeSel usageRange, records []history.UsageRecord, now time.Time, ascii bool) {
+	byDay := dayTotals(records)
+	weeks := rangeSel.heatmapWeeks()
+	if avail := m.width - 8; avail > 0 && avail < weeks {
+		weeks = avail
+	}
+	heat := components.Heatmap(components.HeatmapData{
+		Values: byDay, Weeks: weeks, Today: now, ASCII: ascii,
+	})
+	for _, line := range heat {
+		b.WriteString(m.theme.ChartBar.Render(line) + "\n")
+	}
+}
+
+// writeUsageAllTimeTab renders the "tokens per day" bar chart, the stats
+// block scoped to rangeSel (records/rangeMetas), and the all-time-only stats
+// block that ignores rangeSel (allRecords/allMetas) — a "longest streak" or
+// "largest session" reads as a fixed personal record, not something a date
+// filter narrows.
+func (m *Model) writeUsageAllTimeTab(b *strings.Builder, rangeSel usageRange, records, allRecords []history.UsageRecord, rangeMetas, allMetas []history.Meta, now time.Time, ascii bool) {
+	byDay := dayTotals(records)
+
 	b.WriteString(m.theme.UserLabel.Render("tokens per day") + "\n")
 	window := rangeSel.barWindow()
 	values := make([]int, window)
@@ -202,34 +261,49 @@ func (m *Model) usageOverlay() string {
 	}
 	b.WriteString("\n")
 
-	// --- Activity heatmap ------------------------------------------------------
-	b.WriteString(m.theme.UserLabel.Render("activity") + "\n")
-	weeks := rangeSel.heatmapWeeks()
-	if avail := (m.width - 8); avail > 0 && avail < weeks {
-		weeks = avail
-	}
-	heat := components.Heatmap(components.HeatmapData{
-		Values: byDay, Weeks: weeks, Today: now, ASCII: ascii,
-	})
-	for _, line := range heat {
-		b.WriteString(m.theme.ChartBar.Render(line) + "\n")
-	}
-	b.WriteString("\n")
-
-	// --- Per-model breakdown ------------------------------------------------
-	b.WriteString(m.theme.UserLabel.Render("models") + "\n")
 	models, grand := aggregateByModel(records)
-	shown := models
-	overflow := 0
-	overflowTokens := 0
-	if len(shown) > maxUsageModelRows {
-		for _, mt := range shown[maxUsageModelRows:] {
-			overflow++
-			overflowTokens += mt.total()
-		}
-		shown = shown[:maxUsageModelRows]
+	activeDays, topDay, topDayTokens, streak := usageSummary(byDay, now)
+	favorite := ""
+	if len(models) > 0 {
+		favorite = models[0].Model
 	}
-	for i, mt := range shown {
+	b.WriteString(m.theme.UserLabel.Render(rangeSel.label()) + "\n")
+	summary := [][2]string{
+		{"total tokens", components.FormatTokens(grand)},
+		{"requests", fmt.Sprintf("%d", len(records))},
+		{"sessions saved", fmt.Sprintf("%d", len(rangeMetas))},
+		{"favorite model", favorite},
+		{"active days", fmt.Sprintf("%d", activeDays)},
+		{"most active day", fmt.Sprintf("%s (%s tok)", topDay, components.FormatTokens(topDayTokens))},
+		{"current streak", fmt.Sprintf("%d day(s)", streak)},
+	}
+	for _, row := range summary {
+		fmt.Fprintf(b, "  %s %s\n",
+			m.theme.StatusBar.Render(fmt.Sprintf("%-16s", row[0])),
+			m.theme.StatusValue.Render(row[1]))
+	}
+
+	b.WriteString("\n" + m.theme.UserLabel.Render("all-time records") + "\n")
+	longest := longestStreak(dayTotals(allRecords))
+	largestTokens, largestWhen := largestSession(allMetas)
+	allTime := [][2]string{
+		{"longest streak", fmt.Sprintf("%d day(s)", longest)},
+		{"largest session", largestSessionLabel(largestTokens, largestWhen)},
+	}
+	for _, row := range allTime {
+		fmt.Fprintf(b, "  %s %s\n",
+			m.theme.StatusBar.Render(fmt.Sprintf("%-16s", row[0])),
+			m.theme.StatusValue.Render(row[1]))
+	}
+}
+
+// writeUsageModelsTab renders the full per-model breakdown for records
+// (already scoped to the selected range), uncapped: this tab is the model
+// list's own dedicated screen, so unlike a shared page there is no reason to
+// fold the tail into a summary line.
+func (m *Model) writeUsageModelsTab(b *strings.Builder, records []history.UsageRecord) {
+	models, grand := aggregateByModel(records)
+	for i, mt := range models {
 		dot := lipgloss.NewStyle().Foreground(modelDotColors[i%len(modelDotColors)]).Render("●")
 		pct := 0.0
 		if grand > 0 {
@@ -239,57 +313,22 @@ func (m *Model) usageOverlay() string {
 		if r := []rune(name); len(r) > 40 {
 			name = string(r[:39]) + "…"
 		}
-		fmt.Fprintf(&b, "  %s %s %s\n", dot,
+		fmt.Fprintf(b, "  %s %s %s\n", dot,
 			m.theme.StatusValue.Render(fmt.Sprintf("%-42s", name)),
 			m.theme.StatusBar.Render(fmt.Sprintf("(%.1f%%)", pct)))
-		fmt.Fprintf(&b, "    %s\n", m.theme.StatusBar.Render(fmt.Sprintf(
+		fmt.Fprintf(b, "    %s\n", m.theme.StatusBar.Render(fmt.Sprintf(
 			"in: %s · out: %s · %d requests",
 			components.FormatTokens(mt.Prompt), components.FormatTokens(mt.Reply), mt.Requests)))
 	}
-	if overflow > 0 {
-		fmt.Fprintf(&b, "  %s\n", m.theme.StatusBar.Render(fmt.Sprintf(
-			"+%d more (%s tok)", overflow, components.FormatTokens(overflowTokens))))
-	}
-	b.WriteString("\n")
+}
 
-	// --- Summary, scoped to the selected range -------------------------------
-	b.WriteString(m.theme.UserLabel.Render(rangeSel.label()) + "\n")
-	activeDays, topDay, topDayTokens, streak := usageSummary(byDay, now)
-	favorite := ""
-	if len(models) > 0 {
-		favorite = models[0].Model
+// dayTotals aggregates records into a day -> total-tokens map.
+func dayTotals(records []history.UsageRecord) map[string]int {
+	byDay := map[string]int{}
+	for _, d := range history.AggregateByDay(records) {
+		byDay[d.Day] = d.TotalTokens()
 	}
-	summary := [][2]string{
-		{"total tokens", components.FormatTokens(grand)},
-		{"requests", fmt.Sprintf("%d", len(records))},
-		{"sessions saved", fmt.Sprintf("%d", len(metas))},
-		{"favorite model", favorite},
-		{"active days", fmt.Sprintf("%d", activeDays)},
-		{"most active day", fmt.Sprintf("%s (%s tok)", topDay, components.FormatTokens(topDayTokens))},
-		{"current streak", fmt.Sprintf("%d day(s)", streak)},
-	}
-	for _, row := range summary {
-		fmt.Fprintf(&b, "  %s %s\n",
-			m.theme.StatusBar.Render(fmt.Sprintf("%-16s", row[0])),
-			m.theme.StatusValue.Render(row[1]))
-	}
-
-	// --- All-time-only stats, unaffected by the range toggle -----------------
-	b.WriteString("\n" + m.theme.UserLabel.Render("all-time records") + "\n")
-	longest := longestStreak(byDayAll)
-	largestTokens, largestWhen := largestSession(m.usageState.metas)
-	allTime := [][2]string{
-		{"longest streak", fmt.Sprintf("%d day(s)", longest)},
-		{"largest session", largestSessionLabel(largestTokens, largestWhen)},
-	}
-	for _, row := range allTime {
-		fmt.Fprintf(&b, "  %s %s\n",
-			m.theme.StatusBar.Render(fmt.Sprintf("%-16s", row[0])),
-			m.theme.StatusValue.Render(row[1]))
-	}
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close · r to cycle range"))
-	return b.String()
+	return byDay
 }
 
 // barChartXLabels picks which columns of a window-wide, right-anchored-on-now
@@ -308,8 +347,23 @@ func barChartXLabels(window int, now time.Time) map[int]string {
 	return xlabels
 }
 
-// usageRangeRow renders the All time / Last 7 days / Last 30 days selector,
-// highlighting the current selection.
+// usageTabRow renders the Activity / All time / Models selector, highlighting
+// the current tab.
+func usageTabRow(theme styles.Theme, current usageTab) string {
+	tabs := []usageTab{usageTabActivity, usageTabAllTime, usageTabModels}
+	parts := make([]string, len(tabs))
+	for i, t := range tabs {
+		if t == current {
+			parts[i] = theme.UserLabel.Render(t.label())
+		} else {
+			parts[i] = theme.StatusBar.Render(t.label())
+		}
+	}
+	return strings.Join(parts, theme.StatusBar.Render(" · "))
+}
+
+// usageRangeRow renders the Full history / Last 7 days / Last 30 days
+// selector, highlighting the current selection.
 func usageRangeRow(theme styles.Theme, current usageRange) string {
 	ranges := []usageRange{usageRangeAll, usageRangeLast7, usageRangeLast30}
 	parts := make([]string, len(ranges))
