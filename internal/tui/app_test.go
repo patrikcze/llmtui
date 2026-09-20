@@ -924,6 +924,71 @@ func TestUsageCommandOpensDashboard(t *testing.T) {
 	}
 }
 
+// TestUsageOverlayRangeKeyCyclesAndWraps covers the 'r' key added to
+// updateOverlay: it must cycle all time -> last 7 days -> last 30 days ->
+// all time, updating the rendered content each time, and it must have no
+// effect once the overlay is closed (the usageState.active gate).
+func TestUsageOverlayRangeKeyCyclesAndWraps(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = t.TempDir()
+	if err := history.AppendUsage(m.historyDir, history.UsageRecord{
+		Time: time.Now(), Provider: "mock", Model: "demo-model",
+		PromptTokens: 100, CompletionTokens: 250, DurationMS: 800,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	typeText(m, "/usage")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(m.viewport.View(), "all time") {
+		t.Fatalf("usage overlay should default to 'all time':\n%s", m.viewport.View())
+	}
+
+	m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.usageState.rangeSel != usageRangeLast7 {
+		t.Fatalf("rangeSel = %v, want usageRangeLast7 after one 'r'", m.usageState.rangeSel)
+	}
+	if !strings.Contains(m.viewport.View(), "last 7 days") {
+		t.Fatalf("usage overlay should show 'last 7 days' after cycling:\n%s", m.viewport.View())
+	}
+
+	m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.usageState.rangeSel != usageRangeLast30 {
+		t.Fatalf("rangeSel = %v, want usageRangeLast30 after two 'r'", m.usageState.rangeSel)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.usageState.rangeSel != usageRangeAll {
+		t.Fatalf("rangeSel = %v, want it to wrap back to usageRangeAll after three 'r'", m.usageState.rangeSel)
+	}
+
+	m.closeOverlay()
+	if m.usageState.active {
+		t.Fatal("closeOverlay should clear usageState.active")
+	}
+}
+
+// TestUsageOverlayRangeKeyInertWhenHistoryDisabled guards a subtle edge in
+// cmdUsage: with chat.save_history off, the overlay opens straight to its
+// "history saving is disabled" message with no usage data loaded, and
+// usageState.active must stay false so a stray 'r' keypress there is a
+// no-op instead of cycling a range that has nothing to filter.
+func TestUsageOverlayRangeKeyInertWhenHistoryDisabled(t *testing.T) {
+	m := newTestModel(t)
+	m.historyDir = ""
+
+	typeText(m, "/usage")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.usageState.active {
+		t.Fatal("usageState.active should stay false when history saving is disabled")
+	}
+
+	m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.usageState.rangeSel != usageRangeAll {
+		t.Fatalf("rangeSel = %v, want it to stay usageRangeAll (no-op) when the overlay has no usage data", m.usageState.rangeSel)
+	}
+}
+
 func TestEscStopsGeneration(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue("hello")

@@ -352,6 +352,7 @@ func (m *Model) openOverlay(render func() string) {
 func (m *Model) closeOverlay() {
 	m.overlayOpen = false
 	m.overlayRender = nil
+	m.usageState.active = false
 	m.clearPicker()
 	m.refreshViewport()
 }
