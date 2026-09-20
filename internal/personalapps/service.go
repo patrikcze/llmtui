@@ -796,6 +796,10 @@ func (s *Service) eventView(e BackendEvent) (EventView, error) {
 	}, nil
 }
 
+// eventFingerprint digests every field update_event can patch, so a
+// concurrent edit to any one of them — not just the interval or title —
+// fails the staleness check in eventKitCalendarMutator.update instead of
+// being silently overwritten.
 func eventFingerprint(e BackendEvent) string {
 	return Fingerprint(
 		e.Ref.NativeID,
@@ -803,6 +807,9 @@ func eventFingerprint(e BackendEvent) string {
 		e.Interval.Start.UTC().Format(time.RFC3339Nano),
 		e.Interval.End.UTC().Format(time.RFC3339Nano),
 		e.Title,
+		e.Notes,
+		e.Location,
+		e.Timezone,
 		fmt.Sprintf("allday=%t", e.AllDay),
 	)
 }

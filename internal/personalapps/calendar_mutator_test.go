@@ -21,8 +21,10 @@ func freshEvent(calendarID, eventID string, start, end time.Time, hasAttendees, 
 func calendarBridgeEventFrom(e BackendEvent) calendarBridgeEvent {
 	return calendarBridgeEvent{
 		ID: e.Ref.NativeID, CalendarID: e.Ref.AccountID, ItemID: e.Ref.ExternalID,
-		Title: e.Title, Start: e.Interval.Start.UTC().Format(time.RFC3339Nano),
-		End: e.Interval.End.UTC().Format(time.RFC3339Nano), AllDay: e.AllDay,
+		Title: e.Title, Location: e.Location, Notes: e.Notes,
+		Start: e.Interval.Start.UTC().Format(time.RFC3339Nano),
+		End:   e.Interval.End.UTC().Format(time.RFC3339Nano), AllDay: e.AllDay,
+		Timezone:  e.Timezone,
 		Attendees: e.HasAttendees, Recurring: e.Recurring,
 	}
 }
@@ -231,6 +233,67 @@ func TestEventKitCalendarMutatorUpdateStaleIsNeverSent(t *testing.T) {
 	}
 	if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeStale {
 		t.Fatalf("outcomes = %+v, want a single stale outcome", outcomes)
+	}
+}
+
+// TestEventKitCalendarMutatorUpdateRejectsStaleNotesOrLocation guards the
+// fingerprint gap where eventFingerprint omitted Notes, Location and
+// Timezone even though update_event can patch them: a collaborator's edit
+// to one of those fields between prepare and apply must still fail the
+// freshness check instead of being silently overwritten by a stale plan.
+func TestEventKitCalendarMutatorUpdateRejectsStaleNotesOrLocation(t *testing.T) {
+	start := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	cases := []struct {
+		name   string
+		mutate func(*BackendEvent)
+	}{
+		{"notes changed", func(e *BackendEvent) { e.Notes = "changed by someone else" }},
+		{"location changed", func(e *BackendEvent) { e.Location = "a different room" }},
+		{"timezone changed", func(e *BackendEvent) { e.Timezone = "America/New_York" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := freshEvent("cal-1", "evt-1", start, end, false, false)
+			before.Notes = "original notes"
+			before.Location = "original room"
+			before.Timezone = "Europe/Prague"
+			expected := eventFingerprint(before)
+
+			current := before
+			tc.mutate(&current)
+
+			updateSent := false
+			backend := newEventKitCalendarBackend(fakeCalendarBridgeRunner{runFn: func(request []byte) ([]byte, error) {
+				var decoded calendarBridgeRequest
+				_ = json.Unmarshal(request, &decoded)
+				if decoded.Operation == "update_event" {
+					updateSent = true
+				}
+				return calendarBridgeReply(t, request, calendarBridgeResponse{Event: ptr(calendarBridgeEventFrom(current))}), nil
+			}})
+			m := newEventKitCalendarMutator(backend)
+
+			title := "Updated"
+			rc := ResolvedChange{
+				Change: Change{Type: ChangeCalendarUpdateEvent, CalendarUpdateEvent: &CalendarUpdateEventChange{
+					EventID: "evt_h", ExpectedVersion: expected, Title: &title,
+				}},
+				Refs: map[Handle]ResourceRef{"evt_h": before.Ref},
+			}
+			outcomes, err := m.Apply(context.Background(), rc)
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if updateSent {
+				t.Fatal("an event changed since prepare must never reach the update_event call")
+			}
+			if len(outcomes) != 1 || outcomes[0].Outcome != OutcomeStale {
+				t.Fatalf("outcomes = %+v, want a single stale outcome", outcomes)
+			}
+		})
 	}
 }
 

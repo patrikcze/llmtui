@@ -347,7 +347,14 @@ func (c *defaultLocalContextCollector) workspace(ctx context.Context) workspaceC
 		}
 	}
 	command := exec.CommandContext(ctx, "git", "-C", c.root, "status", "--porcelain=v1", "--branch", "--untracked-files=normal")
-	command.Env = append(sanitizedEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0")
+	// This call is auto-approved exactly like run_command's own read-only
+	// "git status", so it needs the same helper-neutralizing overrides
+	// (gitHardenedEnv, defined alongside hardenGitInvocation in tools.go):
+	// without them, repository-local config in a handed-over working tree
+	// (core.fsmonitor, interactive.diffFilter, …) could launch an
+	// attacker-chosen helper with the current user's privileges even though
+	// no human approves this call.
+	command.Env = append(append(sanitizedEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0"), gitHardenedEnv()...)
 	output, err := boundedCommandOutput(command, 512*1024)
 	if err != nil {
 		result.GitUnavailable = true

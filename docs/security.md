@@ -245,7 +245,11 @@ unwanted save and `/memory off` stops future ones.
     forced off and `--no-ext-diff`/`--no-textconv` appended, regardless of
     what the repository's configuration or attributes ask for; a
     human-approved `git` command (for example `git push`, which may
-    legitimately need `credential.helper`) is never rewritten this way.
+    legitimately need `credential.helper`) is never rewritten this way. The
+    same `core.fsmonitor`/`interactive.diffFilter` overrides also cover the
+    unapproved `git status` that `local_context` (`kind=workspace`) runs to
+    summarize branch/dirty state, so requesting workspace context on an
+    untrusted checkout can't launch a configured helper either.
   - **Write guardrails** — writes into `.git/` (a model-written git hook
     would otherwise execute on your next git command), key-material
     directories (`.ssh`, `.gnupg`), `.llmtui/` (the workspace skill and
