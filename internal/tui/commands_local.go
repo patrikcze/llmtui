@@ -1208,6 +1208,18 @@ func cmdUsage(m *Model, args string) tea.Cmd {
 	sub, _ := splitArgs(args)
 	switch sub {
 	case "":
+		m.usageState = usageOverlayState{}
+		if m.historyDir != "" {
+			records, err := history.ReadUsage(m.historyDir)
+			if err != nil {
+				return m.fail("usage: " + err.Error())
+			}
+			metas, err := history.List(m.historyDir)
+			if err != nil {
+				return m.fail("usage: " + err.Error())
+			}
+			m.usageState = usageOverlayState{records: records, metas: metas, active: true}
+		}
 		m.openOverlay(func() string { return m.usageOverlay() })
 	case "session":
 		m.openOverlay(func() string { return m.statsOverlay() })

@@ -2,7 +2,10 @@ package styles
 
 import (
 	"image/color"
+	"math"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestByNameResolvesEveryBuiltInTheme(t *testing.T) {
@@ -73,6 +76,46 @@ func TestBadgeWarnAndBadgeErrAreDistinct(t *testing.T) {
 		errFg := theme.BadgeErr.GetForeground()
 		if sameColor(warnFg, errFg) {
 			t.Errorf("%s: BadgeWarn and BadgeErr render with the same color", theme.Name)
+		}
+	}
+}
+
+func TestRelativeLuminanceBoundaries(t *testing.T) {
+	if lum := relativeLuminance(lipgloss.Color("#000000")); lum != 0 {
+		t.Errorf("relativeLuminance(black) = %v, want 0", lum)
+	}
+	if lum := relativeLuminance(lipgloss.Color("#FFFFFF")); math.Abs(lum-1) > 1e-9 {
+		t.Errorf("relativeLuminance(white) = %v, want 1", lum)
+	}
+}
+
+func TestContrastForegroundPicksTheHigherContrastOption(t *testing.T) {
+	if got := contrastForeground(lipgloss.Color("#000000")); !sameColor(got, lipgloss.Color("#FFFFFF")) {
+		t.Errorf("contrastForeground(black) = %v, want white", got)
+	}
+	if got := contrastForeground(lipgloss.Color("#FFFFFF")); !sameColor(got, lipgloss.Color("#1A1A1A")) {
+		t.Errorf("contrastForeground(white) = %v, want near-black", got)
+	}
+}
+
+// TestTabActiveMeetsWCAGAAForEveryThemeAccent guards the pill styling behind
+// an active tab/range selector (see usage.go's usageTabRow/usageRangeRow):
+// TabActive fills its background with the theme's Accent color and must
+// pick a foreground that stays readable against it. A naive fixed choice
+// (always white, or always black) fails WCAG AA on at least one of these
+// three themes' Accent colors — that is the whole reason
+// contrastForeground exists instead.
+func TestTabActiveMeetsWCAGAAForEveryThemeAccent(t *testing.T) {
+	const wcagAA = 4.5
+	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+		bg := theme.TabActive.GetBackground()
+		fg := theme.TabActive.GetForeground()
+		if bg == nil || fg == nil {
+			t.Fatalf("%s: TabActive has an unset Background/Foreground", theme.Name)
+		}
+		ratio := contrastRatio(relativeLuminance(fg), relativeLuminance(bg))
+		if ratio < wcagAA {
+			t.Errorf("%s: TabActive foreground/background contrast = %.2f, want >= %.1f (WCAG AA)", theme.Name, ratio, wcagAA)
 		}
 	}
 }

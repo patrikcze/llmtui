@@ -183,6 +183,9 @@ type Model struct {
 	overlayRender func() string
 	// picker holds the arrow-key picker overlay state (see pickerState).
 	picker pickerState
+	// usageState holds the /usage overlay's cached data and range selection
+	// (see usageOverlayState).
+	usageState usageOverlayState
 	// visionInfoByID caches model metadata from the last successful ListModels
 	// call, so the paste-image gate can use provider.ResolveVision even after
 	// the model picker overlay closes and clears picker.pickerModels.
@@ -1255,6 +1258,23 @@ func (m *Model) updateOverlay(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
+	case "r":
+		if m.usageState.active {
+			m.usageState.rangeSel = m.usageState.rangeSel.next()
+			m.viewport.SetContent(m.overlayRender())
+			return m, nil
+		}
+	case "left", "right":
+		if m.usageState.active {
+			if msg.String() == "left" {
+				m.usageState.tab = m.usageState.tab.prev()
+			} else {
+				m.usageState.tab = m.usageState.tab.next()
+			}
+			m.viewport.SetContent(m.overlayRender())
+			m.viewport.GotoTop()
+			return m, nil
+		}
 	}
 	if msg.String() == "q" {
 		m.closeOverlay()

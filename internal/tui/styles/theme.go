@@ -5,6 +5,7 @@ package styles
 
 import (
 	"image/color"
+	"math"
 	"os"
 	"sync"
 
@@ -34,6 +35,43 @@ func IsDark() bool {
 		isDarkCached = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 	})
 	return isDarkCached
+}
+
+// relativeLuminance computes c's WCAG relative luminance (0=black, 1=white)
+// from its linearized sRGB channels.
+func relativeLuminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	toLinear := func(v uint32) float64 {
+		f := float64(v) / 0xFFFF
+		if f <= 0.03928 {
+			return f / 12.92
+		}
+		return math.Pow((f+0.055)/1.055, 2.4)
+	}
+	return 0.2126*toLinear(r) + 0.7152*toLinear(g) + 0.0722*toLinear(b)
+}
+
+// contrastRatio is the WCAG contrast ratio between two relative luminances
+// (each in [0,1]), always >= 1.
+func contrastRatio(l1, l2 float64) float64 {
+	if l1 < l2 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+// contrastForeground picks whichever of near-black or near-white has the
+// higher WCAG contrast ratio against bg, so text drawn on an active
+// selector's background (any theme's Accent, used as a pill fill) stays
+// legible regardless of how bright or dark that particular color is —
+// fixed white or fixed black text would each fail against at least one of
+// the three themes' Accent colors.
+func contrastForeground(bg color.Color) color.Color {
+	bgLum := relativeLuminance(bg)
+	if contrastRatio(1, bgLum) >= contrastRatio(0, bgLum) {
+		return lipgloss.Color("#FFFFFF")
+	}
+	return lipgloss.Color("#1A1A1A")
 }
 
 // Theme groups every style the TUI needs.
@@ -70,6 +108,7 @@ type Theme struct {
 	ErrorText      lipgloss.Style
 	ChartBar       lipgloss.Style
 	ChartLabel     lipgloss.Style
+	TabActive      lipgloss.Style
 }
 
 // newTheme builds every derived style from one base palette, so each theme
@@ -127,6 +166,14 @@ func newTheme(name string, accent, subtle, text, faint, good, bad, warning, pane
 	t.ErrorText = lipgloss.NewStyle().Foreground(t.Bad)
 	t.ChartBar = lipgloss.NewStyle().Foreground(t.Accent)
 	t.ChartLabel = lipgloss.NewStyle().Foreground(t.Faint)
+	// TabActive fills the selected item of a tab-like row (e.g. /usage's tab
+	// and range selectors) as a solid pill, matching how Claude Code marks
+	// its active tab. contrastForeground guarantees the label stays
+	// readable no matter how bright or dark this theme's Accent is.
+	t.TabActive = lipgloss.NewStyle().Bold(true).
+		Background(t.Accent).
+		Foreground(contrastForeground(t.Accent)).
+		Padding(0, 1)
 
 	return t
 }

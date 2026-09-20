@@ -27,7 +27,13 @@ long picker list keeps the selected row scrolled into view instead of
 resetting to the top. While an overlay is open, async events (stream
 progress, health results) never overwrite it; a resize rebuilds its content
 at the new width instead of leaving it stale, and the chat re-renders on
-close.
+close. `/usage` additionally splits into three tabs — Activity (heatmap),
+All time (bar chart + stats), Models (per-model breakdown) — cycled with
+`←`/`→` (wrapping both directions, resetting scroll to the top on switch),
+and binds `r` to cycle a date range shared across all three tabs (full
+history / last 7 days / last 30 days). Every tab's content is re-sliced
+from data fetched once at open time, not re-read from disk on every
+keypress or resize.
 
 Ordinary typed keys, including `PgUp`/`PgDn`, go to the composer, not the
 chat transcript — the transcript is normally reachable only by mouse wheel.
