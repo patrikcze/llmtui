@@ -137,3 +137,9 @@ mocked) before fixing, and the fixes were verified to make each reproduction
 fail on the pre-fix code and pass on the fixed code. See `docs/security.md`'s
 "Command classifier" and "Git configuration cannot repurpose an
 auto-approved git command" entries for the user-facing description.
+
+## 7. 2026-09-20 finding: `local_context.workspace` bypassed git hardening
+
+| Finding | Severity | Status | Fix |
+| --- | --- | --- | --- |
+| `local_context` (`kind=workspace`) shelled out to `git status` directly (`internal/tools/local_context.go`, `defaultLocalContextCollector.workspace`), adding only `GIT_OPTIONAL_LOCKS=0` instead of the `gitHardenedEnv` overrides the 2026-09-13 review's finding 1 fix added for `run_command`'s git path. This call is *never* approval-gated (`Runner.NeedsApproval` only asks for `kind=clipboard`), so a repository-local `core.fsmonitor` helper could run with no human in the loop the moment the model requested workspace context on an untrusted checkout — **reopens SEC-003** by the same effective-configuration gap, through a second, independent call site. | Medium (CWE-78) | Fixed | `internal/tools/local_context.go` (`defaultLocalContextCollector.workspace`): the collector's `git status` invocation now also carries `gitHardenedEnv()`, the same `GIT_CONFIG_*` overrides `hardenGitInvocation` uses, forcing `core.fsmonitor`/`interactive.diffFilter` off. `status` needs no `--no-ext-diff`/`--no-textconv` rewrite (those subcommands are diff/show/log/blame only). Regression test `TestLocalContextWorkspaceDoesNotRunConfiguredFSMonitorHelper` in `internal/tools/security_review_2026_09_20_test.go`, verified to fail on the pre-fix code and pass on the fixed code. |
