@@ -86,6 +86,25 @@ Indexes are schema-versioned and re-scanned for secret content when loaded.
 Unversioned legacy indexes are rejected; rebuild them with `/rag index` so
 old persisted excerpts cannot bypass current scanning rules.
 
+## Retrieval budget
+
+`rag.retrieval.max_context_tokens` caps the workspace excerpts in every prompt
+path:
+
+- **Active Context** (the default, `memory.retrieval.enabled: true`): it is a
+  hard ceiling on the total tokens of source chunks, and it also tightens the
+  soft `memory.retrieval.source_tokens` tier cap when lower. It never raises
+  the soft cap, and the overall `memory.retrieval.max_context_tokens` still
+  applies, so the defaults (3000 vs 768/1800) do not change prompt size.
+- **Legacy formatting** (memory retrieval disabled): a hard character cap
+  (about four characters per token) on the whole block including citation
+  framing. A top snippet that alone exceeds it is cut at a line boundary and
+  marked `(truncated)`; it is no longer admitted whole.
+
+If the composed request still exceeds the model's context window, workspace
+retrieval is shrunk first, lowest-ranked excerpt first, before the request is
+rejected. Memory tiers are never trimmed this way.
+
 ## Disabling everything
 
 RAG is off unless you turn it on. To ensure it never runs, keep

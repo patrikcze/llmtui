@@ -130,8 +130,13 @@ type RetrievalPolicy struct {
 	ProjectTokens int
 	EpisodeTokens int
 	AgentTokens   int
-	SourceTokens  int
-	KindCaps      map[Kind]int
+	// SourceTokens is the soft tier preference for source chunks: hits over it
+	// are deferred but may still be admitted while the total budget has room.
+	SourceTokens int
+	// SourceMaxTokens is a hard ceiling on the tokens spent on source chunks
+	// in total, across both packing passes. Zero means no ceiling.
+	SourceMaxTokens int
+	KindCaps        map[Kind]int
 }
 
 // RejectedHit records why a candidate did not enter the final context.

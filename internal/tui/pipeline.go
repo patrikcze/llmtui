@@ -580,6 +580,10 @@ func (m *Model) memoryRetrievalPolicy() memoryindex.RetrievalPolicy {
 	if policy.SourceTokens <= 0 {
 		policy.SourceTokens = 768
 	}
+	policy.SourceTokens = ragSourceTokenCap(policy.SourceTokens, m.cfg.RAG.Retrieval.MaxContextTokens)
+	if ragMax := m.cfg.RAG.Retrieval.MaxContextTokens; ragMax > 0 {
+		policy.SourceMaxTokens = ragMax
+	}
 	return policy
 }
 
@@ -957,6 +961,12 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 	// prompt even though they are outside messages[].
 	probe := composeFromBase(base, nil, "")
 	fixed := estimatePrepared(probe, specs, window, reserve, 0, 0)
+	// Workspace retrieval is optional: shrink it, lowest-ranked first, before
+	// rejecting a request it alone pushes over the window.
+	for fixed.Total+reserve > window && shedOptionalRetrieval(&base, m.ragMaxContextChars()) {
+		probe = composeFromBase(base, nil, "")
+		fixed = estimatePrepared(probe, specs, window, reserve, 0, 0)
+	}
 	decision := contextmgr.Decide(historyMessages, contextmgr.Params{
 		Strategy:               m.ctxStrategy,
 		ContextWindow:          window,

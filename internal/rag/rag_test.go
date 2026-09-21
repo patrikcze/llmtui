@@ -2,6 +2,7 @@ package rag
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -326,11 +327,57 @@ func TestFormatContextRespectsCharCap(t *testing.T) {
 		{Chunk: DocumentChunk{Path: "a", StartLine: 1, EndLine: 1, Text: long}},
 		{Chunk: DocumentChunk{Path: "b", StartLine: 1, EndLine: 1, Text: long}},
 	}
+	// Both snippets are far larger than the cap. The cap is hard: the top
+	// result is cut to fit rather than admitted whole, and nothing follows it.
 	out := FormatContext(results, 200)
 	if strings.Contains(out, "file: b") {
 		t.Error("second snippet included despite char cap")
 	}
-	if !strings.Contains(out, "file: a") {
-		t.Error("first snippet dropped by char cap")
+	if len(out) > 200 {
+		t.Errorf("output is %d bytes, exceeds the 200-byte cap", len(out))
+	}
+}
+
+func TestFormatContextTruncatesTopSnippetAtLineBoundary(t *testing.T) {
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d of the snippet", i))
+	}
+	results := []Result{{Chunk: DocumentChunk{Path: "a.go", StartLine: 1, EndLine: 50, Text: strings.Join(lines, "\n")}}}
+	out := FormatContext(results, 400)
+	if len(out) > 400 {
+		t.Fatalf("output is %d bytes, exceeds the 400-byte cap", len(out))
+	}
+	if !strings.Contains(out, "file: a.go lines 1-50") || !strings.Contains(out, "line 00 of the snippet") {
+		t.Errorf("citation and leading content should survive:\n%s", out)
+	}
+	if !strings.Contains(out, "(truncated)") || strings.Contains(out, "line 49") {
+		t.Errorf("expected a truncated snippet:\n%s", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "    line ") && !strings.HasSuffix(l, "of the snippet") {
+			t.Errorf("line cut mid-way: %q", l)
+		}
+	}
+}
+
+func TestFormatContextOmitsSnippetWithNoRoomForContent(t *testing.T) {
+	results := []Result{{Chunk: DocumentChunk{Path: "a.go", StartLine: 1, EndLine: 1, Text: "content"}}}
+	if out := FormatContext(results, 30); out != "" {
+		t.Errorf("a cap smaller than the citation header must yield nothing, got %q", out)
+	}
+}
+
+func TestFormatContextKeepsWholeSnippetsThatFit(t *testing.T) {
+	results := []Result{
+		{Chunk: DocumentChunk{Path: "a", StartLine: 1, EndLine: 1, Text: "short a"}},
+		{Chunk: DocumentChunk{Path: "b", StartLine: 1, EndLine: 1, Text: "short b"}},
+	}
+	out := FormatContext(results, 0)
+	if !strings.Contains(out, "file: a") || !strings.Contains(out, "file: b") || strings.Contains(out, "truncated") {
+		t.Errorf("uncapped output should hold both whole snippets:\n%s", out)
+	}
+	if got := FormatContext(results, len(out)+10); got != out {
+		t.Error("a cap with room to spare must not change the output")
 	}
 }
