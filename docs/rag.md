@@ -78,9 +78,15 @@ rag:
     strategy: "keyword"
 ```
 
-The on-disk index (`index_path/index.json`) stores workspace source excerpts
-and is written with owner-only permissions. Delete it any time with
-`/rag clear`.
+The on-disk index stores workspace source excerpts and is written with
+owner-only permissions. Each workspace gets its own index at
+`index_path/<workspace-id>/index.json`, where the id is derived from the
+canonical (symlink-resolved) `rag.workspace.root`. Switching projects never
+loads or overwrites another project's index; an index whose recorded root does
+not match the current workspace is refused. `/rag clear` deletes only the
+current workspace's index. A single unscoped `index_path/index.json` from an
+older release is ignored: run `/rag index` once per workspace (and delete the
+old file if you no longer need it).
 
 Indexes are schema-versioned and re-scanned for secret content when loaded.
 Unversioned legacy indexes are rejected; rebuild them with `/rag index` so

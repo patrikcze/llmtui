@@ -617,7 +617,9 @@ func (m *Model) rebuildFromConfig() {
 	m.ragRoot = ""
 	m.ragBuiltAt = time.Time{}
 	if dir, err := history.ExpandHome(cfg.RAG.IndexPath); err == nil && dir != "" {
-		m.ragStore = rag.NewStore(dir)
+		// The store is scoped to the configured workspace: an index built
+		// for another project must never feed this project's prompts.
+		m.ragStore = rag.NewStore(dir).ForRoot(m.ragWorkspaceRoot())
 		if idx, root, builtAt, lerr := m.ragStore.Load(); lerr != nil {
 			m.errText = lerr.Error()
 		} else if idx != nil {

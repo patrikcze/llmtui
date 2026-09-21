@@ -334,3 +334,98 @@ func TestFormatContextRespectsCharCap(t *testing.T) {
 		t.Error("first snippet dropped by char cap")
 	}
 }
+
+func TestStoreForRootIsolatesWorkspaces(t *testing.T) {
+	base := NewStore(filepath.Join(t.TempDir(), "ragdir"))
+	rootA, rootB := t.TempDir(), t.TempDir()
+	writeFile(t, rootA, "a.md", "alpha secretless notes about apples")
+	writeFile(t, rootB, "b.md", "beta notes about bananas")
+	idxA, _, err := Build(BuildConfig{Root: rootA, Include: []string{"**/*.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idxB, _, err := Build(BuildConfig{Root: rootB, Include: []string{"**/*.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.ForRoot(rootA).Save(idxA, rootA); err != nil {
+		t.Fatalf("Save A: %v", err)
+	}
+
+	// Another workspace must not see A's excerpts.
+	got, _, _, err := base.ForRoot(rootB).Load()
+	if err != nil || got != nil {
+		t.Fatalf("workspace B Load = (%v, %v), want no index and no error", got, err)
+	}
+
+	// Indexing B must not overwrite A.
+	if err := base.ForRoot(rootB).Save(idxB, rootB); err != nil {
+		t.Fatalf("Save B: %v", err)
+	}
+	gotA, _, _, err := base.ForRoot(rootA).Load()
+	if err != nil || gotA == nil || len(gotA.Search("apples", 3)) == 0 {
+		t.Fatalf("workspace A index lost after indexing B: %v, %v", gotA, err)
+	}
+
+	// Clearing B leaves A intact.
+	if err := base.ForRoot(rootB).Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if gotA, _, _, _ := base.ForRoot(rootA).Load(); gotA == nil {
+		t.Error("Clear on workspace B removed workspace A's index")
+	}
+}
+
+func TestStoreForRootRejectsMismatchedRecordedRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ragdir")
+	rootA, rootB := t.TempDir(), t.TempDir()
+	writeFile(t, rootA, "a.md", "apples")
+	idx, _, err := Build(BuildConfig{Root: rootA, Include: []string{"**/*.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeB := NewStore(dir).ForRoot(rootB)
+	if err := storeB.Save(idx, rootA); err == nil {
+		t.Fatal("Save accepted an index recorded for a different workspace")
+	}
+
+	// A file planted (or copied) into B's slot but recorded for A is refused.
+	if err := NewStore(dir).ForRoot(rootA).Save(idx, rootA); err != nil {
+		t.Fatal(err)
+	}
+	src := NewStore(dir).ForRoot(rootA).path()
+	dst := storeB.path()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _, err := storeB.Load(); err == nil || got != nil {
+		t.Fatalf("Load = (%v, %v), want mismatch error and no index", got, err)
+	}
+}
+
+func TestStoreForRootTreatsSymlinkAsSameWorkspace(t *testing.T) {
+	base := NewStore(filepath.Join(t.TempDir(), "ragdir"))
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	writeFile(t, real, "a.md", "apples")
+	idx, _, err := Build(BuildConfig{Root: real, Include: []string{"**/*.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.ForRoot(real).Save(idx, real); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _, err := base.ForRoot(link).Load(); err != nil || got == nil {
+		t.Fatalf("symlinked spelling of the same workspace did not find its index: %v, %v", got, err)
+	}
+}

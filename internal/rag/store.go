@@ -1,6 +1,8 @@
 package rag
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,10 +30,39 @@ type persisted struct {
 // Store reads and writes an index under a directory.
 type Store struct {
 	dir string
+	// root, when set, is the canonical workspace this store is bound to; Load
+	// and Save refuse an index recorded for any other workspace.
+	root string
 }
 
 // NewStore targets dir (created on Save if missing).
 func NewStore(dir string) *Store { return &Store{dir: dir} }
+
+// ForRoot returns a store bound to one workspace. Its index lives in a
+// subdirectory named after the canonical workspace path, so indexing project
+// B never replaces project A's index, and an index recorded for a different
+// workspace is rejected rather than served. An index written by an older
+// unscoped release (dir/index.json) is deliberately not read: its excerpts
+// cannot be attributed to a workspace without trusting its recorded root.
+func (s *Store) ForRoot(root string) *Store {
+	canon := CanonicalRoot(root)
+	sum := sha256.Sum256([]byte(canon))
+	return &Store{dir: filepath.Join(s.dir, hex.EncodeToString(sum[:8])), root: canon}
+}
+
+// CanonicalRoot returns the absolute, symlink-resolved form of root so two
+// spellings of the same directory share one identity. If the path cannot be
+// resolved (for example it does not exist) the absolute path is used.
+func CanonicalRoot(root string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return filepath.Clean(root)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
 
 func (s *Store) path() string { return filepath.Join(s.dir, indexFileName) }
 
@@ -40,6 +71,9 @@ func (s *Store) path() string { return filepath.Join(s.dir, indexFileName) }
 func (s *Store) Save(idx *Index, root string) error {
 	if idx == nil {
 		return fmt.Errorf("rag: save nil index")
+	}
+	if s.root != "" && CanonicalRoot(root) != s.root {
+		return fmt.Errorf("rag: index root %q does not match the store workspace %q", root, s.root)
 	}
 	if containsSecretChunk(idx.Chunks) {
 		return fmt.Errorf("rag: refusing to save an index containing likely secret material")
@@ -82,6 +116,9 @@ func (s *Store) Load() (idx *Index, root string, builtAt time.Time, err error) {
 	}
 	if p.Version != currentIndexVersion {
 		return nil, "", time.Time{}, fmt.Errorf("rag: index format changed; run /rag index to rebuild it")
+	}
+	if s.root != "" && CanonicalRoot(p.Root) != s.root {
+		return nil, "", time.Time{}, fmt.Errorf("rag: stored index belongs to workspace %q, not %q; run /rag index to build one for this workspace", p.Root, s.root)
 	}
 	if containsSecretChunk(p.Chunks) {
 		return nil, "", time.Time{}, fmt.Errorf("rag: persisted index contains likely secret material; run /rag index to rebuild it safely")
