@@ -382,10 +382,14 @@ func tierTokenCap(kind Kind, policy RetrievalPolicy) int {
 	}
 }
 
+// estimateHitTokens counts the hit's text plus the Active Context framing
+// around it (record element, provenance attributes, untrusted boundaries).
+// Text alone undercounts by roughly 100 tokens per hit, which added up to
+// the difference between a request that fit and one the provider rejected.
 func estimateHitTokens(hit Hit) int {
 	text := hit.Item.Text
 	if hit.Item.Summary != "" {
 		text = hit.Item.Summary
 	}
-	return max(1, (len(text)+3)/4+16)
+	return max(1, (len(text)+framingBytes(hit)+3)/4)
 }

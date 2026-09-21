@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/patrikcze/llmtui/internal/memoryindex"
+	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/rag"
 )
 
@@ -177,5 +180,65 @@ func TestShedOptionalRetrievalLeavesMemoryAndInputUntouched(t *testing.T) {
 	}
 	if len(original) != len(base.memoryHits) {
 		t.Error("memory hits were modified with no source chunks in the prompt")
+	}
+}
+
+type staticSource []memoryindex.Hit
+
+func (s staticSource) Search(context.Context, memoryindex.Query) ([]memoryindex.Hit, error) {
+	return s, nil
+}
+
+// TestActiveContextEstimateTracksRenderedPrompt guards the estimate against
+// drifting from the record format prompt.formatActiveContext really renders.
+// It measures each record's marginal size in a composed prompt and checks the
+// retriever's per-hit token estimate is never below it and stays close.
+func TestActiveContextEstimateTracksRenderedPrompt(t *testing.T) {
+	updated := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	hits := []memoryindex.Hit{
+		{Item: memoryindex.Item{
+			ID: "pref-1", Kind: memoryindex.KindUserPreference, Scope: memoryindex.ScopeUser,
+			Text: "Prefer concise Go code with comments.", Trust: memoryindex.TrustUserAuthored, UpdatedAt: updated,
+		}, Score: 1},
+		{Item: memoryindex.Item{
+			ID: "internal/tui/pipeline.go#41-80", Kind: memoryindex.KindSourceChunk, Scope: memoryindex.ScopeProject,
+			Text: strings.Repeat("func compose() {}\n", 40), Trust: memoryindex.TrustWorkspaceUntrusted,
+			Source: memoryindex.SourceRef{Path: "internal/tui/pipeline.go", StartLine: 41, EndLine: 80}, UpdatedAt: updated,
+		}, Score: .9},
+		{Item: memoryindex.Item{
+			ID: "dec-1", Kind: memoryindex.KindProjectDecision, Scope: memoryindex.ScopeProject, ProjectID: "0123456789abcdef0123",
+			Text: "Use PostgreSQL for durable storage.", Trust: memoryindex.TrustUserAuthored, UpdatedAt: updated,
+		}, Score: .8},
+	}
+	result, err := memoryindex.NewRetriever(staticSource(hits)).SearchDetailed(context.Background(), memoryindex.Query{ProjectID: "0123456789abcdef0123"}, memoryindex.RetrievalPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != len(hits) {
+		t.Fatalf("retriever kept %d of %d hits", len(result.Hits), len(hits))
+	}
+
+	activeBytes := func(hs []memoryindex.Hit) int {
+		out := prompt.Compose(prompt.Input{UseActiveContext: true, ActiveContext: activeContextRecords(hs)})
+		for _, s := range out.Sections {
+			if s.Title == "Active Context" {
+				return len(s.Content)
+			}
+		}
+		t.Fatal("no Active Context section rendered")
+		return 0
+	}
+	// Marginal rendered size of record i is measured against the prompt
+	// holding records 0..i-1, which cancels the fixed wrapper and preamble.
+	for i := 1; i < len(result.Hits); i++ {
+		hit := result.Hits[i]
+		rendered := activeBytes(result.Hits[:i+1]) - activeBytes(result.Hits[:i])
+		want := (rendered + 3) / 4
+		if hit.Tokens < want {
+			t.Errorf("%s: estimate %d tokens < rendered %d tokens: framing undercounted", hit.Item.ID, hit.Tokens, want)
+		}
+		if hit.Tokens > want+8 {
+			t.Errorf("%s: estimate %d tokens far above rendered %d tokens", hit.Item.ID, hit.Tokens, want)
+		}
 	}
 }

@@ -77,8 +77,12 @@ func TestRetrieverDetailedEnforcesTotalBudgetAndReassignsSoftCaps(t *testing.T) 
 		{Item: Item{ID: "p2", Kind: KindProjectDecision, Scope: ScopeProject, Text: "second project decision"}, Score: .9},
 		{Item: Item{ID: "p3", Kind: KindProjectDecision, Scope: ScopeProject, Text: "third project decision"}, Score: .8},
 	}}
+	// Budgets are expressed in units of one hit so the test does not depend on
+	// the exact framing overhead: room for two hits and a half, soft cap of one.
+	one := estimateHitTokens(source.hits[0])
+	maxTokens := one*5/2 + 8
 	result, err := NewRetriever(source).SearchDetailed(context.Background(), Query{}, RetrievalPolicy{
-		MaxTokens: 50, ProjectTokens: 20,
+		MaxTokens: maxTokens, ProjectTokens: one,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +90,8 @@ func TestRetrieverDetailedEnforcesTotalBudgetAndReassignsSoftCaps(t *testing.T) 
 	if len(result.Hits) != 2 {
 		t.Fatalf("soft-cap reassignment selected %d hits, want 2: %+v", len(result.Hits), result)
 	}
-	if result.TotalTokens > 50 {
-		t.Fatalf("total tokens = %d, exceeds 50", result.TotalTokens)
+	if result.TotalTokens > maxTokens {
+		t.Fatalf("total tokens = %d, exceeds %d", result.TotalTokens, maxTokens)
 	}
 	if len(result.Rejected) != 1 || result.Rejected[0].Reason != "tier_budget" {
 		t.Fatalf("budget rejections = %+v", result.Rejected)
@@ -111,15 +115,16 @@ func TestRetrieverSourceMaxTokensIsAHardCeilingButSoftCapIsNot(t *testing.T) {
 		return result
 	}
 
-	// Each chunk is ~116 tokens. A soft tier cap of one chunk still admits all
-	// three while total budget remains (existing reassignment behavior).
-	if got := len(run(RetrievalPolicy{MaxTokens: 1000, SourceTokens: 120}).Hits); got != 3 {
+	// A soft tier cap of one chunk still admits all three while total budget
+	// remains (existing reassignment behavior).
+	one := estimateHitTokens(source.hits[0])
+	if got := len(run(RetrievalPolicy{MaxTokens: one * 10, SourceTokens: one}).Hits); got != 3 {
 		t.Fatalf("soft cap admitted %d chunks, want 3", got)
 	}
 
 	// The hard ceiling is never exceeded, in either packing pass, and it
 	// keeps the highest-ranked chunks.
-	hard := run(RetrievalPolicy{MaxTokens: 1000, SourceTokens: 120, SourceMaxTokens: 250})
+	hard := run(RetrievalPolicy{MaxTokens: one * 10, SourceTokens: one, SourceMaxTokens: one*2 + 10})
 	if len(hard.Hits) != 2 || hard.Hits[0].Item.ID != "a" || hard.Hits[1].Item.ID != "b" {
 		t.Fatalf("hard ceiling hits = %+v, want a and b", hard.Hits)
 	}
