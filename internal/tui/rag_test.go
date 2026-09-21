@@ -103,3 +103,36 @@ func TestRagOffSkipsRetrieval(t *testing.T) {
 		t.Error("retrieval ran while RAG was off")
 	}
 }
+
+func TestRebuildFromConfigDoesNotLoadAnotherWorkspacesIndex(t *testing.T) {
+	indexDir := t.TempDir()
+	rootA, rootB := t.TempDir(), t.TempDir()
+	idx := rag.NewIndex([]rag.DocumentChunk{
+		{ID: "a.go#1-1", Path: "a.go", StartLine: 1, EndLine: 1, Text: "project A private notes"},
+	})
+	// Legacy layout: one unscoped index.json recorded for workspace A. This is
+	// what B used to load blindly.
+	if err := rag.NewStore(indexDir).Save(idx, rootA); err != nil {
+		t.Fatal(err)
+	}
+	if err := rag.NewStore(indexDir).ForRoot(rootA).Save(idx, rootA); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(t)
+	m.cfg.RAG.IndexPath = indexDir
+	m.cfg.RAG.Workspace.Root = rootB
+	m.rebuildFromConfig()
+	if m.ragIndex != nil {
+		t.Fatalf("workspace B loaded workspace A's index (%d chunks)", m.ragIndex.Len())
+	}
+	if strings.Contains(m.errText, "rag") {
+		t.Errorf("a different workspace's index should be absent, not an error: %q", m.errText)
+	}
+
+	m.cfg.RAG.Workspace.Root = rootA
+	m.rebuildFromConfig()
+	if m.ragIndex == nil {
+		t.Fatal("workspace A did not load its own index")
+	}
+}
