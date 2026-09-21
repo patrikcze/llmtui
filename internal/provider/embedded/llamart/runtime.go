@@ -166,7 +166,7 @@ func (r *Runtime) Load(
 		return meta, fmt.Errorf("context_size must not be negative: %d", opts.ContextSize)
 	}
 	if opts.Speculative.Type == embedded.SpeculativeDraftMTP {
-		return meta, errors.New("speculative.type draft-mtp is unavailable with the pinned Yzma v1.26.1 bindings: llama.cpp requires staging next-token embedding APIs that Yzma does not expose; disable speculative decoding or use a compatible future Yzma/runtime pair")
+		return meta, errors.New("speculative.type draft-mtp is unavailable with the pinned Yzma v1.27.0 bindings: llama.cpp requires staging next-token embedding APIs that Yzma does not expose; disable speculative decoding or use a compatible future Yzma/runtime pair")
 	}
 	if err := opts.RopeScaling.Validate(); err != nil {
 		return meta, err
