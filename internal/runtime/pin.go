@@ -66,7 +66,7 @@ type CompatibleRange struct {
 // PlatformPin describes one platform's official llama.cpp release archive
 // and the per-file SHA256 hashes for all runtime files we bundle/verify.
 type PlatformPin struct {
-	Archive string             `json:"archive"` // e.g. "llama-b10066-bin-macos-arm64.tar.gz"
+	Archive string             `json:"archive"` // e.g. "llama-b10964-bin-macos-arm64.tar.gz"
 	URL     string             `json:"url"`
 	SHA256  string             `json:"sha256"`  // archive SHA256
 	Size    int64              `json:"size"`    // archive size in bytes
@@ -114,7 +114,7 @@ func (p PlatformPin) ForBackend(backend string) (*PlatformPin, error) {
 // Every managed directory is guaranteed a "LICENSE" entry: platforms whose
 // archive includes one (verified via that entry's own hash in Files) keep
 // it; platforms whose official archive doesn't (the Windows CPU/Vulkan zips,
-// as of b10066) get llmtui's embedded, byte-identical fallback copy of the
+// as of b10964) get llmtui's embedded, byte-identical fallback copy of the
 // same upstream text (see Install's ensureLicensePresent). Encoding the
 // guarantee here — rather than only inside Install — is what keeps
 // install-time manifest writing and resolve-time pin comparison in
@@ -168,7 +168,7 @@ func (p *Pin) PlatformPin(platform string) (*PlatformPin, error) {
 }
 
 // LlamaVersion returns the LLAMA_VERSION string expected by the manifest
-// (e.g., "b10066" for llama.cpp tag b10066).
+// (e.g., "b10964" for llama.cpp tag b10964).
 func (p *Pin) LlamaVersion() string {
 	return p.LlamaTag
 }

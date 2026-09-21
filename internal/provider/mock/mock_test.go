@@ -79,3 +79,40 @@ func TestListModels(t *testing.T) {
 		t.Error("mock should list at least one model")
 	}
 }
+
+func TestReplyListsOfferedTools(t *testing.T) {
+	p := New()
+	p.Delay = 0
+	events, err := p.Chat(context.Background(), provider.ChatRequest{
+		Model:    "demo-model",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+		Tools:    []provider.ToolSpec{{Name: "list_dir", Description: "List a directory.\nSecond line."}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var text strings.Builder
+	for ev := range events {
+		text.WriteString(ev.Delta)
+	}
+	got := text.String()
+	if !strings.Contains(got, "`list_dir` — List a directory.") || strings.Contains(got, "Second line") {
+		t.Errorf("reply should list tool name and first description line, got:\n%s", got)
+	}
+}
+
+func TestContextWindowsAreConsistent(t *testing.T) {
+	p := New()
+	models, _ := p.ListModels(context.Background())
+	for _, m := range models {
+		if m.ContextLen < 16384 {
+			t.Errorf("%s ContextLen = %d; too small for tool schemas plus the default response reserve", m.ID, m.ContextLen)
+		}
+	}
+	if got := p.Capabilities().ContextWindowTokens; got != models[0].ContextLen {
+		t.Errorf("capabilities window %d != demo-model ContextLen %d", got, models[0].ContextLen)
+	}
+	if p.Capabilities().NativeTools == provider.CapabilityUnsupported {
+		t.Error("demo should keep native tools so it exercises the real request path")
+	}
+}

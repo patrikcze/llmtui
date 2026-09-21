@@ -2,6 +2,40 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-09-21 addendum: runtime pin → llama.cpp v0.4.1 / yzma v1.27.0
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
+every earlier pin value in this document, including the 2026-09-05 addendum's.
+
+- yzma `v1.26.1` → **`v1.27.0`** (`go.mod`). This is yzma's declared binding
+  for llama.cpp `v0.4.1`; its `DefaultVersion` authenticates the same release
+  manifest used below. The binding adds llama.cpp's multidimensional mtmd
+  decoder-position API. llmtui does not call that new API, so no provider code
+  change is required, but the new symbol is resolved when mtmd is loaded.
+- llama.cpp `b10809` / `v0.4.0` → **`b10964` / `v0.4.1`**, commit
+  `b29c606e28a01b1bc8c1351026a0fa6e616bf6c4`. The stable tag's platform
+  binaries remain hosted under its nightly build tag, so `pin.json` records
+  `b10964` and uses the official `ggml-org/llama.cpp` archive URLs.
+- yzma pins the `v0.4.1` digest manifest at
+  `sha256:e5fd75ea7d0f8f882de6f49968fb54fe19c4208882ae63b4d7eba97e9b747577`.
+  Every archive SHA-256 in `pin.json` was checked against that authenticated
+  manifest; archive sizes and all allowlisted per-file hashes were computed
+  independently from the downloaded archives.
+- `compatible_range` is the exact compatible build, `b10964`–`b10964`.
+  Library soversions move from llama/mtmd `.0.4.0` to `.0.4.1` and ggml
+  `.0.23.0` to `.0.24.0`. The allowlist and alias families are unchanged.
+  `libllama-common` and the `*-impl` tool libraries remain excluded because
+  `libllama` and `libmtmd` do not link to them on macOS, Linux, or Windows.
+  CPU and Vulkan archives were also byte-compared for every shared base file;
+  only the Vulkan backend library is additive, preserving `PackPin` semantics.
+
+Validation: `go mod verify`, `go test -count=1 ./...`, and `go vet ./...`
+pass. `llmtui runtime install` downloads, size/SHA-256-verifies, extracts, and
+full-verifies the b10964 darwin-arm64 runtime; yzma v1.27.0 then resolves every
+llama and mtmd symbol from that installed runtime. Model generation was not
+re-run locally because no GGUF was supplied; the native CI lane remains the
+cross-platform inference gate.
+
 ## 2026-09-05 addendum: runtime pin → llama.cpp v0.4.0 / yzma v1.26.1
 
 Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
@@ -236,8 +270,8 @@ native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
 The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
-yzma `v1.26.1`, llama.cpp build `b10809` — the build behind upstream's
-`v0.4.0` tagged release; see the 2026-09-05 addendum). Packaged
+yzma `v1.27.0`, llama.cpp build `b10964` — the build behind upstream's
+`v0.4.1` tagged release; see the 2026-09-21 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
@@ -409,7 +443,7 @@ Two new optional persistent flags, `--context-size` and `--gpu-layers`,
 bind only when set (existing precedence rules). `ListModels` returns the
 configured model plus sibling `*.gguf` files for the model picker.
 
-The pinned Yzma v1.26.1 context ABI also supports independently configured
+The pinned Yzma v1.27.0 context ABI also supports independently configured
 `NThreadsBatch`, `NUbatch`, `TypeK`, `TypeV`, and `Offload_kqv`. llmtui maps
 these from opt-in embedded settings while retaining the old `kv_cache_type` as
 a shared K/V fallback and preserving native defaults for omitted micro-batch
