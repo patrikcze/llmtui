@@ -9,6 +9,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
+	"github.com/patrikcze/llmtui/internal/provider/mock"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -367,5 +368,31 @@ func TestToolCallDiagnosticsDoNotStoreArguments(t *testing.T) {
 	}
 	if strings.Contains(diagnostics[0].ArgumentsHash, "SECRET") {
 		t.Fatal("diagnostics leaked argument content")
+	}
+}
+
+func TestMockDemoWithNativeToolsFitsDefaultReserve(t *testing.T) {
+	m := newTestModel(t)
+	m.prov = mock.New()
+	m.model = "demo-model"
+	m.toolsOn = true
+	m.webOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.cfg.Context.MaxContextTokens = 0
+	m.cfg.Context.ReserveResponseTokens = 4096 // shipped default
+	m.resetNativeToolMode()
+
+	if !m.toolsNative {
+		t.Fatal("mock demo should offer native tools")
+	}
+	prepared, err := m.prepareRequest("hello", nil, false)
+	if err != nil {
+		t.Fatalf("prepareRequest with mock demo and tools enabled: %v", err)
+	}
+	if len(prepared.tools) == 0 {
+		t.Fatal("expected native tool schemas in the request")
+	}
+	if left := prepared.estimate.Window - prepared.estimate.Total - 4096; left < 8000 {
+		t.Errorf("only %d tokens left for conversation history; window too tight", left)
 	}
 }

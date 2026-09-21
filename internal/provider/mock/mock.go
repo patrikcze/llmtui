@@ -28,10 +28,19 @@ func (p *Provider) HealthCheck(ctx context.Context) error { return nil }
 
 func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
 	return []provider.ModelInfo{
-		{ID: "demo-model", Name: "Demo Model", Description: "Offline demo model built into llmtui", ContextLen: 8192},
-		{ID: "demo-model-mini", Name: "Demo Model Mini", Description: "Smaller offline demo model", ContextLen: 4096},
+		{ID: "demo-model", Name: "Demo Model", Description: "Offline demo model built into llmtui", ContextLen: demoContextTokens},
+		{ID: "demo-model-mini", Name: "Demo Model Mini", Description: "Smaller offline demo model", ContextLen: demoMiniContextTokens},
 	}, nil
 }
+
+// The demo advertises a generous window on purpose: it runs with workspace
+// tools on, and the native tool schemas plus system prompt plus the default
+// response reserve already exceed 8k. Nothing is allocated; the window is
+// only used for request budgeting.
+const (
+	demoContextTokens     = 32768
+	demoMiniContextTokens = 16384
+)
 
 const demoReply = "Hello! I'm the **built-in demo model**. No local LLM server was reachable, " +
 	"so llmtui switched to offline demo mode.\n\n" +
@@ -74,6 +83,9 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	go func() {
 		defer close(events)
 		words := strings.SplitAfter(demoReply, " ")
+		if len(req.Tools) > 0 {
+			words = append(words, strings.SplitAfter(toolsShowcase(req.Tools), " ")...)
+		}
 		completion := 0
 		for _, w := range words {
 			if p.Delay > 0 {
@@ -111,6 +123,33 @@ func (p *Provider) Capabilities() provider.Capabilities {
 		SupportsModelList:    true,
 		SupportsTokenUsage:   true,
 		SupportsSystemPrompt: true,
-		ContextWindowTokens:  8192,
+		ContextWindowTokens:  demoContextTokens,
 	}
+}
+
+// toolsShowcase lists the native tools the request offered so the offline
+// demo shows what llmtui can do once a real model is connected.
+func toolsShowcase(specs []provider.ToolSpec) string {
+	var b strings.Builder
+	b.WriteString("\n\n**Tools offered to the model this turn** (a real model can call these, with approval):\n\n")
+	for _, s := range specs {
+		b.WriteString("- `" + s.Name + "`")
+		if d := firstLine(s.Description); d != "" {
+			b.WriteString(" — " + d)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nThe demo model only replies with canned text; it does not call them.")
+	return b.String()
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if r := []rune(s); len(r) > 100 {
+		s = string(r[:100]) + "…"
+	}
+	return s
 }
