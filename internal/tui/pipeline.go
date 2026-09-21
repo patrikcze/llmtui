@@ -594,28 +594,7 @@ func activeContextRecords(hits []memoryindex.Hit) []prompt.MemoryRecord {
 		if hit.Item.Summary != "" {
 			text = hit.Item.Summary
 		}
-		source := "unknown"
-		switch hit.Item.Kind {
-		case memoryindex.KindUserPreference:
-			source = "user"
-		case memoryindex.KindProjectArchitecture, memoryindex.KindProjectConvention, memoryindex.KindProjectDecision:
-			source = "project:" + shortMemoryID(hit.Item.ProjectID)
-			if hit.Item.Source.RunID != "" {
-				source += "/run:" + hit.Item.Source.RunID
-				if hit.Item.Source.Cycle > 0 {
-					source += fmt.Sprintf("/cycle:%d", hit.Item.Source.Cycle)
-				}
-			}
-		case memoryindex.KindEpisode:
-			source = "session:" + hit.Item.SessionID
-		case memoryindex.KindAgentObjective, memoryindex.KindAgentCriterion, memoryindex.KindAgentFailure, memoryindex.KindAgentEvidence:
-			source = "run:" + hit.Item.RunID
-			if hit.Item.Source.Cycle > 0 {
-				source += fmt.Sprintf("/cycle:%d", hit.Item.Source.Cycle)
-			}
-		case memoryindex.KindSourceChunk:
-			source = fmt.Sprintf("%s:%d-%d", hit.Item.Source.Path, hit.Item.Source.StartLine, hit.Item.Source.EndLine)
-		}
+		source := memoryindex.SourceLabel(hit)
 		records = append(records, prompt.MemoryRecord{
 			ID: hit.Item.ID, Kind: string(hit.Item.Kind), Scope: string(hit.Item.Scope),
 			Source: source, Trust: string(hit.Item.Trust), Text: text, UpdatedAt: hit.Item.UpdatedAt,
@@ -624,12 +603,7 @@ func activeContextRecords(hits []memoryindex.Hit) []prompt.MemoryRecord {
 	return records
 }
 
-func shortMemoryID(id string) string {
-	if len(id) <= 12 {
-		return id
-	}
-	return id[:12]
-}
+func shortMemoryID(id string) string { return memoryindex.ShortID(id) }
 
 func composeFromBase(base compositionBase, recent []provider.Message, summary string) prompt.Output {
 	in := base.input
