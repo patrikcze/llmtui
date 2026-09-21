@@ -309,8 +309,17 @@ func overlapsSelectedChunk(candidate Hit, selected []Hit) bool {
 func packHits(hits []Hit, policy RetrievalPolicy) RetrievalResult {
 	result := RetrievalResult{TierTokens: map[Scope]int{}}
 	deferred := make([]Hit, 0)
+	sourceTokens := 0
+	overSourceCeiling := func(hit Hit) bool {
+		return policy.SourceMaxTokens > 0 && hit.Item.Kind == KindSourceChunk &&
+			sourceTokens+hit.Tokens > policy.SourceMaxTokens
+	}
 	for _, hit := range hits {
 		hit.Tokens = estimateHitTokens(hit)
+		if overSourceCeiling(hit) {
+			result.Rejected = append(result.Rejected, RejectedHit{Hit: hit, Reason: "source_budget"})
+			continue
+		}
 		if policy.TopK > 0 && len(result.Hits) >= policy.TopK {
 			result.Rejected = append(result.Rejected, RejectedHit{Hit: hit, Reason: "top_k"})
 			continue
@@ -325,8 +334,15 @@ func packHits(hits []Hit, policy RetrievalPolicy) RetrievalResult {
 			continue
 		}
 		selectHit(&result, hit)
+		if hit.Item.Kind == KindSourceChunk {
+			sourceTokens += hit.Tokens
+		}
 	}
 	for _, hit := range deferred {
+		if overSourceCeiling(hit) {
+			result.Rejected = append(result.Rejected, RejectedHit{Hit: hit, Reason: "source_budget"})
+			continue
+		}
 		if policy.TopK > 0 && len(result.Hits) >= policy.TopK {
 			result.Rejected = append(result.Rejected, RejectedHit{Hit: hit, Reason: "top_k"})
 			continue
@@ -336,6 +352,9 @@ func packHits(hits []Hit, policy RetrievalPolicy) RetrievalResult {
 			continue
 		}
 		selectHit(&result, hit)
+		if hit.Item.Kind == KindSourceChunk {
+			sourceTokens += hit.Tokens
+		}
 	}
 	return result
 }

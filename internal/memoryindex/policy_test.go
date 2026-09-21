@@ -3,6 +3,7 @@ package memoryindex
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,43 @@ func TestRetrieverDetailedEnforcesTotalBudgetAndReassignsSoftCaps(t *testing.T) 
 	}
 	if len(result.Rejected) != 1 || result.Rejected[0].Reason != "tier_budget" {
 		t.Fatalf("budget rejections = %+v", result.Rejected)
+	}
+}
+
+func TestRetrieverSourceMaxTokensIsAHardCeilingButSoftCapIsNot(t *testing.T) {
+	chunk := func(id string, score float64) Hit {
+		return Hit{Item: Item{
+			ID: id, Kind: KindSourceChunk, Scope: ScopeProject, Text: strings.Repeat("x", 400),
+			Source: SourceRef{Path: id + ".go", StartLine: 1, EndLine: 1},
+		}, Score: score}
+	}
+	source := fakeSource{hits: []Hit{chunk("a", 1), chunk("b", .9), chunk("c", .8)}}
+	run := func(policy RetrievalPolicy) RetrievalResult {
+		t.Helper()
+		result, err := NewRetriever(source).SearchDetailed(context.Background(), Query{}, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	// Each chunk is ~116 tokens. A soft tier cap of one chunk still admits all
+	// three while total budget remains (existing reassignment behavior).
+	if got := len(run(RetrievalPolicy{MaxTokens: 1000, SourceTokens: 120}).Hits); got != 3 {
+		t.Fatalf("soft cap admitted %d chunks, want 3", got)
+	}
+
+	// The hard ceiling is never exceeded, in either packing pass, and it
+	// keeps the highest-ranked chunks.
+	hard := run(RetrievalPolicy{MaxTokens: 1000, SourceTokens: 120, SourceMaxTokens: 250})
+	if len(hard.Hits) != 2 || hard.Hits[0].Item.ID != "a" || hard.Hits[1].Item.ID != "b" {
+		t.Fatalf("hard ceiling hits = %+v, want a and b", hard.Hits)
+	}
+	found := false
+	for _, r := range hard.Rejected {
+		found = found || (r.Hit.Item.ID == "c" && r.Reason == "source_budget")
+	}
+	if !found {
+		t.Errorf("chunk c should be rejected with source_budget: %+v", hard.Rejected)
 	}
 }

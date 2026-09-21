@@ -188,7 +188,7 @@ it does not install an embedding model or make a network request.
 | `retrieval.project_tokens` | `512` | Soft typed-project tier cap |
 | `retrieval.episodic_tokens` | `384` | Soft saved-episode tier cap |
 | `retrieval.agent_tokens` | `512` | Soft active-run tier cap |
-| `retrieval.source_tokens` | `768` | Soft workspace-source/RAG tier cap |
+| `retrieval.source_tokens` | `768` | Soft workspace-source/RAG tier cap (`rag.retrieval.max_context_tokens` lowers it and hard-caps source chunks) |
 
 Dots map to underscores for environment variables, for example
 `LLMTUI_MEMORY_EPISODIC_CAPTURE=true` and
