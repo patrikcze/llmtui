@@ -51,6 +51,13 @@ left or right truncation. Choice maps are sorted in Go because their source
 type has no insertion order; callers that require checkpoint order should use
 an ordered choice list and parity fixtures should cover that choice explicitly.
 
+The fourth slice adds `DecodeLogits`, which applies the same bounded
+temperature buckets and entropy confidence calculation used by the reference
+agent, then produces normalized choice, expected score, or noul answers. It
+uses stable softmax and rejects non-finite logits before any result reaches a
+caller. Calibration values outside the usable range are clamped and therefore
+cannot sharpen an uncertain result into a false certainty.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.
