@@ -218,7 +218,7 @@ func BuildSequence(tokenizer TokenEncoder, state any, question Question, options
 		optBudget -= len(ids)
 	}
 	if optBudget < 16 {
-		per := max(4, (headMaxLen-16)/max(1, len(optionIDs)))
+		per := maxInt(4, (headMaxLen-16)/maxInt(1, len(optionIDs)))
 		for i := range optionIDs {
 			if len(optionIDs[i]) > per {
 				optionIDs[i] = optionIDs[i][:per]
@@ -229,7 +229,7 @@ func BuildSequence(tokenizer TokenEncoder, state any, question Question, options
 			optBudget -= len(ids)
 		}
 	}
-	if limit := max(8, optBudget); len(head) > limit {
+	if limit := maxInt(8, optBudget); len(head) > limit {
 		head = head[:limit]
 	}
 	ids := []int{tokenizer.CLSTokenID()}
@@ -241,7 +241,7 @@ func BuildSequence(tokenizer TokenEncoder, state any, question Question, options
 		ids = append(ids, option...)
 	}
 	ids = append(ids, tokenizer.SEPTokenID())
-	room := max(0, maxLen-len(ids)-1)
+	room := maxInt(0, maxLen-len(ids)-1)
 	stateText, err := SerializeState(state)
 	if err != nil {
 		return EncodedSequence{}, fmt.Errorf("serialize state: %w", err)
@@ -271,7 +271,7 @@ func BuildSequence(tokenizer TokenEncoder, state any, question Question, options
 	return EncodedSequence{IDs: ids, MarkerPositions: filteredMarkers, QuestionType: question.Type}, nil
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}
