@@ -84,6 +84,23 @@ var (
 	stagedBeforeRename  = func() {}
 )
 
+// stagedRename, syncParentDirFn, and verifyPublishedContentFn are the same
+// kind of test-only indirection as the staging hooks above, covering the
+// three steps after staging completes: the publish itself, the best-effort
+// post-publish directory sync, and the post-publish readback confirmation.
+// syncParentDirFn and verifyPublishedContentFn default to the real
+// functions defined elsewhere in this package (syncParentDir is platform-
+// split; verifyPublishedContentFn wraps this file's own
+// verifyPublishedContent) so overriding one in a test never has to
+// reimplement the real behavior, only replace it for that one test.
+var (
+	stagedRename = func(root *os.Root, oldname, newname string) error {
+		return root.Rename(oldname, newname)
+	}
+	syncParentDirFn          = syncParentDir
+	verifyPublishedContentFn = verifyPublishedContent
+)
+
 // stagingFilePrefix marks a staged write's sibling file as llmtui's own, so
 // a crash that leaves one behind is recognizable and not mistaken for
 // model-authored content.
@@ -270,15 +287,15 @@ func publishStagedWrite(root *os.Root, rel string, content []byte, mode os.FileM
 	// of this file for why no amount of single-process optimistic checking
 	// closes it completely.
 	stagedBeforeRename()
-	if rerr := root.Rename(tempName, rel); rerr != nil {
+	if rerr := stagedRename(root, tempName, rel); rerr != nil {
 		return out, fmt.Errorf("publish staged write: %w", rerr)
 	}
 	published = true
 
-	if serr := syncParentDir(root, dir); serr != nil {
+	if serr := syncParentDirFn(root, dir); serr != nil {
 		out.DurabilityWarning = fmt.Sprintf("directory sync after publish failed (%v); the write is committed but crash durability is reduced", serr)
 	}
-	if verr := verifyPublishedContent(root, rel, content, byteLimit); verr != nil {
+	if verr := verifyPublishedContentFn(root, rel, content, byteLimit); verr != nil {
 		note := fmt.Sprintf("post-write confirmation read failed (%v); the write is committed but could not be re-verified", verr)
 		if out.DurabilityWarning != "" {
 			out.DurabilityWarning += "; " + note
