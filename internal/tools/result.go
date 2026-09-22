@@ -106,6 +106,11 @@ var errorCodeVocabulary = map[string]bool{
 	"repeat_block":             true,
 	"budget_block":             true,
 	"outcome_unknown":          true,
+	// symlink_write_unsupported (Phase 1b): write_file/edit_file's target, or
+	// an existing parent directory component, is a symbolic link. Write
+	// admission rejects this outright rather than writing through or
+	// replacing the link — see rejectSymlinkWriteTarget in file_write.go.
+	"symlink_write_unsupported": true,
 }
 
 // Coverage states how much of the intended source a producer actually
