@@ -72,6 +72,18 @@ exactly one answer of the requested type for every question. This keeps
 decision output separate from approval and generative provider policy until a
 real verified runtime is available.
 
+The Apple Silicon review adds three explicitly managed MLX variants:
+`laya:english-mlx`, `laya:multilingual-mlx`, and `laya:typed-decisions-mlx`.
+For example, `llmtui decision pull laya:english-mlx --revision <commit>` downloads the pinned
+Hugging Face checkpoint files, including `mlx_config.json`, and verifies them
+with the same staging and checksum rules. These artifacts are marked
+`runtime.ready: false` because `laya-mlx` is a Python/MLX runtime rather than a
+Go-loadable library; a future Apple Silicon bridge must validate the Python
+environment and communicate through an explicit loader boundary. The model
+repository reports 7–14 ms short-decision measurements on M3 Max and parity
+checks against the reference runtime, so it is now the preferred backend
+candidate for that platform, subject to the bridge and end-to-end evaluation.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.

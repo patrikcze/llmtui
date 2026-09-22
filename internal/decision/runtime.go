@@ -13,6 +13,7 @@ import (
 const (
 	RuntimeFormatSafeTensors = "safetensors"
 	RuntimeFormatONNX        = "onnx"
+	RuntimeFormatMLX         = "mlx"
 )
 
 var ErrRuntimeArtifactUnavailable = errors.New("verified decision runtime artifact unavailable")
@@ -82,7 +83,7 @@ func validateRuntimeArtifact(runtime RuntimeArtifact) error {
 		}
 		return nil
 	}
-	if runtime.Format != RuntimeFormatSafeTensors {
+	if runtime.Format != RuntimeFormatSafeTensors && runtime.Format != RuntimeFormatMLX {
 		return fmt.Errorf("source-only runtime format %q is not supported", runtime.Format)
 	}
 	if runtime.Path != "" || runtime.SHA256 != "" || runtime.Exporter != "" || runtime.UpstreamRevision != "" {

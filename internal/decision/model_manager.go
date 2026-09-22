@@ -142,7 +142,7 @@ func NewModelManager(opts ModelManagerOptions) (*ModelManager, error) {
 	}
 	catalog := opts.Catalog
 	if len(catalog) == 0 {
-		catalog = append([]ModelDescriptor(nil), LayaModels...)
+		catalog = defaultModelCatalog()
 	}
 	seen := make(map[string]struct{}, len(catalog))
 	for _, descriptor := range catalog {
@@ -335,7 +335,7 @@ func (m *ModelManager) Pull(ctx context.Context, id string, opts PullOptions) (I
 		Engine:        "laya",
 		Model:         descriptor.Alias,
 		Source:        ModelSource{Type: "huggingface", Repository: descriptor.Repository, Revision: revision},
-		Runtime:       RuntimeArtifact{Format: "safetensors", Note: "source checkpoint only; no verified Go runtime artifact is installed"},
+		Runtime:       RuntimeArtifact{Format: descriptor.runtimeFormat(), Note: descriptor.runtimeNote()},
 		Files:         manifestFiles,
 		InstalledAt:   time.Now().UTC().Format(time.RFC3339),
 	}
@@ -399,7 +399,7 @@ func selectArtifacts(endpoint *url.URL, descriptor ModelDescriptor, revision str
 			continue
 		}
 		rel := strings.TrimPrefix(entry.Path, prefix)
-		if rel != "model.safetensors" && rel != "rl_agent_config.json" && !strings.HasPrefix(rel, "tokenizer/") && !strings.HasPrefix(rel, "encoder/") {
+		if rel != "model.safetensors" && rel != "rl_agent_config.json" && rel != "mlx_config.json" && !strings.HasPrefix(rel, "tokenizer/") && !strings.HasPrefix(rel, "encoder/") {
 			continue
 		}
 		if entry.Size < 0 || entry.Size > maxModelFileBytes {
@@ -413,21 +413,23 @@ func selectArtifacts(endpoint *url.URL, descriptor ModelDescriptor, revision str
 		selected = append(selected, artifact{Path: rel, Size: entry.Size, SHA256: sum, URL: artifactURL})
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].Path < selected[j].Path })
-	hasModel, hasConfig, hasTokenizer, hasEncoder := false, false, false, false
+	hasModel, hasConfig, hasTokenizer, hasEncoder, hasMLXConfig := false, false, false, false, false
 	for _, item := range selected {
 		switch {
 		case item.Path == "model.safetensors":
 			hasModel = true
 		case item.Path == "rl_agent_config.json":
 			hasConfig = true
+		case item.Path == "mlx_config.json":
+			hasMLXConfig = true
 		case strings.HasPrefix(item.Path, "tokenizer/"):
 			hasTokenizer = true
 		case strings.HasPrefix(item.Path, "encoder/"):
 			hasEncoder = true
 		}
 	}
-	if !hasModel || !hasConfig || !hasTokenizer || !hasEncoder {
-		return nil, fmt.Errorf("laya checkpoint %q is incomplete (model=%v config=%v tokenizer=%v encoder=%v)", descriptor.Alias, hasModel, hasConfig, hasTokenizer, hasEncoder)
+	if !hasModel || !hasConfig || !hasTokenizer || !hasEncoder || (descriptor.runtimeFormat() == RuntimeFormatMLX && !hasMLXConfig) {
+		return nil, fmt.Errorf("laya checkpoint %q is incomplete (model=%v config=%v tokenizer=%v encoder=%v mlx_config=%v)", descriptor.Alias, hasModel, hasConfig, hasTokenizer, hasEncoder, hasMLXConfig)
 	}
 	return selected, nil
 }

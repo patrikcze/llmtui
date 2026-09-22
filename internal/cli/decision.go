@@ -61,7 +61,7 @@ func newDecisionModelsCmd(r *Root) *cobra.Command {
 					if item.Manifest.Runtime.Ready {
 						runtimeStatus = item.Manifest.Runtime.Format
 					} else {
-						runtimeStatus = "source only"
+						runtimeStatus = item.Manifest.Runtime.Format + " (external loader required)"
 					}
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", "laya:"+descriptor.Alias, status, revision, runtimeStatus)
@@ -101,7 +101,7 @@ func newDecisionPullCmd(r *Root) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("pull decision model: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Model: %s\nRevision: %s\nPath: %s\nRuntime: source only (not executable)\n", result.ID, result.Manifest.Source.Revision, result.Path)
+			fmt.Fprintf(cmd.OutOrStdout(), "Model: %s\nRevision: %s\nPath: %s\nRuntime: %s (ready=%t)\n", result.ID, result.Manifest.Source.Revision, result.Path, result.Manifest.Runtime.Format, result.Manifest.Runtime.Ready)
 			return nil
 		},
 	}

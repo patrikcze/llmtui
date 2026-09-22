@@ -118,6 +118,37 @@ func TestModelManagerResumesPartialArtifact(t *testing.T) {
 	}
 }
 
+func TestModelManagerPullsMLXArtifactsAsExternalRuntime(t *testing.T) {
+	files := map[string][]byte{
+		"model.safetensors":        []byte("mlx-model-bytes"),
+		"rl_agent_config.json":     []byte(`{"encoder":"offline","head_layers":2}`),
+		"mlx_config.json":          []byte(`{"format":"laya-mlx","format_version":1,"dtype":"float16"}`),
+		"tokenizer/tokenizer.json": []byte("tokenizer"),
+		"encoder/config.json":      []byte("encoder"),
+	}
+	revision := "1234567890abc"
+	server := newHubTestServer(t, revision, files)
+	defer server.Close()
+	root := t.TempDir()
+	manager, err := NewModelManager(ModelManagerOptions{
+		RootDir: root, Endpoint: server.URL, AllowHTTP: true,
+		Catalog: []ModelDescriptor{{Alias: "english-mlx", Repository: "owner/repo", RuntimeFormat: RuntimeFormatMLX, RuntimeNote: "external MLX"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := manager.Pull(context.Background(), "laya:english-mlx", PullOptions{})
+	if err != nil {
+		t.Fatalf("MLX Pull() error = %v", err)
+	}
+	if installed.Manifest.Runtime.Ready || installed.Manifest.Runtime.Format != RuntimeFormatMLX {
+		t.Fatalf("MLX runtime metadata = %#v", installed.Manifest.Runtime)
+	}
+	if _, err := os.Stat(filepath.Join(installed.Path, "mlx_config.json")); err != nil {
+		t.Fatalf("MLX metadata was not installed: %v", err)
+	}
+}
+
 func TestNewModelManagerRejectsNonHTTPSEndpoint(t *testing.T) {
 	if _, err := NewModelManager(ModelManagerOptions{Endpoint: "http://example.test"}); err == nil {
 		t.Fatal("NewModelManager() accepted non-HTTPS endpoint")
