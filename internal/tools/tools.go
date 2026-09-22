@@ -181,12 +181,22 @@ type Call struct {
 // Result is the outcome of executing one call. Diff is a display-only
 // rendering of what a write_file changed (see RenderWriteDiff); it is shown
 // in the TUI but never sent to the model.
+//
+// Meta is the additive typed outcome/coverage/window envelope (see
+// result.go). It is populated by every in-package producer and by the
+// controller-only producers in internal/tui that build a Result directly
+// (ask_user, tool_search, get_entity_details, MCP). A Result built before
+// Phase 1a landed, or by a path this phase did not reach, carries a
+// zero-value Meta (Meta.Outcome == "") — callers that read Meta must treat
+// that as "not classified," not as OutcomeUnknown, which is a distinct,
+// explicit value.
 type Result struct {
 	Call     Call
 	Output   string
 	Diff     string
 	Err      error
 	Entities []entity.Candidate
+	Meta     ResultMeta
 }
 
 // fenceOpen matches a tool block opener: 3+ backticks, "tool", name, optional path.
