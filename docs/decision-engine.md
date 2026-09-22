@@ -58,6 +58,13 @@ uses stable softmax and rejects non-finite logits before any result reaches a
 caller. Calibration values outside the usable range are clamped and therefore
 cannot sharpen an uncertain result into a false certainty.
 
+The fifth slice adds the provider-independent `Router`. It chooses the
+requested or configured model from installed revisions, loads only through
+`LoadRuntime`, and keeps a bounded LRU of resident engines. Predictions hold a
+reference while running, so an idle engine can be evicted and closed without
+interrupting an in-flight request. The router remains opt-in and returns the
+existing unavailable error until a verified backend loader is supplied.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.
