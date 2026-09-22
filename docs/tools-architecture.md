@@ -91,6 +91,49 @@ Concretely:
 5. Results go back to the model as either a synthetic user message wrapped in `[tool results]` (fenced mode, `FormatResults`) or as proper `role:"tool"` messages carrying `ToolCallID`/`ToolName` (native mode, `NativeResults`, `native.go:276`).
 6. The model gets another turn with those results in context and can call more tools or answer normally. This repeats up to `tools.max_iterations` (default 10, `toolMaxIter`, `app.go:1155`) — after that the *user* decides whether to grant more rounds, so a long task never silently dies.
 
+### `tools.Result.Meta`: typed outcome and coverage
+
+`tools.Result` (`result.go`) additively carries `Meta ResultMeta` alongside
+the legacy `Output`/`Diff`/`Err`/`Entities` fields. This is *not* a second
+success/failure signal to reconcile with `Err` — it is the same operation's
+outcome, described in a form callers (the agent receipt ledger, the progress
+digest, future phases) can switch on instead of pattern-matching rendered
+text:
+
+- `Meta.Outcome` — `ok | partial | failed | cancelled | timeout | unknown`.
+  A successful-but-incomplete observation (e.g. `grep` skipping an
+  oversized file) is `partial` with `Err == nil` — it is not, and must
+  never be treated as, an execution failure. A clean, exhaustive zero-match
+  result is `ok`, not a fabricated failure.
+- `Meta.Error` — set only alongside a non-nil `Err`; carries a stable,
+  closed `Code` (see `errorCodeVocabulary` in `result.go`, e.g.
+  `not_found`, `stale_source`... — this phase's exact set is pinned by
+  `TestErrorCodeVocabularyIsClosedAndStable`) and a `Retry` hint
+  (`none | correct_input | reread | later | reconnect`). `Code` is never
+  `err.Error()` — it is a fixed vocabulary a caller can switch on.
+- `Meta.Coverage` — `SourceComplete`/`CaptureComplete`/`PreviewComplete`
+  booleans plus observed/retained/total byte-and-line counts (nil totals
+  mean genuinely unknown, never guessed). This is how a capped scan
+  discloses that a zero-match result is not proof of absence.
+- `Meta.Window` — the position of a bounded view inside a larger
+  representation, where pagination applies; `nil` where it doesn't yet
+  (list_dir, glob — a later phase adds their pagination).
+- `Meta.Effect` — `none | changed | unchanged | unknown`, independent of
+  `Outcome`: an executed command that timed out can be `Effect=unknown`
+  without that implying the command never touched a file.
+
+`agent.ActionStatus` (`executed | denied | blocked | unknown`) is a
+separate, controller-owned concept recorded by the batch/approval layer —
+producers never set it, and it is not duplicated onto `Result`/`Meta`. A
+caller combines the two ("user denied," "controller blocked," "tool
+failed") rather than looking for a single merged field.
+
+This phase's shared formatter (`formatResultContent`, called by both
+`FormatResults` and `NativeResults`) renders `Meta`-blind: model-visible
+text is byte-identical to before `Meta` existed. `Meta` is available for a
+later phase's formatter to surface; nothing today parses it out of the
+rendered string, and nothing should — read it off `Result.Meta` directly.
+
 ### The same round trip as a conversation
 
 The flowchart above shows the plumbing; here is what actually happens between
