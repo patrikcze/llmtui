@@ -32,6 +32,17 @@ or performs network inference. The next implementation slice must establish
 Python-vs-runtime golden fixtures and a reproducible, checksum-pinned runtime
 artifact before enabling predictions.
 
+The second slice now makes that boundary executable in code. A ready runtime
+manifest must identify an ONNX file, its size and SHA-256, the exporter, and
+the upstream revision used to create it. `LoadRuntime` revalidates the
+manifest, rejects source-only checkpoints, rejects symlinked or tampered
+artifacts, and calls a narrow `RuntimeLoader` only after those checks pass.
+The loader is deliberately injected so a native backend can be selected after
+its platform and licensing requirements are verified. `GoldenFixture` provides
+the companion parity contract: pinned structured inputs and normalized answers
+can be produced by a Python reference run and consumed by a future Go runtime
+without treating token IDs as a public API.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.

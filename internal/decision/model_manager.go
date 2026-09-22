@@ -81,11 +81,14 @@ type ModelSource struct {
 }
 
 type RuntimeArtifact struct {
-	Format   string `json:"format"`
-	Ready    bool   `json:"ready"`
-	Exporter string `json:"exporter,omitempty"`
-	SHA256   string `json:"sha256,omitempty"`
-	Note     string `json:"note,omitempty"`
+	Format           string `json:"format"`
+	Ready            bool   `json:"ready"`
+	Path             string `json:"path,omitempty"`
+	Size             int64  `json:"size,omitempty"`
+	Exporter         string `json:"exporter,omitempty"`
+	UpstreamRevision string `json:"upstream_revision,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
+	Note             string `json:"note,omitempty"`
 }
 
 // Installation is a discovered or newly installed model directory.
@@ -134,7 +137,7 @@ func NewModelManager(opts ModelManagerOptions) (*ModelManager, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("model endpoint must not contain credentials, query, or fragment")
 	}
-	if u.Scheme != "https" && !(opts.AllowHTTP && isLoopbackHost(u.Hostname())) {
+	if u.Scheme != "https" && (!opts.AllowHTTP || !isLoopbackHost(u.Hostname())) {
 		return nil, fmt.Errorf("model endpoint must use HTTPS")
 	}
 	catalog := opts.Catalog
@@ -166,7 +169,7 @@ func NewModelManager(opts ModelManagerOptions) (*ModelManager, error) {
 				return err
 			}
 		}
-		if req.URL.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(req.URL.Hostname())) {
+		if req.URL.Scheme != "https" && (u.Scheme != "http" || !isLoopbackHost(req.URL.Hostname())) {
 			return fmt.Errorf("refusing insecure model redirect to %q", req.URL.Redacted())
 		}
 		if !allowedModelRedirectHost(req.URL.Hostname(), u.Hostname()) {
@@ -367,7 +370,7 @@ func (m *ModelManager) resolveRevision(ctx context.Context, descriptor ModelDesc
 		return "", fmt.Errorf("resolve %s revision %q: %w", descriptor.Repository, requested, err)
 	}
 	if !isHexRevision(info.SHA) {
-		return "", fmt.Errorf("Hugging Face returned invalid revision %q", info.SHA)
+		return "", fmt.Errorf("hugging face returned invalid revision %q", info.SHA)
 	}
 	return info.SHA, nil
 }
@@ -424,7 +427,7 @@ func selectArtifacts(endpoint *url.URL, descriptor ModelDescriptor, revision str
 		}
 	}
 	if !hasModel || !hasConfig || !hasTokenizer || !hasEncoder {
-		return nil, fmt.Errorf("Laya checkpoint %q is incomplete (model=%v config=%v tokenizer=%v encoder=%v)", descriptor.Alias, hasModel, hasConfig, hasTokenizer, hasEncoder)
+		return nil, fmt.Errorf("laya checkpoint %q is incomplete (model=%v config=%v tokenizer=%v encoder=%v)", descriptor.Alias, hasModel, hasConfig, hasTokenizer, hasEncoder)
 	}
 	return selected, nil
 }
@@ -642,13 +645,19 @@ func (m *ModelManager) inspectPath(dir string, descriptor ModelDescriptor, hash 
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return Installation{}, fmt.Errorf("parse model manifest: %w", err)
 	}
-	valid := manifest.SchemaVersion == modelSchema && manifest.Engine == "laya" && manifest.Model == descriptor.Alias && manifest.Source.Repository == descriptor.Repository && !manifest.Runtime.Ready
+	valid := manifest.SchemaVersion == modelSchema && manifest.Engine == "laya" && manifest.Model == descriptor.Alias && manifest.Source.Repository == descriptor.Repository && validateRuntimeArtifact(manifest.Runtime) == nil
 	if hash && valid {
 		for _, file := range manifest.Files {
 			path, pathErr := safeJoin(dir, file.Path)
 			if pathErr != nil || rejectSymlinkChain(path, m.root) != nil || verifyFile(path, file.Size, file.SHA256) != nil {
 				valid = false
 				break
+			}
+		}
+		if valid && manifest.Runtime.Ready {
+			path, pathErr := safeJoin(dir, manifest.Runtime.Path)
+			if pathErr != nil || rejectSymlinkChain(path, m.root) != nil || verifyFile(path, manifest.Runtime.Size, manifest.Runtime.SHA256) != nil {
+				valid = false
 			}
 		}
 	}
@@ -806,7 +815,7 @@ func isHexRevision(revision string) bool {
 		return false
 	}
 	for _, r := range revision {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}
