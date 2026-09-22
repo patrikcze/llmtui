@@ -21,21 +21,22 @@ const (
 // globFiles recursively finds workspace files without invoking a shell. A
 // pattern without a slash matches file names at any depth; ** is supported as
 // a complete path segment for recursive path matching.
-func (r *Runner) globFiles(ctx context.Context, rel, pattern string) (string, error) {
+func (r *Runner) globFiles(ctx context.Context, rel, pattern string) (string, ResultMeta, error) {
+	meta := ResultMeta{Effect: EffectNone}
 	pattern, err := normalizeGlobPattern(pattern)
 	if err != nil {
-		return "", err
+		return "", meta, withCode(err, "invalid_pattern", RetryCorrectInput)
 	}
 	base, err := r.searchBase(rel)
 	if err != nil {
-		return "", err
+		return "", meta, withCode(err, "safety_block", RetryCorrectInput)
 	}
 	info, err := os.Stat(base)
 	if err != nil {
-		return "", fmt.Errorf("glob: %w", err)
+		return "", meta, withCode(fmt.Errorf("glob: %w", err), "not_found", RetryCorrectInput)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("glob path %q is not a directory", rel)
+		return "", meta, withCode(fmt.Errorf("glob path %q is not a directory", rel), "invalid_arguments", RetryCorrectInput)
 	}
 
 	var matches []string
@@ -80,43 +81,53 @@ func (r *Runner) globFiles(ctx context.Context, rel, pattern string) (string, er
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("glob: %w", err)
+		return "", meta, fmt.Errorf("glob: %w", err)
+	}
+	// glob always reports OutcomeOK, matching list_dir: the cap is a
+	// documented bound on an otherwise-complete scan, not a failed scan.
+	meta.Outcome = OutcomeOK
+	meta.Coverage = Coverage{SourceComplete: !truncated, CaptureComplete: !truncated, PreviewComplete: true, RetainedBytes: 0}
+	if truncated {
+		meta.Coverage.Reasons = []string{"files"}
 	}
 	if len(matches) == 0 {
-		return fmt.Sprintf("no files matched %q", pattern), nil
+		return fmt.Sprintf("no files matched %q", pattern), meta, nil
 	}
 	sort.Strings(matches)
 	if truncated {
 		matches = append(matches, fmt.Sprintf("… results limited to %d files", maxSearchResults))
 	}
-	return strings.Join(matches, "\n"), nil
+	joined := strings.Join(matches, "\n")
+	meta.Coverage.ObservedBytes, meta.Coverage.RetainedBytes = int64(len(joined)), int64(len(joined))
+	return joined, meta, nil
 }
 
 // grepFiles searches files directly with Go's regexp engine. Recursive
 // searches skip likely secret files; an explicit secret file is instead
 // handled by Runner.NeedsApproval, matching read_file's policy.
-func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (string, error) {
+func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (string, ResultMeta, error) {
+	meta := ResultMeta{Effect: EffectNone}
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		return "", fmt.Errorf("grep needs a regular expression")
+		return "", meta, withCode(fmt.Errorf("grep needs a regular expression"), "invalid_arguments", RetryCorrectInput)
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return "", fmt.Errorf("grep pattern: %w", err)
+		return "", meta, withCode(fmt.Errorf("grep pattern: %w", err), "invalid_pattern", RetryCorrectInput)
 	}
 	if strings.TrimSpace(fileGlob) != "" {
 		fileGlob, err = normalizeGlobPattern(fileGlob)
 		if err != nil {
-			return "", fmt.Errorf("grep file glob: %w", err)
+			return "", meta, withCode(fmt.Errorf("grep file glob: %w", err), "invalid_pattern", RetryCorrectInput)
 		}
 	}
 	base, err := r.searchBase(rel)
 	if err != nil {
-		return "", err
+		return "", meta, withCode(err, "safety_block", RetryCorrectInput)
 	}
 	info, err := os.Stat(base)
 	if err != nil {
-		return "", fmt.Errorf("grep: %w", err)
+		return "", meta, withCode(fmt.Errorf("grep: %w", err), "not_found", RetryCorrectInput)
 	}
 	recursive := info.IsDir()
 	var files []string
@@ -164,7 +175,7 @@ func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (
 			return nil
 		})
 		if err != nil {
-			return "", fmt.Errorf("grep: %w", err)
+			return "", meta, fmt.Errorf("grep: %w", err)
 		}
 	} else {
 		files = []string{base}
@@ -175,24 +186,35 @@ func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (
 	bytesUsed := 0
 	limit := r.maxKB * 1024
 	truncated := false
+	skippedLarge, skippedUnreadable, skippedBinary := false, false, false
 	for _, filePath := range files {
 		if err := ctx.Err(); err != nil {
-			return "", fmt.Errorf("grep: %w", err)
+			return "", meta, fmt.Errorf("grep: %w", err)
 		}
 		info, err := os.Stat(filePath)
-		if err != nil || info.IsDir() || info.Size() > int64(limit) {
+		if err != nil {
+			skippedUnreadable = true
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+		if info.Size() > int64(limit) {
+			skippedLarge = true
 			continue
 		}
 		data, err := os.ReadFile(filePath)
 		if err != nil {
+			skippedUnreadable = true
 			continue
 		}
 		if bytes.IndexByte(data, 0) >= 0 {
+			skippedBinary = true
 			continue
 		}
 		workspaceRel, err := filepath.Rel(r.root, filePath)
 		if err != nil {
-			return "", fmt.Errorf("grep: %w", err)
+			return "", meta, fmt.Errorf("grep: %w", err)
 		}
 		workspaceRel = filepath.ToSlash(workspaceRel)
 		for index, line := range strings.Split(string(data), "\n") {
@@ -211,11 +233,42 @@ func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (
 			break
 		}
 	}
+	// grep is OutcomeOK for an exhaustive scan (including zero matches — a
+	// clean negative result is not a failure) and OutcomePartial whenever any
+	// cap fired, so a capped zero-match result is never reported as an
+	// exhaustive negative.
+	complete := !filesTruncated && !truncated
+	var reasons []string
+	if filesTruncated {
+		reasons = append(reasons, "files")
+	}
+	if truncated {
+		reasons = append(reasons, "matches")
+	}
+	if skippedLarge {
+		reasons = append(reasons, "large")
+	}
+	if skippedUnreadable {
+		reasons = append(reasons, "unreadable")
+	}
+	if skippedBinary {
+		reasons = append(reasons, "binary")
+	}
+	if skippedLarge || skippedUnreadable || skippedBinary {
+		complete = false
+	}
+	outcome := OutcomeOK
+	if !complete {
+		outcome = OutcomePartial
+	}
+	meta.Outcome = outcome
+	meta.Coverage = Coverage{SourceComplete: complete, CaptureComplete: complete, PreviewComplete: true, Reasons: reasons}
 	if len(matches) == 0 {
+		meta.Coverage.ObservedBytes = 0
 		if filesTruncated {
-			return fmt.Sprintf("no matches for %q in the first %d eligible files", pattern, maxSearchFiles), nil
+			return fmt.Sprintf("no matches for %q in the first %d eligible files", pattern, maxSearchFiles), meta, nil
 		}
-		return fmt.Sprintf("no matches for %q", pattern), nil
+		return fmt.Sprintf("no matches for %q", pattern), meta, nil
 	}
 	if filesTruncated && !truncated {
 		matches = append(matches, fmt.Sprintf("… search limited to the first %d eligible files", maxSearchFiles))
@@ -223,7 +276,9 @@ func (r *Runner) grepFiles(ctx context.Context, rel, pattern, fileGlob string) (
 	if truncated {
 		matches = append(matches, fmt.Sprintf("… results limited to %d matches and %d KB", maxSearchResults, r.maxKB))
 	}
-	return strings.Join(matches, "\n"), nil
+	joined := strings.Join(matches, "\n")
+	meta.Coverage.ObservedBytes, meta.Coverage.RetainedBytes = int64(bytesUsed), int64(len(joined))
+	return joined, meta, nil
 }
 
 func (r *Runner) searchBase(rel string) (string, error) {

@@ -445,47 +445,54 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		return res
 	}
 	if c.InputErr != "" {
-		res.Err = fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr)
+		res.Err = withCode(fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr), "invalid_arguments", RetryCorrectInput)
+		res.Meta = finalizeMeta(ResultMeta{Effect: EffectNone}, res.Err)
 		return res
 	}
+	var meta ResultMeta
 	switch c.Tool {
 	case ToolListDir:
-		res.Output, res.Err = r.listDir(c.Path)
+		res.Output, meta, res.Err = r.listDir(c.Path)
 	case ToolReadFile:
-		res.Output, res.Err = r.readFile(c.Path, c.Offset, c.Limit)
+		res.Output, meta, res.Err = r.readFileMeta(c.Path, c.Offset, c.Limit)
 		if res.Err == nil && !IsSecretPath(c.Path) {
 			res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
 		}
 	case ToolEditFile:
-		res.Output, res.Diff, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
+		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
 	case ToolGlob:
-		res.Output, res.Err = r.globFiles(ctx, c.Path, c.Body)
+		res.Output, meta, res.Err = r.globFiles(ctx, c.Path, c.Body)
 	case ToolGrep:
-		res.Output, res.Err = r.grepFiles(ctx, c.Path, c.Body, c.Filter)
+		res.Output, meta, res.Err = r.grepFiles(ctx, c.Path, c.Body, c.Filter)
 	case ToolWriteFile:
-		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
+		res.Output, res.Diff, meta, res.Err = r.writeFileMeta(c.Path, c.Body)
 	case ToolRunCommand:
-		res.Output, res.Err = r.runCommandContext(ctx, c.Body)
+		res.Output, meta, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
-		res.Output, res.Entities, res.Err = r.webSearch(ctx, c)
+		res.Output, res.Entities, meta, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
-		res.Output, res.Entities, res.Err = r.webFetch(ctx, c)
+		res.Output, res.Entities, meta, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
-		res.Output, res.Err = r.skillLoad(c)
+		res.Output, meta, res.Err = r.skillLoad(c)
 	case ToolAskUser:
 		res.Err = errors.New("ask_user is a controller pause and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolLocalContext:
-		res.Output, res.Err = r.localContext(ctx, c)
+		res.Output, meta, res.Err = r.localContext(ctx, c)
 	case ToolSearch:
 		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolGetEntityDetails:
 		res.Err = errors.New("get_entity_details is handled by the controller and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolPersonalApps:
-		res.Output, res.Err = r.personalApps(ctx, c)
+		res.Output, meta, res.Err = r.personalApps(ctx, c)
 	default:
-		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
+		res.Err = withCode(fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch), "not_found", RetryCorrectInput)
+		meta.Effect = EffectNone
 	}
+	res.Meta = finalizeMeta(meta, res.Err)
 	return res
 }
 
@@ -516,20 +523,23 @@ var ErrUnknownTool = errors.New("unknown tool")
 
 const maxDirEntries = 200
 
-func (r *Runner) listDir(rel string) (string, error) {
+func (r *Runner) listDir(rel string) (string, ResultMeta, error) {
+	meta := ResultMeta{Effect: EffectNone}
 	abs, err := r.resolve(rel)
 	if err != nil {
-		return "", err
+		return "", meta, withCode(err, "safety_block", RetryCorrectInput)
 	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return "", fmt.Errorf("list directory: %w", err)
+		return "", meta, withCode(fmt.Errorf("list directory: %w", err), "not_found", RetryCorrectInput)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	var b strings.Builder
+	capped := false
 	for i, e := range entries {
 		if i >= maxDirEntries {
 			fmt.Fprintf(&b, "… and %d more entries\n", len(entries)-maxDirEntries)
+			capped = true
 			break
 		}
 		if e.IsDir() {
@@ -538,50 +548,69 @@ func (r *Runner) listDir(rel string) (string, error) {
 			b.WriteString(e.Name() + "\n")
 		}
 	}
-	if b.Len() == 0 {
-		return "(empty directory)", nil
+	// list_dir always reports OutcomeOK: the cap is a documented, intentional
+	// bound on an otherwise-complete listing, not a failure to inspect the
+	// directory (every entry was read to produce the count in "and N more").
+	meta.Outcome = OutcomeOK
+	meta.Coverage = Coverage{
+		SourceComplete:  !capped,
+		CaptureComplete: !capped,
+		PreviewComplete: true,
+		TotalLines:      int64Ptr(int64(len(entries))),
 	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	if capped {
+		meta.Coverage.Reasons = []string{"entries"}
+	}
+	if b.Len() == 0 {
+		return "(empty directory)", meta, nil
+	}
+	return strings.TrimRight(b.String(), "\n"), meta, nil
 }
 
-func (r *Runner) readFile(rel string, offset, limit int) (output string, err error) {
+func (r *Runner) readFile(rel string, offset, limit int) (string, error) {
+	output, _, err := r.readFileMeta(rel, offset, limit)
+	return output, err
+}
+
+func (r *Runner) readFileMeta(rel string, offset, limit int) (output string, meta ResultMeta, err error) {
+	meta.Effect = EffectNone
 	if rel == "" {
-		return "", fmt.Errorf("read_file needs a path")
+		return "", meta, withCode(fmt.Errorf("read_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
-	if err := ValidateReadRange(offset, limit); err != nil {
-		return "", err
+	if verr := ValidateReadRange(offset, limit); verr != nil {
+		return "", meta, withCode(verr, "invalid_arguments", RetryCorrectInput)
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", err
+	if _, rerr := r.resolve(rel); rerr != nil {
+		return "", meta, withCode(rerr, "safety_block", RetryCorrectInput)
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
+		return "", meta, fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	name := filepath.Clean(rel)
 	info, err := root.Stat(name)
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, withCode(fmt.Errorf("read file: %w", err), "not_found", RetryCorrectInput)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("%q is a directory (use list_dir)", rel)
+		return "", meta, withCode(fmt.Errorf("%q is a directory (use list_dir)", rel), "invalid_arguments", RetryCorrectInput)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", rel)
+		return "", meta, withCode(fmt.Errorf("%q is not a regular file", rel), "unsupported_content", RetryCorrectInput)
 	}
 	byteLimit := int64(r.maxKB) * 1024
 	file, err := root.Open(name)
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, fmt.Errorf("read file: %w", err)
 	}
 	defer func() { err = errors.Join(err, file.Close()) }()
 	openedInfo, err := file.Stat()
 	if err != nil {
-		return "", fmt.Errorf("read file metadata: %w", err)
+		return "", meta, fmt.Errorf("read file metadata: %w", err)
 	}
 	if !openedInfo.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", rel)
+		return "", meta, withCode(fmt.Errorf("%q is not a regular file", rel), "unsupported_content", RetryCorrectInput)
 	}
 	// A bounded read is enough for both modes: the whole-file read is capped
 	// at byteLimit as before, and a line range is sliced out of that same
@@ -589,7 +618,7 @@ func (r *Runner) readFile(rel string, offset, limit int) (output string, err err
 	// multi-gigabyte line).
 	data, err := io.ReadAll(io.LimitReader(file, byteLimit+1))
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, fmt.Errorf("read file: %w", err)
 	}
 	bytesTruncated := int64(len(data)) > byteLimit
 	if bytesTruncated {
@@ -599,16 +628,37 @@ func (r *Runner) readFile(rel string, offset, limit int) (output string, err err
 	start, count, ranged := CanonicalReadRange(offset, limit)
 	if !ranged {
 		text, consumed := boundedUTF8(data, int(byteLimit))
+		cov := Coverage{
+			SourceComplete:  !bytesTruncated,
+			CaptureComplete: !bytesTruncated,
+			PreviewComplete: consumed >= len(data),
+			ObservedBytes:   int64(len(data)),
+			RetainedBytes:   int64(consumed),
+		}
+		if !bytesTruncated {
+			cov.TotalBytes = int64Ptr(openedInfo.Size())
+		}
+		outcome := OutcomeOK
+		if bytesTruncated {
+			cov.Reasons = []string{"bytes"}
+			outcome = OutcomePartial
+		}
+		meta.Outcome, meta.Coverage = outcome, cov
 		if bytesTruncated || consumed < len(data) {
 			total := openedInfo.Size()
 			if bytesTruncated && total < int64(len(data))+1 {
 				total = int64(len(data)) + 1
 			}
-			return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), nil
+			return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), meta, nil
 		}
-		return text, nil
+		return text, meta, nil
 	}
-	return renderLineRange(filepath.ToSlash(name), data, bytesTruncated, start, count, int(byteLimit))
+	text, lineMeta, err := renderLineRange(filepath.ToSlash(name), data, bytesTruncated, start, count, int(byteLimit))
+	lineMeta.Effect = EffectNone
+	if err != nil {
+		return "", lineMeta, withCode(err, "range_after_eof", RetryCorrectInput)
+	}
+	return text, lineMeta, nil
 }
 
 // renderLineRange slices [start, start+count) 1-based lines out of the bounded
@@ -616,14 +666,15 @@ func (r *Runner) readFile(rel string, offset, limit int) (output string, err err
 // (so the model cannot copy an artificial number into an edit_file old_text).
 // An offset past the last available line is a recoverable error, never a
 // silent empty success.
-func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start, count, byteLimit int) (string, error) {
+func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start, count, byteLimit int) (string, ResultMeta, error) {
+	var meta ResultMeta
 	segments := splitKeepNewline(data)
 	totalKnown := !bytesTruncated
 	if start > len(segments) {
 		if totalKnown {
-			return "", fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, len(segments))
+			return "", meta, fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, len(segments))
 		}
-		return "", fmt.Errorf("read_file offset %d is past the %d lines that fit within the %d KB read limit for %q", start, len(segments), byteLimit/1024, displayPath)
+		return "", meta, fmt.Errorf("read_file offset %d is past the %d lines that fit within the %d KB read limit for %q", start, len(segments), byteLimit/1024, displayPath)
 	}
 	first := start - 1
 	last := first + count
@@ -651,10 +702,43 @@ func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start
 	default:
 		header.WriteString("]")
 	}
-	if text == "" {
-		return header.String(), nil
+
+	// SourceComplete tracks only the byte-prefix read cap (bytesTruncated), not
+	// whether more of the file exists past this requested window — a ranged
+	// read that returns exactly the window the caller asked for is a complete,
+	// successful bounded observation (OutcomeOK), not a partial one. NextOffset
+	// exists precisely so pagination is navigation, not incompleteness.
+	cov := Coverage{
+		SourceComplete:  !bytesTruncated,
+		CaptureComplete: !bytesTruncated,
+		PreviewComplete: !lineCapped,
+		ObservedBytes:   int64(len(data)),
+		RetainedBytes:   int64(consumed),
 	}
-	return header.String() + "\n\n" + text, nil
+	if totalKnown {
+		cov.TotalLines = int64Ptr(int64(len(segments)))
+	}
+	var reasons []string
+	if bytesTruncated {
+		reasons = append(reasons, "bytes")
+	}
+	if lineCapped {
+		reasons = append(reasons, "line")
+	}
+	cov.Reasons = reasons
+	outcome := OutcomeOK
+	if bytesTruncated {
+		outcome = OutcomePartial
+	}
+	win := &Window{StartLine: int64(start), EndLine: int64(last), PartialLine: lineCapped}
+	if last < len(segments) {
+		win.NextOffset = int64Ptr(int64(last + 1))
+	}
+	meta = ResultMeta{Outcome: outcome, Coverage: cov, Window: win}
+	if text == "" {
+		return header.String(), meta, nil
+	}
+	return header.String() + "\n\n" + text, meta, nil
 }
 
 // splitKeepNewline splits file bytes into line segments that each retain their
@@ -695,11 +779,16 @@ func boundedUTF8(data []byte, maxBytes int) (text string, consumed int) {
 }
 
 func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {
-	diff, err = r.writeFileChecked(rel, content, nil)
+	output, diff, _, err = r.writeFileMeta(rel, content)
+	return output, diff, err
+}
+
+func (r *Runner) writeFileMeta(rel, content string) (output, diff string, meta ResultMeta, err error) {
+	diff, meta, err = r.writeFileChecked(rel, content, nil)
 	if err != nil {
-		return "", "", err
+		return "", "", meta, err
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, nil
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, meta, nil
 }
 
 // writeFileChecked is the shared safe-write implementation behind both
@@ -712,27 +801,31 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 // already exist, be readable within the cap, and hold exactly the bytes the
 // edit was computed against. Any mismatch fails the write untouched so a
 // concurrent external change is never silently clobbered.
-func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (diff string, err error) {
+func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (diff string, meta ResultMeta, err error) {
+	// The write either fully replaces the file's content or fails outright —
+	// there is no partial-content mechanism to be incomplete about.
+	meta.Coverage = Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(content)), RetainedBytes: int64(len(content))}
+	meta.Effect = EffectNone // nothing attempted yet at every early-return below
 	rel = strings.TrimSpace(rel)
 	if rel == "" {
-		return "", fmt.Errorf("write_file needs a path")
+		return "", meta, withCode(fmt.Errorf("write_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
 	rel = filepath.Clean(rel)
 	displayPath := filepath.ToSlash(rel)
 	// Block writes into .git (a hook would execute on the next git command),
 	// key-material directories, and shell startup files.
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
-		return "", errors.New(msg)
+		return "", meta, withCode(errors.New(msg), "safety_block", RetryCorrectInput)
 	}
 	if len(content) > r.maxKB*1024 {
-		return "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
+		return "", meta, withCode(fmt.Errorf("content exceeds the %d KB write limit", r.maxKB), "unsupported_content", RetryCorrectInput)
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", err
+	if _, rerr := r.resolve(rel); rerr != nil {
+		return "", meta, withCode(rerr, "safety_block", RetryCorrectInput)
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
+		return "", meta, fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	// Capture the previous content so the TUI can show what changed.
@@ -741,7 +834,7 @@ func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (d
 	oldTooBig := false
 	if info, err := root.Stat(rel); err == nil {
 		if info.IsDir() {
-			return "", fmt.Errorf("%q is a directory", rel)
+			return "", meta, withCode(fmt.Errorf("%q is a directory", rel), "invalid_arguments", RetryCorrectInput)
 		}
 		existed = true
 		if info.Size() <= int64(r.maxKB)*1024 {
@@ -756,100 +849,110 @@ func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (d
 	}
 	if expectCurrent != nil {
 		if !existed {
-			return "", fmt.Errorf("%q no longer exists; use write_file to create it", displayPath)
+			return "", meta, withCode(fmt.Errorf("%q no longer exists; use write_file to create it", displayPath), "not_found", RetryReread)
 		}
 		if oldTooBig {
-			return "", fmt.Errorf("%q changed and is no longer readable within the %d KB limit; re-read it and retry", displayPath, r.maxKB)
+			return "", meta, withCode(fmt.Errorf("%q changed and is no longer readable within the %d KB limit; re-read it and retry", displayPath, r.maxKB), "unsupported_content", RetryReread)
 		}
 		if oldContent != *expectCurrent {
-			return "", fmt.Errorf("%q changed since it was read; re-read the file and retry the edit against its current text", displayPath)
+			return "", meta, withCode(fmt.Errorf("%q changed since it was read; re-read the file and retry the edit against its current text", displayPath), "match_not_found", RetryReread)
 		}
 	}
+	// From here on, a failure occurs while a write may already be underway —
+	// its effect on disk is genuinely unknown, not "none".
+	meta.Effect = EffectUnknown
 	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
-		return "", fmt.Errorf("create parent directory: %w", err)
+		return "", meta, fmt.Errorf("create parent directory: %w", err)
 	}
 	file, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return "", fmt.Errorf("open file for writing: %w", err)
+		return "", meta, fmt.Errorf("open file for writing: %w", err)
 	}
 	if _, err := io.WriteString(file, content); err != nil {
 		_ = file.Close()
-		return "", fmt.Errorf("write file: %w", err)
+		return "", meta, fmt.Errorf("write file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("close written file: %w", err)
+		return "", meta, fmt.Errorf("close written file: %w", err)
 	}
+	meta.Outcome = OutcomeOK
+	meta.Effect = EffectChanged
 	if oldTooBig {
-		return fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath), nil
+		return fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath), meta, nil
 	}
-	return RenderWriteDiff(displayPath, oldContent, content, existed), nil
+	rendered := RenderWriteDiff(displayPath, oldContent, content, existed)
+	if IsNoChangeDiff(rendered) {
+		meta.Effect = EffectUnchanged
+	}
+	return rendered, meta, nil
 }
 
 // editFile performs exactly one literal, exact-match replacement in an
 // existing text file. It never creates a file, never uses regex or fuzzy
 // matching, and fails without writing when old_text is absent or matches more
 // than once — the model is expected to re-read and retry with unique context.
-func (r *Runner) editFile(rel, oldText, newText string) (output, diff string, err error) {
+func (r *Runner) editFile(rel, oldText, newText string) (output, diff string, meta ResultMeta, err error) {
+	meta.Effect = EffectNone
 	rel = strings.TrimSpace(rel)
 	if rel == "" {
-		return "", "", fmt.Errorf("edit_file needs a path")
+		return "", "", meta, withCode(fmt.Errorf("edit_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
 	if oldText == "" {
-		return "", "", fmt.Errorf("edit_file needs old_text — the exact fragment to replace")
+		return "", "", meta, withCode(fmt.Errorf("edit_file needs old_text — the exact fragment to replace"), "invalid_arguments", RetryCorrectInput)
 	}
 	if oldText == newText {
-		return "", "", fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+		return "", "", meta, withCode(fmt.Errorf("edit_file old_text and new_text are identical; nothing to change"), "no_change", RetryCorrectInput)
 	}
 	rel = filepath.Clean(rel)
 	displayPath := filepath.ToSlash(rel)
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
-		return "", "", errors.New(msg)
+		return "", "", meta, withCode(errors.New(msg), "safety_block", RetryCorrectInput)
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", "", err
+	if _, rerr := r.resolve(rel); rerr != nil {
+		return "", "", meta, withCode(rerr, "safety_block", RetryCorrectInput)
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", "", fmt.Errorf("open workspace root: %w", err)
+		return "", "", meta, fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	info, statErr := root.Stat(rel)
 	if errors.Is(statErr, os.ErrNotExist) {
-		return "", "", fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath), "not_found", RetryCorrectInput)
 	}
 	if statErr != nil {
-		return "", "", fmt.Errorf("edit file: %w", statErr)
+		return "", "", meta, fmt.Errorf("edit file: %w", statErr)
 	}
 	if info.IsDir() {
-		return "", "", fmt.Errorf("%q is a directory", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is a directory", displayPath), "invalid_arguments", RetryCorrectInput)
 	}
 	if !info.Mode().IsRegular() {
-		return "", "", fmt.Errorf("%q is not a regular file", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is not a regular file", displayPath), "unsupported_content", RetryCorrectInput)
 	}
 	byteLimit := int64(r.maxKB) * 1024
 	data, err := readRootFileLimited(root, rel, byteLimit)
 	if err != nil {
-		return "", "", fmt.Errorf("%q is larger than the %d KB edit limit; use write_file to replace it wholesale", displayPath, r.maxKB)
+		return "", "", meta, withCode(fmt.Errorf("%q is larger than the %d KB edit limit; use write_file to replace it wholesale", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
 	}
 	if !utf8.Valid(data) {
-		return "", "", fmt.Errorf("%q is not valid UTF-8 text; edit_file only edits text files", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is not valid UTF-8 text; edit_file only edits text files", displayPath), "encoding_loss", RetryCorrectInput)
 	}
 	current := string(data)
 	switch matches := strings.Count(current, oldText); {
 	case matches == 0:
-		return "", "", fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath), "match_not_found", RetryReread)
 	case matches > 1:
-		return "", "", fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath)
+		return "", "", meta, withCode(fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath), "ambiguous_match", RetryCorrectInput)
 	}
 	updated := strings.Replace(current, oldText, newText, 1)
 	if int64(len(updated)) > byteLimit {
-		return "", "", fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB)
+		return "", "", meta, withCode(fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
 	}
-	diff, err = r.writeFileChecked(rel, updated, &current)
+	diff, meta, err = r.writeFileChecked(rel, updated, &current)
 	if err != nil {
-		return "", "", err
+		return "", "", meta, err
 	}
-	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, nil
+	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, meta, nil
 }
 
 func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, err error) {
@@ -874,19 +977,25 @@ func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, 
 // the parent process never reach the command (or, through its output, the
 // model).
 func (r *Runner) runCommand(body string) (string, error) {
-	return r.runCommandContext(context.Background(), body)
+	output, _, err := r.runCommandContext(context.Background(), body)
+	return output, err
 }
 
-func (r *Runner) runCommandContext(parent context.Context, body string) (string, error) {
+func (r *Runner) runCommandContext(parent context.Context, body string) (string, ResultMeta, error) {
+	// run_command runs an arbitrary shell command: even a "successful" run
+	// (exit 0) may have changed the workspace, and this package has no way
+	// to know either way, so Effect is always unknown — never inferred as
+	// "none" or "changed" from the exit code or output alone.
+	meta := ResultMeta{Effect: EffectUnknown}
 	cmdline := strings.TrimSpace(body)
 	if cmdline == "" {
-		return "", fmt.Errorf("run_command needs a command in the block body")
+		return "", meta, withCode(fmt.Errorf("run_command needs a command in the block body"), "invalid_arguments", RetryCorrectInput)
 	}
 	if strings.ContainsAny(cmdline, "\n\r") {
-		return "", fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first")
+		return "", meta, withCode(fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first"), "invalid_arguments", RetryCorrectInput)
 	}
 	if commandReferencesOutsideWorkspace(cmdline, r.root) {
-		return "", fmt.Errorf("run_command blocked: command references a path outside the workspace")
+		return "", meta, withCode(fmt.Errorf("run_command blocked: command references a path outside the workspace"), "safety_block", RetryCorrectInput)
 	}
 	execLine, gitEnv := hardenGitInvocation(cmdline)
 
@@ -914,54 +1023,88 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start command: %w", err)
+		return "", meta, fmt.Errorf("start command: %w", err)
 	}
 	if err := procutil.TrackProcess(cmd); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return "", fmt.Errorf("contain command process tree: %w", err)
+		return "", meta, fmt.Errorf("contain command process tree: %w", err)
 	}
 	err := cmd.Wait()
 	// Commands are synchronous by contract (one command per block), so any
 	// process still in the group — a backgrounded `cmd &`, a timed-out tree —
 	// must not outlive the tool call.
 	procutil.KillGroup(cmd)
+	observed := out.Len()
 	output := strings.TrimRight(out.String(), "\n")
+	capped := false
 	if limit := r.maxKB * 1024; len(output) > limit {
 		output, _ = terminaltext.TruncateBytes(output, limit)
 		output += "\n… output truncated"
+		capped = true
 	}
+	meta.Coverage = Coverage{
+		SourceComplete:  !capped,
+		CaptureComplete: !capped,
+		PreviewComplete: true,
+		ObservedBytes:   int64(observed),
+		RetainedBytes:   int64(len(output)),
+	}
+	if capped {
+		meta.Coverage.Reasons = []string{"bytes"}
+	}
+	// run_command's own Outcome states are OK/Failed/Timeout/Cancelled — never
+	// Partial: an output cap is a capture-completeness fact (Coverage), not a
+	// downgrade of whether the command itself succeeded.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return output, fmt.Errorf("command timed out after %s", timeout)
+		meta.Outcome = OutcomeTimeout
+		meta.Error = &ErrorInfo{Code: "timeout", Retry: RetryLater, Message: boundErrorMessage(fmt.Errorf("command timed out after %s", timeout))}
+		return output, meta, fmt.Errorf("command timed out after %s", timeout)
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
-		return output, fmt.Errorf("command cancelled: %w", ctx.Err())
+		meta.Outcome = OutcomeCancelled
+		meta.Error = &ErrorInfo{Code: "cancelled", Retry: RetryNone, Message: boundErrorMessage(fmt.Errorf("command cancelled: %w", ctx.Err()))}
+		return output, meta, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 	if err != nil {
-		return output, fmt.Errorf("command failed: %w", err)
+		meta.Outcome = OutcomeFailed
+		return output, meta, fmt.Errorf("command failed: %w", err)
 	}
+	meta.Outcome = OutcomeOK
 	if output == "" {
 		output = "(no output)"
 	}
-	return output, nil
+	return output, meta, nil
 }
 
 // skillLoad activates a skill for the current run via the configured
 // SkillLoader. It is deliberately side-effect free beyond prompt state:
 // unknown IDs and validation failures come back as recoverable tool errors
 // the model can correct from.
-func (r *Runner) skillLoad(c Call) (string, error) {
+func (r *Runner) skillLoad(c Call) (string, ResultMeta, error) {
 	id := strings.TrimSpace(c.Path)
 	if id == "" {
 		id = strings.TrimSpace(c.Body)
 	}
 	if id == "" {
-		return "", fmt.Errorf("skill_load needs a skill id")
+		return "", ResultMeta{Effect: EffectNone}, withCode(fmt.Errorf("skill_load needs a skill id"), "invalid_arguments", RetryCorrectInput)
 	}
 	if r.Skills == nil {
-		return "", fmt.Errorf("skills are not available in this session")
+		return "", ResultMeta{Effect: EffectNone}, withCode(fmt.Errorf("skills are not available in this session"), "unsupported_content", RetryNone)
 	}
-	return r.Skills.LoadSkillForRun(id)
+	output, err := r.Skills.LoadSkillForRun(id)
+	if err != nil {
+		return "", ResultMeta{Effect: EffectNone}, withCode(err, "not_found", RetryCorrectInput)
+	}
+	// Activating a skill mutates run-local prompt-composition state (the
+	// skill becomes active for the rest of the run) even though it writes no
+	// workspace file, so Effect is "changed" rather than "none".
+	meta := ResultMeta{
+		Outcome:  OutcomeOK,
+		Effect:   EffectChanged,
+		Coverage: Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(output)), RetainedBytes: int64(len(output))},
+	}
+	return output, meta, nil
 }
 
 // secretEnvPattern matches environment variable names that likely hold

@@ -189,7 +189,7 @@ func TestEditFileStaleContentGuard(t *testing.T) {
 	r := NewRunner(root, 64)
 
 	// writeFileChecked directly: the precondition must reject a mismatch.
-	diff, err := r.writeFileChecked("f.txt", "whatever", ptr("a different snapshot"))
+	diff, _, err := r.writeFileChecked("f.txt", "whatever", ptr("a different snapshot"))
 	if err == nil || diff != "" {
 		t.Fatalf("stale precondition did not fail: diff=%q err=%v", diff, err)
 	}
@@ -199,7 +199,7 @@ func TestEditFileStaleContentGuard(t *testing.T) {
 	}
 
 	// Matching snapshot succeeds.
-	if _, err := r.writeFileChecked("f.txt", "one\n2\nthree\n", ptr("one\nTWO\nthree\n")); err != nil {
+	if _, _, err := r.writeFileChecked("f.txt", "one\n2\nthree\n", ptr("one\nTWO\nthree\n")); err != nil {
 		t.Fatalf("matching precondition failed: %v", err)
 	}
 }

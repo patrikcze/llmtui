@@ -93,14 +93,15 @@ func decodePersonalAppsBody(call *Call) {
 // the model is meant to read. A Go error here means the call could not even
 // reach the Service: the feature is disabled, or the result could not be
 // rendered.
-func (r *Runner) personalApps(ctx context.Context, c Call) (string, error) {
+func (r *Runner) personalApps(ctx context.Context, c Call) (string, ResultMeta, error) {
+	meta := ResultMeta{Effect: EffectNone}
 	if r.PersonalApps == nil {
-		return "", errPersonalAppsDisabled
+		return "", meta, withCode(errPersonalAppsDisabled, "unsupported_content", RetryNone)
 	}
 	res := r.PersonalApps.ExecuteRaw(ctx, []byte(c.Body))
 	encoded, err := json.Marshal(res)
 	if err != nil {
-		return "", fmt.Errorf("encode personal_apps result: %w", err)
+		return "", meta, fmt.Errorf("encode personal_apps result: %w", err)
 	}
 	// The result can carry mail/calendar content (subjects, bodies, event
 	// titles) once real adapters are wired; sanitize and frame it exactly
@@ -109,7 +110,125 @@ func (r *Runner) personalApps(ctx context.Context, c Call) (string, error) {
 	// ANSI sequences as \u-literals, so there is nothing here for Sanitize
 	// to strip that would corrupt the JSON syntax itself.
 	sanitized := terminaltext.Sanitize(string(encoded))
-	return untrusted.Frame("personal_apps", string(res.Operation), sanitized), nil
+	output := untrusted.Frame("personal_apps", string(res.Operation), sanitized)
+	meta = personalAppsResultMeta(res)
+	return output, meta, nil
+}
+
+// personalAppsResultMeta maps internal/personalapps' own domain
+// Status/Code — preserved unchanged in the JSON payload above — onto the
+// generic tools.Outcome/ErrorInfo, so a caller that only understands the
+// typed envelope (never the domain schema) can still tell success from
+// failure from partial without parsing the JSON body. change_apply's
+// "outcome_unknown" domain status maps to OutcomeUnknown, never OutcomeOK or
+// OutcomeFailed — a mutation whose effect could not be established must
+// never look like either a confirmed success or a confirmed failure (§23:
+// "generic retry hints must not authorize a second mutation").
+//
+// Several personalapps.Code values (app_unavailable, stale_reference,
+// precondition_failed, ambiguous_time, rate_limited, journal_unavailable,
+// internal) have no exact match in this phase's closed ErrorInfo.Code
+// vocabulary; each is mapped to its closest available code (documented on
+// the individual case below) rather than left uncoded, so typed consumers
+// still get a stable, switchable value.
+func personalAppsResultMeta(res personalapps.Result) ResultMeta {
+	meta := ResultMeta{Effect: personalAppsEffect(res.Operation, res.Status)}
+	if res.Coverage != nil {
+		meta.Coverage = Coverage{
+			SourceComplete:  res.Coverage.Complete,
+			CaptureComplete: res.Coverage.Complete,
+			PreviewComplete: true,
+			ObservedBytes:   int64(res.Coverage.Scanned),
+			RetainedBytes:   int64(res.Coverage.Returned),
+		}
+		if res.Coverage.Reason != "" {
+			meta.Coverage.Reasons = []string{res.Coverage.Reason}
+		}
+	} else {
+		meta.Coverage = Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true}
+	}
+	switch res.Status {
+	case personalapps.StatusOK:
+		meta.Outcome = OutcomeOK
+	case personalapps.StatusPartial:
+		meta.Outcome = OutcomePartial
+	case personalapps.StatusOutcomeUnknown:
+		meta.Outcome = OutcomeUnknown
+		meta.Error = &ErrorInfo{Code: "outcome_unknown", Retry: RetryLater, Message: personalAppsErrorMessage(res)}
+	case personalapps.StatusTimeout:
+		meta.Outcome = OutcomeTimeout
+		meta.Error = &ErrorInfo{Code: "timeout", Retry: RetryLater, Message: personalAppsErrorMessage(res)}
+	case personalapps.StatusDenied:
+		meta.Outcome = OutcomeFailed
+		meta.Error = &ErrorInfo{Code: "permission_denied", Retry: RetryNone, Message: personalAppsErrorMessage(res)}
+	case personalapps.StatusUnsupported:
+		meta.Outcome = OutcomeFailed
+		meta.Error = &ErrorInfo{Code: "unsupported_content", Retry: RetryNone, Message: personalAppsErrorMessage(res)}
+	case personalapps.StatusStale:
+		meta.Outcome = OutcomeFailed
+		meta.Error = &ErrorInfo{Code: "match_not_found", Retry: RetryReread, Message: personalAppsErrorMessage(res)}
+	default: // personalapps.StatusError and any future value
+		meta.Outcome = OutcomeFailed
+		meta.Error = &ErrorInfo{Code: personalAppsErrorCode(res), Retry: RetryNone, Message: personalAppsErrorMessage(res)}
+	}
+	return meta
+}
+
+func personalAppsErrorMessage(res personalapps.Result) string {
+	if res.Error != nil {
+		return truncateLine(res.Error.Message, 300)
+	}
+	return ""
+}
+
+// personalAppsErrorCode maps the domain's finer-grained failure Code onto
+// this phase's closed ErrorInfo.Code vocabulary for the personalapps.
+// StatusError case. Several domain codes have no exact counterpart; this
+// picks the closest available meaning rather than leaving Code empty.
+func personalAppsErrorCode(res personalapps.Result) string {
+	if res.Error == nil {
+		return ""
+	}
+	switch res.Error.Code {
+	case personalapps.CodeInvalidRequest, personalapps.CodeInvalidTimezone:
+		return "invalid_arguments"
+	case personalapps.CodePermissionDenied, personalapps.CodeScopeDenied, personalapps.CodeReadOnlyCalendar:
+		return "permission_denied"
+	case personalapps.CodeAppUnavailable, personalapps.CodeUnsupportedOperation:
+		return "unsupported_content"
+	case personalapps.CodeContentUnavailable:
+		return "not_found"
+	case personalapps.CodeStaleReference, personalapps.CodePreconditionFailed:
+		return "match_not_found"
+	case personalapps.CodeAmbiguousTime:
+		return "ambiguous_match"
+	case personalapps.CodeBridgeProtocolError:
+		return "network"
+	case personalapps.CodeRateLimited:
+		return "budget_block"
+	case personalapps.CodeJournalUnavailable, personalapps.CodeOutcomeUnknown:
+		return "outcome_unknown"
+	default: // CodeInternal and any future value: no closed code applies.
+		return ""
+	}
+}
+
+// personalAppsEffect classifies what a personal_apps call did using the same
+// static per-operation classification the domain package itself already
+// exposes (personalapps.Operation.Effect), refined by the actual outcome: a
+// mutation that did not reach OutcomeOK never claims EffectChanged.
+func personalAppsEffect(op personalapps.Operation, status personalapps.Status) Effect {
+	if op.Effect() != personalapps.EffectMutate {
+		return EffectNone
+	}
+	switch status {
+	case personalapps.StatusOK:
+		return EffectChanged
+	case personalapps.StatusOutcomeUnknown, personalapps.StatusTimeout:
+		return EffectUnknown
+	default:
+		return EffectNone
+	}
 }
 
 // describePersonalAppsCall renders one line for the approval prompt and
