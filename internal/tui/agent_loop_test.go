@@ -1978,6 +1978,58 @@ func TestToolSafetyFailureIsClassifiedForEscalation(t *testing.T) {
 	}
 }
 
+// TestClassifyToolErrorPrefersTypedMetaOverText proves classifyToolError
+// reads result.Meta's typed Outcome/Error.Code, not result.Err's text: every
+// case below carries an error message that would classify differently (or
+// not at all) under the legacy text-only fallback, so a pass here is only
+// possible if the Meta-driven path actually ran.
+func TestClassifyToolErrorPrefersTypedMetaOverText(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta tools.ResultMeta
+		want agent.ErrorKind
+	}{
+		{
+			name: "safety_block code despite generic wording",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "safety_block"}},
+			want: agent.ErrorSafety,
+		},
+		{
+			name: "invalid_arguments code despite generic wording",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "invalid_arguments"}},
+			want: agent.ErrorToolValidation,
+		},
+		{
+			name: "OutcomeTimeout with no wrapped context error and no 'timed out' text",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeTimeout},
+			want: agent.ErrorTimeout,
+		},
+		{
+			name: "OutcomeCancelled with no wrapped context error",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeCancelled},
+			want: agent.ErrorCancelled,
+		},
+		{
+			name: "budget_block code",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "budget_block"}},
+			want: agent.ErrorBudget,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tools.Result{
+				Call: tools.Call{Tool: tools.ToolRunCommand},
+				// A message that would mislead the text-based fallback into a
+				// different classification (or none) if it were consulted.
+				Err:  errors.New("something happened"),
+				Meta: tc.meta,
+			}
+			if got := classifyToolError(result, false); got != tc.want {
+				t.Fatalf("kind = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 type blockingAgentProvider struct {
 	started chan struct{}
 }

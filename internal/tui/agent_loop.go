@@ -1551,24 +1551,70 @@ func askUserEvidenceSummary(output string) string {
 	return "user answer received"
 }
 
+// classifyToolError classifies a failed tool result for the agent receipt
+// ledger. It prefers the typed classification a Phase 1a-adapted producer
+// attaches to result.Meta (see classifyByMeta) over parsing result.Err's
+// text, so renaming or rewording an error message can no longer change which
+// agent.ErrorKind a failure counts as. The text-based fallback below remains
+// for any Result whose Meta was never populated (Meta.Outcome == "" — see
+// tools.Result's doc comment) — do not remove it while any producer or test
+// path still constructs a bare Result.
 func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {
-	errorText := ""
-	if result.Err != nil {
-		errorText = strings.ToLower(result.Err.Error())
-	}
 	switch {
 	case denied || errors.Is(result.Err, tools.ErrDenied):
 		return agent.ErrorPermissionDenied
 	case result.Call.InputErr != "":
 		return agent.ErrorToolValidation
+	}
+	if result.Err == nil {
+		return ""
+	}
+	if kind, ok := classifyByMeta(result.Meta); ok {
+		return kind
+	}
+	errorText := strings.ToLower(result.Err.Error())
+	switch {
 	case errors.Is(result.Err, context.Canceled):
 		return agent.ErrorCancelled
-	case errors.Is(result.Err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(result.Err.Error()), "timed out"):
+	case errors.Is(result.Err, context.DeadlineExceeded) || strings.Contains(errorText, "timed out"):
 		return agent.ErrorTimeout
 	case strings.Contains(errorText, "outside the workspace") || strings.Contains(errorText, " is not allowed"):
 		return agent.ErrorSafety
 	default:
 		return agent.ErrorToolExecution
+	}
+}
+
+// classifyByMeta maps a producer's typed tools.ResultMeta onto agent.ErrorKind.
+// ok is false when Meta was never populated (Meta.Outcome == ""), telling the
+// caller to fall back to the legacy text-based classification.
+func classifyByMeta(meta tools.ResultMeta) (kind agent.ErrorKind, ok bool) {
+	if meta.Outcome == "" {
+		return "", false
+	}
+	if meta.Error != nil {
+		switch meta.Error.Code {
+		case "invalid_arguments", "invalid_pattern":
+			return agent.ErrorToolValidation, true
+		case "safety_block":
+			return agent.ErrorSafety, true
+		case "permission_denied":
+			return agent.ErrorPermissionDenied, true
+		case "cancelled":
+			return agent.ErrorCancelled, true
+		case "timeout":
+			return agent.ErrorTimeout, true
+		case "budget_block":
+			return agent.ErrorBudget, true
+		}
+	}
+	switch meta.Outcome {
+	case tools.OutcomeCancelled:
+		return agent.ErrorCancelled, true
+	case tools.OutcomeTimeout:
+		return agent.ErrorTimeout, true
+	default:
+		return agent.ErrorToolExecution, true
 	}
 }
 
