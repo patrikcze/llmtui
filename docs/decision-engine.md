@@ -43,6 +43,14 @@ the companion parity contract: pinned structured inputs and normalized answers
 can be produced by a Python reference run and consumed by a future Go runtime
 without treating token IDs as a public API.
 
+The sequence builder is the third slice. `BuildSequence` reproduces the
+checkpoint's bounded layout and marker bookkeeping behind a small
+`TokenEncoder` interface: typed question head, one mask marker per option,
+bounded option text, separator tokens, and bounded state text with explicit
+left or right truncation. Choice maps are sorted in Go because their source
+type has no insertion order; callers that require checkpoint order should use
+an ordered choice list and parity fixtures should cover that choice explicitly.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.
