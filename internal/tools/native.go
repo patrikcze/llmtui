@@ -720,16 +720,9 @@ const SkillInstructions = "- skill_load <skill-id> — activate one of the liste
 func NativeResults(results []Result) []provider.Message {
 	out := make([]provider.Message, 0, len(results))
 	for _, res := range results {
-		content := res.Output
-		if res.Err != nil {
-			content = "error: " + res.Err.Error()
-			if res.Output != "" {
-				content += "\n" + res.Output
-			}
-		}
 		out = append(out, provider.Message{
 			Role:       provider.RoleTool,
-			Content:    content,
+			Content:    formatResultContent(res),
 			ToolCallID: res.Call.ID,
 			ToolName:   res.Call.Tool,
 			Display:    res.Diff,

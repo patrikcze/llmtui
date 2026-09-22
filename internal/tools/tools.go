@@ -1346,16 +1346,27 @@ func FormatResults(results []Result) string {
 			target += " " + res.Call.Path
 		}
 		fmt.Fprintf(&b, "\n### %s\n", target)
-		if res.Err != nil {
-			b.WriteString("error: " + res.Err.Error() + "\n")
-			if res.Output != "" {
-				b.WriteString(res.Output + "\n")
-			}
-			continue
-		}
-		b.WriteString(res.Output + "\n")
+		b.WriteString(formatResultContent(res) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatResultContent renders the model-facing body shared by FormatResults
+// (fenced) and NativeResults (native): the error line, if any, followed by
+// output. It is the "one shared formatter" Phase 1a adds (see result.go);
+// this phase renders exactly what the two callers already rendered
+// separately — Meta is populated but not yet part of the rendered text, so
+// this change is structural, not visible to a model. See
+// TestFormatResultContentUnchanged for the byte-identical proof.
+func formatResultContent(res Result) string {
+	if res.Err != nil {
+		content := "error: " + res.Err.Error()
+		if res.Output != "" {
+			content += "\n" + res.Output
+		}
+		return content
+	}
+	return res.Output
 }
 
 // CollapseBlocks replaces each fenced tool block in reply with a one-line
