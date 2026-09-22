@@ -388,9 +388,14 @@ fragment straight into an `edit_file` `old_text`.
 existing text file: zero matches or more than one fails without writing.
 It does not extend the tool subsystem — it shares `write_file`'s
 `writeFileChecked` core (workspace confinement, blocked-path guardrails, the
-size cap, the display diff). The only addition is a precondition: `edit_file`
-passes the bytes it computed the change against, and `writeFileChecked`
-refuses the write if the file no longer holds exactly those bytes, so a
-concurrent external change is never silently clobbered. `old_text` itself is
-the deterministic precondition — there is no session state requiring a prior
-`read_file`.
+size cap, the confined staged-write-then-atomic-rename publish, the display
+diff). The only addition is a precondition: `edit_file` passes the bytes it
+computed the change against, and `writeFileChecked` refuses the write if the
+file no longer holds exactly those bytes — checked once before staging and
+again immediately before the publishing rename, so a change introduced
+while the write itself is in flight is also caught. That is optimistic
+staleness detection, not compare-and-swap: an external writer landing after
+that last check can still have its change overwritten by the rename (see
+`internal/tools/file_write.go`'s "honest concurrency guarantee" comment).
+`old_text` itself is the deterministic precondition — there is no session
+state requiring a prior `read_file`.
