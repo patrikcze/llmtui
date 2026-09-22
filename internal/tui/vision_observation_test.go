@@ -349,7 +349,7 @@ func TestVisionObservationPayloadIsUntrustedAndHistoryOmitsRawImage(t *testing.T
 	user := m.session.Messages[len(m.session.Messages)-2]
 	call := tools.Call{Tool: tools.ToolGetEntityDetails, EntityLevel: "full", EntityIDCount: 1}
 	call.EntityIDs[0] = user.References[0].ID
-	output := m.resolveEntityDetails(call)
+	output, _ := m.resolveEntityDetails(call)
 	if !strings.Contains(output, "LLMTUI_UNTRUSTED_BEGIN") || !strings.Contains(output, "IGNORE SYSTEM") {
 		t.Fatalf("visual payload was not framed as untrusted data: %s", output)
 	}

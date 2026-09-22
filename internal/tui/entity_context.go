@@ -158,9 +158,14 @@ func (m *Model) handleEntityDetailsBatch(calls []tools.Call) (tea.Cmd, bool) {
 		return m.rejectWholeBatch(calls, fmt.Errorf("get_entity_details must be called alone; no calls in this batch were executed")), true
 	}
 	if !m.entitiesEnabled() {
+		err := fmt.Errorf("get_entity_details is disabled")
 		results := make([]tools.Result, len(calls))
 		for i, call := range calls {
-			results[i] = tools.Result{Call: call, Err: fmt.Errorf("get_entity_details is disabled")}
+			results[i] = tools.Result{Call: call, Err: err, Meta: tools.ResultMeta{
+				Outcome: tools.OutcomeFailed,
+				Effect:  tools.EffectNone,
+				Error:   &tools.ErrorInfo{Code: "unsupported_content", Retry: tools.RetryNone, Message: err.Error()},
+			}}
 		}
 		m.advanceToolRound()
 		m.toolErr += len(results)
@@ -179,10 +184,18 @@ func (m *Model) handleEntityDetailsBatch(calls []tools.Call) (tea.Cmd, bool) {
 		result := tools.Result{Call: call}
 		if call.InputErr != "" {
 			result.Err = fmt.Errorf("invalid arguments for %s: %s", call.Tool, call.InputErr)
+			result.Meta = tools.ResultMeta{
+				Outcome: tools.OutcomeFailed, Effect: tools.EffectNone,
+				Error: &tools.ErrorInfo{Code: "invalid_arguments", Retry: tools.RetryCorrectInput, Message: result.Err.Error()},
+			}
 		} else if err := tools.ValidateEntityDetailsCall(&call); err != nil {
 			result.Err = err
+			result.Meta = tools.ResultMeta{
+				Outcome: tools.OutcomeFailed, Effect: tools.EffectNone,
+				Error: &tools.ErrorInfo{Code: "invalid_arguments", Retry: tools.RetryCorrectInput, Message: err.Error()},
+			}
 		} else {
-			result.Output = m.resolveEntityDetails(call)
+			result.Output, result.Meta = m.resolveEntityDetails(call)
 		}
 		results = append(results, result)
 	}
@@ -194,7 +207,45 @@ func (m *Model) handleEntityDetailsBatch(calls []tools.Call) (tea.Cmd, bool) {
 	return m.sendToolResults(results), true
 }
 
-func (m *Model) resolveEntityDetails(call tools.Call) string {
+// entityDetailsMeta implements the §23 "all-invalid -> failed, mixed ->
+// partial, empty successful query -> OK" mapping: an empty resolutions list
+// (a query that matched nothing) is a valid, complete empty result, never a
+// fabricated failure; every resolution failing is OutcomeFailed; a mix of
+// resolved and unresolved entities is OutcomePartial, since some but not all
+// of the requested detail was actually delivered.
+func entityDetailsMeta(resolutions []entity.Resolution) tools.ResultMeta {
+	if len(resolutions) == 0 {
+		return tools.ResultMeta{
+			Outcome:  tools.OutcomeOK,
+			Effect:   tools.EffectNone,
+			Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true},
+		}
+	}
+	ok, failed := 0, 0
+	for _, resolution := range resolutions {
+		if resolution.Status == entity.StatusOK {
+			ok++
+		} else {
+			failed++
+		}
+	}
+	meta := tools.ResultMeta{Effect: tools.EffectNone}
+	switch {
+	case failed == 0:
+		meta.Outcome = tools.OutcomeOK
+		meta.Coverage = tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, RetainedBytes: int64(ok)}
+	case ok == 0:
+		meta.Outcome = tools.OutcomeFailed
+		meta.Coverage = tools.Coverage{SourceComplete: false, CaptureComplete: false, PreviewComplete: true, Reasons: []string{"not_found"}}
+		meta.Error = &tools.ErrorInfo{Code: "not_found", Retry: tools.RetryCorrectInput, Message: "no requested entity resolved"}
+	default:
+		meta.Outcome = tools.OutcomePartial
+		meta.Coverage = tools.Coverage{SourceComplete: false, CaptureComplete: false, PreviewComplete: true, RetainedBytes: int64(ok), Reasons: []string{"not_found"}}
+	}
+	return meta
+}
+
+func (m *Model) resolveEntityDetails(call tools.Call) (string, tools.ResultMeta) {
 	level := entity.Level(call.EntityLevel)
 	ids := call.EntityIDs[:call.EntityIDCount]
 	resolutions := m.entities.ResolveMany(ids, level, tools.MaxEntityDetailsIDs)
@@ -235,9 +286,13 @@ func (m *Model) resolveEntityDetails(call tools.Call) string {
 		}
 		wire.Entities = append(wire.Entities, item)
 	}
+	meta := entityDetailsMeta(resolutions)
 	encoded, err := json.Marshal(wire)
 	if err != nil {
-		return `{"entities":[],"error":"could not encode entity details"}`
+		return `{"entities":[],"error":"could not encode entity details"}`, tools.ResultMeta{
+			Outcome: tools.OutcomeFailed, Effect: tools.EffectNone,
+			Error: &tools.ErrorInfo{Code: "invalid_arguments", Retry: tools.RetryNone, Message: "could not encode entity details"},
+		}
 	}
-	return string(encoded)
+	return string(encoded), meta
 }

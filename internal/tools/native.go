@@ -743,9 +743,14 @@ func NativeResults(results []Result) []provider.Message {
 // tells the model to wrap up, so the user still gets a final answer.
 func LimitResults(calls []Call, max int) []Result {
 	err := fmt.Errorf("tool iteration limit reached (%d rounds this turn, tools.max_iterations) — this call was not executed. Do not request more tools; give your final answer now using what you already know", max)
+	meta := ResultMeta{
+		Outcome: OutcomeUnknown,
+		Effect:  EffectUnknown,
+		Error:   &ErrorInfo{Code: "budget_block", Retry: RetryLater, Message: boundErrorMessage(err)},
+	}
 	out := make([]Result, len(calls))
 	for i, c := range calls {
-		out[i] = Result{Call: c, Err: err}
+		out[i] = Result{Call: c, Err: err, Meta: meta}
 	}
 	return out
 }

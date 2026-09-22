@@ -107,7 +107,11 @@ func (m *Model) answerAskUser(answer string) tea.Cmd {
 		"answer":               answer,
 		"grants_authorization": false,
 	})
-	result := tools.Result{Call: call, Output: string(payload)}
+	result := tools.Result{Call: call, Output: string(payload), Meta: tools.ResultMeta{
+		Outcome:  tools.OutcomeOK,
+		Effect:   tools.EffectNone,
+		Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(payload)), RetainedBytes: int64(len(payload))},
+	}}
 	m.recordAgentToolResultsCount([]tools.Result{result}, false, []agent.ActionStatus{agent.ActionExecuted})
 	m.toolOK++
 	return tea.Batch(m.sendToolResults([]tools.Result{result}), m.persistAgentRun())
@@ -130,7 +134,12 @@ func (m *Model) completePendingAsk(reason string) {
 	if m.pendingAsk == nil {
 		return
 	}
-	result := tools.Result{Call: m.pendingAsk.call, Err: errors.New(reason)}
+	err := errors.New(reason)
+	result := tools.Result{Call: m.pendingAsk.call, Err: err, Meta: tools.ResultMeta{
+		Outcome: tools.OutcomeCancelled,
+		Effect:  tools.EffectNone,
+		Error:   &tools.ErrorInfo{Code: "cancelled", Retry: tools.RetryNone, Message: reason},
+	}}
 	m.pendingAsk = nil
 	m.continueAfterUserInput()
 	m.appendTerminalToolResults([]tools.Result{result})
@@ -141,9 +150,15 @@ func (m *Model) persistableMessages() []provider.Message {
 	if m.pendingAsk == nil {
 		return messages
 	}
+	const snapshotReason = "session snapshot saved while waiting for the human answer; resume the task with fresh input instead of replaying this call"
 	result := tools.Result{
 		Call: m.pendingAsk.call,
-		Err:  errors.New("session snapshot saved while waiting for the human answer; resume the task with fresh input instead of replaying this call"),
+		Err:  errors.New(snapshotReason),
+		Meta: tools.ResultMeta{
+			Outcome: tools.OutcomeCancelled,
+			Effect:  tools.EffectNone,
+			Error:   &tools.ErrorInfo{Code: "cancelled", Retry: tools.RetryNone, Message: snapshotReason},
+		},
 	}
 	if result.Call.ID != "" {
 		return append(messages, tools.NativeResults([]tools.Result{result})...)

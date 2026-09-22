@@ -1721,9 +1721,13 @@ func (m *Model) runToolPlan(plan toolBatchPlan) tea.Cmd {
 // matters for the token-burn failure this closes.
 func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, terminal bool) tea.Cmd {
 	err := fmt.Errorf("%s. Use different arguments, a different approach, or report the observable state", reason)
+	meta := tools.ResultMeta{
+		Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+		Error: &tools.ErrorInfo{Code: "repeat_block", Retry: tools.RetryCorrectInput, Message: err.Error()},
+	}
 	results := make([]tools.Result, len(calls))
 	for i, call := range calls {
-		results[i] = tools.Result{Call: call, Err: err}
+		results[i] = tools.Result{Call: call, Err: err, Meta: meta}
 	}
 	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.toolErr += len(results)

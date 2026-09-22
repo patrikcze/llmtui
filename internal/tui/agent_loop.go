@@ -1659,9 +1659,13 @@ func (m *Model) terminateAgentModelRequestBudget(reason string) tea.Cmd {
 // just doesn't continue past it.
 func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd {
 	err := fmt.Errorf("%s; this call was not executed. Stop requesting tools and report the observable state", reason)
+	meta := tools.ResultMeta{
+		Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+		Error: &tools.ErrorInfo{Code: "budget_block", Retry: tools.RetryLater, Message: err.Error()},
+	}
 	results := make([]tools.Result, len(calls))
 	for i, call := range calls {
-		results[i] = tools.Result{Call: call, Err: err}
+		results[i] = tools.Result{Call: call, Err: err, Meta: meta}
 	}
 	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.appendTerminalToolResults(results)

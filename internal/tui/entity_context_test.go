@@ -166,7 +166,8 @@ func TestEntityQueryReportsPartialAndEmptyMatches(t *testing.T) {
 				t.Fatal(err)
 			}
 			var result entityDetailsWire
-			if err := json.Unmarshal([]byte(m.resolveEntityDetails(call)), &result); err != nil {
+			output, _ := m.resolveEntityDetails(call)
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
 				t.Fatal(err)
 			}
 			if result.TotalMatches == nil || *result.TotalMatches != tc.total || len(result.Entities) != tc.count {

@@ -245,7 +245,17 @@ func (m *Model) runToolSearch(call tools.Call, candidates []tools.ToolSearchCand
 		Query: call.SearchQuery, Matches: matches, TotalMatches: totalMatches,
 		Truncated: truncated, Hint: hint,
 	})
-	return tools.Result{Call: call, Output: string(payload)}, names
+	// Zero matches is still OutcomeOK — a discovery query that found nothing
+	// is a valid, complete negative result, not a failure.
+	meta := tools.ResultMeta{
+		Outcome:  tools.OutcomeOK,
+		Effect:   tools.EffectNone,
+		Coverage: tools.Coverage{SourceComplete: !truncated, CaptureComplete: !truncated, PreviewComplete: true, RetainedBytes: int64(len(matches))},
+	}
+	if truncated {
+		meta.Coverage.Reasons = []string{"matches"}
+	}
+	return tools.Result{Call: call, Output: string(payload), Meta: meta}, names
 }
 
 func (m *Model) hiddenMCPToolRecoveryName(err error) (string, bool) {
@@ -292,9 +302,17 @@ func (m *Model) rejectUnavailableMCPBatch(calls []tools.Call) (tea.Cmd, bool) {
 }
 
 func (m *Model) rejectWholeBatch(calls []tools.Call, err error) tea.Cmd {
+	// The batch was rejected on its shape (mixed ask_user/discovery calls, an
+	// unavailable MCP name, ...) before any call in it reached a producer, so
+	// this is a dispatch/input failure — OutcomeFailed, never OutcomeOK or a
+	// fabricated success-shaped Meta.
+	meta := tools.ResultMeta{
+		Outcome: tools.OutcomeFailed, Effect: tools.EffectNone,
+		Error: &tools.ErrorInfo{Code: "invalid_arguments", Retry: tools.RetryCorrectInput, Message: err.Error()},
+	}
 	results := make([]tools.Result, len(calls))
 	for index, call := range calls {
-		results[index] = tools.Result{Call: call, Err: err}
+		results[index] = tools.Result{Call: call, Err: err, Meta: meta}
 	}
 	m.toolErr += len(results)
 	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))

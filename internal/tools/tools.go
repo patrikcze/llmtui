@@ -1568,7 +1568,15 @@ var ErrDenied = errors.New("denied by the user")
 func DeniedResults(calls []Call) []Result {
 	out := make([]Result, len(calls))
 	for i, c := range calls {
-		out[i] = Result{Call: c, Err: ErrDenied}
+		// The call never reached a producer, so its outcome is genuinely
+		// unknown (never OutcomeFailed — the tool itself neither ran nor
+		// failed) — combined with agent.ActionDenied at the controller layer,
+		// which is what actually records "the user denied this."
+		out[i] = Result{Call: c, Err: ErrDenied, Meta: ResultMeta{
+			Outcome: OutcomeUnknown,
+			Effect:  EffectUnknown,
+			Error:   &ErrorInfo{Code: "permission_denied", Retry: RetryNone, Message: boundErrorMessage(ErrDenied)},
+		}}
 	}
 	return out
 }

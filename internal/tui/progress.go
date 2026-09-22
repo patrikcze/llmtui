@@ -106,20 +106,33 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 	executedIndex := 0
 	for i, call := range p.calls {
 		if reason := p.blocked[i]; reason != "" {
+			err := fmt.Errorf(
+				"%s. Use different arguments, a different approach, or report the observable state",
+				reason,
+			)
 			merged = append(merged, tools.Result{
 				Call: call,
-				Err: fmt.Errorf(
-					"%s. Use different arguments, a different approach, or report the observable state",
-					reason,
-				),
+				Err:  err,
+				// A ledger block never reaches a producer, so its outcome is
+				// unknown — paired with agent.ActionBlocked, which is what
+				// actually records "the controller withheld execution."
+				Meta: tools.ResultMeta{
+					Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+					Error: &tools.ErrorInfo{Code: "repeat_block", Retry: tools.RetryCorrectInput, Message: err.Error()},
+				},
 			})
 			statuses = append(statuses, agent.ActionBlocked)
 			continue
 		}
 		if executedIndex >= len(executed) {
+			err := fmt.Errorf("tool result missing for accepted call; it was not reported as completed")
 			merged = append(merged, tools.Result{
 				Call: call,
-				Err:  fmt.Errorf("tool result missing for accepted call; it was not reported as completed"),
+				Err:  err,
+				Meta: tools.ResultMeta{
+					Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+					Error: &tools.ErrorInfo{Code: "outcome_unknown", Retry: tools.RetryLater, Message: err.Error()},
+				},
 			})
 			statuses = append(statuses, agent.ActionUnknown)
 			continue
