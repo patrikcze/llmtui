@@ -592,6 +592,53 @@ func TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence(t *testing.T) {
 	}
 }
 
+// TestRecordAgentToolResultsCountTreatsPartialCoverageAsSuccess is the
+// Phase 1a §31 counters/receipt requirement: an operation that actually
+// executed but only partially covered its source (e.g. grep's capped scan,
+// or — once a later phase adds retention — a capture/storage limitation) is
+// recorded as succeeded, never as an execution failure. Succeeded is driven
+// by Result.Err alone (nil here), independent of Meta.Outcome being
+// OutcomePartial — this proves that independence rather than assuming it.
+func TestRecordAgentToolResultsCountTreatsPartialCoverageAsSuccess(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("partial-coverage", "search the repo", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("search the repo", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+
+	m.recordAgentToolResultsCount([]tools.Result{{
+		Call:   tools.Call{ID: "grep-1", Tool: tools.ToolGrep, Path: ".", Body: "needle"},
+		Output: "no matches for \"needle\" in the first 3 eligible files",
+		Meta: tools.ResultMeta{
+			Outcome:  tools.OutcomePartial,
+			Effect:   tools.EffectNone,
+			Coverage: tools.Coverage{SourceComplete: false, Reasons: []string{"large"}},
+		},
+	}}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if len(m.agentLoop.execution.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(m.agentLoop.execution.ToolCalls))
+	}
+	record := m.agentLoop.execution.ToolCalls[0]
+	if !record.Succeeded {
+		t.Fatal("Succeeded = false, want true: a partial-but-executed observation is not an execution failure")
+	}
+	if record.ErrorKind != "" {
+		t.Fatalf("ErrorKind = %q, want empty: no Err was returned", record.ErrorKind)
+	}
+	if len(m.agentLoop.execution.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none recorded for a successful (if partial) observation", m.agentLoop.execution.Errors)
+	}
+	if !m.agentLoop.execution.NewEvidence {
+		t.Fatal("NewEvidence = false, want true: a partial observation is still real, novel evidence")
+	}
+}
+
 // TestProjectCompletedAgentHistoryRemovesRawToolOutput guards the raw
 // transcript-projection half of the fix Phase 3 completed: the projected
 // history itself must still never carry a completed cycle's raw tool
