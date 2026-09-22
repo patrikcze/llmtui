@@ -114,3 +114,26 @@ func TestNativeResultsSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// TestErrorCodeVocabularyIsClosedAndStable pins the exact §23 error-code set
+// this phase may produce (the Phase 2b+ resource codes are intentionally
+// absent — see the doc comment on errorCodeVocabulary). Adding, removing, or
+// renaming a code here is a deliberate contract change a caller can switch
+// on, not a typo fix; this test exists so that change is visible in review.
+func TestErrorCodeVocabularyIsClosedAndStable(t *testing.T) {
+	want := []string{
+		"invalid_arguments", "invalid_pattern", "not_found", "range_after_eof",
+		"unsupported_content", "encoding_loss", "ambiguous_match",
+		"match_not_found", "no_change", "network", "dns", "http_status",
+		"unsupported_content_type", "cancelled", "timeout", "permission_denied",
+		"safety_block", "repeat_block", "budget_block", "outcome_unknown",
+	}
+	if len(errorCodeVocabulary) != len(want) {
+		t.Fatalf("errorCodeVocabulary has %d codes, want %d", len(errorCodeVocabulary), len(want))
+	}
+	for _, code := range want {
+		if !errorCodeVocabulary[code] {
+			t.Errorf("errorCodeVocabulary missing %q", code)
+		}
+	}
+}
