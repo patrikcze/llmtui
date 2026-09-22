@@ -65,6 +65,13 @@ reference while running, so an idle engine can be evicted and closed without
 interrupting an in-flight request. The router remains opt-in and returns the
 existing unavailable error until a verified backend loader is supplied.
 
+The final planned implementation slice adds `Service` as the conservative
+caller boundary. It is disabled by default, returns `ErrUnavailable` when no
+opt-in engine is configured, and validates that an enabled backend returns
+exactly one answer of the requested type for every question. This keeps
+decision output separate from approval and generative provider policy until a
+real verified runtime is available.
+
 Model acquisition is explicit (`llmtui decision pull laya:english`); normal
 startup and normal chat do not contact Hugging Face. The feature is disabled
 by default in `decision_engine.enabled` and is not wired into agent policy yet.
