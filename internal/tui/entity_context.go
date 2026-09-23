@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -18,6 +19,15 @@ const defaultEntityContextTokens = 1200
 
 func (m *Model) entitiesEnabled() bool {
 	return m.cfg != nil && m.cfg.Entities.Enabled && m.entities != nil
+}
+
+// outputStorageEnabled reports whether captured tool-result bodies (Phase
+// 2b) should be published for later resource_id read-back. An empty value
+// and any value other than the literal "off" behave like the default
+// "memory" — see EntitiesConfig.OutputStorage's doc comment for why this
+// package does not fail config load over an unrecognized value.
+func (m *Model) outputStorageEnabled() bool {
+	return m.cfg == nil || m.cfg.Entities.OutputStorage != "off"
 }
 
 func (m *Model) resetEntities() {
@@ -69,27 +79,42 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 	if !m.entitiesEnabled() {
 		return results
 	}
+	captureStorageOn := m.outputStorageEnabled()
 	for index := range results {
-		if results[index].Err != nil || len(results[index].Entities) == 0 {
+		if results[index].Err != nil {
 			continue
 		}
-		views := make([]entity.View, 0, len(results[index].Entities))
-		for _, candidate := range results[index].Entities {
-			if m.agentRunActive() {
-				candidate.Scope = entity.ScopeAgentRun
-				candidate.ScopeID = m.agentRunID()
-			} else {
-				candidate.Scope = entity.ScopeSession
-				candidate.ScopeID = ""
+		if len(results[index].Entities) > 0 {
+			views := make([]entity.View, 0, len(results[index].Entities))
+			for _, candidate := range results[index].Entities {
+				if m.agentRunActive() {
+					candidate.Scope = entity.ScopeAgentRun
+					candidate.ScopeID = m.agentRunID()
+				} else {
+					candidate.Scope = entity.ScopeSession
+					candidate.ScopeID = ""
+				}
+				view, err := m.entities.Put(candidate)
+				if err != nil {
+					continue
+				}
+				views = append(views, view)
 			}
-			view, err := m.entities.Put(candidate)
-			if err != nil {
-				continue
+			if len(views) > 0 {
+				results[index].Output = appendEntityReferences(results[index].Output, views)
 			}
-			views = append(views, view)
 		}
-		if len(views) > 0 {
-			results[index].Output = appendEntityReferences(results[index].Output, views)
+		// Captures (Phase 2b-ii): a producer-retained body beyond what
+		// Output already shows (currently only a capped run_command
+		// result). This is a quiet, deliberate no-op when output storage is
+		// off or nothing was captured — never an error surfaced to the
+		// model, since the underlying tool call already succeeded and
+		// Output already carries its capped preview either way.
+		if captureStorageOn && len(results[index].Captures) > 0 {
+			resourceViews := m.publishResultCaptures(results[index].Call, results[index].Captures)
+			if len(resourceViews) > 0 {
+				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
+			}
 		}
 	}
 	return results
@@ -101,6 +126,66 @@ func appendEntityReferences(output string, views []entity.View) string {
 	b.WriteString("\n\n[registered runtime entities — use the exact IDs for later detail requests]\n")
 	for _, view := range views {
 		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q\n", view.ID, view.Kind, view.Label, view.Source)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// publishResultCaptures publishes each of a result's unpublished Captures
+// (internal/tools' bounded, producer-retained bodies) into the entity
+// registry as resource bodies, returning a view for every one that
+// succeeded. A Publish failure (e.g. entity.ErrBodyCapacityExhausted, every
+// slot pinned) is silently skipped, not surfaced as a tool error — the
+// command already ran and its capped Output is unaffected; retention merely
+// could not happen this time. context.Background() is used deliberately:
+// neither registerResultEntities nor any of sendToolResults' call sites
+// carries a cancellable context down to this point (the batch's own
+// execution context is only used while the batch runs, not once its
+// results are being finalized for the model), and Publish against the
+// in-memory backend is fast enough that this is not a blocking concern for
+// Bubble Tea's Update (see CLAUDE.md "Update must never block").
+func (m *Model) publishResultCaptures(call tools.Call, captures []tools.Capture) []entity.ResourceView {
+	views := make([]entity.ResourceView, 0, len(captures))
+	for _, capture := range captures {
+		candidate := entity.Candidate{
+			Kind:  capture.Kind,
+			Label: capture.Label,
+			Trust: capture.Trust,
+			Provenance: entity.Provenance{
+				Source:    "tools",
+				Operation: call.Tool,
+				CallID:    call.ID,
+			},
+			Resource: entity.ResourceMetadata{
+				ContentType: capture.ContentType,
+				BodyDigest:  capture.BodyDigest,
+			},
+		}
+		if m.agentRunActive() {
+			candidate.Scope = entity.ScopeAgentRun
+			candidate.ScopeID = m.agentRunID()
+		} else {
+			candidate.Scope = entity.ScopeSession
+			candidate.ScopeID = ""
+		}
+		view, err := m.entities.Publish(context.Background(), candidate, capture.Body)
+		if err != nil {
+			continue
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+// appendResourceReferences mirrors appendEntityReferences for published
+// resource bodies. Kept short — this text is model-visible and counts
+// against context budget — it never repeats the retained body itself, only
+// the ID to read it back with.
+func appendResourceReferences(output string, views []entity.ResourceView) string {
+	var b strings.Builder
+	b.WriteString(output)
+	b.WriteString("\n\n[retained output — read it back with read_file resource_id instead of rerunning this command]\n")
+	for _, view := range views {
+		fmt.Fprintf(&b, "- %s kind=%s bytes=%d\n", view.ID, view.Kind, view.SizeBytes)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

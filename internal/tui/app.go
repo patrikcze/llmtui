@@ -400,6 +400,8 @@ func New(opts Options) *Model {
 			MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
 			MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
 			MaxFullExpansions: cfg.Entities.MaxFullExpansions,
+			MaxBodyBytes:      cfg.Entities.MaxOutputBytes,
+			MaxTotalBodyBytes: cfg.Entities.MaxTotalOutputBytes,
 		}),
 		visionObservationIDs:      make(map[string]entity.ID),
 		visionObservationAttempts: make(map[string]bool),
@@ -465,6 +467,8 @@ func (m *Model) rebuildFromConfig() {
 		MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
 		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
 		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
+		MaxBodyBytes:      cfg.Entities.MaxOutputBytes,
+		MaxTotalBodyBytes: cfg.Entities.MaxTotalOutputBytes,
 	})
 	m.resetVisionObservations()
 	if !m.reasoningDisplaySet {
@@ -510,6 +514,13 @@ func (m *Model) rebuildFromConfig() {
 	m.toolRunner = nil
 	if wd, err := os.Getwd(); err == nil {
 		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
+		// Always wired, independent of entities.enabled/output_storage: the
+		// registry itself always exists (see m.entities above), and
+		// read_file's resource_id path against an empty/disabled registry
+		// already fails cleanly (resource_unavailable) with nothing ever
+		// published to it — there is no separate "disabled" state for the
+		// adapter itself to represent.
+		m.toolRunner.Resources = newResourceAdapter(m.entities)
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
