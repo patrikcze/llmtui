@@ -78,12 +78,17 @@ bytes/op, allocations/op):
 
 These values are a local calibration snapshot, not a cross-machine promise.
 
-## Open gates
+## Final gate evidence
 
-The required Go, race, build, lint, vulnerability, and `make check` results
-are attached to the Phase 8 commit/PR validation. Windows ACL execution and
-embedded native-model hardware remain platform/model gates on this macOS host;
-the Windows and Linux entity compile checks are still run as portability
-evidence. A future model-configured run should retain this report's baseline
-and fixture hash, add at least five trials per model/protocol setting, and may
-then revise defaults only if safety and local-model evidence remain clean.
+The final tree passed `go test -count=1 ./...`, `go vet ./...`, `make build`,
+`golangci-lint run ./...`, `govulncheck ./...`, the required package race
+subset, and the exact `make check` target (including full race coverage).
+Linux and Windows `internal/entity` compile checks also passed. The localhost
+backed web tests and benchmark were run with the repository's approved
+escalation because the sandbox cannot bind test listeners.
+
+Windows ACL execution and embedded native-model hardware remain platform/model
+gates on this macOS host. A future model-configured run should retain this
+report's baseline and fixture hash, add at least five trials per model/protocol
+setting, and may then revise defaults only if safety and local-model evidence
+remain clean.
