@@ -36,11 +36,8 @@ type Metadata struct {
 
 	// BaselineSHA and CandidateSHA identify the two git commits a Phase 8
 	// A/B comparison run measures; FixtureHash identifies the exact fixture
-	// set used. All three are additive and zero-value safe: nothing in this
-	// package populates them yet, so a caller that never sets them gets the
-	// same JSON output as before this field existed. They exist so a later
-	// reproduction can bind measurements to the exact commits and fixtures
-	// that produced them (plan §28 Phase 8 report template).
+	// set used. All three are additive and zero-value safe so synthetic
+	// callers can continue to omit them.
 	BaselineSHA  string `json:"baseline_sha,omitempty"`
 	CandidateSHA string `json:"candidate_sha,omitempty"`
 	FixtureHash  string `json:"fixture_hash,omitempty"`
@@ -435,7 +432,8 @@ func ValidateMetadata(metadata Metadata) error {
 		"endpoint_type": metadata.EndpointType, "backend_version": metadata.BackendVersion,
 		"quantization": metadata.Quantization, "tool_schema_fingerprint": metadata.ToolSchema,
 		"chat_template": metadata.ChatTemplate, "verifier_mode": metadata.VerifierMode,
-		"assistance_mode": metadata.AssistanceMode,
+		"assistance_mode": metadata.AssistanceMode, "baseline_sha": metadata.BaselineSHA,
+		"candidate_sha": metadata.CandidateSHA, "fixture_hash": metadata.FixtureHash,
 	} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("metadata %s contains a line break", name)
