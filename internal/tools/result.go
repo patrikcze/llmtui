@@ -114,16 +114,16 @@ var errorCodeVocabulary = map[string]bool{
 	// admission rejects this outright rather than writing through or
 	// replacing the link — see rejectSymlinkWriteTarget in file_write.go.
 	"symlink_write_unsupported": true,
-	// resource_unavailable (Phase 2b-ii): read_file's resource_id selector
-	// could not open the requested entity body — not present, not a resource
-	// body (entity.ErrNotAResourceBody), or its lifetime ended. This phase
-	// does not distinguish those cases (see readResourceMeta in
-	// resource.go); a finer §23 vocabulary (cursor_expired/snapshot_incomplete)
-	// is Phase 3+.
+	// resource_unavailable/resource_expired (resource reads): the requested
+	// retained body is absent, the wrong entity kind, or its lease lifetime has
+	// ended.
 	"resource_unavailable": true,
 	// capture_limit (Phase 3): a requested late line window lies beyond the
 	// bounded scan budget, so the source was not exhaustively inspected.
-	"capture_limit": true,
+	"capture_limit":    true,
+	"source_changed":   true,
+	"resource_expired": true,
+	"stale_source":     true,
 }
 
 // Coverage states how much of the intended source a producer actually
@@ -185,6 +185,7 @@ type EncodingInfo struct {
 	UTF8Valid bool
 	CRLF      bool
 	NUL       bool
+	Lossy     bool
 	Complete  bool
 }
 
@@ -207,6 +208,13 @@ type ResultMeta struct {
 	// FileVersion is present only when SourceDigest covers the complete file.
 	FileVersion *entity.FileVersion
 	Encoding    EncodingInfo
+	// Snapshot is an internal handoff for a complete eligible file body. It is
+	// consumed by the controller for one bounded resource publication and is
+	// never formatted, serialized, or sent directly to a provider.
+	Snapshot []byte
+	// Precondition reports version when an observed file version guarded an
+	// edit, or exact_text_only for the compatibility path.
+	Precondition string
 	// Effect classifies what the call did to the outside world: none |
 	// changed | unchanged | unknown.
 	Effect Effect

@@ -377,9 +377,10 @@ func (c AgentVerifierConfig) ResolvedMode() string {
 // read, and write files and run commands under the directory llmtui was
 // started from).
 type ToolsConfig struct {
-	Enabled       bool `mapstructure:"enabled" yaml:"enabled"`
-	MaxIterations int  `mapstructure:"max_iterations" yaml:"max_iterations"`
-	MaxFileKB     int  `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	Enabled       bool            `mapstructure:"enabled" yaml:"enabled"`
+	MaxIterations int             `mapstructure:"max_iterations" yaml:"max_iterations"`
+	MaxFileKB     int             `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	Read          ToolsReadConfig `mapstructure:"read" yaml:"read"`
 	// Approve gates mutating actions (writes, non-read-only commands):
 	// "ask" prompts in the TUI, "auto" runs them without asking.
 	Approve        string `mapstructure:"approve" yaml:"approve"`
@@ -402,6 +403,13 @@ type ToolsConfig struct {
 	// Discovery progressively exposes large dynamic MCP catalogs while core
 	// tools remain visible. Discovery changes visibility, never permission.
 	Discovery ToolsDiscoveryConfig `mapstructure:"discovery" yaml:"discovery"`
+}
+
+// ToolsReadConfig controls the default file window. Zero keeps the direct
+// Runner API's legacy whole-file behavior; the application default is a
+// bounded 200-line window.
+type ToolsReadConfig struct {
+	DefaultLines int `mapstructure:"default_lines" yaml:"default_lines"`
 }
 
 // ToolsDiscoveryConfig controls deterministic task-local progressive tool
@@ -976,6 +984,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
 	v.SetDefault("tools.max_file_kb", 512)
+	v.SetDefault("tools.read.default_lines", 200)
 	v.SetDefault("tools.approve", "ask")
 	v.SetDefault("tools.command_timeout", "30s")
 	v.SetDefault("tools.native", "auto")
@@ -1238,6 +1247,8 @@ tools:
   max_iterations: 10 # tool rounds per user message; when spent, a prompt
   #                    asks whether to grant more rounds or wrap up
   max_file_kb: 512 # per-file read/write and command output size cap
+  read:
+    default_lines: 200 # bounded default read window; 0 preserves whole-file reads
   command_timeout: "30s"
   # Web tools: web_search (DuckDuckGo, no API key) and web_fetch (page as
   # Markdown). Off by default; fetches ask for approval per URL. Toggle per

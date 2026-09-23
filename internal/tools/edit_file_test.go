@@ -204,6 +204,33 @@ func TestEditFileStaleContentGuard(t *testing.T) {
 	}
 }
 
+func TestEditFileObservedVersionPrecondition(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "f.txt", "one\nTWO\nthree\n")
+	r := NewRunner(root, 64)
+	read := r.Execute(Call{Tool: ToolReadFile, Path: "f.txt"})
+	if read.Err != nil || read.Meta.FileVersion == nil || !read.Meta.FileVersion.Complete {
+		t.Fatalf("read = %+v, want complete file version", read)
+	}
+	version := *read.Meta.FileVersion
+	if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("one\nTWO changed\nthree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := r.Execute(Call{Tool: ToolEditFile, Path: "f.txt", OldText: "TWO", NewText: "2", ExpectedVersion: &version})
+	if stale.Err == nil || stale.Meta.Error == nil || stale.Meta.Error.Code != "stale_source" {
+		t.Fatalf("stale edit = %+v, want stale_source", stale)
+	}
+	if stale.Meta.Precondition != "version" {
+		t.Fatalf("precondition = %q, want version", stale.Meta.Precondition)
+	}
+
+	// An explicit unknown selector cannot silently downgrade to exact-text-only.
+	unknown := r.Execute(Call{Tool: ToolEditFile, Path: "f.txt", OldText: "TWO changed", NewText: "2", ExpectedResourceID: "ent_" + strings.Repeat("z", 26)})
+	if unknown.Err == nil || unknown.Meta.Error == nil || unknown.Meta.Error.Code != "resource_unavailable" {
+		t.Fatalf("unknown version edit = %+v, want resource_unavailable", unknown)
+	}
+}
+
 func ptr(s string) *string { return &s }
 
 func TestEditFileNativeDecoding(t *testing.T) {

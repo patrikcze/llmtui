@@ -43,6 +43,24 @@ func TestToolResultEntityEntersPromptAsMinimalReference(t *testing.T) {
 	}
 }
 
+func TestObservedFileVersionBindsEditsAfterDelivery(t *testing.T) {
+	m := newTestModel(t)
+	version := entity.FileVersion{Path: "src/main.go", Digest: "digest", SizeBytes: 12, Complete: true}
+	m.recordDeliveredFileVersions([]tools.Result{{
+		Call: tools.Call{Tool: tools.ToolReadFile, Path: "src/main.go"},
+		Meta: tools.ResultMeta{FileVersion: &version},
+	}})
+	calls := m.bindObservedEditVersions([]tools.Call{{
+		Tool: tools.ToolEditFile, Path: "src/main.go", OldText: "old", NewText: "new",
+	}})
+	if len(calls) != 1 || calls[0].ExpectedVersion == nil || calls[0].ExpectedVersion.Digest != "digest" {
+		t.Fatalf("bound calls = %+v, want the delivered version precondition", calls)
+	}
+	if got := calls[0].ExpectedResourceID; got != "" {
+		t.Fatalf("resource ID = %q, want empty when no retained body was delivered", got)
+	}
+}
+
 func TestEntityLookupAfterHistoryIsDropped(t *testing.T) {
 	for _, native := range []bool{true, false} {
 		t.Run(map[bool]string{true: "native", false: "fenced"}[native], func(t *testing.T) {

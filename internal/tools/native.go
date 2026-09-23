@@ -32,10 +32,12 @@ func Specs() []provider.ToolSpec {
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root. Omit when passing resource_id instead."},
-					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start. Not supported with resource_id."},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500). Not supported with resource_id."},
+					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start. Works for paths and retained resource bodies."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500). Not supported with byte_offset."},
+					"byte_offset": {"type": "integer", "minimum": 0, "description": "Continue a partial giant line from this raw byte offset; cannot combine with offset or limit."},
 					"resource_id": {"type": "string", "description": "Recover a previously retained tool output body by its ent_... ID instead of reading a path. Exactly one of path or resource_id must be set."}
-				}
+				},
+				"additionalProperties": false
 			}`),
 		},
 		{
@@ -83,7 +85,8 @@ func Specs() []provider.ToolSpec {
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root. The file must already exist."},
 					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate."},
-					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."}
+					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."},
+					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
 				},
 				"required": ["path", "old_text", "new_text"]
 			}`),
@@ -159,24 +162,26 @@ func Specs() []provider.ToolSpec {
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path       string   `json:"path"`
-	Content    string   `json:"content"`
-	Command    string   `json:"command"`
-	Query      string   `json:"query"`
-	URL        string   `json:"url"`
-	MaxResults int      `json:"max_results"`
-	Skill      string   `json:"skill"`
-	Pattern    string   `json:"pattern"`
-	Glob       string   `json:"glob"`
-	Freshness  string   `json:"freshness_token"`
-	Offset     int      `json:"offset"`
-	Limit      int      `json:"limit"`
-	ResourceID string   `json:"resource_id"`
-	OldText    string   `json:"old_text"`
-	NewText    string   `json:"new_text"`
-	EntityIDs  []string `json:"entity_ids"`
-	Level      string   `json:"level"`
-	Kinds      []string `json:"kinds"`
+	Path               string   `json:"path"`
+	Content            string   `json:"content"`
+	Command            string   `json:"command"`
+	Query              string   `json:"query"`
+	URL                string   `json:"url"`
+	MaxResults         int      `json:"max_results"`
+	Skill              string   `json:"skill"`
+	Pattern            string   `json:"pattern"`
+	Glob               string   `json:"glob"`
+	Freshness          string   `json:"freshness_token"`
+	Offset             int      `json:"offset"`
+	Limit              int      `json:"limit"`
+	ByteOffset         *int64   `json:"byte_offset"`
+	ResourceID         string   `json:"resource_id"`
+	OldText            string   `json:"old_text"`
+	NewText            string   `json:"new_text"`
+	ExpectedResourceID string   `json:"expected_resource_id"`
+	EntityIDs          []string `json:"entity_ids"`
+	Level              string   `json:"level"`
+	Kinds              []string `json:"kinds"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -375,13 +380,17 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		switch tc.Name {
 		case ToolReadFile:
 			c.ResourceID = strings.TrimSpace(args.ResourceID)
-			if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
+			if err := ValidateReadSelectors(c.Path, c.ResourceID); err != nil {
+				c.InputErr = err.Error()
+			} else if err := ValidateReadArguments(args.Offset, args.Limit, args.ByteOffset); err != nil {
 				c.InputErr = err.Error()
 			} else {
 				c.Offset, c.Limit = args.Offset, args.Limit
+				c.ByteOffset = args.ByteOffset
 			}
 		case ToolEditFile:
 			c.OldText, c.NewText = args.OldText, args.NewText
+			c.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 			if err := ValidateEditFileCall(&c); err != nil {
 				c.InputErr = err.Error()
 			}
@@ -765,7 +774,7 @@ func NativeInstructions(root string, withWeb bool) string {
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- Use read_file with offset/limit when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
+- The default read is a bounded line window. Use read_file with offset/limit for complete lines, or byte_offset copied from next_byte_offset for a partial giant line. A returned resource_id reads the same retained snapshot without reopening its source. Use edit_file for a small change to an existing file — old_text must match exactly once; reuse a complete file observation when one is available. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,6 +19,103 @@ import (
 )
 
 const defaultEntityContextTokens = 1200
+
+type observedFileVersion struct {
+	ResourceID string
+	Version    entity.FileVersion
+	ObservedAt time.Time
+}
+
+func fileVersionKey(path string) string {
+	return filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+}
+
+// bindObservedEditVersions turns a model's edit request into a controller
+// precondition using only versions already delivered in this conversation.
+// An unknown or stale selector remains unbound and is rejected by execution;
+// it is never guessed from the current filesystem.
+func (m *Model) bindObservedEditVersions(calls []tools.Call) []tools.Call {
+	if len(calls) == 0 || len(m.observedFileVersions) == 0 {
+		return calls
+	}
+	out := append([]tools.Call(nil), calls...)
+	for i := range out {
+		if out[i].Tool != tools.ToolEditFile || out[i].ExpectedVersion != nil {
+			continue
+		}
+		var observed observedFileVersion
+		var ok bool
+		if id := strings.TrimSpace(out[i].ExpectedResourceID); id != "" {
+			observed, ok = m.observedFileVersions["id:"+id]
+		} else {
+			observed, ok = m.observedFileVersions["path:"+fileVersionKey(out[i].Path)]
+		}
+		if !ok {
+			continue
+		}
+		version := observed.Version
+		out[i].ExpectedVersion = &version
+		if out[i].ExpectedResourceID == "" {
+			out[i].ExpectedResourceID = observed.ResourceID
+		}
+	}
+	return out
+}
+
+// recordDeliveredFileVersions records metadata only after the result message
+// has been appended to the conversation. This matches the model-observation
+// boundary: a captured version that was never delivered cannot authorize an
+// edit.
+func (m *Model) recordDeliveredFileVersions(results []tools.Result) {
+	if len(results) == 0 {
+		return
+	}
+	if m.observedFileVersions == nil {
+		m.observedFileVersions = make(map[string]observedFileVersion)
+	}
+	for _, result := range results {
+		version := result.Meta.FileVersion
+		if result.Err != nil || version == nil || !version.Complete || version.Path == "" {
+			continue
+		}
+		observed := observedFileVersion{Version: *version, ObservedAt: time.Now().UTC()}
+		observed.ResourceID = strings.TrimSpace(result.ResourceID)
+		if observed.ResourceID == "" {
+			observed.ResourceID = strings.TrimSpace(result.Call.ExpectedResourceID)
+		}
+		m.observedFileVersions["path:"+fileVersionKey(version.Path)] = observed
+		if observed.ResourceID != "" {
+			m.observedFileVersions["id:"+observed.ResourceID] = observed
+		}
+	}
+}
+
+func (m *Model) pinPendingVersions(plan toolBatchPlan) {
+	m.releasePendingVersionPins()
+	if m.entities == nil {
+		return
+	}
+	for _, call := range plan.runnableCalls() {
+		id := strings.TrimSpace(call.ExpectedResourceID)
+		if id == "" {
+			continue
+		}
+		parsed, err := entity.ParseID(id)
+		if err != nil || !m.entities.RetainBody(parsed) {
+			continue
+		}
+		m.pendingVersionPins = append(m.pendingVersionPins, parsed)
+	}
+}
+
+func (m *Model) releasePendingVersionPins() {
+	for _, id := range m.pendingVersionPins {
+		if m.entities != nil {
+			m.entities.ReleaseBody(id)
+		}
+	}
+	m.pendingVersionPins = nil
+}
 
 func (m *Model) entitiesEnabled() bool {
 	return m.cfg != nil && m.cfg.Entities.Enabled && m.entities != nil
@@ -110,6 +209,11 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 				}
 			}
 		}
+		if results[index].Call.ResourceID != "" {
+			results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
+				ID: results[index].Call.ResourceID, Kind: string(entity.KindFile), Label: "retained body",
+			})
+		}
 		// Captures (Phase 2b-ii): a producer-retained body beyond what
 		// Output already shows (currently only a capped run_command
 		// result). This is a quiet, deliberate no-op when output storage is
@@ -121,6 +225,9 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 			if len(resourceViews) > 0 {
 				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
 				for _, view := range resourceViews {
+					if results[index].ResourceID == "" && view.Resource.FileVersion != nil {
+						results[index].ResourceID = view.ID.String()
+					}
 					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
 						ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
 					})
@@ -170,6 +277,13 @@ func (m *Model) publishResultCaptures(call tools.Call, captures []tools.Capture)
 				ContentType: capture.ContentType,
 				BodyDigest:  capture.BodyDigest,
 			},
+		}
+		candidate.Resource = capture.Resource
+		if candidate.Resource.ContentType == "" {
+			candidate.Resource.ContentType = capture.ContentType
+		}
+		if candidate.Resource.BodyDigest == "" {
+			candidate.Resource.BodyDigest = capture.BodyDigest
 		}
 		if m.agentRunActive() {
 			candidate.Scope = entity.ScopeAgentRun

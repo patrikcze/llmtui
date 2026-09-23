@@ -353,6 +353,9 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
 		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
 	}
+	if cfg.Tools.Read.DefaultLines != 200 {
+		t.Fatalf("tools.read.default_lines = %d, want 200", cfg.Tools.Read.DefaultLines)
+	}
 	if !cfg.Tools.Discovery.Enabled || cfg.Tools.Discovery.Threshold != 16 || cfg.Tools.Discovery.MaxResults != 5 {
 		t.Fatalf("tools.discovery defaults = %+v", cfg.Tools.Discovery)
 	}

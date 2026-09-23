@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/patrikcze/llmtui/internal/entity"
 )
 
 // This file is the write **publication primitive** shared by write_file and
@@ -441,6 +443,10 @@ func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (d
 	// post-publish confirmation below finds.
 	meta.Outcome = OutcomeOK
 	meta.Effect = EffectChanged
+	meta.SourceDigest = digestBytes([]byte(content))
+	meta.ContentDigest = meta.SourceDigest
+	meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: int64(len(content)), Complete: true}
+	meta.Encoding = encodingInfo([]byte(content), true)
 
 	var rendered string
 	if oldTooBig {

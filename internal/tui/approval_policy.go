@@ -114,7 +114,7 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		// Path identifies the file; the exact old→new pair identifies the
 		// change. Approving one replacement must never authorise a different
 		// old_text or a different new_text against the same file.
-		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText))
+		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""

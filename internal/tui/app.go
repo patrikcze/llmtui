@@ -321,6 +321,11 @@ type Model struct {
 	// toolRecoveryFeedback is a one-request protocol reminder after a dropped
 	// pseudo-call. It never contains model output or arguments.
 	toolRecoveryFeedback string
+	// observedFileVersions contains versions the model has actually received
+	// in a delivered tool-result message. It is deliberately controller-only
+	// state and is never persisted or sent as prompt text.
+	observedFileVersions map[string]observedFileVersion
+	pendingVersionPins   []entity.ID
 	// lastPersonalAppsResult survives a lastDebug reset (every request-prep
 	// path replaces lastDebug wholesale); each debugInfo{} construction site
 	// copies it back in. See sendToolResults.
@@ -518,6 +523,7 @@ func (m *Model) rebuildFromConfig() {
 	m.toolRunner = nil
 	if wd, err := os.Getwd(); err == nil {
 		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
+		m.toolRunner.SetDefaultReadLines(cfg.Tools.Read.DefaultLines)
 		// Always wired, independent of entities.enabled/output_storage: the
 		// registry itself always exists (see m.entities above), and
 		// read_file's resource_id path against an empty/disabled registry
@@ -1502,6 +1508,7 @@ func (m *Model) send() tea.Cmd {
 		return m.answerAskUser(text)
 	}
 	m.resetToolDisclosure()
+	m.releasePendingVersionPins()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
@@ -1570,6 +1577,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
+	calls = m.bindObservedEditVersions(calls)
 	for _, call := range calls {
 		if call.ID == "" {
 			continue // legacy fenced protocol is not provider-native evidence.
@@ -1626,6 +1634,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
 		m.keys.keysMode = false
+		m.pinPendingVersions(plan)
 		m.waitForApproval(plan, true)
 		m.refreshViewport()
 		return nil
@@ -1637,6 +1646,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 			}
 			m.overlayOpen = false
 			m.keys.keysMode = false
+			m.pinPendingVersions(plan)
 			m.waitForApproval(plan, false)
 			m.refreshViewport()
 			return nil
@@ -1770,6 +1780,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 func (m *Model) denyPendingTools() tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.releasePendingVersionPins()
 	m.clearPendingTools()
 	for _, call := range calls {
 		if call.ID != "" {
@@ -1821,6 +1832,7 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		for _, msg := range tools.NativeResults(results) {
 			m.session.AddMessage(msg)
 		}
+		m.recordDeliveredFileVersions(results)
 		return m.continueChat()
 	}
 	var references []provider.MessageReference
@@ -1828,6 +1840,7 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		references = appendMessageReferences(references, result.References...)
 	}
 	cmd := m.dispatchWithReferences(tools.FormatResults(results), nil, references)
+	m.recordDeliveredFileVersions(results)
 	// Attach the write diffs to the just-added results message so the TUI
 	// can show what changed (display only; the model sees FormatResults).
 	if diff := tools.CollectDiffs(results); diff != "" {
@@ -1850,6 +1863,7 @@ func (m *Model) appendTerminalToolResults(results []tools.Result) {
 		for _, msg := range tools.NativeResults(results) {
 			m.session.AddMessage(msg)
 		}
+		m.recordDeliveredFileVersions(results)
 		return
 	}
 	m.session.AddMessage(provider.Message{
@@ -1858,6 +1872,7 @@ func (m *Model) appendTerminalToolResults(results []tools.Result) {
 		Display:    tools.CollectDiffs(results),
 		References: resultReferences(results),
 	})
+	m.recordDeliveredFileVersions(results)
 }
 
 func resultReferences(results []tools.Result) []provider.MessageReference {
@@ -1997,6 +2012,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 	case approvalYes:
 		plan := m.pendingPlan()
 		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.releasePendingVersionPins()
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
 		m.approvePersonalAppsCalls(calls)
@@ -2011,6 +2027,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		}
 		plan := m.pendingPlan()
 		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.releasePendingVersionPins()
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
 		m.approvePersonalAppsCalls(calls)
@@ -2031,6 +2048,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 func (m *Model) resolveBudget(choice int) tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.releasePendingVersionPins()
 	m.clearPendingTools()
 	if choice == 0 {
 		m.renewToolBudget()
@@ -2067,6 +2085,7 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.DropLast()
 		}
 	}
+	m.releasePendingVersionPins()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	m.errText = ""
 	m.notice = "retrying last message"
@@ -2185,6 +2204,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		return m, m.quit()
 	}
 	m.ctrlCAt = time.Now()
+	m.releasePendingVersionPins()
 	var agentSave tea.Cmd
 	switch {
 	case m.agentVerifying() || m.agentContracting():

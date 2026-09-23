@@ -116,8 +116,7 @@ func TestNativeResultsSnapshot(t *testing.T) {
 }
 
 // TestErrorCodeVocabularyIsClosedAndStable pins the exact §23 error-code set
-// this phase may produce (the Phase 2b+ resource codes are intentionally
-// absent — see the doc comment on errorCodeVocabulary). Adding, removing, or
+// this phase may produce. Adding, removing, or
 // renaming a code here is a deliberate contract change a caller can switch
 // on, not a typo fix; this test exists so that change is visible in review.
 func TestErrorCodeVocabularyIsClosedAndStable(t *testing.T) {
@@ -128,6 +127,7 @@ func TestErrorCodeVocabularyIsClosedAndStable(t *testing.T) {
 		"unsupported_content_type", "cancelled", "timeout", "permission_denied",
 		"safety_block", "repeat_block", "budget_block", "outcome_unknown",
 		"symlink_write_unsupported", "resource_unavailable", "capture_limit",
+		"source_changed", "resource_expired", "stale_source",
 	}
 	if len(errorCodeVocabulary) != len(want) {
 		t.Fatalf("errorCodeVocabulary has %d codes, want %d", len(errorCodeVocabulary), len(want))

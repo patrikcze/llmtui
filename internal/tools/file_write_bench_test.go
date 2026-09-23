@@ -51,7 +51,7 @@ func BenchmarkEditFileSmall(b *testing.B) {
 		if i%2 == 1 {
 			from, want = "MARKER2\n", "MARKER\n"
 		}
-		if _, _, _, err := r.editFile("bench.txt", from, want); err != nil {
+		if _, _, _, err := r.editFile("bench.txt", from, want, nil); err != nil {
 			b.Fatalf("edit: %v", err)
 		}
 	}

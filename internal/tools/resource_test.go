@@ -200,6 +200,15 @@ func TestReadFileResourceIDNotFoundIsResourceUnavailable(t *testing.T) {
 	}
 }
 
+func TestReadFileResourceIDExpiredIsDistinct(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	r.Resources = &fakeResourceReader{err: errors.New("entity body lifetime has ended")}
+	res := r.Execute(Call{Tool: ToolReadFile, ResourceID: "ent_" + strings.Repeat("f", 26)})
+	if res.Err == nil || res.Meta.Error == nil || res.Meta.Error.Code != "resource_expired" {
+		t.Fatalf("result = %+v, want resource_expired", res)
+	}
+}
+
 // TestReadFilePathAndResourceIDTogetherIsInvalidArguments proves the
 // exactly-one-selector rule: both set is rejected before either is read,
 // never silently preferring one over the other.

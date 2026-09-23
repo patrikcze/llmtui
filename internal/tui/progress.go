@@ -200,16 +200,23 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 	case tools.ToolWriteFile:
 		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body)
 	case tools.ToolEditFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolWebFetch:
 		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness)
 	case tools.ToolReadFile:
 		// A different line range is a different operation, so paginating
 		// through a file is never mistaken for a repeated no-progress call.
 		start, count, ranged := tools.CanonicalReadRange(c.Offset, c.Limit)
-		resource = normalizeWorkspacePath(root, resource)
+		if strings.TrimSpace(c.ResourceID) != "" {
+			resource = "resource:" + strings.TrimSpace(c.ResourceID)
+		} else {
+			resource = normalizeWorkspacePath(root, resource)
+		}
 		if ranged {
 			resource += "\x1e" + strconv.Itoa(start) + "\x1e" + strconv.Itoa(count)
+		}
+		if c.ByteOffset != nil {
+			resource += "\x1ebyte\x1e" + strconv.FormatInt(*c.ByteOffset, 10)
 		}
 	case tools.ToolListDir:
 		resource = normalizeWorkspacePath(root, resource)

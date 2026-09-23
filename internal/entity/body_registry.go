@@ -212,6 +212,31 @@ func (r *Registry) releaseBodyPin(id ID) {
 	r.mu.Unlock()
 }
 
+// RetainBody reserves a published body against eviction while a controller
+// operation (such as an approval prompt) refers to its file version.
+func (r *Registry) RetainBody(id ID) bool {
+	if r == nil || !id.Valid() {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.limits.Now().UTC()
+	r.purgeExpiredBodiesLocked(now)
+	if _, ok := r.bodies[id]; !ok {
+		return false
+	}
+	r.bodyPinned[id]++
+	return true
+}
+
+// ReleaseBody undoes RetainBody. It is idempotent when the body is absent.
+func (r *Registry) ReleaseBody(id ID) {
+	if r == nil {
+		return
+	}
+	r.releaseBodyPin(id)
+}
+
 // bodyLease implements BodyLease. Close is idempotent via closeOnce so a
 // caller's defer plus an explicit early-exit Close cannot double-release
 // the pin.

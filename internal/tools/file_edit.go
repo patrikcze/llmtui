@@ -17,21 +17,22 @@ const maxReadFilePayloadBytes = 512
 type readFileArgs struct {
 	Offset     int    `json:"offset,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+	ByteOffset *int64 `json:"byte_offset,omitempty"`
 	ResourceID string `json:"resource_id,omitempty"`
 }
 
 type editFileArgs struct {
-	OldText string `json:"old_text"`
-	NewText string `json:"new_text"`
+	OldText            string `json:"old_text"`
+	NewText            string `json:"new_text"`
+	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
 }
 
 // decodeReadFileBody parses the optional JSON range/resource_id object from a
 // fenced read_file block. The legacy form — path in the info string, empty
 // body — is left untouched, and so is a non-JSON body (a model that
 // mistakenly pasted content there still gets the old "body ignored" behavior
-// rather than a new hard error). resource_id is validated at execution time
-// (ExecuteContext's ToolReadFile case), not here — this function only
-// extracts it.
+// rather than a new hard error). Selector and range shape validation happens
+// here; resource lifetime/ID ownership is checked at execution time.
 func decodeReadFileBody(call *Call) {
 	body := strings.TrimSpace(call.Body)
 	if !strings.HasPrefix(body, "{") {
@@ -46,12 +47,17 @@ func decodeReadFileBody(call *Call) {
 		call.InputErr = "read_file range needs one JSON object like {\"offset\":1,\"limit\":200}: " + err.Error()
 		return
 	}
-	if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
+	if err := ValidateReadArguments(args.Offset, args.Limit, args.ByteOffset); err != nil {
 		call.InputErr = err.Error()
 		return
 	}
 	call.Offset, call.Limit = args.Offset, args.Limit
+	call.ByteOffset = args.ByteOffset
 	call.ResourceID = strings.TrimSpace(args.ResourceID)
+	if err := ValidateReadSelectors(call.Path, call.ResourceID); err != nil {
+		call.InputErr = err.Error()
+		return
+	}
 	call.Body = ""
 }
 
@@ -69,6 +75,7 @@ func decodeEditFileBody(call *Call) {
 		return
 	}
 	call.OldText, call.NewText = args.OldText, args.NewText
+	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 	call.Body = ""
 	if err := ValidateEditFileCall(call); err != nil {
 		call.InputErr = err.Error()
