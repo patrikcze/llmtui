@@ -1,0 +1,12 @@
+{
+  "laya_mlx_version": "0.2.0",
+  "model_revision": "28416e78cb26a239a4eabaa2e084904ec5e6cacb",
+  "dtype": "float16",
+  "device": "gpu",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "probability_tolerance": 0.002,
+  "network": "socket connections forbidden",
+  "reference": "direct laya_mlx.Agent.predict",
+  "compile": false,
+  "cache_prompts": false
+}

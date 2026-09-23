@@ -346,6 +346,31 @@ type AgentVerifierConfig struct {
 	MaxAttempts int `mapstructure:"max_attempts" yaml:"max_attempts"`
 }
 
+// DecisionEngineConfig controls the optional local structured-decision layer.
+// It is disabled by default and never replaces the generative provider.
+type DecisionEngineConfig struct {
+	Enabled  bool       `mapstructure:"enabled" yaml:"enabled"`
+	Provider string     `mapstructure:"provider" yaml:"provider"`
+	Laya     LayaConfig `mapstructure:"laya" yaml:"laya"`
+}
+
+// LayaConfig names installed checkpoints and their lifecycle policy. Paths
+// are optional because the model manager has a platform-default store.
+type LayaConfig struct {
+	ModelDir     string                     `mapstructure:"model_dir" yaml:"model_dir,omitempty"`
+	MLXPython    string                     `mapstructure:"mlx_python" yaml:"mlx_python,omitempty"`
+	DefaultModel string                     `mapstructure:"default_model" yaml:"default_model"`
+	Preload      []string                   `mapstructure:"preload" yaml:"preload,omitempty"`
+	MaxLoaded    int                        `mapstructure:"max_loaded" yaml:"max_loaded"`
+	Models       map[string]LayaModelConfig `mapstructure:"models" yaml:"models,omitempty"`
+}
+
+type LayaModelConfig struct {
+	Path       string `mapstructure:"path" yaml:"path,omitempty"`
+	Repository string `mapstructure:"repo" yaml:"repo,omitempty"`
+	Revision   string `mapstructure:"revision" yaml:"revision,omitempty"`
+}
+
 // Verification policy modes; see AgentVerifierConfig.Mode.
 const (
 	VerifierModeOff           = "off"
@@ -678,6 +703,7 @@ type Config struct {
 	Prompt          PromptConfig                  `mapstructure:"prompt" yaml:"prompt"`
 	Context         ContextConfig                 `mapstructure:"context" yaml:"context"`
 	Agent           AgentConfig                   `mapstructure:"agent" yaml:"agent"`
+	DecisionEngine  DecisionEngineConfig          `mapstructure:"decision_engine" yaml:"decision_engine"`
 	Tools           ToolsConfig                   `mapstructure:"tools" yaml:"tools"`
 	Skills          SkillsConfig                  `mapstructure:"skills" yaml:"skills"`
 	Plugins         PluginsConfig                 `mapstructure:"plugins" yaml:"plugins"`
@@ -810,6 +836,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
+		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -982,6 +1009,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.timeout", "120s")
 	v.SetDefault("agent.verifier.max_attempts", 2)
 	v.SetDefault("agent.enforce_budgets_live", true)
+
+	v.SetDefault("decision_engine.enabled", false)
+	v.SetDefault("decision_engine.provider", "laya")
+	v.SetDefault("decision_engine.laya.default_model", "english")
+	v.SetDefault("decision_engine.laya.max_loaded", 1)
+	v.SetDefault("decision_engine.laya.mlx_python", "")
+	v.SetDefault("decision_engine.laya.model_dir", "")
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -1234,6 +1268,21 @@ agent:
     model: "" # empty uses the active executor model in a fresh context
     max_tokens: 1024
     timeout: "120s"
+
+# Optional local structured decisions. This never replaces the generative
+# provider and remains disabled until a verified decision runtime is installed.
+decision_engine:
+  enabled: false
+  provider: laya
+  laya:
+    default_model: english
+    model_dir: "" # empty uses the platform data directory; otherwise the exact Laya store root
+    mlx_python: "" # Python 3.11+ with laya-mlx==0.2.0; empty uses python3 on PATH
+    max_loaded: 1
+    preload: []
+    # Reserved per-model overrides; not consumed by decision commands yet.
+    # Use model_dir for the shared store and decision pull --revision to pin.
+    models: {}
 
 # Workspace tools: lets the model list, read, and write files and run
 # commands under the directory llmtui was started from. Off by default —

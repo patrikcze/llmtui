@@ -67,6 +67,7 @@ func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.
 		newProvidersCmd(r),
 		newModelsCmd(r),
 		newRuntimeCmd(r),
+		newDecisionCmd(r),
 		newDoctorCmd(r),
 		newHistoryCmd(r),
 		newStatsCmd(r),
