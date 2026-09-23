@@ -204,7 +204,7 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 			strconv.Itoa(c.SearchContext), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor),
 		}, "\x1e")
 	case tools.ToolWriteFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolEditFile:
 		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolWebFetch:
@@ -366,7 +366,7 @@ func progressDigest(r tools.Result) string {
 // Outcome, a changed Coverage count, a different Window) digest differently.
 func progressDigestFromMeta(m tools.ResultMeta) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "outcome:%s\x1feffect:%s\x1freused:%t", m.Outcome, m.Effect, m.Reused)
+	fmt.Fprintf(h, "outcome:%s\x1feffect:%s\x1fprecondition:%s\x1freused:%t", m.Outcome, m.Effect, m.Precondition, m.Reused)
 	if m.Error != nil {
 		fmt.Fprintf(h, "\x1fcode:%s\x1fretry:%s", m.Error.Code, m.Error.Retry)
 	}
@@ -406,6 +406,12 @@ func progressDigestFromMeta(m tools.ResultMeta) string {
 	}
 	if m.ContentDigest != "" {
 		fmt.Fprintf(h, "\x1fcontent_digest:%s", m.ContentDigest)
+	}
+	if m.SourceDigest != "" {
+		fmt.Fprintf(h, "\x1fsource_digest:%s", m.SourceDigest)
+	}
+	if m.FileVersion != nil {
+		fmt.Fprintf(h, "\x1ffile_version:%s,%s,%d,%t", m.FileVersion.Path, m.FileVersion.Digest, m.FileVersion.SizeBytes, m.FileVersion.Complete)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

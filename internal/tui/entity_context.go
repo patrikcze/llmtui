@@ -30,7 +30,7 @@ func fileVersionKey(path string) string {
 	return filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
 }
 
-// bindObservedEditVersions turns a model's edit request into a controller
+// bindObservedEditVersions turns a model's edit or overwrite request into a controller
 // precondition using only versions already delivered in this conversation.
 // An unknown or stale selector remains unbound and is rejected by execution;
 // it is never guessed from the current filesystem.
@@ -40,7 +40,7 @@ func (m *Model) bindObservedEditVersions(calls []tools.Call) []tools.Call {
 	}
 	out := append([]tools.Call(nil), calls...)
 	for i := range out {
-		if out[i].Tool != tools.ToolEditFile || out[i].ExpectedVersion != nil {
+		if (out[i].Tool != tools.ToolEditFile && out[i].Tool != tools.ToolWriteFile) || out[i].ExpectedVersion != nil {
 			continue
 		}
 		var observed observedFileVersion
@@ -51,6 +51,10 @@ func (m *Model) bindObservedEditVersions(calls []tools.Call) []tools.Call {
 			observed, ok = m.observedFileVersions["path:"+fileVersionKey(out[i].Path)]
 		}
 		if !ok {
+			continue
+		}
+		if fileVersionKey(observed.Version.Path) != fileVersionKey(out[i].Path) {
+			out[i].InputErr = fmt.Sprintf("expected_resource_id %q belongs to %q, not %q", out[i].ExpectedResourceID, observed.Version.Path, out[i].Path)
 			continue
 		}
 		version := observed.Version
@@ -80,9 +84,6 @@ func (m *Model) recordDeliveredFileVersions(results []tools.Result) {
 		}
 		observed := observedFileVersion{Version: *version, ObservedAt: time.Now().UTC()}
 		observed.ResourceID = strings.TrimSpace(result.ResourceID)
-		if observed.ResourceID == "" {
-			observed.ResourceID = strings.TrimSpace(result.Call.ExpectedResourceID)
-		}
 		m.observedFileVersions["path:"+fileVersionKey(version.Path)] = observed
 		if observed.ResourceID != "" {
 			m.observedFileVersions["id:"+observed.ResourceID] = observed

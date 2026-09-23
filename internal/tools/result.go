@@ -125,6 +125,7 @@ var errorCodeVocabulary = map[string]bool{
 	"cursor_expired":        true,
 	"retention_unavailable": true,
 	"wrong_resource_kind":   true,
+	"snapshot_incomplete":   true,
 }
 
 // Coverage states how much of the intended source a producer actually

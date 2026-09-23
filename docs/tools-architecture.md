@@ -407,5 +407,9 @@ while the write itself is in flight is also caught. That is optimistic
 staleness detection, not compare-and-swap: an external writer landing after
 that last check can still have its change overwritten by the rename (see
 `internal/tools/file_write.go`'s "honest concurrency guarantee" comment).
-`old_text` itself is the deterministic precondition — there is no session
-state requiring a prior `read_file`.
+When the controller has delivered a complete file snapshot, the model may
+pass its `resource_id` as `expected_resource_id` to `edit_file` or to the
+structured overwrite form of `write_file`. The controller pins that body
+through approval and execution rechecks the complete raw digest, so an
+external change fails as `stale_source`; without an observed version the
+legacy exact-text-only edit and unguarded overwrite paths remain available.

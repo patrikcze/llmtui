@@ -333,6 +333,8 @@ func Parse(reply string) []Call {
 						decodeListingBody(&call)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
+					case ToolWriteFile:
+						decodeWriteFileBody(&call)
 					case ToolPersonalApps:
 						decodePersonalAppsBody(&call)
 					}
@@ -613,18 +615,25 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 			}
 		}
 	case ToolEditFile:
-		if strings.TrimSpace(c.ExpectedResourceID) != "" && c.ExpectedVersion == nil {
-			res.Err = withCode(fmt.Errorf("edit_file expected_resource_id %q is not an observed file version; re-read the file before editing", c.ExpectedResourceID), "resource_unavailable", RetryReread)
+		expected, resolveErr := r.resolveExpectedVersion(ctx, c.Path, c.ExpectedResourceID, c.ExpectedVersion)
+		if resolveErr != nil {
+			res.Err = resolveErr
 			meta.Effect = EffectNone
 			break
 		}
-		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, c.ExpectedVersion)
+		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, expected)
 	case ToolGlob:
 		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
 		res.Output, meta, res.Captures, res.Err = r.grepFilesPage(ctx, c)
 	case ToolWriteFile:
-		res.Output, res.Diff, meta, res.Err = r.writeFileMeta(c.Path, c.Body)
+		expected, resolveErr := r.resolveExpectedVersion(ctx, c.Path, c.ExpectedResourceID, c.ExpectedVersion)
+		if resolveErr != nil {
+			res.Err = resolveErr
+			meta.Effect = EffectNone
+			break
+		}
+		res.Output, res.Diff, meta, res.Err = r.writeFileMetaExpected(c.Path, c.Body, expected)
 	case ToolRunCommand:
 		res.Output, meta, res.Captures, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
@@ -1114,11 +1123,56 @@ func (r *Runner) writeFile(rel, content string) (output, diff string, err error)
 }
 
 func (r *Runner) writeFileMeta(rel, content string) (output, diff string, meta ResultMeta, err error) {
-	diff, meta, err = r.writeFileChecked(rel, content, nil)
-	if err != nil {
-		return "", "", meta, err
+	return r.writeFileMetaExpected(rel, content, nil)
+}
+
+func (r *Runner) writeFileMetaExpected(rel, content string, expected *entity.FileVersion) (output, diff string, meta ResultMeta, err error) {
+	if expected != nil {
+		meta.Precondition = "version"
 	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, meta, nil
+	var current string
+	if expected != nil {
+		clean := filepath.Clean(strings.TrimSpace(rel))
+		if msg := r.Guardrails.checkWritePath(clean); msg != "" {
+			return "", "", meta, withCode(errors.New(msg), "safety_block", RetryCorrectInput)
+		}
+		if _, resolveErr := r.resolve(clean); resolveErr != nil {
+			return "", "", meta, withCode(resolveErr, "safety_block", RetryCorrectInput)
+		}
+		current, err = r.currentFileContent(rel)
+		if err != nil {
+			return "", "", meta, withCode(fmt.Errorf("%q changed or is unavailable; re-read the file before overwriting", filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), "stale_source", RetryReread)
+		}
+		if digestBytes([]byte(current)) != expected.Digest || int64(len(current)) != expected.SizeBytes {
+			return "", "", meta, withCode(fmt.Errorf("%q changed since the observed file version; re-read it before overwriting", filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), "stale_source", RetryReread)
+		}
+	}
+	diff, checked, err := r.writeFileChecked(rel, content, func() *string {
+		if expected == nil {
+			return nil
+		}
+		return &current
+	}())
+	checked.Precondition = meta.Precondition
+	if err != nil {
+		return "", "", checked, err
+	}
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, checked, nil
+}
+
+func (r *Runner) currentFileContent(rel string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(rel))
+	root, err := os.OpenRoot(r.root)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	info, err := root.Stat(clean)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(r.maxKB)*1024 {
+		return "", fmt.Errorf("current file is unavailable")
+	}
+	b, err := readRootFileLimited(root, clean, int64(r.maxKB)*1024)
+	return string(b), err
 }
 
 // editFile performs exactly one literal, exact-match replacement in an
@@ -1864,8 +1918,8 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - read_file <path> — return a bounded default window; an optional JSON body {"offset":1,"limit":200} returns a line range, and {"byte_offset":N} continues a partial giant line. Pass {"resource_id":"ent_..."} instead of a path to page a retained body without rerunning the command.
 - glob [path] — recursively find files; the glob pattern is the block's body
 - grep [path] — recursively search file contents with a regular expression in the block's body
-- write_file <path> — create or overwrite a file with the block's body
-- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}
+- write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}
+- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}, optionally with "expected_resource_id" from a complete prior read
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 - local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval
@@ -1885,7 +1939,7 @@ grep -rn "TODO" scripts
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- Use ranged read_file when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
+- Use ranged read_file when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. When a complete prior read supplied a resource_id, pass it as expected_resource_id; stale versions are rejected and should be re-read. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`

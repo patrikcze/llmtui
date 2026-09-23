@@ -1496,11 +1496,10 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))
 		}
 		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) &&
-			strings.TrimSpace(result.Call.Path) != "" && !tools.IsNoChangeDiff(result.Diff) {
-			// A write that replaced a file with its own current content
-			// succeeds but changes nothing — do not score it as progress, or
-			// a pointless retry that re-writes the same bytes reads as new
-			// evidence.
+			strings.TrimSpace(result.Call.Path) != "" && result.Meta.Effect == tools.EffectChanged {
+			// Only the typed changed effect counts as a changed file. An
+			// idempotent overwrite succeeds but changes nothing, so it must not
+			// score as progress or make a pointless retry look productive.
 			m.agentLoop.execution.ChangedFiles = append(m.agentLoop.execution.ChangedFiles, result.Call.Path)
 			m.agentLoop.execution.Artifacts = append(m.agentLoop.execution.Artifacts, result.Call.Path)
 		}

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -25,6 +26,39 @@ type editFileArgs struct {
 	OldText            string `json:"old_text"`
 	NewText            string `json:"new_text"`
 	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
+}
+
+type writeFileArgs struct {
+	Content            string `json:"content"`
+	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
+}
+
+// decodeWriteFileBody accepts the optional structured overwrite form while
+// retaining the legacy raw-body form (including raw JSON documents).
+func decodeWriteFileBody(call *Call) {
+	trimmed := strings.TrimSpace(call.Body)
+	if !strings.HasPrefix(trimmed, "{") {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil {
+		return // raw file content remains valid legacy syntax
+	}
+	if _, hasContent := fields["content"]; !hasContent {
+		if _, hasID := fields["expected_resource_id"]; !hasID {
+			return
+		}
+	}
+	var args writeFileArgs
+	if err := decodeOneJSONObject(call.Body, &args); err != nil {
+		call.InputErr = "write_file structured body needs content and optional expected_resource_id: " + err.Error()
+		return
+	}
+	call.Body = args.Content
+	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
+	if err := ValidateWriteFileCall(call); err != nil {
+		call.InputErr = err.Error()
+	}
 }
 
 // decodeReadFileBody parses the optional JSON range/resource_id object from a
@@ -97,6 +131,18 @@ func ValidateEditFileCall(call *Call) error {
 	}
 	if call.OldText == call.NewText {
 		return fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+	}
+	return nil
+}
+
+// ValidateWriteFileCall validates the optional version selector without doing
+// filesystem or resource I/O; resolution happens at execution time.
+func ValidateWriteFileCall(call *Call) error {
+	if call == nil {
+		return fmt.Errorf("write_file call is missing")
+	}
+	if strings.TrimSpace(call.Path) == "" {
+		return fmt.Errorf("write_file needs a target path")
 	}
 	return nil
 }

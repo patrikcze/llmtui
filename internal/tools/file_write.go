@@ -422,6 +422,17 @@ func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (d
 			return "", meta, withCode(fmt.Errorf("%q changed since it was read; re-read the file and retry the edit against its current text", displayPath), "match_not_found", RetryReread)
 		}
 	}
+	if existed && !oldTooBig && oldContent == content {
+		// A successful idempotent overwrite is observable success, but it did
+		// not change the workspace and must not count as progress.
+		meta.Outcome = OutcomeOK
+		meta.Effect = EffectUnchanged
+		meta.SourceDigest = digestBytes([]byte(content))
+		meta.ContentDigest = meta.SourceDigest
+		meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: int64(len(content)), Complete: true}
+		meta.Encoding = encodingInfo([]byte(content), true)
+		return RenderWriteDiff(displayPath, oldContent, content, true), meta, nil
+	}
 	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return "", meta, fmt.Errorf("create parent directory: %w", err)
 	}

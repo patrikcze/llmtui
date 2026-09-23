@@ -108,7 +108,7 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		// The path says which file is clobbered; the body says with what.
 		// Approving "overwrite README.md with these bytes" must not approve
 		// "overwrite README.md with anything at all".
-		sum := sha256.Sum256([]byte(c.Body))
+		sum := sha256.Sum256([]byte(c.Body + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolEditFile:
 		// Path identifies the file; the exact old→new pair identifies the

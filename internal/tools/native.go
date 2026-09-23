@@ -78,19 +78,20 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolWriteFile,
-			Description: "Create or overwrite a file in the project workspace with the given content. Paths are relative to the project root. May require the user's approval.",
+			Description: "Create or overwrite a file in the project workspace with the given content. Pass expected_resource_id from a complete prior read to reject stale overwrites. Paths are relative to the project root. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root."},
-					"content": {"type": "string", "description": "The full file content to write."}
+					"content": {"type": "string", "description": "The full file content to write."},
+					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
 				},
 				"required": ["path", "content"]
 			}`),
 		},
 		{
 			Name:        ToolEditFile,
-			Description: "Replace one exact, unique text fragment in an existing workspace file. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
+			Description: "Replace one exact, unique text fragment in an existing workspace file. Pass expected_resource_id from a complete prior read to reject stale edits. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -426,6 +427,10 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			}
 		case ToolWriteFile:
 			c.Body = args.Content
+			c.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
+			if err := ValidateWriteFileCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolRunCommand:
 			c.Body = args.Command
 		case ToolWebSearch:
@@ -799,7 +804,7 @@ func NativeInstructions(root string, withWeb bool) string {
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- The default read is a bounded line window. Use read_file with offset/limit for complete lines, or byte_offset copied from next_byte_offset for a partial giant line. A returned resource_id reads the same retained snapshot without reopening its source. Use edit_file for a small change to an existing file — old_text must match exactly once; reuse a complete file observation when one is available. Use write_file only to create a file or deliberately replace all of it.
+- The default read is a bounded line window. Use read_file with offset/limit for complete lines, or byte_offset copied from next_byte_offset for a partial giant line. A returned resource_id reads the same retained snapshot without reopening its source. Use edit_file for a small change to an existing file — old_text must match exactly once; pass expected_resource_id from a complete prior file observation when one is available so stale edits are rejected. For guarded whole-file replacement, pass the same expected_resource_id with write_file. Use write_file without it only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`
