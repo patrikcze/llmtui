@@ -133,4 +133,8 @@ func TestPhase5LegacyRawJSONWriteRemainsCompatible(t *testing.T) {
 	if strings.TrimSpace(calls[0].ExpectedResourceID) != "" {
 		t.Fatalf("unexpected resource ID %q", calls[0].ExpectedResourceID)
 	}
+	contentField := Parse("```tool write_file data.json\n{\"content\":\"this is the document\"}\n```")
+	if len(contentField) != 1 || contentField[0].Body != "{\"content\":\"this is the document\"}\n" {
+		t.Fatalf("raw JSON content field was misclassified: %+v", contentField)
+	}
 }

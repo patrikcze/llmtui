@@ -44,10 +44,11 @@ func decodeWriteFileBody(call *Call) {
 	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil {
 		return // raw file content remains valid legacy syntax
 	}
-	if _, hasContent := fields["content"]; !hasContent {
-		if _, hasID := fields["expected_resource_id"]; !hasID {
-			return
-		}
+	// A raw JSON document is valid write_file content. The optional fenced
+	// envelope is therefore unambiguous only when it carries the selector;
+	// without expected_resource_id, preserve the legacy raw body byte-for-byte.
+	if _, hasID := fields["expected_resource_id"]; !hasID {
+		return
 	}
 	var args writeFileArgs
 	if err := decodeOneJSONObject(call.Body, &args); err != nil {
