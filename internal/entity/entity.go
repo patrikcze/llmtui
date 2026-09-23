@@ -24,6 +24,12 @@ const (
 	DefaultMaxTotalPayload   = 4 * 1024 * 1024
 	DefaultMaxPreviewBytes   = 768
 	DefaultMaxFullExpansions = 8
+	// DefaultMaxBodyBytes and DefaultMaxTotalBodyBytes bound Registry.Publish
+	// bodies. This is a separate budget from the small-payload accounting
+	// above (MaxPayloadBytes/MaxTotalPayload): body bytes are never merged
+	// into the semantic-entity payload total.
+	DefaultMaxBodyBytes      = 4 * 1024 * 1024
+	DefaultMaxTotalBodyBytes = 16 * 1024 * 1024
 )
 
 // Kind identifies the normalized object represented by an entity.
@@ -154,6 +160,9 @@ type Candidate struct {
 	Preview    string
 	ExpiresAt  time.Time
 	Redacted   bool
+	// Resource carries the body-identity metadata for Registry.Publish
+	// candidates. Registry.Put ignores it; Put callers never set it.
+	Resource ResourceMetadata
 }
 
 // View is a progressive model-facing representation of one entity. Payload
@@ -189,6 +198,10 @@ type Limits struct {
 	MaxTotalPayload   int
 	MaxPreviewBytes   int
 	MaxFullExpansions int
+	// MaxBodyBytes and MaxTotalBodyBytes bound Registry.Publish bodies. This
+	// is a separate budget from MaxPayloadBytes/MaxTotalPayload above.
+	MaxBodyBytes      int
+	MaxTotalBodyBytes int
 	Now               func() time.Time
 }
 
@@ -210,6 +223,15 @@ func (l Limits) normalized() Limits {
 	}
 	if l.MaxPayloadBytes > l.MaxTotalPayload {
 		l.MaxPayloadBytes = l.MaxTotalPayload
+	}
+	if l.MaxBodyBytes <= 0 {
+		l.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if l.MaxTotalBodyBytes <= 0 {
+		l.MaxTotalBodyBytes = DefaultMaxTotalBodyBytes
+	}
+	if l.MaxBodyBytes > l.MaxTotalBodyBytes {
+		l.MaxBodyBytes = l.MaxTotalBodyBytes
 	}
 	if l.Now == nil {
 		l.Now = time.Now
