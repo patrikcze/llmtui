@@ -97,6 +97,20 @@ chat:
 	}
 }
 
+func TestOutputStorageRejectsUnknownValue(t *testing.T) {
+	path := writeConfig(t, `
+entities:
+  output_storage: disk
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	if _, err := Load(v); err == nil || !strings.Contains(err.Error(), "entities.output_storage") {
+		t.Fatalf("Load() error = %v, want output_storage validation error", err)
+	}
+}
+
 func TestEmbeddedAdvancedConfigurationParses(t *testing.T) {
 	path := writeConfig(t, `
 providers:

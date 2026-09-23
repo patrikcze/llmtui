@@ -256,14 +256,8 @@ type EntitiesConfig struct {
 	// them bounded in-process; "off" disables retention while leaving every
 	// other entity feature (semantic entities via Put, get_entity_details)
 	// unaffected — a capped tool result still shows its preview, just no
-	// resource_id to recover the rest. An empty value and any value other
-	// than "off" behave like "memory" at the point this is read
-	// (internal/tui/entity_context.go) — this file does not fail config load
-	// over an unrecognized value, matching the permissive fallback this file
-	// already uses for other closed-vocabulary strings (e.g.
-	// context.strategy via contextmgr.ValidStrategy) rather than a hard
-	// Load()-time error, a pattern that does not otherwise exist in this
-	// file.
+	// resource_id to recover the rest. An explicitly empty value behaves like
+	// the default and is accepted for compatibility with generated config.
 	OutputStorage string `mapstructure:"output_storage" yaml:"output_storage"`
 	// MaxOutputBytes/MaxTotalOutputBytes bound Registry.Publish bodies,
 	// mirroring MaxPayloadBytes/MaxTotalPayloadBytes above for the separate
@@ -838,6 +832,11 @@ func Load(v *viper.Viper) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	switch cfg.Entities.OutputStorage {
+	case "", "memory", "off":
+	default:
+		return nil, fmt.Errorf("entities.output_storage: must be empty, memory, or off (got %q)", cfg.Entities.OutputStorage)
 	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderConfig{}
