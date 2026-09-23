@@ -327,11 +327,45 @@ func TestReadFileDualIDsAreDisambiguatedForExpectedResourceID(t *testing.T) {
 	if results[0].ResourceID == "" {
 		t.Fatal("test setup: read_file result carries no resource_id — dual-ID scenario did not reproduce")
 	}
-	if !strings.Contains(output, "not a valid expected_resource_id") {
-		t.Fatalf("citation entity block does not warn it is unusable as expected_resource_id:\n%s", output)
+	if !strings.Contains(output, "citation only, not a resource_id") {
+		t.Fatalf("citation entity block does not warn it is unusable as a resource_id:\n%s", output)
 	}
 	if !strings.Contains(output, "use this exact id as expected_resource_id") {
 		t.Fatalf("resource body block does not say it is the id to use for expected_resource_id:\n%s", output)
+	}
+}
+
+// TestNonFileSameKindCitationIsAlsoDisambiguated generalizes the test above:
+// read_file is not the only producer that pairs a Put-based citation entity
+// with a same-Kind Publish-based resource body for the same call — MCP tool
+// results (internal/tui/mcp_tools.go) and web_fetch
+// (internal/tools/web.go's renderWebPage) do the identical
+// KindMCPResult/KindMCPResult and KindWebPage/KindWebPage pairing. Only the
+// citation ID is queryable via get_entity_details; only the resource-body ID
+// works with read_file's resource_id. A fix scoped only to entity.KindFile
+// would leave this exact misuse risk open for both. The citation warning
+// must apply regardless of Kind.
+func TestNonFileSameKindCitationIsAlsoDisambiguated(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Entities.Enabled = true
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	results := m.registerResultEntities([]tools.Result{{
+		Call:   tools.Call{Tool: "mcp", MCPServer: "jira", MCPTool: "get_issue"},
+		Output: "issue detail",
+		Entities: []entity.Candidate{{
+			Kind: entity.KindMCPResult, Label: "jira/get_issue", Trust: entity.TrustMCPUntrusted,
+			Scope: entity.ScopeSession, Payload: "issue detail",
+		}},
+		Captures: []tools.Capture{{
+			Kind: entity.KindMCPResult, Label: "jira/get_issue", Trust: entity.TrustMCPUntrusted,
+			ContentType: "text/plain", Body: []byte("issue detail"), BodyDigest: "digest",
+			Resource: entity.ResourceMetadata{ContentType: "text/plain", BodyDigest: "digest"},
+		}},
+	}})
+	output := results[0].Output
+	if !strings.Contains(output, "citation only, not a resource_id") {
+		t.Fatalf("non-file citation entity is not disambiguated from its same-kind resource body:\n%s", output)
 	}
 }
 

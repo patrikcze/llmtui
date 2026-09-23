@@ -304,18 +304,17 @@ func appendEntityReferences(output string, views []entity.View) string {
 	b.WriteString(output)
 	b.WriteString("\n\n[registered runtime entities — use the exact IDs for later detail requests]\n")
 	for _, view := range views {
-		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q", view.ID, view.Kind, view.Label, view.Source)
-		// A read_file result registers both this citation entity and (when
-		// eligible) a separate retained resource body via
-		// appendResourceReferences below — only the latter's ID is a valid
-		// expected_resource_id. Without this, a model has no textual signal
-		// for which of the two near-identical kind=file lines to use where,
-		// and reliably picks the wrong one (observed twice independently,
-		// 2026-09-23).
-		if view.Kind == entity.KindFile {
-			b.WriteString(" (citation only — not a valid expected_resource_id)")
-		}
-		b.WriteString("\n")
+		// This entity is always Put-based, so it never has a retained body —
+		// true regardless of Kind, not just entity.KindFile. Several
+		// producers (read_file, MCP tool results, web_fetch) register this
+		// citation entity alongside a separate, same-Kind Publish-based
+		// resource body for the same call via appendResourceReferences
+		// below, rendering two near-identical "kind=X label=..." lines. Only
+		// the resource body's ID works as read_file's resource_id or
+		// write_file/edit_file's expected_resource_id; with no textual
+		// signal here, a model reliably picks the wrong one (observed
+		// independently for read_file's KindFile pairing twice, 2026-09-23).
+		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q (citation only, not a resource_id)\n", view.ID, view.Kind, view.Label, view.Source)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
