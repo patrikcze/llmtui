@@ -118,12 +118,11 @@ latency generally dominates the small number of tool calls in a turn.
 
 MCP results are labeled as untrusted external data, enclosed in matching
 collision-checked begin/end markers, and share the workspace tools' output
-cap (`tools.max_file_kb`,
-default 512 KB): an oversized reply is truncated with a marker rather than
-flooding the model's context. An MCP `isError: true` result remains an errored
-tool result. The model and saved session receive the complete sanitized,
-framed detail, while compact terminal rendering shows the first actionable
-error line. `/tools output` toggles the complete detail for human inspection.
+cap (`tools.max_file_kb`, default 512 KB). An oversized reply is retained only
+to that bounded body limit and is marked partial; structured non-text parts
+are reported as bounded metadata and are never dereferenced as URIs. An MCP
+`isError: true` result remains an errored tool result. `/tools output` toggles
+the complete detail for human inspection.
 
 **Small-model name mangling.** Some smaller local models reproduce
 `mcp__server__tool` names imperfectly (e.g. collapsing the double

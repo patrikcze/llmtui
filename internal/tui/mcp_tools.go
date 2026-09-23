@@ -135,13 +135,31 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 		}
 		return res
 	}
-	content := terminaltext.Sanitize(out.Content)
-	observed := len(content)
+	fullContent := terminaltext.Sanitize(out.Content)
+	if len(out.Structured) > 0 {
+		structured := terminaltext.Sanitize(string(out.Structured))
+		if fullContent != "" {
+			fullContent += "\n"
+		}
+		fullContent += "[structured MCP content]\n" + structured
+	}
+	content := fullContent
 	truncated := false
 	if maxBytes > 0 && len(content) > maxBytes {
 		content, _ = terminaltext.TruncateBytes(content, maxBytes)
-		content += fmt.Sprintf("\n… truncated (%d of %d bytes shown)", len(content), len(out.Content))
 		truncated = true
+	}
+	unsupported := make([]string, 0)
+	for _, part := range out.Parts {
+		if !part.Supported {
+			unsupported = append(unsupported, terminaltext.Sanitize(part.Type))
+		}
+	}
+	if truncated {
+		content += fmt.Sprintf("\n… truncated (%d of %d bytes shown)", len(content), len(fullContent))
+	}
+	if len(unsupported) > 0 {
+		content += fmt.Sprintf("\n[omitted unsupported MCP content parts: %s]", strings.Join(unsupported, ", "))
 	}
 	server := terminaltext.Sanitize(c.MCPServer)
 	tool := terminaltext.Sanitize(c.MCPTool)
@@ -153,7 +171,7 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 	)
 	res.Meta.Coverage = tools.Coverage{
 		SourceComplete: !truncated, CaptureComplete: !truncated, PreviewComplete: true,
-		ObservedBytes: int64(observed), RetainedBytes: int64(len(content)),
+		ObservedBytes: int64(len(fullContent)), RetainedBytes: int64(len(content)),
 	}
 	if truncated {
 		res.Meta.Coverage.Reasons = []string{"bytes"}
@@ -184,6 +202,16 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 			Trust:    entity.TrustMCPUntrusted,
 			Scope:    entity.ScopeSession,
 			Payload:  content,
+		}}
+		retained := fullContent
+		if maxBytes > 0 && len(retained) > maxBytes {
+			retained, _ = terminaltext.TruncateBytes(retained, maxBytes)
+		}
+		retainedDigest := digestText(retained)
+		res.Captures = []tools.Capture{{
+			Kind: entity.KindMCPResult, Label: c.MCPServer + "/" + c.MCPTool,
+			Trust: entity.TrustMCPUntrusted, ContentType: "text/plain", Body: []byte(retained),
+			BodyDigest: retainedDigest, Resource: entity.ResourceMetadata{ContentType: "text/plain", BodyDigest: retainedDigest},
 		}}
 	}
 	return res

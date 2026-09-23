@@ -278,6 +278,29 @@ func TestExecuteMCPCallTruncatesOversizedResult(t *testing.T) {
 	}
 }
 
+func TestExecuteMCPCallCapturesBoundedUnsupportedParts(t *testing.T) {
+	reg := newConnectedMCPRegistry(t, "parts", nil, func(string, json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Content: "visible", Parts: []mcp.ContentPart{{Type: "text", Bytes: 7, Supported: true}, {Type: "resource", Bytes: 4096}}}, nil
+	})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "parts", MCPTool: "show", MCPArgs: `{}`}, 0)
+	if res.Err != nil || len(res.Captures) != 1 || string(res.Captures[0].Body) != "visible" {
+		t.Fatalf("capture = %+v err=%v", res.Captures, res.Err)
+	}
+	if !strings.Contains(res.Output, "omitted unsupported MCP content parts: resource") {
+		t.Fatalf("unsupported metadata missing: %q", res.Output)
+	}
+}
+
+func TestExecuteMCPCallRetainsBoundedStructuredContent(t *testing.T) {
+	reg := newConnectedMCPRegistry(t, "structured", nil, func(string, json.RawMessage) (mcp.Result, error) {
+		return mcp.Result{Structured: json.RawMessage(`{"forecast":"sunny","temperature":21}`)}, nil
+	})
+	res := executeMCPCall(context.Background(), reg, tools.Call{MCPServer: "structured", MCPTool: "forecast", MCPArgs: `{}`}, 128)
+	if res.Err != nil || !strings.Contains(res.Output, `"forecast":"sunny"`) || len(res.Captures) != 1 {
+		t.Fatalf("structured result=%+v err=%v", res, res.Err)
+	}
+}
+
 func TestExecuteMCPCallTruncatesAtUTF8Boundary(t *testing.T) {
 	huge := strings.Repeat("é", 1024)
 	reg := newConnectedMCPRegistry(t, "utf8", nil, func(string, json.RawMessage) (mcp.Result, error) {

@@ -55,6 +55,20 @@ type Tool struct {
 type Result struct {
 	Content string
 	IsError bool
+	Parts   []ContentPart
+	// Structured is the optional tools/call structuredContent object. It is
+	// retained as raw JSON and bounded by the caller before entering context;
+	// it is never interpreted as a URI or executable instruction.
+	Structured json.RawMessage
+}
+
+// ContentPart preserves bounded MCP content classification without dereferencing
+// resource or URI parts. Text is the only part admitted to the model body;
+// other types remain visible as bounded metadata.
+type ContentPart struct {
+	Type      string
+	Bytes     int
+	Supported bool
 }
 
 // Client is a transport-agnostic connection to one MCP server. Implementations
