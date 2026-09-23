@@ -198,6 +198,45 @@ func (m *Model) entityContextTokenBudget() int {
 	return defaultEntityContextTokens
 }
 
+// applyCandidateScopePolicy is §21's "explicit candidate scope policy,"
+// replacing the blanket agent-run override this function used to apply to
+// every candidate regardless of kind: safe read/search/web/MCP output meant
+// for reuse across turns is session-scoped even when produced during an
+// active /agent run — only vision observations (agent-only, tied to the
+// attachment that triggered this specific run) stay run-scoped, matching
+// the existing, deliberately-preserved vision trust/kind-filter invariant
+// (§7 "Preserve Vision entities"). Provenance.RunID/Cycle are still
+// recorded whenever a run is active, regardless of which scope is chosen,
+// so a session-scoped entity retains which run/cycle actually produced it.
+//
+// Before this fix, EVERY candidate got entity.ScopeAgentRun whenever
+// m.agentRunActive() was true, and endAgentRun unconditionally released
+// that whole scope on every run termination (success, failure, budget
+// exhaustion, cancellation — see skills.go's endAgentRun) — so a file
+// version or captured body read during one agent run became unresolvable
+// the moment that run ended, even though nothing about the underlying
+// file/page/output had changed. A model that correctly remembered and
+// reused a resource_id from an earlier turn would then hit
+// resource_unavailable on a perfectly valid, unstale reference.
+func (m *Model) applyCandidateScopePolicy(candidate *entity.Candidate) {
+	if candidate.Kind == entity.KindVisionObservation {
+		if m.agentRunActive() {
+			candidate.Scope = entity.ScopeAgentRun
+			candidate.ScopeID = m.agentRunID()
+		} else {
+			candidate.Scope = entity.ScopeSession
+			candidate.ScopeID = ""
+		}
+	} else {
+		candidate.Scope = entity.ScopeSession
+		candidate.ScopeID = ""
+	}
+	if m.agentRunActive() {
+		candidate.Provenance.RunID = m.agentRunID()
+		candidate.Provenance.Cycle = m.agentLoop.run.Cycle
+	}
+}
+
 func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 	if !m.entitiesEnabled() {
 		return results
@@ -210,13 +249,7 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 		if len(results[index].Entities) > 0 {
 			views := make([]entity.View, 0, len(results[index].Entities))
 			for _, candidate := range results[index].Entities {
-				if m.agentRunActive() {
-					candidate.Scope = entity.ScopeAgentRun
-					candidate.ScopeID = m.agentRunID()
-				} else {
-					candidate.Scope = entity.ScopeSession
-					candidate.ScopeID = ""
-				}
+				m.applyCandidateScopePolicy(&candidate)
 				view, err := m.entities.Put(candidate)
 				if err != nil {
 					continue
@@ -313,13 +346,7 @@ func (m *Model) publishResultCaptures(call tools.Call, captures []tools.Capture)
 		if candidate.Resource.BodyDigest == "" {
 			candidate.Resource.BodyDigest = capture.BodyDigest
 		}
-		if m.agentRunActive() {
-			candidate.Scope = entity.ScopeAgentRun
-			candidate.ScopeID = m.agentRunID()
-		} else {
-			candidate.Scope = entity.ScopeSession
-			candidate.ScopeID = ""
-		}
+		m.applyCandidateScopePolicy(&candidate)
 		view, err := m.entities.Publish(context.Background(), candidate, capture.Body)
 		if err != nil {
 			continue
