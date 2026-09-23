@@ -45,6 +45,14 @@ func TestPhase5VersionedEditRejectsExternalModification(t *testing.T) {
 	if string(got) != "external\n" {
 		t.Fatalf("stale edit changed file to %q", got)
 	}
+	retryRead := r.Execute(Call{Tool: ToolReadFile, Path: "f.txt"})
+	if retryRead.Err != nil || retryRead.Meta.FileVersion == nil {
+		t.Fatalf("retry read = %+v", retryRead)
+	}
+	retry := r.Execute(Call{Tool: ToolEditFile, Path: "f.txt", OldText: "external", NewText: "recovered", ExpectedVersion: retryRead.Meta.FileVersion})
+	if retry.Err != nil || retry.Meta.Effect != EffectChanged {
+		t.Fatalf("matching-resource retry = %+v", retry)
+	}
 }
 
 func TestPhase5ExpectedResourceIDValidation(t *testing.T) {
