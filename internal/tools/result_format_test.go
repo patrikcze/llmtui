@@ -139,3 +139,27 @@ func TestErrorCodeVocabularyIsClosedAndStable(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkFormatResults and BenchmarkNativeResults are Phase 1a's own
+// checklist item ("Run formatter benchmark, gate G and focused race
+// subset"), never actually added when the phase landed — the shared
+// formatResultContent helper (used by both FormatResults, the fenced
+// [tool results] path, and NativeResults, the role:"tool" path) has run
+// unbenchmarked since. Reuses formatResultFixtures so a regression here is
+// directly comparable to TestFormatResultContentUnchanged/
+// TestFormatResultsSnapshot/TestNativeResultsSnapshot's fixed expectations —
+// a change that shows up here without those tests changing means the
+// formatter got slower without changing its output.
+func BenchmarkFormatResults(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = FormatResults(formatResultFixtures)
+	}
+}
+
+func BenchmarkNativeResults(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = NativeResults(formatResultFixtures)
+	}
+}
