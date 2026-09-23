@@ -976,6 +976,14 @@ func (m *Model) debugOverlay() string {
 	if d.AssistanceReason != "" {
 		m.kv(&b, "assistance (shadow)", fmt.Sprintf("hint=%v reason=%s", d.AssistanceHint, d.AssistanceReason))
 	}
+	if d.DecisionShadowUnavailableReason != "" {
+		m.kv(&b, "laya shadow", "unavailable: "+d.DecisionShadowUnavailableReason)
+	} else if d.DecisionShadowCycleAction != "" {
+		m.kv(&b, "laya shadow", fmt.Sprintf("model=%s action=%s (p=%.2f conf=%.2f) goal_complete=%.2f verifier_needed=%.2f latency=%s vs actual=%s/%s",
+			d.DecisionShadowModel, d.DecisionShadowCycleAction, d.DecisionShadowCycleActionProbability, d.DecisionShadowCycleActionConfidence,
+			d.DecisionShadowGoalCompleteProbability, d.DecisionShadowVerifierNeededProbability,
+			d.DecisionShadowLatency.Round(time.Millisecond), d.DecisionShadowActualVerifierPath, d.DecisionShadowActualDecision))
+	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
 		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")

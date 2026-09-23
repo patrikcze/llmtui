@@ -341,6 +341,13 @@ type Model struct {
 	// agent_loop.go so ordinary chat remains a direct compatibility path.
 	agentOn   bool
 	agentLoop *agentLoopState
+
+	// decisionShadow is the optional Laya MLX decision-engine wiring, nil
+	// unless cfg.DecisionEngine.Enabled. SHADOW-ONLY: read by
+	// dispatchAgentDecisionShadow, never by any authoritative agent-decision
+	// path. See internal/tui/agent_decision_shadow.go.
+	decisionShadow        *decisionShadowService
+	decisionShadowMetrics agentDecisionShadowMetrics
 }
 
 // New builds the chat model.
@@ -706,6 +713,7 @@ func (m *Model) rebuildFromConfig() {
 	}
 	m.profiles = append(profiles, modelprofile.BuiltIn()...)
 	m.configureAgentLoop()
+	m.configureDecisionShadow()
 }
 
 // configureOperationLog keeps crash recovery independent from transcript
@@ -1126,6 +1134,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentContractMsg:
 		return m.handleAgentContract(msg)
+
+	case agentDecisionShadowMsg:
+		return m.handleAgentDecisionShadow(msg)
 
 	case agentPersistedMsg:
 		if msg.err != nil && m.agentLoop != nil && msg.runID == m.agentRunID() {
@@ -2309,6 +2320,7 @@ func (m *Model) quit() tea.Cmd {
 	m.notice = "shutting down…"
 	reg := m.mcpRegistry
 	prov := m.prov
+	decisionSvc := m.decisionShadow
 	persist := m.persistAgentRun()
 	return func() tea.Msg {
 		var persistErr error
@@ -2318,6 +2330,7 @@ func (m *Model) quit() tea.Cmd {
 			}
 		}
 		reg.Close()
+		_ = decisionSvc.Close()
 		return quitDoneMsg{err: errors.Join(persistErr, provider.CloseProvider(prov))}
 	}
 }
@@ -3616,6 +3629,9 @@ func Run(opts Options) error {
 	// nil-safe and idempotent, so this is harmless alongside quit()'s own
 	// m.mcpRegistry.Close() on the happy path.
 	defer m.mcpRegistry.Close()
+	// Same belt-and-braces guarantee for the optional Laya decision engine's
+	// MLX worker subprocess, if one was ever constructed.
+	defer func() { _ = m.decisionShadow.Close() }()
 	// Stops the zone manager's background worker goroutine. New() already
 	// guaranteed it's initialized.
 	defer zone.Close()
@@ -3674,6 +3690,7 @@ func Run(opts Options) error {
 			return
 		}
 		m.mcpRegistry.Close()
+		_ = m.decisionShadow.Close()
 		p.Kill()
 	}()
 	defer signal.Stop(sigCh)

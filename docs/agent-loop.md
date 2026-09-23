@@ -82,6 +82,19 @@ route a request. No automatic assistance default has been adopted. The
 synthetic baseline, opt-in endpoint procedure, denominators, and saved-state
 compatibility gate are documented in [agent-evaluation.md](agent-evaluation.md).
 
+A second shadow tracker, the Laya decision-engine advisor, runs alongside the
+format-assistance tracker when `decision_engine.enabled` is true: after
+`agent.Decide()` resolves each cycle, a compact, bounded snapshot of the
+cycle's observable state (task, objective, acceptance-criteria statuses, tool
+outcomes, changed files, test results — never the raw transcript, hidden
+reasoning, or full tool output) is sent to the configured Laya model, and its
+`cycle_action`/`goal_complete`/`semantic_verifier_needed` predictions are
+recorded in `/debug last` next to the authoritative decision. Like the
+format-assistance tracker, this is shadow-only: no prediction changes
+verifier mode, skips verification, forces success, ends a run, or authorizes
+anything. See [decision-engine.md](decision-engine.md) for the engine itself,
+the Snake-demo design analogy, and the future-phase roadmap.
+
 ## Lifecycle
 
 Each run establishes a contract, then follows the execution stages:

@@ -79,6 +79,34 @@ type debugInfo struct {
 	// agent.AssistanceReason's fixed values.
 	AssistanceHint   bool
 	AssistanceReason string
+	// DecisionShadow* fields are the Laya MLX decision engine's shadow-only
+	// recommendation for the most recently completed agent cycle (see
+	// internal/tui/agent_decision_shadow.go). SHADOW-ONLY: none of these
+	// fields are read by any authoritative agent-decision path; they exist
+	// purely for /debug last and the calibration counters in
+	// agentDecisionShadowMetrics ahead of any future phase that might act on
+	// them. DecisionShadowUnavailableReason is set (and every other
+	// DecisionShadow* field left zero) whenever the engine is disabled,
+	// unavailable, errored, or timed out — a decision runtime error must
+	// have zero effect on the agent run, and that includes never showing a
+	// stale-looking success from a previous cycle.
+	DecisionShadowModel                 string
+	DecisionShadowCycleAction           string
+	DecisionShadowCycleActionConfidence float64
+	// DecisionShadowCycleActionProbability is Answer.Probabilities[Choice] —
+	// distinct from, and more interpretable than, DecisionShadowCycleActionConfidence:
+	// Laya's own reference fixtures show a choice answer's "confidence" is a
+	// margin/distribution-based metric that runs well below the winning
+	// option's own probability even on a clean, correctly-answered,
+	// in-distribution example (see internal/decision/testdata/mlx/typed-decisions-mlx.json's
+	// "department" case: probabilities.billing=0.7448 but confidence=0.3903).
+	DecisionShadowCycleActionProbability    float64
+	DecisionShadowGoalCompleteProbability   float64
+	DecisionShadowVerifierNeededProbability float64
+	DecisionShadowLatency                   time.Duration
+	DecisionShadowUnavailableReason         string
+	DecisionShadowActualVerifierPath        string
+	DecisionShadowActualDecision            string
 	// PersonalAppsResult is the bounded, already-sanitized Output of the most
 	// recent personal_apps tool call — the exact JSON (outcomes, codes,
 	// detail messages) the model itself received. A live investigation found

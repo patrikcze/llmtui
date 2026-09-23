@@ -56,6 +56,14 @@ type agentLoopState struct {
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
+	// decisionShadowGen guards the Laya shadow advisor's async Predict result
+	// the same way verifyGen/contractGen guard the verifier/contract results
+	// (see agentDecisionShadowMsg in agent_decision_shadow.go) — bumped once
+	// per dispatched shadow call, so a stale response from a superseded or
+	// cancelled cycle is discarded. No cancel/in-flight-flag fields are
+	// needed alongside it: the shadow call is fire-and-forget with its own
+	// bounded context, never something the controller blocks on or cancels.
+	decisionShadowGen int
 	// verifierModel and verifierStartedAt describe only a real semantic
 	// verifier request. Deterministic verification never sets them, so the UI
 	// cannot imply that a model is running when the controller decided locally.
@@ -1156,6 +1164,14 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, nil
 	}
 	m.agentLoop.verifying = false
+	// Captured before clearVerifierActivity blanks verifierModel: it is only
+	// ever set for a real semantic verifier request (see its own doc
+	// comment), so its presence here is exactly "did this cycle actually run
+	// a semantic pass" — the shadow advisor's DecisionShadowActualVerifierPath.
+	decisionShadowVerifierPath := "deterministic"
+	if m.agentLoop.verifierModel != "" {
+		decisionShadowVerifierPath = "semantic"
+	}
 	m.clearVerifierActivity()
 	if m.agentLoop.verifyCancel != nil {
 		m.agentLoop.verifyCancel()
@@ -1237,10 +1253,15 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	}
 	m.syncAgentDebug()
 	persist := m.persistAgentRun()
+	// SHADOW-ONLY: this call only ever records a diagnostic — see
+	// agent_decision_shadow.go's package doc comment. stop is already final
+	// and ApplyStop has already run; nothing below this line may change
+	// because of what shadowCmd eventually returns.
+	shadowCmd := m.dispatchAgentDecisionShadow(run, m.agentLoop.execution, decisionShadowVerifierPath, stop.Decision, result.Verdict)
 	switch stop.Decision {
 	case agent.DecisionContinue, agent.DecisionRetry:
 		m.notice = fmt.Sprintf("agent %s · verification %s · %s", shortRunID(run.ID), result.Verdict, stop.Decision)
-		return m, tea.Batch(persist, m.startNextAgentCycle(stop.NextObjective))
+		return m, tea.Batch(persist, shadowCmd, m.startNextAgentCycle(stop.NextObjective))
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
 		m.autoPromoteAgentOutcome()
@@ -1259,7 +1280,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	}
 	m.endAgentRun()
 	m.refreshViewport()
-	return m, persist
+	return m, tea.Batch(persist, shadowCmd)
 }
 
 // satisfyLegacyPassedCriteria keeps older verifier configurations compatible
