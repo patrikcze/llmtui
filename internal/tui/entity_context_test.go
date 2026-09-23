@@ -298,6 +298,77 @@ func TestDisabledEntitiesAreNotModelVisible(t *testing.T) {
 // resource_id from an ended run was rejected by edit_file's
 // expected_resource_id precondition, and only succeeded after a wasted
 // re-read produced a fresh ID.
+// TestReadFileDualIDsAreDisambiguatedForExpectedResourceID reproduces a
+// recurring live failure (2026-09-23, observed twice independently while
+// manually testing the Laya shadow advisor): a complete small-file read_file
+// mints TWO entity IDs — a Put-based citation entity (for later detail
+// lookups) and a Publish-based resource body (the only one valid for a
+// subsequent write_file/edit_file's expected_resource_id) — and nothing in
+// the rendered tool output told the model which was which. Both times, the
+// model picked the citation ID and got wrong_resource_kind /
+// "entity is not a resource body". The output text must now say, inline,
+// which ID is which.
+func TestReadFileDualIDsAreDisambiguatedForExpectedResourceID(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.cfg.Entities.Enabled = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	if err := os.WriteFile(filepath.Join(root, "shadow-test.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := m.toolRunner.Execute(tools.Call{Tool: tools.ToolReadFile, Path: "shadow-test.txt"})
+	if res.Err != nil {
+		t.Fatalf("read_file: %v", res.Err)
+	}
+	results := m.registerResultEntities([]tools.Result{res})
+	output := results[0].Output
+	if results[0].ResourceID == "" {
+		t.Fatal("test setup: read_file result carries no resource_id — dual-ID scenario did not reproduce")
+	}
+	if !strings.Contains(output, "citation only, not a resource_id") {
+		t.Fatalf("citation entity block does not warn it is unusable as a resource_id:\n%s", output)
+	}
+	if !strings.Contains(output, "use this exact id as expected_resource_id") {
+		t.Fatalf("resource body block does not say it is the id to use for expected_resource_id:\n%s", output)
+	}
+}
+
+// TestNonFileSameKindCitationIsAlsoDisambiguated generalizes the test above:
+// read_file is not the only producer that pairs a Put-based citation entity
+// with a same-Kind Publish-based resource body for the same call — MCP tool
+// results (internal/tui/mcp_tools.go) and web_fetch
+// (internal/tools/web.go's renderWebPage) do the identical
+// KindMCPResult/KindMCPResult and KindWebPage/KindWebPage pairing. Only the
+// citation ID is queryable via get_entity_details; only the resource-body ID
+// works with read_file's resource_id. A fix scoped only to entity.KindFile
+// would leave this exact misuse risk open for both. The citation warning
+// must apply regardless of Kind.
+func TestNonFileSameKindCitationIsAlsoDisambiguated(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Entities.Enabled = true
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	results := m.registerResultEntities([]tools.Result{{
+		Call:   tools.Call{Tool: "mcp", MCPServer: "jira", MCPTool: "get_issue"},
+		Output: "issue detail",
+		Entities: []entity.Candidate{{
+			Kind: entity.KindMCPResult, Label: "jira/get_issue", Trust: entity.TrustMCPUntrusted,
+			Scope: entity.ScopeSession, Payload: "issue detail",
+		}},
+		Captures: []tools.Capture{{
+			Kind: entity.KindMCPResult, Label: "jira/get_issue", Trust: entity.TrustMCPUntrusted,
+			ContentType: "text/plain", Body: []byte("issue detail"), BodyDigest: "digest",
+			Resource: entity.ResourceMetadata{ContentType: "text/plain", BodyDigest: "digest"},
+		}},
+	}})
+	output := results[0].Output
+	if !strings.Contains(output, "citation only, not a resource_id") {
+		t.Fatalf("non-file citation entity is not disambiguated from its same-kind resource body:\n%s", output)
+	}
+}
+
 func TestResourceScopeSurvivesAgentRunEnd(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()

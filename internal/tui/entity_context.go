@@ -304,7 +304,17 @@ func appendEntityReferences(output string, views []entity.View) string {
 	b.WriteString(output)
 	b.WriteString("\n\n[registered runtime entities — use the exact IDs for later detail requests]\n")
 	for _, view := range views {
-		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q\n", view.ID, view.Kind, view.Label, view.Source)
+		// This entity is always Put-based, so it never has a retained body —
+		// true regardless of Kind, not just entity.KindFile. Several
+		// producers (read_file, MCP tool results, web_fetch) register this
+		// citation entity alongside a separate, same-Kind Publish-based
+		// resource body for the same call via appendResourceReferences
+		// below, rendering two near-identical "kind=X label=..." lines. Only
+		// the resource body's ID works as read_file's resource_id or
+		// write_file/edit_file's expected_resource_id; with no textual
+		// signal here, a model reliably picks the wrong one (observed
+		// independently for read_file's KindFile pairing twice, 2026-09-23).
+		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q (citation only, not a resource_id)\n", view.ID, view.Kind, view.Label, view.Source)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -365,7 +375,11 @@ func appendResourceReferences(output string, views []entity.ResourceView) string
 	b.WriteString(output)
 	b.WriteString("\n\n[retained output — read it back with read_file resource_id instead of rerunning this command]\n")
 	for _, view := range views {
-		fmt.Fprintf(&b, "- %s kind=%s bytes=%d\n", view.ID, view.Kind, view.SizeBytes)
+		fmt.Fprintf(&b, "- %s kind=%s bytes=%d", view.ID, view.Kind, view.SizeBytes)
+		if view.Kind == entity.KindFile {
+			b.WriteString(" (use this exact id as expected_resource_id when writing or editing this file)")
+		}
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
