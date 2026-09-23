@@ -73,7 +73,11 @@ func (r *Registry) Publish(ctx context.Context, candidate Candidate, body []byte
 	if err := ctx.Err(); err != nil {
 		return ResourceView{}, fmt.Errorf("publish entity body: %w", err)
 	}
+	body = r.bodyBackend.prepare(body)
 	size := len(body)
+	if _, disk := r.bodyBackend.(*diskBodyBackend); disk && candidate.Resource.BodyDigest != "" {
+		candidate.Resource.BodyDigest = digest(string(body))
+	}
 
 	r.mu.Lock()
 	now := r.limits.Now().UTC()

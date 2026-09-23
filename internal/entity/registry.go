@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,14 +47,36 @@ type record struct {
 
 // NewRegistry constructs an empty registry with normalized bounds.
 func NewRegistry(limits Limits) *Registry {
-	return &Registry{
+	r, err := NewRegistryWithStorage(limits, StorageOptions{Mode: StorageMemory})
+	if err != nil {
+		// The memory backend has no expected construction failure. Keep the
+		// historical constructor total and panic only if that invariant breaks.
+		panic(err)
+	}
+	return r
+}
+
+// NewRegistryWithStorage constructs a registry with an explicit body backend.
+// Disk setup errors are returned so callers can report a bounded fallback to
+// memory; no partially initialized registry or body ID is exposed.
+func NewRegistryWithStorage(limits Limits, opts StorageOptions) (*Registry, error) {
+	backend := bodyBackend(newMemoryBodyBackend())
+	if strings.EqualFold(strings.TrimSpace(opts.Mode), StorageDisk) {
+		disk, err := newDiskBodyBackend(opts)
+		if err != nil {
+			return nil, err
+		}
+		backend = disk
+	}
+	r := &Registry{
 		limits:      limits.normalized(),
 		items:       make(map[ID]*record),
 		pinned:      make(map[ID]int),
-		bodyBackend: newMemoryBodyBackend(),
+		bodyBackend: backend,
 		bodies:      make(map[ID]*bodyRecord),
 		bodyPinned:  make(map[ID]int),
 	}
+	return r, nil
 }
 
 // Put registers one candidate and returns its new opaque reference. Similar
@@ -319,6 +342,9 @@ type Stats struct {
 	MaxTotalPayload   int
 	ExpandedThisReq   int
 	MaxFullExpansions int
+	BodyBytes         int
+	MaxBodyBytes      int
+	MaxTotalBodyBytes int
 }
 
 // Stats returns bounded registry counters without exposing payloads.
@@ -337,7 +363,22 @@ func (r *Registry) Stats() Stats {
 		MaxTotalPayload:   r.limits.MaxTotalPayload,
 		ExpandedThisReq:   r.expanded,
 		MaxFullExpansions: r.limits.MaxFullExpansions,
+		BodyBytes:         r.bodyTotal,
+		MaxBodyBytes:      r.limits.MaxBodyBytes,
+		MaxTotalBodyBytes: r.limits.MaxTotalBodyBytes,
 	}
+}
+
+// DiskStorageStatus reports the configured private spool without exposing
+// retained content. Memory registries return an empty status.
+func (r *Registry) DiskStorageStatus() DiskStorageStatus {
+	if r == nil {
+		return DiskStorageStatus{}
+	}
+	if disk, ok := r.bodyBackend.(*diskBodyBackend); ok {
+		return disk.status()
+	}
+	return DiskStorageStatus{}
 }
 
 func (r *Registry) purgeExpiredLocked(now time.Time) {

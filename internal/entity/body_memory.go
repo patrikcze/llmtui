@@ -9,9 +9,11 @@ import (
 
 // bodyBackend stores bounded body bytes and hands back read-only handles.
 // It is Registry's own storage abstraction, not part of this package's
-// public API. A disk-backed implementation is Phase 7; this phase ships
-// only the in-memory backend below.
+// public API. Disk backing is opt-in through NewRegistryWithStorage.
 type bodyBackend interface {
+	// prepare applies backend-specific sensitivity handling before quota
+	// reservation and persistence. The memory backend returns the input.
+	prepare(data []byte) []byte
 	// put stores data and returns an opaque handle for later open/remove
 	// calls. Implementations must copy data rather than retain the caller's
 	// slice, since the caller may reuse or mutate it after put returns.
@@ -38,6 +40,8 @@ type memoryBodyBackend struct {
 	seq    uint64
 	blocks map[string][]byte
 }
+
+func (b *memoryBodyBackend) prepare(data []byte) []byte { return data }
 
 func newMemoryBodyBackend() *memoryBodyBackend {
 	return &memoryBodyBackend{blocks: make(map[string][]byte)}
