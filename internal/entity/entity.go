@@ -102,17 +102,25 @@ var idPattern = regexp.MustCompile(`^` + IDPrefix + `[0-9]{` + fmt.Sprint(idDigi
 // source identity, path, URL, secret, or pointer address.
 type ID string
 
-// ParseID validates the exact model-facing identifier format.
+// ParseID validates the exact model-facing identifier format. It accepts
+// both the legacy sequential shape minted by Registry.Put (ent_ plus a
+// fixed 5-digit number) and the random shape minted by Registry.Publish
+// (ent_ plus a fixed 26-char lowercase base32 string) — see idRandomPattern
+// in id_random.go for why the two shapes can never collide. There is no
+// migration from one shape to the other: an unrecognized ent_-prefixed
+// string is simply invalid, exactly as before this ID family existed.
 func ParseID(raw string) (ID, error) {
-	if !idPattern.MatchString(raw) {
+	if !idPattern.MatchString(raw) && !idRandomPattern.MatchString(raw) {
 		return "", fmt.Errorf("invalid entity ID %q", raw)
 	}
 	return ID(raw), nil
 }
 
-// Valid reports whether id is a canonical entity identifier.
+// Valid reports whether id is a canonical entity identifier, in either the
+// legacy sequential or random shape.
 func (id ID) Valid() bool {
-	return idPattern.MatchString(string(id))
+	s := string(id)
+	return idPattern.MatchString(s) || idRandomPattern.MatchString(s)
 }
 
 func (id ID) String() string { return string(id) }
