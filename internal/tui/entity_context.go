@@ -11,6 +11,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/prompt"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
 	"github.com/patrikcze/llmtui/internal/untrusted"
 )
@@ -102,6 +103,11 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 			}
 			if len(views) > 0 {
 				results[index].Output = appendEntityReferences(results[index].Output, views)
+				for _, view := range views {
+					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
+						ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
+					})
+				}
 			}
 		}
 		// Captures (Phase 2b-ii): a producer-retained body beyond what
@@ -114,6 +120,11 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 			resourceViews := m.publishResultCaptures(results[index].Call, results[index].Captures)
 			if len(resourceViews) > 0 {
 				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
+				for _, view := range resourceViews {
+					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
+						ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
+					})
+				}
 			}
 		}
 	}

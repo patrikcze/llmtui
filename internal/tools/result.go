@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"errors"
+
+	"github.com/patrikcze/llmtui/internal/entity"
 )
 
 // This file is Phase 1a of the next-generation tool runtime plan
@@ -166,10 +168,24 @@ type Window struct {
 	StartByte, EndByte int64
 	// NextOffset is the next complete line to request, only when valid.
 	NextOffset *int64
+	// NextByteOffset is set only when a byte continuation is safe and useful
+	// for the observed source (for example, a partial long line).
+	NextByteOffset *int64
 	// NextCursor is an opaque, bounded continuation token — never a path.
 	NextCursor string
 	// PartialLine reports whether EndLine's content was itself truncated.
 	PartialLine bool
+}
+
+// EncodingInfo describes the raw bytes inspected for a file observation.
+// Complete distinguishes a property established over the whole source from a
+// property observed only in a bounded prefix/window.
+type EncodingInfo struct {
+	Name      string
+	UTF8Valid bool
+	CRLF      bool
+	NUL       bool
+	Complete  bool
 }
 
 // ResultMeta is the additive, typed outcome/coverage/window envelope every
@@ -183,8 +199,14 @@ type ResultMeta struct {
 	Coverage Coverage
 	Window   *Window
 	// ContentDigest is a stable hash of the retained representation; empty
-	// when not applicable this phase (no retention substrate yet).
+	// when no rendered body was retained.
 	ContentDigest string
+	// SourceDigest is a SHA-256 of the complete raw source, populated only for
+	// a complete, stable file observation. It is never a prefix hash.
+	SourceDigest string
+	// FileVersion is present only when SourceDigest covers the complete file.
+	FileVersion *entity.FileVersion
+	Encoding    EncodingInfo
 	// Effect classifies what the call did to the outside world: none |
 	// changed | unchanged | unknown.
 	Effect Effect

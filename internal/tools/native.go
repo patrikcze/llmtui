@@ -728,6 +728,7 @@ func NativeResults(results []Result) []provider.Message {
 			ToolCallID: res.Call.ID,
 			ToolName:   res.Call.Tool,
 			Display:    res.Diff,
+			References: append([]provider.MessageReference(nil), res.References...),
 		})
 	}
 	return out

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +42,55 @@ func TestReadFileLegacyWholeFileUnchanged(t *testing.T) {
 	}
 	if strings.Contains(got, "[read_file:") {
 		t.Fatal("legacy read must not add a range header")
+	}
+}
+
+func TestReadFileCompleteMetadataSeparatesSourceAndRenderedDigests(t *testing.T) {
+	root := t.TempDir()
+	content := "first\r\nsecond\r\n"
+	writeTemp(t, root, "f.txt", content)
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "f.txt"})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	sum := sha256.Sum256([]byte(content))
+	if got, want := res.Meta.SourceDigest, hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("SourceDigest = %q, want %q", got, want)
+	}
+	if res.Meta.ContentDigest == "" {
+		t.Fatal("ContentDigest is empty, want rendered-body digest")
+	}
+	if res.Meta.FileVersion == nil || !res.Meta.FileVersion.Complete || res.Meta.FileVersion.Path != "f.txt" {
+		t.Fatalf("FileVersion = %+v, want complete f.txt version", res.Meta.FileVersion)
+	}
+	if !res.Meta.Encoding.Complete || res.Meta.Encoding.Name != "utf-8" || !res.Meta.Encoding.CRLF {
+		t.Fatalf("Encoding = %+v, want complete UTF-8 CRLF metadata", res.Meta.Encoding)
+	}
+}
+
+func TestReadFileEncodingFlagsInvalidUTF8AndNUL(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'a', 0, 0xff, '\n'}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "binary.dat"})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if !res.Meta.Encoding.Complete || !res.Meta.Encoding.NUL || res.Meta.Encoding.UTF8Valid || res.Meta.Encoding.Name != "binary" {
+		t.Fatalf("Encoding = %+v, want complete binary/invalid UTF-8 flags", res.Meta.Encoding)
+	}
+}
+
+func TestReadFileEmptyDefaultSucceeds(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "empty.txt", "")
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "empty.txt"})
+	if res.Err != nil || res.Output != "" {
+		t.Fatalf("result = output %q error %v, want empty success", res.Output, res.Err)
+	}
+	if res.Meta.Coverage.TotalLines == nil || *res.Meta.Coverage.TotalLines != 0 {
+		t.Fatalf("coverage = %+v, want zero total lines", res.Meta.Coverage)
 	}
 }
 

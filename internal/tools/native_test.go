@@ -124,6 +124,25 @@ func TestNativeResults(t *testing.T) {
 	}
 }
 
+func TestNativeResultsPreserveEphemeralReferences(t *testing.T) {
+	results := []Result{{
+		Call:       Call{ID: "c1", Tool: ToolReadFile},
+		Output:     "body",
+		References: []provider.MessageReference{{ID: "ent_00042", Kind: "file", Label: "f.txt"}},
+	}}
+	msgs := NativeResults(results)
+	if len(msgs) != 1 || len(msgs[0].References) != 1 {
+		t.Fatalf("messages = %+v, want one ephemeral reference", msgs)
+	}
+	if got := msgs[0].References[0]; got.ID != "ent_00042" || got.Kind != "file" || got.Label != "f.txt" {
+		t.Fatalf("reference = %+v", got)
+	}
+	msgs[0].References[0].Label = "mutated"
+	if results[0].References[0].Label != "f.txt" {
+		t.Fatal("NativeResults aliased result references")
+	}
+}
+
 func TestLimitResults(t *testing.T) {
 	calls := []Call{{ID: "c1", Tool: ToolListDir}, {ID: "c2", Tool: ToolReadFile}}
 	results := LimitResults(calls, 10)

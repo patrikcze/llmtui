@@ -150,9 +150,13 @@ type Model struct {
 	showReasoning        bool
 	reasoningDisplaySet  bool
 	attachments          []provider.Image
-	frame                int
-	renderWidth          int
-	mouseEnabled         bool
+	// pendingMessageReferences is consumed synchronously by dispatch when a
+	// fenced tool-result message is appended. References remain controller
+	// metadata and never enter the provider wire payload or persisted history.
+	pendingMessageReferences []provider.MessageReference
+	frame                    int
+	renderWidth              int
+	mouseEnabled             bool
 	// transcriptCache holds the last rendered settled history, reused across
 	// refreshViewport calls whose transcriptCacheKey is unchanged (see
 	// settledTranscriptCached).
@@ -1819,7 +1823,11 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		}
 		return m.continueChat()
 	}
-	cmd := m.dispatch(tools.FormatResults(results), nil)
+	var references []provider.MessageReference
+	for _, result := range results {
+		references = appendMessageReferences(references, result.References...)
+	}
+	cmd := m.dispatchWithReferences(tools.FormatResults(results), nil, references)
 	// Attach the write diffs to the just-added results message so the TUI
 	// can show what changed (display only; the model sees FormatResults).
 	if diff := tools.CollectDiffs(results); diff != "" {
@@ -1845,10 +1853,38 @@ func (m *Model) appendTerminalToolResults(results []tools.Result) {
 		return
 	}
 	m.session.AddMessage(provider.Message{
-		Role:    provider.RoleUser,
-		Content: tools.FormatResults(results),
-		Display: tools.CollectDiffs(results),
+		Role:       provider.RoleUser,
+		Content:    tools.FormatResults(results),
+		Display:    tools.CollectDiffs(results),
+		References: resultReferences(results),
 	})
+}
+
+func resultReferences(results []tools.Result) []provider.MessageReference {
+	var references []provider.MessageReference
+	for _, result := range results {
+		references = appendMessageReferences(references, result.References...)
+	}
+	return references
+}
+
+func appendMessageReferences(dst []provider.MessageReference, refs ...provider.MessageReference) []provider.MessageReference {
+	for _, ref := range refs {
+		if ref.ID == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range dst {
+			if existing.ID == ref.ID && existing.Kind == ref.Kind {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			dst = append(dst, ref)
+		}
+	}
+	return dst
 }
 
 // Approval menu rows, Claude-Code style: pick with ↑/↓ + Enter, or jump

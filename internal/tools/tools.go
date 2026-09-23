@@ -16,6 +16,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +34,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/procutil"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
 )
 
@@ -218,7 +221,12 @@ type Result struct {
 	// (internal/tui/entity_context.go) publishes these into the entity
 	// registry; this package never publishes anything itself.
 	Captures []Capture
-	Meta     ResultMeta
+	// References are ephemeral controller metadata attached to the message
+	// carrying this result. They identify entities/resources registered after
+	// successful delivery; providers ignore them and history does not persist
+	// them.
+	References []provider.MessageReference
+	Meta       ResultMeta
 }
 
 // fenceOpen matches a tool block opener: 3+ backticks, "tool", name, optional path.
@@ -497,7 +505,7 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		default:
 			res.Output, meta, res.Err = r.readFileMetaContext(ctx, c.Path, c.Offset, c.Limit)
 			if res.Err == nil && !IsSecretPath(c.Path) {
-				res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
+				res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output, res.Meta)}
 			}
 		}
 	case ToolEditFile:
@@ -538,7 +546,12 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	return res
 }
 
-func fileEntityCandidate(c Call, output string) entity.Candidate {
+func fileEntityCandidate(c Call, output string, meta ResultMeta) entity.Candidate {
+	resource := entity.ResourceMetadata{BodyDigest: meta.ContentDigest, SourceDigest: meta.SourceDigest}
+	if meta.FileVersion != nil {
+		version := *meta.FileVersion
+		resource.FileVersion = &version
+	}
 	return entity.Candidate{
 		Kind: entity.KindFile,
 		Provenance: entity.Provenance{
@@ -552,6 +565,39 @@ func fileEntityCandidate(c Call, output string) entity.Candidate {
 		Trust:    entity.TrustWorkspaceUntrusted,
 		Scope:    entity.ScopeSession,
 		Payload:  output,
+		Resource: resource,
+	}
+}
+
+func digestBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func countFileLines(data []byte) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := int64(bytes.Count(data, []byte{'\n'}))
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
+}
+
+func encodingInfo(data []byte, complete bool) EncodingInfo {
+	valid := utf8.Valid(data)
+	name := "utf-8"
+	if !valid {
+		name = "invalid-utf8"
+	}
+	nul := bytes.IndexByte(data, 0) >= 0
+	if nul {
+		name = "binary"
+	}
+	return EncodingInfo{
+		Name: name, UTF8Valid: valid, CRLF: bytes.Contains(data, []byte("\r\n")),
+		NUL: nul, Complete: complete,
 	}
 }
 
@@ -691,7 +737,9 @@ func (r *Runner) readFileMetaContext(ctx context.Context, rel string, offset, li
 	}
 	if !bytesTruncated {
 		cov.TotalBytes = int64Ptr(openedInfo.Size())
+		cov.TotalLines = int64Ptr(countFileLines(data))
 	}
+	meta.Encoding = encodingInfo(data, !bytesTruncated)
 	outcome := OutcomeOK
 	if bytesTruncated {
 		cov.Reasons = []string{"bytes"}
@@ -703,7 +751,14 @@ func (r *Runner) readFileMetaContext(ctx context.Context, rel string, offset, li
 		if bytesTruncated && total < int64(len(data))+1 {
 			total = int64(len(data)) + 1
 		}
-		return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), meta, nil
+		output := text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total)
+		meta.ContentDigest = digestBytes([]byte(output))
+		return output, meta, nil
+	}
+	meta.ContentDigest = digestBytes([]byte(text))
+	if int64(len(data)) == openedInfo.Size() {
+		meta.SourceDigest = digestBytes(data)
+		meta.FileVersion = &entity.FileVersion{Path: filepath.ToSlash(name), Digest: meta.SourceDigest, SizeBytes: openedInfo.Size(), Complete: true}
 	}
 	return text, meta, nil
 }
@@ -711,6 +766,7 @@ func (r *Runner) readFileMetaContext(ctx context.Context, rel string, offset, li
 func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displayPath string, size int64, start, count, byteLimit int) (string, ResultMeta, error) {
 	var meta ResultMeta
 	reader := bufio.NewReaderSize(io.LimitReader(file, MaxReadScanBytes+1), 32*1024)
+	rawHash := sha256.New()
 	var selected bytes.Buffer
 	var scanned int64
 	lineNo := 1
@@ -722,6 +778,8 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 	complete := false
 
 	process := func(part []byte, partStart int64, hasNewline bool) {
+		partLen := len(part)
+		_, _ = rawHash.Write(part)
 		if lineNo >= start && lineNo < start+count {
 			if windowStartByte < 0 {
 				windowStartByte = lineStartByte
@@ -738,7 +796,7 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		}
 		if hasNewline {
 			lineNo++
-			lineStartByte = partStart + int64(len(part))
+			lineStartByte = partStart + int64(partLen)
 		}
 	}
 
@@ -839,11 +897,22 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		EndByte:     max(0, windowEndByte),
 		PartialLine: lineCapped,
 	}
+	meta.Encoding = encodingInfo(selected.Bytes(), false)
 	if !scanLimited && !complete {
 		meta.Window.NextOffset = int64Ptr(int64(last + 1))
 	}
 	if text == "" {
+		meta.ContentDigest = digestBytes(nil)
+		if complete && scanned == size {
+			meta.SourceDigest = hex.EncodeToString(rawHash.Sum(nil))
+			meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: size, Complete: true}
+		}
 		return header.String(), meta, nil
+	}
+	meta.ContentDigest = digestBytes([]byte(text))
+	if complete && scanned == size {
+		meta.SourceDigest = hex.EncodeToString(rawHash.Sum(nil))
+		meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: size, Complete: true}
 	}
 	return header.String() + "\n\n" + text, meta, nil
 }
