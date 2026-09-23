@@ -251,6 +251,28 @@ type EntitiesConfig struct {
 	MaxFullExpansions    int  `mapstructure:"max_full_expansions" yaml:"max_full_expansions"`
 	VisionEnabled        bool `mapstructure:"vision_enabled" yaml:"vision_enabled"`
 	VisionMaxTokens      int  `mapstructure:"vision_max_tokens" yaml:"vision_max_tokens"`
+	// OutputStorage gates whether large tool-result bodies (Phase 2b) are
+	// retained for later resource_id read-back. "memory" (default) retains
+	// them bounded in-process; "off" disables retention while leaving every
+	// other entity feature (semantic entities via Put, get_entity_details)
+	// unaffected — a capped tool result still shows its preview, just no
+	// resource_id to recover the rest. An empty value and any value other
+	// than "off" behave like "memory" at the point this is read
+	// (internal/tui/entity_context.go) — this file does not fail config load
+	// over an unrecognized value, matching the permissive fallback this file
+	// already uses for other closed-vocabulary strings (e.g.
+	// context.strategy via contextmgr.ValidStrategy) rather than a hard
+	// Load()-time error, a pattern that does not otherwise exist in this
+	// file.
+	OutputStorage string `mapstructure:"output_storage" yaml:"output_storage"`
+	// MaxOutputBytes/MaxTotalOutputBytes bound Registry.Publish bodies,
+	// mirroring MaxPayloadBytes/MaxTotalPayloadBytes above for the separate
+	// body-retention budget. Zero uses entity.DefaultMaxBodyBytes/
+	// DefaultMaxTotalBodyBytes (this package does not import internal/entity,
+	// so those defaults are not referenced here by name; internal/tui wires
+	// these fields into entity.Limits at registry construction).
+	MaxOutputBytes      int `mapstructure:"max_output_bytes" yaml:"max_output_bytes"`
+	MaxTotalOutputBytes int `mapstructure:"max_total_output_bytes" yaml:"max_total_output_bytes"`
 }
 
 // PromptConfig configures prompt composition.
@@ -916,6 +938,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("entities.max_full_expansions", 8)
 	v.SetDefault("entities.vision_enabled", true)
 	v.SetDefault("entities.vision_max_tokens", 800)
+	v.SetDefault("entities.output_storage", "memory")
+	v.SetDefault("entities.max_output_bytes", 4*1024*1024)
+	v.SetDefault("entities.max_total_output_bytes", 16*1024*1024)
 
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.include_session_summary", true)
@@ -1153,6 +1178,9 @@ entities:
   max_full_expansions: 8
   vision_enabled: true
   vision_max_tokens: 800
+  output_storage: memory # memory | off — off disables read_file resource_id recovery of capped tool output
+  max_output_bytes: 4194304
+  max_total_output_bytes: 16777216
 
 # Prompt composition: helpers are visible via /prompt composed.
 prompt:

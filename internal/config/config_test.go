@@ -64,6 +64,10 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 		!cfg.Entities.VisionEnabled || cfg.Entities.VisionMaxTokens != 800 {
 		t.Fatalf("entity defaults = %+v", cfg.Entities)
 	}
+	if cfg.Entities.OutputStorage != "memory" || cfg.Entities.MaxOutputBytes != 4*1024*1024 ||
+		cfg.Entities.MaxTotalOutputBytes != 16*1024*1024 {
+		t.Fatalf("entity output-storage defaults = %+v", cfg.Entities)
+	}
 }
 
 func TestConfigFileOverridesDefaults(t *testing.T) {
