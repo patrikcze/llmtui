@@ -83,11 +83,9 @@ type ErrorInfo struct {
 	Message string
 }
 
-// errorCodeVocabulary is the closed set of ErrorInfo.Code values this phase
-// may produce. resource_unavailable was added in Phase 2b-ii (read_file's
-// resource_id selector); the remaining codes that depend on Phase 3+
-// substrate (cursor_expired, stale_source, snapshot_incomplete,
-// retention_unavailable, poll_not_due) are still intentionally absent.
+// errorCodeVocabulary is the closed set of ErrorInfo.Code values this runtime
+// may produce. Search cursors and retained-body lookup add their own stable
+// classifications without changing the older read/write vocabulary.
 var errorCodeVocabulary = map[string]bool{
 	"invalid_arguments":        true,
 	"invalid_pattern":          true,
@@ -120,10 +118,13 @@ var errorCodeVocabulary = map[string]bool{
 	"resource_unavailable": true,
 	// capture_limit (Phase 3): a requested late line window lies beyond the
 	// bounded scan budget, so the source was not exhaustively inspected.
-	"capture_limit":    true,
-	"source_changed":   true,
-	"resource_expired": true,
-	"stale_source":     true,
+	"capture_limit":         true,
+	"source_changed":        true,
+	"resource_expired":      true,
+	"stale_source":          true,
+	"cursor_expired":        true,
+	"retention_unavailable": true,
+	"wrong_resource_kind":   true,
 }
 
 // Coverage states how much of the intended source a producer actually
@@ -189,6 +190,19 @@ type EncodingInfo struct {
 	Complete  bool
 }
 
+// SearchCoverage separates the immutable captured result set from the page
+// shown in this response and from the source that was actually scanned.
+type SearchCoverage struct {
+	MatchesReturned int64
+	MatchesCaptured int64
+	MatchesTotal    *int64
+	FilesEligible   int64
+	FilesScanned    int64
+	SourceBytes     int64
+	Skipped         map[string]int64
+	TextComplete    bool
+}
+
 // ResultMeta is the additive, typed outcome/coverage/window envelope every
 // tool result now carries. Outcome lives entirely here; agent.ActionStatus
 // (executed/denied/blocked/unknown) stays controller/batch-owned and is
@@ -208,6 +222,7 @@ type ResultMeta struct {
 	// FileVersion is present only when SourceDigest covers the complete file.
 	FileVersion *entity.FileVersion
 	Encoding    EncodingInfo
+	Search      SearchCoverage
 	// Snapshot is an internal handoff for a complete eligible file body. It is
 	// consumed by the controller for one bounded resource publication and is
 	// never formatted, serialized, or sent directly to a provider.

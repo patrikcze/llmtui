@@ -17,12 +17,15 @@ func Specs() []provider.ToolSpec {
 	return []provider.ToolSpec{
 		{
 			Name:        ToolListDir,
-			Description: "List a directory in the project workspace. Paths are relative to the project root; omit path for the root itself.",
+			Description: "List a directory in the project workspace. Paths are relative to the project root; omit path for the root itself. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Directory path relative to the project root. Optional; defaults to the root."}
-				}
+					"path": {"type": "string", "description": "Directory path relative to the project root. Optional; defaults to the root."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
+					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
+				},
+				"additionalProperties": false
 			}`),
 		},
 		{
@@ -42,27 +45,35 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGlob,
-			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Paths are relative to the project root.",
+			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go or README*."},
-					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."}
+					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
+					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
 				},
 				"required": ["pattern"]
 			}`),
 		},
 		{
 			Name:        ToolGrep,
-			Description: "Recursively search project files with a Go regular expression and return path:line:content matches. Searches are read-only; recursive searches skip likely secret files.",
+			Description: "Recursively search project files. Legacy calls use a Go regular expression; literal/case/context/limit/cursor options provide bounded immutable pages. Searches are read-only; recursive searches skip likely secret files.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"pattern": {"type": "string", "description": "Go regular expression to search for."},
+					"pattern": {"type": "string", "description": "Go regular expression, unless literal=true."},
 					"path": {"type": "string", "description": "Optional file or directory to search, relative to the project root."},
-					"glob": {"type": "string", "description": "Optional file-name glob filter, for example *.go or **/*.md."}
+					"resource_id": {"type": "string", "description": "Search a retained body only; no workspace source is reopened."},
+					"glob": {"type": "string", "description": "Optional file-name glob filter for workspace files."},
+					"literal": {"type": "boolean", "default": false},
+					"case_sensitive": {"type": "boolean", "default": true},
+					"context": {"type": "integer", "minimum": 0, "maximum": 5, "default": 0},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+					"cursor": {"type": "string", "description": "Opaque continuation; omit all query/target fields."}
 				},
-				"required": ["pattern"]
+				"additionalProperties": false
 			}`),
 		},
 		{
@@ -174,6 +185,10 @@ type nativeArgs struct {
 	Freshness          string   `json:"freshness_token"`
 	Offset             int      `json:"offset"`
 	Limit              int      `json:"limit"`
+	Literal            bool     `json:"literal"`
+	CaseSensitive      *bool    `json:"case_sensitive"`
+	Context            int      `json:"context"`
+	Cursor             string   `json:"cursor"`
 	ByteOffset         *int64   `json:"byte_offset"`
 	ResourceID         string   `json:"resource_id"`
 	OldText            string   `json:"old_text"`
@@ -378,6 +393,8 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
+		case ToolListDir:
+			c.SearchLimit, c.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
 		case ToolReadFile:
 			c.ResourceID = strings.TrimSpace(args.ResourceID)
 			if err := ValidateReadSelectors(c.Path, c.ResourceID); err != nil {
@@ -396,9 +413,17 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			}
 		case ToolGlob:
 			c.Body = args.Pattern
+			c.SearchLimit, c.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
 		case ToolGrep:
 			c.Body = args.Pattern
 			c.Filter = strings.TrimSpace(args.Glob)
+			c.ResourceID = strings.TrimSpace(args.ResourceID)
+			c.SearchLiteral, c.SearchCaseSensitive = args.Literal, args.CaseSensitive
+			c.SearchContext, c.SearchLimit = args.Context, args.Limit
+			c.SearchCursor = strings.TrimSpace(args.Cursor)
+			if err := ValidateSearchCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolWriteFile:
 			c.Body = args.Content
 		case ToolRunCommand:

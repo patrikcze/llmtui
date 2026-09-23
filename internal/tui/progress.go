@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -196,7 +197,12 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 			resource = "opaque\x1e" + strings.TrimSpace(c.Body)
 		}
 	case tools.ToolGlob, tools.ToolGrep:
-		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strings.TrimSpace(c.Body), strings.TrimSpace(c.Filter)}, "\x1e")
+		resource = strings.Join([]string{
+			normalizeWorkspacePath(root, resource), strings.TrimSpace(c.ResourceID),
+			normalizeText(c.Body), strings.TrimSpace(c.Filter),
+			strconv.FormatBool(c.SearchLiteral), searchCaseIdentity(c.SearchCaseSensitive),
+			strconv.Itoa(c.SearchContext), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor),
+		}, "\x1e")
 	case tools.ToolWriteFile:
 		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body)
 	case tools.ToolEditFile:
@@ -219,7 +225,7 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 			resource += "\x1ebyte\x1e" + strconv.FormatInt(*c.ByteOffset, 10)
 		}
 	case tools.ToolListDir:
-		resource = normalizeWorkspacePath(root, resource)
+		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor)}, "\x1e")
 	case tools.ToolSearch:
 		resource = normalizeText(c.SearchQuery) + "\x1e" + strconv.Itoa(c.Max)
 	default:
@@ -228,6 +234,13 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 		}
 	}
 	return strings.Join([]string{c.Tool, resource}, "\x1f")
+}
+
+func searchCaseIdentity(v *bool) string {
+	if v == nil {
+		return "default"
+	}
+	return strconv.FormatBool(*v)
 }
 
 func normalizeWorkspacePath(root, raw string) string {
@@ -368,6 +381,19 @@ func progressDigestFromMeta(m tools.ResultMeta) string {
 	}
 	for _, reason := range cov.Reasons {
 		fmt.Fprintf(h, ",%s", reason)
+	}
+	sc := m.Search
+	fmt.Fprintf(h, "\x1fsearch:%d,%d,%t,%d,%d,%d", sc.MatchesReturned, sc.MatchesCaptured, sc.TextComplete, sc.FilesEligible, sc.FilesScanned, sc.SourceBytes)
+	if sc.MatchesTotal != nil {
+		fmt.Fprintf(h, ",matches_total=%d", *sc.MatchesTotal)
+	}
+	keys := make([]string, 0, len(sc.Skipped))
+	for reason := range sc.Skipped {
+		keys = append(keys, reason)
+	}
+	sort.Strings(keys)
+	for _, reason := range keys {
+		fmt.Fprintf(h, ",skip=%s:%d", reason, sc.Skipped[reason])
 	}
 	if w := m.Window; w != nil {
 		fmt.Fprintf(h, "\x1fwindow:%d,%d,%d,%d,%t", w.StartLine, w.EndLine, w.StartByte, w.EndByte, w.PartialLine)

@@ -131,6 +131,9 @@ func (m *Model) outputStorageEnabled() bool {
 }
 
 func (m *Model) resetEntities() {
+	if m.toolRunner != nil {
+		m.toolRunner.ResetSearchCursors()
+	}
 	if m.entities != nil {
 		m.entities.Reset()
 	}
@@ -225,7 +228,7 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 			if len(resourceViews) > 0 {
 				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
 				for _, view := range resourceViews {
-					if results[index].ResourceID == "" && view.Resource.FileVersion != nil {
+					if results[index].ResourceID == "" && (view.Resource.FileVersion != nil || view.Kind == entity.KindSearchResult || view.Kind == entity.KindToolOutput) {
 						results[index].ResourceID = view.ID.String()
 					}
 					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{

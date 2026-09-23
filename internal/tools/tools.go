@@ -26,8 +26,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -166,6 +167,13 @@ type Call struct {
 	Body string
 	// Filter optionally narrows search tools (for example grep's file glob).
 	Filter string
+	// Search options are shared by native and fenced grep forms. A nil
+	// CaseSensitive preserves legacy regex-body behavior and resolves to true.
+	SearchLiteral       bool
+	SearchCaseSensitive *bool
+	SearchContext       int
+	SearchLimit         int
+	SearchCursor        string
 	// Offset and Limit are read_file's optional 1-based line range. Both zero
 	// (or negative) means a whole-file read, preserving the legacy behavior.
 	// See CanonicalReadRange / ValidateReadRange.
@@ -176,10 +184,8 @@ type Call struct {
 	ByteOffset *int64
 	// ResourceID is read_file's alternative selector: a previously published
 	// entity.Registry body (Registry.Publish/OpenBody) to recover instead of
-	// a workspace path. Exactly one of Path/ResourceID may be set — see
-	// ExecuteContext's ToolReadFile case. Offset/Limit do not apply to a
-	// resource read this phase (no ranged/offset windowing over a retained
-	// body yet).
+	// a workspace path. Exactly one of Path/ResourceID may be set for read_file;
+	// ToolGrep also uses it as its retained-body search target.
 	ResourceID string
 	// OldText and NewText carry edit_file's single exact replacement. OldText
 	// must match the target file exactly once; NewText may be empty (a
@@ -321,6 +327,10 @@ func Parse(reply string) []Call {
 						decodeEntityDetailsBody(&call)
 					case ToolReadFile:
 						decodeReadFileBody(&call)
+					case ToolGrep:
+						decodeSearchBody(&call)
+					case ToolGlob, ToolListDir:
+						decodeListingBody(&call)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
 					case ToolPersonalApps:
@@ -405,6 +415,10 @@ type Runner struct {
 	// (entities.output_storage); Resources only lets read_file recover a
 	// body some other path already published.
 	Resources ResourceReader
+
+	searchMu             sync.Mutex
+	searchCursors        map[string]searchCursor
+	searchCaptureEnabled bool
 }
 
 // readFileBeforeContentHook is a package-local test seam. Production leaves it
@@ -436,13 +450,32 @@ func NewRunner(root string, maxKB int) *Runner {
 		maxKB = 512
 	}
 	return &Runner{
-		root:           root,
-		maxKB:          maxKB,
-		execution:      make(chan struct{}, 1),
-		CommandTimeout: 30 * time.Second,
-		Guardrails:     DefaultGuardrails(),
-		LocalContext:   NewLocalContextCollector(root),
+		root:                 root,
+		maxKB:                maxKB,
+		execution:            make(chan struct{}, 1),
+		CommandTimeout:       30 * time.Second,
+		Guardrails:           DefaultGuardrails(),
+		LocalContext:         NewLocalContextCollector(root),
+		searchCursors:        make(map[string]searchCursor),
+		searchCaptureEnabled: true,
 	}
+}
+
+// SetSearchCaptureEnabled controls whether search may advertise retained
+// result-set cursors. The TUI disables it together with output storage; direct
+// Runner users retain the historical in-memory default.
+func (r *Runner) SetSearchCaptureEnabled(enabled bool) { r.searchCaptureEnabled = enabled }
+
+// ResetSearchCursors invalidates all immutable search pages at a session
+// boundary. Existing bodies may remain available through their own resource
+// IDs, but an old cursor must never silently restart a source scan.
+func (r *Runner) ResetSearchCursors() {
+	if r == nil {
+		return
+	}
+	r.searchMu.Lock()
+	r.searchCursors = make(map[string]searchCursor)
+	r.searchMu.Unlock()
 }
 
 // SetDefaultReadLines configures the application-level default window. Zero
@@ -545,7 +578,7 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	var meta ResultMeta
 	switch c.Tool {
 	case ToolListDir:
-		res.Output, meta, res.Err = r.listDir(c.Path)
+		res.Output, meta, res.Captures, res.Err = r.listDirPage(ctx, c.Path, c.SearchLimit, c.SearchCursor)
 	case ToolReadFile:
 		switch {
 		case c.Path != "" && c.ResourceID != "":
@@ -587,9 +620,9 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		}
 		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, c.ExpectedVersion)
 	case ToolGlob:
-		res.Output, meta, res.Err = r.globFiles(ctx, c.Path, c.Body)
+		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
-		res.Output, meta, res.Err = r.grepFiles(ctx, c.Path, c.Body, c.Filter)
+		res.Output, meta, res.Captures, res.Err = r.grepFilesPage(ctx, c)
 	case ToolWriteFile:
 		res.Output, res.Diff, meta, res.Err = r.writeFileMeta(c.Path, c.Body)
 	case ToolRunCommand:
@@ -684,52 +717,6 @@ func encodingInfo(data []byte, complete bool) EncodingInfo {
 // MCP name (e.g. "mcp_srv_tool" for "mcp__srv__tool") must see the correct
 // names to self-correct instead of concluding the tools don't exist.
 var ErrUnknownTool = errors.New("unknown tool")
-
-const maxDirEntries = 200
-
-func (r *Runner) listDir(rel string) (string, ResultMeta, error) {
-	meta := ResultMeta{Effect: EffectNone}
-	abs, err := r.resolve(rel)
-	if err != nil {
-		return "", meta, withCode(err, "safety_block", RetryCorrectInput)
-	}
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return "", meta, withCode(fmt.Errorf("list directory: %w", err), "not_found", RetryCorrectInput)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	var b strings.Builder
-	capped := false
-	for i, e := range entries {
-		if i >= maxDirEntries {
-			fmt.Fprintf(&b, "… and %d more entries\n", len(entries)-maxDirEntries)
-			capped = true
-			break
-		}
-		if e.IsDir() {
-			b.WriteString(e.Name() + "/\n")
-		} else {
-			b.WriteString(e.Name() + "\n")
-		}
-	}
-	// list_dir always reports OutcomeOK: the cap is a documented, intentional
-	// bound on an otherwise-complete listing, not a failure to inspect the
-	// directory (every entry was read to produce the count in "and N more").
-	meta.Outcome = OutcomeOK
-	meta.Coverage = Coverage{
-		SourceComplete:  !capped,
-		CaptureComplete: !capped,
-		PreviewComplete: true,
-		TotalLines:      int64Ptr(int64(len(entries))),
-	}
-	if capped {
-		meta.Coverage.Reasons = []string{"entries"}
-	}
-	if b.Len() == 0 {
-		return "(empty directory)", meta, nil
-	}
-	return strings.TrimRight(b.String(), "\n"), meta, nil
-}
 
 func (r *Runner) readFile(rel string, offset, limit int) (string, error) {
 	output, _, err := r.readFileMeta(rel, offset, limit)
@@ -1807,9 +1794,19 @@ func (c Call) Describe() string {
 	case ToolWebFetch:
 		return "fetch " + c.Path
 	case ToolGlob:
-		return fmt.Sprintf("glob %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+		return fmt.Sprintf("glob %q in %s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), describePageOptions(c))
 	case ToolGrep:
-		return fmt.Sprintf("grep %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+		target := orWorkspace(c.Path)
+		if c.ResourceID != "" {
+			target = "resource_id=" + c.ResourceID
+		}
+		return fmt.Sprintf("grep %q in %s%s", strings.TrimSpace(c.Body), target, describePageOptions(c))
+	case ToolListDir:
+		describePath := ""
+		if strings.TrimSpace(c.Path) != "" {
+			describePath = " " + c.Path
+		}
+		return "list_dir" + describePath + describePageOptions(c)
 	case ToolPersonalApps:
 		return describePersonalAppsCall(c)
 	default:
@@ -1818,6 +1815,29 @@ func (c Call) Describe() string {
 		}
 		return c.Tool + " " + c.Path
 	}
+}
+
+func describePageOptions(c Call) string {
+	var options []string
+	if c.SearchLiteral {
+		options = append(options, "literal")
+	}
+	if c.SearchCaseSensitive != nil {
+		options = append(options, "case_sensitive="+strconv.FormatBool(*c.SearchCaseSensitive))
+	}
+	if c.SearchContext != 0 {
+		options = append(options, fmt.Sprintf("context=%d", c.SearchContext))
+	}
+	if c.SearchLimit != 0 {
+		options = append(options, fmt.Sprintf("limit=%d", c.SearchLimit))
+	}
+	if c.SearchCursor != "" {
+		options = append(options, "cursor="+truncateLine(c.SearchCursor, 24))
+	}
+	if len(options) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(options, ", ") + "]"
 }
 
 func orWorkspace(path string) string {
