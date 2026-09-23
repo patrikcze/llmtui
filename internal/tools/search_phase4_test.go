@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -117,5 +119,45 @@ func TestPhase4SearchLongLineAndCancellation(t *testing.T) {
 	res = r.ExecuteContext(ctx, Call{Tool: ToolGrep, Body: "needle"})
 	if res.Err == nil || !errors.Is(res.Err, context.Canceled) {
 		t.Fatalf("cancelled search err=%v", res.Err)
+	}
+}
+
+func TestPhase4SearchParityWithRgWhenInstalled(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("rg is not installed")
+	}
+	root := t.TempDir()
+	writeSearchFixture(t, root, "a.txt", "needle\nother\n")
+	writeSearchFixture(t, root, "b.txt", "other\nneedle\n")
+	writeSearchFixture(t, root, "c.go", "needle\n")
+	goResult := NewRunner(root, 512).Execute(Call{Tool: ToolGrep, Body: "needle", Filter: "*.txt", SearchLimit: 200})
+	if goResult.Err != nil {
+		t.Fatal(goResult.Err)
+	}
+	goPaths := make(map[string]bool)
+	for _, line := range strings.Split(goResult.Output, "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) == 3 {
+			goPaths[parts[0]] = true
+		}
+	}
+	out, err := exec.Command(rg, "-n", "--no-heading", "--glob", "*.txt", "needle", root).Output()
+	if err != nil {
+		t.Fatalf("rg: %v", err)
+	}
+	rgPaths := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) == 3 {
+			rel, relErr := filepath.Rel(root, parts[0])
+			if relErr != nil {
+				t.Fatal(relErr)
+			}
+			rgPaths[filepath.ToSlash(rel)] = true
+		}
+	}
+	if !reflect.DeepEqual(goPaths, rgPaths) {
+		t.Fatalf("Go/rg hit-path parity mismatch: go=%v rg=%v", goPaths, rgPaths)
 	}
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -20,6 +21,23 @@ func BenchmarkSearchGoSmall(b *testing.B) {
 		res := r.Execute(Call{Tool: ToolGrep, Body: "marker", SearchLimit: 100})
 		if res.Err != nil {
 			b.Fatal(res.Err)
+		}
+	}
+}
+
+func BenchmarkSearchRgOptional(b *testing.B) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		b.Skip("rg is not installed")
+	}
+	root := b.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "large.log"), []byte("marker\n"), 0o600); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := exec.Command(rg, "-n", "--no-heading", "marker", root).Run(); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
