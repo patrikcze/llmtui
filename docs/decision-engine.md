@@ -225,6 +225,43 @@ disabled, unavailable, worker crash, timeout, malformed answer) only ever
 records an unavailable reason. Its purpose is calibration evidence — see the
 metrics above — not behavior change.
 
+### Pre-verifier counterfactual shadow (second observation)
+
+The shadow above always fires after `agent.Decide()` — useful for "did Laya
+predict the cycle's final outcome," but it can't cleanly isolate "is Laya
+good at judging whether semantic verification was needed" from "is Laya
+good at predicting the final action," since by the time it's asked a
+semantic verifier (if one ran) has already happened. A future
+`guarded_assist` phase (below) would need exactly that narrower judgment
+*before* the verifier runs. A second shadow call is dispatched inside
+`startAgentVerification`, immediately after `run.ApplyDeterministicCriteria`
+and before any verifier-mode branching — reusing the same compact
+snapshot builder, so the state is provably deterministic-only (no verifier
+`CriteriaUpdates` have landed yet at that point). It asks a narrower,
+2-question set — `semantic_verifier_needed` and `evidence_sufficient`
+(both noul) — never the 5-way `cycle_action` choice, since there is no
+"final action" to predict yet.
+
+The prediction and the cycle's later-arriving actual outcome (whether a
+semantic verifier actually ran, its verdict, and the final decision) are
+reconciled by a small, bounded, either-order-safe correlation record —
+either half may arrive first, since the prediction resolves asynchronously.
+Once both halves are present, the pair folds into a rolling, diagnostic-only
+0.5-threshold confusion matrix (`/debug last`'s `laya pre-verifier` line)
+and a bounded raw-sample history a threshold-sweep report can read later
+(`internal/tui/agent_decision_calibration_test.go`, opt-in via
+`LLMTUI_TEST_LAYA_MLX=1` like the real MLX integration test above). The
+priority metric is **false negative**: Laya says verification is
+unnecessary but the authoritative pipeline required one anyway — exactly
+the case a future active gate must never produce. No threshold is selected
+or acted on anywhere in this phase.
+
+`/debug last`'s `laya shadow` line also now shows the full `cycle_action`
+probability distribution, not just the winning choice — manual calibration
+found the single winning probability (and `Confidence`) both close to
+uninterpretable in isolation; seeing every option's probability is what
+actually answers whether a losing option was ever seriously considered.
+
 ### The Snake-demo analogy
 
 The design mirrors [laya-mlx's Snake
@@ -249,17 +286,38 @@ that never moves.
 ### Future phase (doc-only, not implemented here): `guarded_assist`
 
 A possible next phase, not built in this PR, would give Laya exactly one
-active capability: a **one-way escalation** to semantic verification. Today,
-adaptive mode (`agent.verifier.mode: adaptive`) skips a real verifier request
-whenever deterministic evidence already settles a cycle. In `guarded_assist`,
-if `semantic_verifier_needed`'s probability clears a calibrated threshold on
-a cycle adaptive mode would otherwise skip, the controller would run the
-semantic verifier anyway — never the reverse. Laya must never be allowed to
-skip a verifier that would otherwise run, mark a run done, or bypass any
-existing policy in this future phase; escalation-only, one direction, is the
-constraint any implementation of `guarded_assist` must preserve. No
-confidence threshold exists yet — this phase requires calibration evidence
-from the shadow advisor above first.
+active capability: a **one-way escalation** to semantic verification, using
+the pre-verifier shadow's `semantic_verifier_needed` signal specifically
+(not the post-cycle `cycle_action` choice).
+
+**Allowed, as the only initial active behavior:**
+
+```text
+adaptive policy WOULD SKIP the semantic verifier
+        +
+Laya semantic_verifier_needed >= a calibrated threshold
+        ↓
+RUN the semantic verifier anyway
+```
+
+**Forbidden, permanently, never the initial active mode:**
+
+```text
+adaptive policy WOULD RUN the semantic verifier
+        +
+Laya says verification is unnecessary
+        ↓
+SKIP the verifier
+```
+
+Laya must never be allowed to skip a verifier that would otherwise run,
+mark a run done, authorize a tool, bypass an approval, override a
+deterministic failure, or satisfy a criterion directly, in this or any
+future phase — escalation-only, one direction, is the constraint any
+implementation of `guarded_assist` must preserve. No confidence threshold
+exists yet; selecting one requires calibration evidence from both shadow
+observations above, with the pre-verifier shadow's false-negative rate as
+the metric that would actually justify (or rule out) a specific threshold.
 
 ## Measured bridge validation (2026-09-23)
 
