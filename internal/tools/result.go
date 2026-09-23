@@ -126,6 +126,7 @@ var errorCodeVocabulary = map[string]bool{
 	"retention_unavailable": true,
 	"wrong_resource_kind":   true,
 	"snapshot_incomplete":   true,
+	"cache_miss":            true,
 }
 
 // Coverage states how much of the intended source a producer actually

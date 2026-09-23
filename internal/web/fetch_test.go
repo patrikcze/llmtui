@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,6 +85,62 @@ func TestFetchTruncatesToCap(t *testing.T) {
 	}
 	if !page.Truncated || len(page.Content) > 1200 || !strings.Contains(page.Content, "truncated") {
 		t.Errorf("truncated=%v len=%d", page.Truncated, len(page.Content))
+	}
+}
+
+func TestFetchRetainsBodyAndCacheMetadataBeforePreviewCap(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.Header().Set("ETag", `"abc"`)
+		w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+		w.Header().Set("Vary", "Accept-Language")
+		fmt.Fprint(w, strings.Repeat("x", 3*1024))
+	}))
+	defer srv.Close()
+	page, err := testClient(1).FetchWithOptions(context.Background(), srv.URL, FetchOptions{Mode: FetchAuto, MaxAge: time.Minute})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(page.Body) != 3*1024 || len(page.Content) >= len(page.Body) || page.BodyDigest == "" || page.SourceDigest == "" {
+		t.Fatalf("body=%d content=%d bodyDigest=%q sourceDigest=%q", len(page.Body), len(page.Content), page.BodyDigest, page.SourceDigest)
+	}
+	if page.ETag != `"abc"` || page.LastModified == "" || page.FreshUntil.IsZero() || page.Vary == "" {
+		t.Fatalf("cache metadata missing: %+v", page)
+	}
+}
+
+func TestFetchConditional304(t *testing.T) {
+	seen := make(chan string, 1)
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("If-None-Match")
+		w.Header().Set("ETag", `"abc"`)
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+	page, err := testClient(64).FetchWithOptions(context.Background(), srv.URL, FetchOptions{Mode: FetchAuto, ETag: `"abc"`, MaxAge: time.Minute})
+	if err != nil || !page.NotModified || page.Body != "" {
+		t.Fatalf("304 page=%+v err=%v", page, err)
+	}
+	if got := <-seen; got != `"abc"` {
+		t.Errorf("If-None-Match=%q", got)
+	}
+}
+
+func BenchmarkFetchSmallPage(b *testing.B) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "max-age=60")
+		_, _ = w.Write([]byte("forecast: sunny\n" + strings.Repeat("detail ", 40)))
+	}))
+	defer srv.Close()
+	c := testClient(64)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := c.FetchWithOptions(context.Background(), srv.URL, FetchOptions{Mode: FetchRefresh, MaxAge: time.Minute}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

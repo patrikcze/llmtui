@@ -18,9 +18,41 @@ type SearchResult struct {
 // Page is one fetched document, already reduced to model-friendly text.
 type Page struct {
 	URL, Title, Content, ContentType string
-	Bytes                            int // raw response bytes read
-	Status                           int
-	Truncated                        bool
+	// Body is the bounded, extracted representation before the model preview
+	// cap. It never exceeds the raw response admission cap.
+	Body                     string
+	RequestedURL             string
+	Bytes                    int // raw response bytes read
+	Status                   int
+	Truncated                bool
+	RawTruncated             bool
+	NotModified              bool
+	ETag, LastModified       string
+	CacheControl, Vary       string
+	NoStore                  bool
+	FreshUntil               time.Time
+	AcquiredAt               time.Time
+	SourceDigest, BodyDigest string
+}
+
+// FetchMode controls reuse of a previously retained response.
+type FetchMode string
+
+const (
+	FetchAuto    FetchMode = "auto"
+	FetchCached  FetchMode = "cached"
+	FetchRefresh FetchMode = "refresh"
+)
+
+// FetchOptions carries bounded cache validators. The Client never decides to
+// reuse a body on its own; callers explicitly choose the mode and may supply
+// validators from a session-owned snapshot index.
+type FetchOptions struct {
+	Mode         FetchMode
+	ETag         string
+	LastModified string
+	MaxAge       time.Duration
+	RefreshEpoch string
 }
 
 // Client implements search and fetch over plain HTTP. The zero value is not

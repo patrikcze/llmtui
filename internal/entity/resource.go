@@ -41,6 +41,18 @@ type ResourceMetadata struct {
 	Relation     string // search_of | extraction_of | snapshot_of
 	FileVersion  *FileVersion
 	Observation  ObservationMetadata
+	// Web identity/cache metadata is optional and only populated for retained
+	// web snapshots. It is descriptive; freshness admission remains owned by
+	// the session controller.
+	RequestedURL string
+	FinalURL     string
+	ETag         string
+	LastModified string
+	CacheControl string
+	Vary         string
+	NoStore      bool
+	FreshUntil   time.Time
+	Preview      string
 }
 
 // BodyLease is a pinned, immutable, read-only handle to a published body's

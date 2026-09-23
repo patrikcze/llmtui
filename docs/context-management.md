@@ -55,6 +55,13 @@ retained and leaves `tool_search` available for a narrower query. Discovery
 does not bypass the context budget, make a hidden tool callable, or weaken its
 approval policy.
 
+Web pages and bounded web-search result sets follow the same reference model:
+the preview enters the next prompt, while the retained body and acquisition
+metadata stay behind an ephemeral entity reference. Compaction preserves the
+reference marker without copying the body into every summary. A later web
+fetch can request an eligible cached observation or explicitly refresh it;
+current-data requests therefore cannot be satisfied silently by stale text.
+
 ## The summary
 
 Built by a **heuristic summarizer** (no extra LLM call, deterministic): it

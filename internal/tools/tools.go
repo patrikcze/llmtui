@@ -37,6 +37,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/procutil"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
+	"github.com/patrikcze/llmtui/internal/web"
 )
 
 // ResultsPrefix marks the follow-up message that carries tool output back to
@@ -203,6 +204,11 @@ type Call struct {
 	InputErr string
 	// Max caps web_search results (native max_results argument).
 	Max int
+	// WebCacheMode and WebRefreshEpoch control web_fetch freshness admission.
+	// Empty mode is auto; refresh epochs are controller-owned opaque values.
+	WebCacheMode    string
+	WebRefreshEpoch string
+	WebCacheMaxAge  int
 	// Freshness is an explicit caller-supplied observation epoch for volatile
 	// read tools. Reusing the same token remains the same operation; changing
 	// it deliberately requests a new poll without disguising it through
@@ -335,6 +341,8 @@ func Parse(reply string) []Call {
 						decodeEditFileBody(&call)
 					case ToolWriteFile:
 						decodeWriteFileBody(&call)
+					case ToolWebFetch:
+						decodeWebFetchBody(&call)
 					case ToolPersonalApps:
 						decodePersonalAppsBody(&call)
 					}
@@ -390,6 +398,7 @@ type Runner struct {
 	// search hits per call.
 	Web           WebClient
 	WebMaxResults int
+	WebSnapshots  WebSnapshotStore
 
 	// Guardrails governs write blocks (.git, key material, shell startup
 	// files), command classification, and secret-read approval. Defaults to
@@ -421,6 +430,20 @@ type Runner struct {
 	searchMu             sync.Mutex
 	searchCursors        map[string]searchCursor
 	searchCaptureEnabled bool
+}
+
+// WebSnapshotStore is the controller-owned metadata index for retained web
+// bodies. Implementations store bytes in the entity registry and keep only
+// references here; tools never persist or share snapshots across sessions.
+type WebSnapshotStore interface {
+	GetWebSnapshot(ctx context.Context, requestedURL, mode, refreshEpoch string, maxAge time.Duration) (web.Page, bool, error)
+	PutWebSnapshot(ctx context.Context, requestedURL string, page web.Page) (string, error)
+}
+
+// WebSnapshotIndexer lets the controller associate a published entity body
+// with the metadata-only URL index after normal result publication.
+type WebSnapshotIndexer interface {
+	IndexWebSnapshot(requestedURL string, id entity.ID, metadata entity.ResourceMetadata)
 }
 
 // readFileBeforeContentHook is a package-local test seam. Production leaves it
@@ -637,9 +660,9 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolRunCommand:
 		res.Output, meta, res.Captures, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
-		res.Output, res.Entities, meta, res.Err = r.webSearch(ctx, c)
+		res.Output, res.Entities, res.Captures, meta, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
-		res.Output, res.Entities, meta, res.Err = r.webFetch(ctx, c)
+		res.Output, res.Entities, res.Captures, meta, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, meta, res.Err = r.skillLoad(c)
 	case ToolAskUser:

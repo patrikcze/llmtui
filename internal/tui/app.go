@@ -226,6 +226,8 @@ type Model struct {
 	toolErr              int         // failed or denied tool calls (exit summary)
 	webOn                bool        // web tools (web_search/web_fetch) enabled
 	webClient            *web.Client // shared web client; nil if the runner is unavailable
+	webSnapshots         *webSnapshotStore
+	webRefreshEpoch      uint64
 
 	// Optional Apple Mail/Calendar integration (disabled by default; see
 	// personal_apps.go). personalApps is nil unless personal_apps.enabled is
@@ -414,6 +416,7 @@ func New(opts Options) *Model {
 		}),
 		visionObservationIDs:      make(map[string]entity.ID),
 		visionObservationAttempts: make(map[string]bool),
+		webSnapshots:              newWebSnapshotStore(nil),
 
 		memEnabled:    cfg.Memory.Enabled,
 		profileMode:   profileMode,
@@ -532,6 +535,8 @@ func (m *Model) rebuildFromConfig() {
 		// published to it — there is no separate "disabled" state for the
 		// adapter itself to represent.
 		m.toolRunner.Resources = newResourceAdapter(m.entities)
+		m.webSnapshots.registry = m.entities
+		m.toolRunner.WebSnapshots = m.webSnapshots
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
@@ -1578,6 +1583,7 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
+	calls = m.admitWebRefresh(calls)
 	calls = m.bindObservedEditVersions(calls)
 	for _, call := range calls {
 		if call.ID == "" {

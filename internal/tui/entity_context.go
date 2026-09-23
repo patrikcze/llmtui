@@ -26,6 +26,22 @@ type observedFileVersion struct {
 	ObservedAt time.Time
 }
 
+// admitWebRefresh makes freshness epochs controller-owned. A model may ask
+// for refresh, but cannot churn an arbitrary token to bypass the progress
+// ledger; each admitted refresh gets one monotonic session identity.
+func (m *Model) admitWebRefresh(calls []tools.Call) []tools.Call {
+	out := append([]tools.Call(nil), calls...)
+	for i := range out {
+		if out[i].Tool != tools.ToolWebFetch || strings.ToLower(strings.TrimSpace(out[i].WebCacheMode)) != "refresh" {
+			out[i].WebRefreshEpoch = ""
+			continue
+		}
+		m.webRefreshEpoch++
+		out[i].WebRefreshEpoch = fmt.Sprintf("refresh-%d", m.webRefreshEpoch)
+	}
+	return out
+}
+
 func fileVersionKey(path string) string {
 	return filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
 }
@@ -132,11 +148,15 @@ func (m *Model) outputStorageEnabled() bool {
 }
 
 func (m *Model) resetEntities() {
+	m.webRefreshEpoch = 0
 	if m.toolRunner != nil {
 		m.toolRunner.ResetSearchCursors()
 	}
 	if m.entities != nil {
 		m.entities.Reset()
+	}
+	if m.webSnapshots != nil {
+		m.webSnapshots.Reset()
 	}
 	m.resetVisionObservations()
 }
@@ -229,6 +249,11 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 			if len(resourceViews) > 0 {
 				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
 				for _, view := range resourceViews {
+					if m.webSnapshots != nil {
+						if indexer, ok := any(m.webSnapshots).(tools.WebSnapshotIndexer); ok && view.Kind == entity.KindWebPage {
+							indexer.IndexWebSnapshot(view.Resource.RequestedURL, view.ID, view.Resource)
+						}
+					}
 					if results[index].ResourceID == "" && (view.Resource.FileVersion != nil || view.Kind == entity.KindSearchResult || view.Kind == entity.KindToolOutput) {
 						results[index].ResourceID = view.ID.String()
 					}

@@ -136,6 +136,14 @@ producers never set it, and it is not duplicated onto `Result`/`Meta`. A
 caller combines the two ("user denied," "controller blocked," "tool
 failed") rather than looking for a single merged field.
 
+Web fetches retain one bounded extracted body in the session entity registry
+before applying the model preview cap. `cache_mode=auto` can reuse that body
+only while its recorded freshness and `cache_max_age` permit it; `cached`
+fails visibly when no retained body is eligible, and `refresh` performs a new
+network observation. Validators are used for conditional requests and a 304
+reuses the same retained body. The requested URL identity is recorded
+separately from the final redirect URL, and URL userinfo is rejected.
+
 This phase's shared formatter (`formatResultContent`, called by both
 `FormatResults` and `NativeResults`) renders `Meta`-blind: model-visible
 text is byte-identical to before `Meta` existed. `Meta` is available for a

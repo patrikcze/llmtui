@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,7 +123,7 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		sum := sha256.Sum256([]byte(strings.TrimSpace(c.Body)))
 		return c.Tool, hex.EncodeToString(sum[:]), ""
 	case tools.ToolWebFetch:
-		return c.Tool, strings.TrimSpace(c.Path), ""
+		return c.Tool, strings.TrimSpace(c.Path), strings.Join([]string{strings.TrimSpace(c.WebCacheMode), strconv.Itoa(c.WebCacheMaxAge), strings.TrimSpace(c.WebRefreshEpoch)}, "\x00")
 	case tools.ToolWebSearch:
 		return c.Tool, strings.TrimSpace(c.Body), ""
 	case tools.ToolLocalContext:

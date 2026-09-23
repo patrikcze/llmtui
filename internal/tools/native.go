@@ -195,6 +195,9 @@ type nativeArgs struct {
 	OldText            string   `json:"old_text"`
 	NewText            string   `json:"new_text"`
 	ExpectedResourceID string   `json:"expected_resource_id"`
+	CacheMode          string   `json:"cache_mode"`
+	CacheMaxAge        int      `json:"cache_max_age"`
+	RefreshEpoch       string   `json:"refresh_epoch"`
 	EntityIDs          []string `json:"entity_ids"`
 	Level              string   `json:"level"`
 	Kinds              []string `json:"kinds"`
@@ -440,6 +443,9 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		case ToolWebFetch:
 			c.Path = args.URL
 			c.Freshness = strings.TrimSpace(args.Freshness)
+			c.WebCacheMode = strings.TrimSpace(args.CacheMode)
+			c.WebCacheMaxAge = args.CacheMaxAge
+			c.WebRefreshEpoch = strings.TrimSpace(args.RefreshEpoch)
 		case ToolSkillLoad:
 			c.Path = args.Skill
 		}
@@ -489,12 +495,15 @@ func WebSpecs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolWebFetch,
-			Description: "Fetch one web page and return its readable content as Markdown. May require the user's approval.",
+			Description: "Fetch one web page and return its readable content as Markdown. Use cache_mode=refresh for explicitly current data; cached/auto reuse only a retained session snapshot. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"url": {"type": "string", "description": "The http(s) URL to fetch."},
-					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."}
+					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."},
+					"cache_mode": {"type": "string", "enum": ["auto", "cached", "refresh"], "default": "auto"},
+					"cache_max_age": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "Maximum age in seconds for an automatic cached snapshot."},
+					"refresh_epoch": {"type": "string", "description": "Controller-issued refresh identity; changing it opts into a new observation."}
 				},
 				"required": ["url"]
 			}`),
