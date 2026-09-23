@@ -979,8 +979,8 @@ func (m *Model) debugOverlay() string {
 	if d.DecisionShadowUnavailableReason != "" {
 		m.kv(&b, "laya shadow", "unavailable: "+d.DecisionShadowUnavailableReason)
 	} else if d.DecisionShadowCycleAction != "" {
-		m.kv(&b, "laya shadow", fmt.Sprintf("model=%s action=%s (%.2f) goal_complete=%.2f verifier_needed=%.2f latency=%s vs actual=%s/%s",
-			d.DecisionShadowModel, d.DecisionShadowCycleAction, d.DecisionShadowCycleActionConfidence,
+		m.kv(&b, "laya shadow", fmt.Sprintf("model=%s action=%s (p=%.2f conf=%.2f) goal_complete=%.2f verifier_needed=%.2f latency=%s vs actual=%s/%s",
+			d.DecisionShadowModel, d.DecisionShadowCycleAction, d.DecisionShadowCycleActionProbability, d.DecisionShadowCycleActionConfidence,
 			d.DecisionShadowGoalCompleteProbability, d.DecisionShadowVerifierNeededProbability,
 			d.DecisionShadowLatency.Round(time.Millisecond), d.DecisionShadowActualVerifierPath, d.DecisionShadowActualDecision))
 	}

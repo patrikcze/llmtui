@@ -375,6 +375,7 @@ func (m *Model) recordAgentDecisionShadowResult(msg agentDecisionShadowMsg) {
 		m.lastDebug.DecisionShadowUnavailableReason = msg.err.Error()
 		m.lastDebug.DecisionShadowCycleAction = ""
 		m.lastDebug.DecisionShadowCycleActionConfidence = 0
+		m.lastDebug.DecisionShadowCycleActionProbability = 0
 		m.lastDebug.DecisionShadowGoalCompleteProbability = 0
 		m.lastDebug.DecisionShadowVerifierNeededProbability = 0
 		m.lastDebug.DecisionShadowLatency = msg.elapsed
@@ -391,6 +392,7 @@ func (m *Model) recordAgentDecisionShadowResult(msg agentDecisionShadowMsg) {
 	action := msg.result.Answers["cycle_action"]
 	m.lastDebug.DecisionShadowCycleAction = action.Choice
 	m.lastDebug.DecisionShadowCycleActionConfidence = action.Confidence
+	m.lastDebug.DecisionShadowCycleActionProbability = action.Probabilities[action.Choice]
 
 	if goalComplete, ok := msg.result.Answers["goal_complete"]; ok {
 		m.lastDebug.DecisionShadowGoalCompleteProbability = goalComplete.Probability

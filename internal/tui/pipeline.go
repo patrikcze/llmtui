@@ -90,9 +90,17 @@ type debugInfo struct {
 	// unavailable, errored, or timed out — a decision runtime error must
 	// have zero effect on the agent run, and that includes never showing a
 	// stale-looking success from a previous cycle.
-	DecisionShadowModel                     string
-	DecisionShadowCycleAction               string
-	DecisionShadowCycleActionConfidence     float64
+	DecisionShadowModel                 string
+	DecisionShadowCycleAction           string
+	DecisionShadowCycleActionConfidence float64
+	// DecisionShadowCycleActionProbability is Answer.Probabilities[Choice] —
+	// distinct from, and more interpretable than, DecisionShadowCycleActionConfidence:
+	// Laya's own reference fixtures show a choice answer's "confidence" is a
+	// margin/distribution-based metric that runs well below the winning
+	// option's own probability even on a clean, correctly-answered,
+	// in-distribution example (see internal/decision/testdata/mlx/typed-decisions-mlx.json's
+	// "department" case: probabilities.billing=0.7448 but confidence=0.3903).
+	DecisionShadowCycleActionProbability    float64
 	DecisionShadowGoalCompleteProbability   float64
 	DecisionShadowVerifierNeededProbability float64
 	DecisionShadowLatency                   time.Duration
