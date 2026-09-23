@@ -155,3 +155,59 @@ func TestRunCommandOutputStorageOffSkipsResourcePublishing(t *testing.T) {
 		t.Fatalf("Meta.Error = %+v, want code resource_unavailable", fake.Meta.Error)
 	}
 }
+
+// TestAppendTerminalToolResultsPublishesCaptures closes a gap the plan's
+// Phase 2b checklist called out explicitly ("finalizeToolResults once for
+// normal/controller/terminal paths") that neither Phase 2b-ii nor any later
+// phase actually closed: sendToolResults (the continuing-conversation path)
+// has always called registerResultEntities first, but
+// appendTerminalToolResults (the last batch of an agent run, or a budget/
+// ask_user termination — see its three call sites in agent_loop.go, app.go,
+// and ask_user.go) delivered results directly, skipping entity/capture
+// registration entirely. A capped run_command result in the FINAL batch of
+// an agent run therefore lost its resource_id forever — there is no later
+// turn to ask for it. This predates Phase 2b (verified against the
+// pre-plan baseline, commit b6c57a7, where appendTerminalToolResults never
+// called any entity-registration step either) but only became an observable
+// resource-loss bug once Phase 2b-ii gave captures something to publish.
+func TestAppendTerminalToolResultsPublishesCaptures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell test")
+	}
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(root, 8) // 8 KB display/retention cap
+	m.toolRunner.Resources = newResourceAdapter(m.entities)
+	m.cfg.Entities.Enabled = true
+
+	res := m.toolRunner.Execute(tools.Call{Tool: tools.ToolRunCommand, Body: fmt.Sprintf("yes | head -c %d", 1<<16)})
+	if res.Err != nil {
+		t.Fatalf("run_command: %v", res.Err)
+	}
+	if len(res.Captures) != 1 {
+		t.Fatalf("Captures = %d, want 1 for a capped result", len(res.Captures))
+	}
+
+	before := len(m.session.Messages)
+	m.appendTerminalToolResults([]tools.Result{res})
+	if len(m.session.Messages) != before+1 {
+		t.Fatalf("session gained %d messages, want exactly 1", len(m.session.Messages)-before)
+	}
+	appended := m.session.Messages[len(m.session.Messages)-1]
+	id := resourceIDPattern.FindString(appended.Content)
+	if id == "" {
+		t.Fatalf("terminal-path delivery lost the capped result's resource_id reference: %q", appended.Content)
+	}
+
+	// The published body is genuinely recoverable through the same
+	// read_file(resource_id=...) path the continuing-conversation case
+	// proves above — not just a reference string with nothing behind it.
+	readRes := m.toolRunner.Execute(tools.Call{Tool: tools.ToolReadFile, ResourceID: id})
+	if readRes.Err != nil {
+		t.Fatalf("read_file resource_id=%s: %v", id, readRes.Err)
+	}
+	if len(readRes.Output) != 8*1024 {
+		t.Fatalf("recovered resource body = %d bytes, want the full 8 KiB retention cap", len(readRes.Output))
+	}
+}

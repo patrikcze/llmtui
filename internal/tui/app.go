@@ -1880,10 +1880,20 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 // call when the controller terminates without another model round. Native
 // calls remain role:"tool" messages; fenced calls retain the protocol's
 // single [tool results] user message.
+//
+// Registers entities/publishes captures first, exactly like sendToolResults
+// does for the continuing-conversation path: the terminal path is the last
+// batch of an agent run, so skipping this step would silently lose the
+// resource_id for a capped result's retained body — the model never gets
+// another turn to ask for it after this. registerResultEntities already
+// no-ops for Err != nil results and for entities/output_storage being off,
+// so this is safe to call unconditionally, matching every existing caller
+// of this function (agent-run termination, budget blocks, ask_user).
 func (m *Model) appendTerminalToolResults(results []tools.Result) {
 	if len(results) == 0 {
 		return
 	}
+	results = m.registerResultEntities(results)
 	if results[0].Call.ID != "" {
 		for _, msg := range tools.NativeResults(results) {
 			m.session.AddMessage(msg)
