@@ -117,7 +117,12 @@ type debugInfo struct {
 	// counterfactual shadow's most recent prediction — see
 	// internal/tui/agent_decision_shadow.go's "Pre-verifier counterfactual
 	// shadow" section. Same SHADOW-ONLY contract as the DecisionShadow*
-	// fields above.
+	// fields above. DecisionShadowPreVerifierAvailable is the "was a
+	// successful prediction received" signal — deliberately a separate
+	// bool, not inferred from either probability being non-zero: 0.0 is a
+	// legitimate probability value, so that would silently hide a real
+	// prediction whenever both answers happened to be exactly zero.
+	DecisionShadowPreVerifierAvailable                     bool
 	DecisionShadowPreVerifierNeededProbability             float64
 	DecisionShadowPreVerifierEvidenceSufficientProbability float64
 	DecisionShadowPreVerifierUnavailableReason             string

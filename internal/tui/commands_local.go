@@ -987,7 +987,7 @@ func (m *Model) debugOverlay() string {
 	}
 	if d.DecisionShadowPreVerifierUnavailableReason != "" {
 		m.kv(&b, "laya pre-verifier", "unavailable: "+d.DecisionShadowPreVerifierUnavailableReason)
-	} else if d.DecisionShadowPreVerifierNeededProbability != 0 || d.DecisionShadowPreVerifierEvidenceSufficientProbability != 0 {
+	} else if d.DecisionShadowPreVerifierAvailable {
 		m.kv(&b, "laya pre-verifier", fmt.Sprintf("verifier_needed=%.2f evidence_sufficient=%.2f vs actual_semantic_verifier_ran=%v",
 			d.DecisionShadowPreVerifierNeededProbability, d.DecisionShadowPreVerifierEvidenceSufficientProbability,
 			d.DecisionShadowActualSemanticVerifierRan))

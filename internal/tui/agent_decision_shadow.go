@@ -607,6 +607,7 @@ func (m *Model) recordPreVerifierPrediction(msg agentDecisionPreVerifierShadowMs
 			entry.evidenceSufficientProbability = sufficient.Probability
 		}
 	}
+	m.lastDebug.DecisionShadowPreVerifierAvailable = entry.predictionErr == ""
 	m.lastDebug.DecisionShadowPreVerifierUnavailableReason = entry.predictionErr
 	m.lastDebug.DecisionShadowPreVerifierNeededProbability = entry.verifierNeededProbability
 	m.lastDebug.DecisionShadowPreVerifierEvidenceSufficientProbability = entry.evidenceSufficientProbability
