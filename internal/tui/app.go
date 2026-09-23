@@ -126,7 +126,8 @@ type Model struct {
 	turnRuntime
 	// entities is ephemeral session runtime state. It is never serialized as
 	// history, memory, cache content, or agent-run state.
-	entities *entity.Registry
+	entities             *entity.Registry
+	entityStorageWarning string
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -394,26 +395,20 @@ func New(opts Options) *Model {
 	}
 
 	m := &Model{
-		cfg:          opts.Config,
-		theme:        t,
-		prov:         opts.Provider,
-		model:        opts.Model,
-		session:      chat.NewSession(opts.Config.Chat.SystemPrompt),
-		input:        ta,
-		spinner:      sp,
-		mouseEnabled: true,
-		sessionName:  history.NewSessionName(time.Now()),
-		inputLines:   1,
-		exit:         exitSummaryState{startedAt: time.Now()},
-		turnRuntime:  newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
-		entities: entity.NewRegistry(entity.Limits{
-			MaxEntities:       cfg.Entities.MaxSessionEntities,
-			MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
-			MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
-			MaxFullExpansions: cfg.Entities.MaxFullExpansions,
-			MaxBodyBytes:      cfg.Entities.MaxOutputBytes,
-			MaxTotalBodyBytes: cfg.Entities.MaxTotalOutputBytes,
-		}),
+		cfg:                       opts.Config,
+		theme:                     t,
+		prov:                      opts.Provider,
+		model:                     opts.Model,
+		session:                   chat.NewSession(opts.Config.Chat.SystemPrompt),
+		input:                     ta,
+		spinner:                   sp,
+		mouseEnabled:              true,
+		sessionName:               history.NewSessionName(time.Now()),
+		inputLines:                1,
+		exit:                      exitSummaryState{startedAt: time.Now()},
+		turnRuntime:               newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
+		entities:                  entity.NewRegistry(entity.Limits{}),
+		entityStorageWarning:      "",
 		visionObservationIDs:      make(map[string]entity.ID),
 		visionObservationAttempts: make(map[string]bool),
 		webSnapshots:              newWebSnapshotStore(nil),
@@ -431,6 +426,9 @@ func New(opts Options) *Model {
 	}
 	m.resetNativeToolMode()
 	m.rebuildFromConfig()
+	if m.entityStorageWarning != "" {
+		m.notice = m.entityStorageWarning
+	}
 	if opts.ResumeSession != nil {
 		m.adoptSession(opts.ResumeSessionName, *opts.ResumeSession)
 		m.notice = fmt.Sprintf("resumed %s (%d messages, %s/%s)",
@@ -468,20 +466,40 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	}
 }
 
-// rebuildFromConfig (re)derives the components that mirror the config:
-// history dir, response cache, memory store, and model profiles. It runs at
-// startup and after /config reload; session-scoped choices the user made at
-// runtime (/profile, /context strategy, /memory on|off) are left alone.
-func (m *Model) rebuildFromConfig() {
-	cfg := m.cfg
-	m.entities = entity.NewRegistry(entity.Limits{
+func newEntityRegistry(cfg *config.Config) (*entity.Registry, string) {
+	limits := entity.Limits{
 		MaxEntities:       cfg.Entities.MaxSessionEntities,
 		MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
 		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
 		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
 		MaxBodyBytes:      cfg.Entities.MaxOutputBytes,
 		MaxTotalBodyBytes: cfg.Entities.MaxTotalOutputBytes,
+	}
+	root := cfg.Entities.OutputStoragePath
+	if root != "" {
+		if expanded, err := history.ExpandHome(root); err == nil {
+			root = expanded
+		}
+	}
+	registry, err := entity.NewRegistryWithStorage(limits, entity.StorageOptions{
+		Mode: cfg.Entities.OutputStorage, Root: root, MaxBytes: cfg.Entities.MaxTotalOutputBytes,
 	})
+	if err == nil {
+		return registry, ""
+	}
+	return entity.NewRegistry(limits), fmt.Sprintf("entity disk storage unavailable; using memory: %v", err)
+}
+
+// rebuildFromConfig (re)derives the components that mirror the config:
+// history dir, response cache, memory store, and model profiles. It runs at
+// startup and after /config reload; session-scoped choices the user made at
+// runtime (/profile, /context strategy, /memory on|off) are left alone.
+func (m *Model) rebuildFromConfig() {
+	cfg := m.cfg
+	m.entities, m.entityStorageWarning = newEntityRegistry(cfg)
+	if m.entityStorageWarning != "" {
+		m.notice = m.entityStorageWarning
+	}
 	m.resetVisionObservations()
 	if !m.reasoningDisplaySet {
 		m.showReasoning = cfg.UI.ShowReasoning

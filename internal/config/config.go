@@ -253,12 +253,14 @@ type EntitiesConfig struct {
 	VisionMaxTokens      int  `mapstructure:"vision_max_tokens" yaml:"vision_max_tokens"`
 	// OutputStorage gates whether large tool-result bodies (Phase 2b) are
 	// retained for later resource_id read-back. "memory" (default) retains
-	// them bounded in-process; "off" disables retention while leaving every
+	// them bounded in-process; "disk" uses an optional private temporary spool;
+	// "off" disables retention while leaving every
 	// other entity feature (semantic entities via Put, get_entity_details)
 	// unaffected — a capped tool result still shows its preview, just no
 	// resource_id to recover the rest. An explicitly empty value behaves like
 	// the default and is accepted for compatibility with generated config.
-	OutputStorage string `mapstructure:"output_storage" yaml:"output_storage"`
+	OutputStorage     string `mapstructure:"output_storage" yaml:"output_storage"`
+	OutputStoragePath string `mapstructure:"output_storage_path" yaml:"output_storage_path"`
 	// MaxOutputBytes/MaxTotalOutputBytes bound Registry.Publish bodies,
 	// mirroring MaxPayloadBytes/MaxTotalPayloadBytes above for the separate
 	// body-retention budget. Zero uses entity.DefaultMaxBodyBytes/
@@ -842,9 +844,9 @@ func Load(v *viper.Viper) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	switch cfg.Entities.OutputStorage {
-	case "", "memory", "off":
+	case "", "memory", "disk", "off":
 	default:
-		return nil, fmt.Errorf("entities.output_storage: must be empty, memory, or off (got %q)", cfg.Entities.OutputStorage)
+		return nil, fmt.Errorf("entities.output_storage: must be empty, memory, disk, or off (got %q)", cfg.Entities.OutputStorage)
 	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderConfig{}
@@ -1186,7 +1188,8 @@ entities:
   max_full_expansions: 8
   vision_enabled: true
   vision_max_tokens: 800
-  output_storage: memory # memory | off — off disables read_file resource_id recovery of capped tool output
+  output_storage: memory # memory | disk | off — disk uses a private session spool; off disables recovery
+  output_storage_path: "" # optional owner-only root for disk spools
   max_output_bytes: 4194304
   max_total_output_bytes: 16777216
 

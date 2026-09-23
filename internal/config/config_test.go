@@ -97,11 +97,23 @@ chat:
 	}
 }
 
-func TestOutputStorageRejectsUnknownValue(t *testing.T) {
+func TestOutputStorageAcceptsDisk(t *testing.T) {
 	path := writeConfig(t, `
 entities:
   output_storage: disk
 `)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil || cfg.Entities.OutputStorage != "disk" {
+		t.Fatalf("Load() = cfg=%+v err=%v, want disk", cfg, err)
+	}
+}
+
+func TestOutputStorageRejectsUnknownValue(t *testing.T) {
+	path := writeConfig(t, "\nentities:\n  output_storage: network\n")
 	v, err := NewViper(path)
 	if err != nil {
 		t.Fatalf("NewViper: %v", err)

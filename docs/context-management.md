@@ -62,6 +62,12 @@ reference marker without copying the body into every summary. A later web
 fetch can request an eligible cached observation or explicitly refresh it;
 current-data requests therefore cannot be satisfied silently by stale text.
 
+Optional disk-backed entity bodies use the same session-local references and
+quotas as memory storage. The spool is temporary and owner-only; it is not
+history, durable memory, or a cross-session lookup service. Secret-shaped text
+is redacted before it crosses into the spool, and failed cleanup or quota
+reclamation leaves retention unavailable rather than exceeding the cap.
+
 ## The summary
 
 Built by a **heuristic summarizer** (no extra LLM call, deterministic): it

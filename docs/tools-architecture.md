@@ -144,6 +144,14 @@ network observation. Validators are used for conditional requests and a 304
 reuses the same retained body. The requested URL identity is recorded
 separately from the final redirect URL, and URL userinfo is rejected.
 
+The body registry defaults to memory. Setting `entities.output_storage: disk`
+selects a private per-session spool under the configured
+`entities.output_storage_path` (or the OS temporary directory). Files use
+owner-only permissions, random names, an ownership marker, atomic staging,
+and the same per-body and aggregate quotas. Disk setup or quota failures fall
+back to bounded memory at startup with a visible diagnostic; the registry
+never turns a failed write into a usable resource ID.
+
 This phase's shared formatter (`formatResultContent`, called by both
 `FormatResults` and `NativeResults`) renders `Meta`-blind: model-visible
 text is byte-identical to before `Meta` existed. `Meta` is available for a

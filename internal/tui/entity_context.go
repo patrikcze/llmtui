@@ -141,8 +141,7 @@ func (m *Model) entitiesEnabled() bool {
 // outputStorageEnabled reports whether captured tool-result bodies (Phase
 // 2b) should be published for later resource_id read-back. An empty value
 // and any value other than the literal "off" behave like the default
-// "memory" — see EntitiesConfig.OutputStorage's doc comment for why this
-// package does not fail config load over an unrecognized value.
+// "memory" and "disk" enable bounded body retention; "off" disables it.
 func (m *Model) outputStorageEnabled() bool {
 	return m.cfg == nil || m.cfg.Entities.OutputStorage != "off"
 }
