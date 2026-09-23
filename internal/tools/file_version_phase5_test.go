@@ -83,6 +83,44 @@ func TestPhase5ExpectedResourceIDValidation(t *testing.T) {
 	}
 }
 
+// TestExpectedVersionIsTrustedWhenResourceIDIsEvicted reproduces a live
+// failure found while manually testing the Laya shadow advisor (2026-09-23):
+// internal/tui's bindObservedEditVersions attaches BOTH ExpectedVersion (its
+// own trusted, just-delivered record) and ExpectedResourceID to a write/edit
+// call whenever a resource ID was also delivered with that observation.
+// resolveExpectedVersion previously required OpenBody(ExpectedResourceID) to
+// succeed even when ExpectedVersion was already fully resolved — so a body
+// evicted from the (independently bounded) entity registry made an
+// otherwise perfectly valid, already-verified write fail with
+// resource_unavailable, even though the write's actual safety check
+// (writeFileMetaExpected's digest comparison against the live file) never
+// needed the registry at all. ExpectedVersion must be trusted directly
+// whenever it is already present, the same way it already is when no
+// resource ID is attached.
+func TestExpectedVersionIsTrustedWhenResourceIDIsEvicted(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "f.txt", "before\n")
+	r := NewRunner(root, 64)
+	read := r.Execute(Call{Tool: ToolReadFile, Path: "f.txt"})
+	if read.Err != nil || read.Meta.FileVersion == nil {
+		t.Fatalf("read = %+v", read)
+	}
+	// Simulate the registry having evicted the body this ID once pointed to
+	// — exactly the "not present in this session" failure observed live.
+	r.Resources = &phase5ResourceReader{err: errors.New("entity body is not present in this session")}
+	res := r.Execute(Call{
+		Tool: ToolWriteFile, Path: "f.txt", Body: "after\n",
+		ExpectedVersion: read.Meta.FileVersion, ExpectedResourceID: phase5ResourceID,
+	})
+	if res.Err != nil {
+		t.Fatalf("write = %+v, want success trusting ExpectedVersion despite an evicted resource ID", res)
+	}
+	got, err := os.ReadFile(root + "/f.txt")
+	if err != nil || string(got) != "after\n" {
+		t.Fatalf("file content = %q, err=%v, want %q", got, err, "after\n")
+	}
+}
+
 func TestPhase5WriteSameBytesIsUnchanged(t *testing.T) {
 	root := t.TempDir()
 	writeTemp(t, root, "f.txt", "same\n")
