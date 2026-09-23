@@ -45,6 +45,12 @@ const (
 	// user-provided image. It is evidence about visible pixels, not external
 	// source provenance or durable memory.
 	KindVisionObservation Kind = "vision_observation"
+	// KindToolOutput identifies a retained command/generic-text body
+	// published via Registry.Publish.
+	KindToolOutput Kind = "tool_output"
+	// KindSearchResult identifies a captured search result row published
+	// via Registry.Publish.
+	KindSearchResult Kind = "search_result"
 )
 
 // Level controls progressive disclosure.
@@ -286,7 +292,8 @@ func validCandidate(c Candidate) error {
 // but controller lookup filters accept only this closed vocabulary.
 func ValidKind(kind Kind) bool {
 	switch kind {
-	case KindWebResult, KindWebPage, KindFile, KindMCPResult, KindCollection, KindVisionObservation:
+	case KindWebResult, KindWebPage, KindFile, KindMCPResult, KindCollection, KindVisionObservation,
+		KindToolOutput, KindSearchResult:
 		return true
 	default:
 		return false
