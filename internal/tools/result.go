@@ -85,8 +85,7 @@ type ErrorInfo struct {
 // may produce. resource_unavailable was added in Phase 2b-ii (read_file's
 // resource_id selector); the remaining codes that depend on Phase 3+
 // substrate (cursor_expired, stale_source, snapshot_incomplete,
-// retention_unavailable, capture_limit, poll_not_due) are still
-// intentionally absent.
+// retention_unavailable, poll_not_due) are still intentionally absent.
 var errorCodeVocabulary = map[string]bool{
 	"invalid_arguments":        true,
 	"invalid_pattern":          true,
@@ -120,6 +119,9 @@ var errorCodeVocabulary = map[string]bool{
 	// resource.go); a finer §23 vocabulary (cursor_expired/snapshot_incomplete)
 	// is Phase 3+.
 	"resource_unavailable": true,
+	// capture_limit (Phase 3): a requested late line window lies beyond the
+	// bounded scan budget, so the source was not exhaustively inspected.
+	"capture_limit": true,
 }
 
 // Coverage states how much of the intended source a producer actually

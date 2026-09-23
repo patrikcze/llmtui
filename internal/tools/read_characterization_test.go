@@ -7,17 +7,14 @@ import (
 	"testing"
 )
 
-// This file characterizes CURRENT read_file behavior (Phase 0 of the
-// next-generation-tool-runtime plan, evidence row L3). It adds new tests
-// beside read_range_test.go without changing any existing assertion there.
+// This file carries the Phase 0 read_file characterization tests. Assertions
+// for gaps closed by Phase 3 are updated here so the historical fixture keeps
+// guarding the behavior that is now intended.
 
-// TestReadFileRangeCannotReachLinesPastByteLimitedPrefix documents the L3
-// gap: a ranged read is sliced out of the same byte-limited prefix as a
-// whole-file read (readFile -> io.LimitReader(file, byteLimit+1)), so a line
-// that genuinely exists later in the file is unreachable no matter what
-// offset is requested, and the error message itself only ever names the
-// lines that fit within the KB cap, never the file's real total line count.
-func TestReadFileRangeCannotReachLinesPastByteLimitedPrefix(t *testing.T) {
+// TestReadFileRangeReachesLinesPastByteLimitedPrefix closes the Phase 0 L3
+// gap: ranged reads stream past the legacy whole-file prefix while keeping
+// their returned body bounded.
+func TestReadFileRangeReachesLinesPastByteLimitedPrefix(t *testing.T) {
 	root := t.TempDir()
 	// 500 lines of 7-9 bytes each (~4 KB) — well past this runner's 1 KB cap.
 	writeTemp(t, root, "big.txt", numberedLines(500))
@@ -32,19 +29,12 @@ func TestReadFileRangeCannotReachLinesPastByteLimitedPrefix(t *testing.T) {
 		t.Fatalf("got = %q", got)
 	}
 
-	// PHASE 0: current gap, closed in Phase 3 (§L3). Line 400 is a real line
-	// in the 500-line file, but it falls after however many lines fit in the
-	// 1 KB byte-limited prefix, so it can never be read — and the error
-	// reports only the KB-limited prefix's line count, not the true 500.
-	_, err = r.readFile("big.txt", 400, 5)
-	if err == nil {
-		t.Fatal("want an error reading a line past the byte-limited prefix")
+	got, err = r.readFile("big.txt", 400, 5)
+	if err != nil {
+		t.Fatalf("late ranged read failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "fit within") {
-		t.Fatalf("err = %v, want it to name the KB-limited prefix, not a true past-EOF condition", err)
-	}
-	if strings.Contains(err.Error(), "500 lines") {
-		t.Fatalf("err = %v, this call must not be able to know the file's real total line count", err)
+	if !strings.Contains(got, "lines 400-404 of 500") || !strings.Contains(got, "line 400\n") {
+		t.Fatalf("late ranged read = %q", got)
 	}
 }
 

@@ -13,6 +13,7 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -78,6 +79,11 @@ const (
 const (
 	DefaultReadLimit = 200
 	MaxReadLimit     = 500
+	// MaxReadScanBytes bounds how far a ranged read may scan while looking
+	// for a late line window. The returned body remains bounded by maxKB;
+	// this separate ceiling prevents a request for a far-away range from
+	// turning into an unbounded full-file traversal.
+	MaxReadScanBytes = 64 << 20
 )
 
 // CanonicalReadRange normalizes read_file's optional line range. ranged is
@@ -484,7 +490,7 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		case c.ResourceID != "":
 			res.Output, meta, res.Err = r.readResourceMeta(ctx, c.ResourceID)
 		default:
-			res.Output, meta, res.Err = r.readFileMeta(c.Path, c.Offset, c.Limit)
+			res.Output, meta, res.Err = r.readFileMetaContext(ctx, c.Path, c.Offset, c.Limit)
 			if res.Err == nil && !IsSecretPath(c.Path) {
 				res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
 			}
@@ -604,7 +610,14 @@ func (r *Runner) readFile(rel string, offset, limit int) (string, error) {
 }
 
 func (r *Runner) readFileMeta(rel string, offset, limit int) (output string, meta ResultMeta, err error) {
+	return r.readFileMetaContext(context.Background(), rel, offset, limit)
+}
+
+func (r *Runner) readFileMetaContext(ctx context.Context, rel string, offset, limit int) (output string, meta ResultMeta, err error) {
 	meta.Effect = EffectNone
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if rel == "" {
 		return "", meta, withCode(fmt.Errorf("read_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
@@ -643,6 +656,13 @@ func (r *Runner) readFileMeta(rel string, offset, limit int) (output string, met
 	if !openedInfo.Mode().IsRegular() {
 		return "", meta, withCode(fmt.Errorf("%q is not a regular file", rel), "unsupported_content", RetryCorrectInput)
 	}
+	start, count, ranged := CanonicalReadRange(offset, limit)
+	if ranged {
+		// Ranged reads stream past the legacy whole-file prefix. This keeps the
+		// output bounded while allowing a late line window to be addressed without
+		// first materializing the intervening bytes.
+		return r.readLineRangeContext(ctx, file, filepath.ToSlash(name), openedInfo.Size(), start, count, int(byteLimit))
+	}
 	// A bounded read is enough for both modes: the whole-file read is capped
 	// at byteLimit as before, and a line range is sliced out of that same
 	// bounded prefix (io.LimitReader also contains a pathological single
@@ -656,135 +676,156 @@ func (r *Runner) readFileMeta(rel string, offset, limit int) (output string, met
 		data = data[:byteLimit]
 	}
 
-	start, count, ranged := CanonicalReadRange(offset, limit)
-	if !ranged {
-		text, consumed := boundedUTF8(data, int(byteLimit))
-		cov := Coverage{
-			SourceComplete:  !bytesTruncated,
-			CaptureComplete: !bytesTruncated,
-			PreviewComplete: consumed >= len(data),
-			ObservedBytes:   int64(len(data)),
-			RetainedBytes:   int64(consumed),
-		}
-		if !bytesTruncated {
-			cov.TotalBytes = int64Ptr(openedInfo.Size())
-		}
-		outcome := OutcomeOK
-		if bytesTruncated {
-			cov.Reasons = []string{"bytes"}
-			outcome = OutcomePartial
-		}
-		meta.Outcome, meta.Coverage = outcome, cov
-		if bytesTruncated || consumed < len(data) {
-			total := openedInfo.Size()
-			if bytesTruncated && total < int64(len(data))+1 {
-				total = int64(len(data)) + 1
-			}
-			return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), meta, nil
-		}
-		return text, meta, nil
-	}
-	text, lineMeta, err := renderLineRange(filepath.ToSlash(name), data, bytesTruncated, start, count, int(byteLimit))
-	lineMeta.Effect = EffectNone
-	if err != nil {
-		return "", lineMeta, withCode(err, "range_after_eof", RetryCorrectInput)
-	}
-	return text, lineMeta, nil
-}
-
-// renderLineRange slices [start, start+count) 1-based lines out of the bounded
-// file bytes, verbatim, with one compact header line and no per-line numbers
-// (so the model cannot copy an artificial number into an edit_file old_text).
-// An offset past the last available line is a recoverable error, never a
-// silent empty success.
-func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start, count, byteLimit int) (string, ResultMeta, error) {
-	var meta ResultMeta
-	segments := splitKeepNewline(data)
-	totalKnown := !bytesTruncated
-	if start > len(segments) {
-		if totalKnown {
-			return "", meta, fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, len(segments))
-		}
-		return "", meta, fmt.Errorf("read_file offset %d is past the %d lines that fit within the %d KB read limit for %q", start, len(segments), byteLimit/1024, displayPath)
-	}
-	first := start - 1
-	last := first + count
-	if last > len(segments) {
-		last = len(segments)
-	}
-	selected := bytes.Join(segments[first:last], nil)
-	text, consumed := boundedUTF8(selected, byteLimit)
-	lineCapped := consumed < len(selected)
-
-	var header strings.Builder
-	fmt.Fprintf(&header, "[read_file: %s lines %d-%d", displayPath, start, last)
-	if totalKnown {
-		fmt.Fprintf(&header, " of %d", len(segments))
-	}
-	switch {
-	case last < len(segments):
-		fmt.Fprintf(&header, ", next_offset=%d]", last+1)
-	case bytesTruncated:
-		fmt.Fprintf(&header, ", more of the file is past the %d KB read limit]", byteLimit/1024)
-	case lineCapped:
-		fmt.Fprintf(&header, ", line %d truncated at the %d KB limit]", last, byteLimit/1024)
-	case totalKnown:
-		header.WriteString(", end of file]")
-	default:
-		header.WriteString("]")
-	}
-
-	// SourceComplete tracks only the byte-prefix read cap (bytesTruncated), not
-	// whether more of the file exists past this requested window — a ranged
-	// read that returns exactly the window the caller asked for is a complete,
-	// successful bounded observation (OutcomeOK), not a partial one. NextOffset
-	// exists precisely so pagination is navigation, not incompleteness.
+	text, consumed := boundedUTF8(data, int(byteLimit))
 	cov := Coverage{
 		SourceComplete:  !bytesTruncated,
 		CaptureComplete: !bytesTruncated,
-		PreviewComplete: !lineCapped,
+		PreviewComplete: consumed >= len(data),
 		ObservedBytes:   int64(len(data)),
 		RetainedBytes:   int64(consumed),
 	}
-	if totalKnown {
-		cov.TotalLines = int64Ptr(int64(len(segments)))
+	if !bytesTruncated {
+		cov.TotalBytes = int64Ptr(openedInfo.Size())
 	}
-	var reasons []string
-	if bytesTruncated {
-		reasons = append(reasons, "bytes")
-	}
-	if lineCapped {
-		reasons = append(reasons, "line")
-	}
-	cov.Reasons = reasons
 	outcome := OutcomeOK
 	if bytesTruncated {
+		cov.Reasons = []string{"bytes"}
 		outcome = OutcomePartial
 	}
-	win := &Window{StartLine: int64(start), EndLine: int64(last), PartialLine: lineCapped}
-	if last < len(segments) {
-		win.NextOffset = int64Ptr(int64(last + 1))
+	meta.Outcome, meta.Coverage = outcome, cov
+	if bytesTruncated || consumed < len(data) {
+		total := openedInfo.Size()
+		if bytesTruncated && total < int64(len(data))+1 {
+			total = int64(len(data)) + 1
+		}
+		return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), meta, nil
 	}
-	meta = ResultMeta{Outcome: outcome, Coverage: cov, Window: win}
+	return text, meta, nil
+}
+
+func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displayPath string, size int64, start, count, byteLimit int) (string, ResultMeta, error) {
+	var meta ResultMeta
+	reader := bufio.NewReaderSize(io.LimitReader(file, MaxReadScanBytes+1), 32*1024)
+	var selected bytes.Buffer
+	var scanned int64
+	lineNo := 1
+	selectedBytes := int64(0)
+	scanLimited := false
+	complete := false
+
+	process := func(part []byte, hasNewline bool) {
+		if lineNo >= start && lineNo < start+count {
+			selectedBytes += int64(len(part))
+			if selected.Len() < byteLimit {
+				remaining := byteLimit - selected.Len()
+				if len(part) > remaining {
+					part = part[:remaining]
+				}
+				_, _ = selected.Write(part)
+			}
+		}
+		if hasNewline {
+			lineNo++
+		}
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			meta.Outcome = OutcomeCancelled
+			meta.Error = &ErrorInfo{Code: "cancelled", Retry: RetryNone, Message: boundErrorMessage(fmt.Errorf("read_file cancelled: %w", err))}
+			return "", meta, fmt.Errorf("read file cancelled: %w", err)
+		}
+		part, err := reader.ReadSlice('\n')
+		scanned += int64(len(part))
+		if scanned > MaxReadScanBytes {
+			scanLimited = true
+			break
+		}
+		switch err {
+		case nil:
+			process(part, true)
+		case bufio.ErrBufferFull:
+			process(part, false)
+		case io.EOF:
+			if len(part) > 0 {
+				process(part, false)
+				lineNo++
+			}
+			complete = true
+		default:
+			return "", meta, fmt.Errorf("read file: %w", err)
+		}
+		if err != bufio.ErrBufferFull {
+			if err == nil || err == io.EOF {
+				if err == io.EOF {
+					break
+				}
+				// A complete line is enough to continue; the next iteration
+				// determines whether the requested window or source ends.
+			}
+		}
+	}
+
+	if !complete && !scanLimited {
+		complete = true
+	}
+	if start >= lineNo && complete {
+		return "", meta, withCode(fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, max(0, lineNo-1)), "range_after_eof", RetryCorrectInput)
+	}
+	if start >= lineNo && scanLimited {
+		return "", meta, withCode(fmt.Errorf("read_file offset %d is beyond the %d MB scan limit for %q", start, MaxReadScanBytes/(1<<20), displayPath), "capture_limit", RetryCorrectInput)
+	}
+	last := start + count - 1
+	if last >= lineNo && complete {
+		last = max(start, lineNo-1)
+	}
+	text, consumed := boundedUTF8(selected.Bytes(), byteLimit)
+	lineCapped := selectedBytes > int64(byteLimit) || consumed < selected.Len()
+	var header strings.Builder
+	fmt.Fprintf(&header, "[read_file: %s lines %d-%d", displayPath, start, last)
+	switch {
+	case scanLimited:
+		fmt.Fprintf(&header, ", scan limited at %d MB]", MaxReadScanBytes/(1<<20))
+	case last < lineNo-1:
+		fmt.Fprintf(&header, " of %d, next_offset=%d]", lineNo-1, last+1)
+	case complete:
+		fmt.Fprintf(&header, " of %d, end of file]", lineNo-1)
+	default:
+		header.WriteString("]")
+	}
+	if lineCapped {
+		fmt.Fprintf(&header, "\n… selected line range truncated at the %d KB read limit", byteLimit/1024)
+	}
+	cov := Coverage{
+		SourceComplete:  complete,
+		CaptureComplete: complete,
+		PreviewComplete: !lineCapped,
+		ObservedBytes:   scanned,
+		RetainedBytes:   int64(consumed),
+	}
+	if complete {
+		cov.TotalBytes = int64Ptr(size)
+		cov.TotalLines = int64Ptr(int64(lineNo - 1))
+	}
+	if scanLimited {
+		cov.Reasons = append(cov.Reasons, "scan")
+	}
+	if lineCapped {
+		cov.Reasons = append(cov.Reasons, "line")
+	}
+	outcome := OutcomeOK
+	if scanLimited || lineCapped {
+		outcome = OutcomePartial
+	}
+	meta.Outcome, meta.Coverage = outcome, cov
+	meta.Window = &Window{StartLine: int64(start), EndLine: int64(last), PartialLine: lineCapped}
+	if !scanLimited && !complete {
+		meta.Window.NextOffset = int64Ptr(int64(last + 1))
+	}
 	if text == "" {
 		return header.String(), meta, nil
 	}
 	return header.String() + "\n\n" + text, meta, nil
-}
-
-// splitKeepNewline splits file bytes into line segments that each retain their
-// trailing "\n", so rejoining a slice reproduces the original bytes exactly. A
-// final empty segment after a trailing newline is dropped: "a\nb\n" is two
-// lines, not three.
-func splitKeepNewline(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
-	}
-	segments := bytes.SplitAfter(data, []byte{'\n'})
-	if n := len(segments); n > 0 && len(segments[n-1]) == 0 {
-		segments = segments[:n-1]
-	}
-	return segments
 }
 
 // boundedUTF8 converts arbitrary file bytes into valid UTF-8 without letting

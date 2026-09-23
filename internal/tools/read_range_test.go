@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,6 +87,35 @@ func TestReadFileRange(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReadFileRangeStreamsBeyondLegacyPrefix(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "large.txt", numberedLines(1200))
+	res := NewRunner(root, 1).Execute(Call{Tool: ToolReadFile, Path: "large.txt", Offset: 900, Limit: 2})
+	if res.Err != nil {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if !strings.Contains(res.Output, "lines 900-901 of 1200, next_offset=902") {
+		t.Fatalf("header = %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "line 900\nline 901\n") {
+		t.Fatalf("output = %q", res.Output)
+	}
+	if res.Meta.Coverage.TotalLines == nil || *res.Meta.Coverage.TotalLines != 1200 {
+		t.Fatalf("coverage = %+v, want exact total lines", res.Meta.Coverage)
+	}
+}
+
+func TestReadFileRangeCancellation(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "large.txt", numberedLines(10))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := NewRunner(root, 1).ExecuteContext(ctx, Call{Tool: ToolReadFile, Path: "large.txt", Offset: 2, Limit: 1})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "cancel") {
+		t.Fatalf("error = %v, want cancellation", res.Err)
 	}
 }
 
