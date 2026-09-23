@@ -923,9 +923,15 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	// blocked indefinitely after the context kills the direct shell.
 	cmd.WaitDelay = time.Second
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	limit := r.maxKB * 1024
+	// Bounded during capture, not just at formatting time: capture never
+	// retains more than limit bytes regardless of how much the command
+	// produces (Phase 2a, output_capture.go) — the post-hoc bytes.Buffer
+	// this replaced grew to the command's full output before any cap
+	// applied.
+	capture := newBoundedCapture(limit)
+	cmd.Stdout = capture
+	cmd.Stderr = capture
 	if err := cmd.Start(); err != nil {
 		return "", meta, fmt.Errorf("start command: %w", err)
 	}
@@ -939,24 +945,33 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	// process still in the group — a backgrounded `cmd &`, a timed-out tree —
 	// must not outlive the tool call.
 	procutil.KillGroup(cmd)
-	observed := out.Len()
-	output := strings.TrimRight(out.String(), "\n")
-	capped := false
-	if limit := r.maxKB * 1024; len(output) > limit {
+	observed := capture.Observed()
+	output := strings.TrimRight(string(capture.Bytes()), "\n")
+	// Capture-time truncation already happened (boundedCapture never
+	// retained more than limit bytes); a discarded tail is now just a
+	// question of applying the same UTF-8-safe trim and marker as before —
+	// the raw byte-cap cut can land mid-rune even though len(output) is
+	// already <= limit, so TruncateBytes still runs unconditionally here.
+	capped := capture.Retained() < observed
+	if capped {
 		output, _ = terminaltext.TruncateBytes(output, limit)
 		output += "\n… output truncated"
-		capped = true
 	}
 	meta.Coverage = Coverage{
 		SourceComplete:  !capped,
 		CaptureComplete: !capped,
 		PreviewComplete: true,
-		ObservedBytes:   int64(observed),
+		ObservedBytes:   observed,
 		RetainedBytes:   int64(len(output)),
 	}
 	if capped {
 		meta.Coverage.Reasons = []string{"bytes"}
 	}
+	// Full-stream digest (retained or discarded bytes alike), so two
+	// truncated results with an identical retained prefix but different
+	// actual output never collide — a later phase's repeat-detection/dedup
+	// logic must be able to tell them apart.
+	meta.ContentDigest = capture.Digest()
 	// run_command's own Outcome states are OK/Failed/Timeout/Cancelled — never
 	// Partial: an output cap is a capture-completeness fact (Coverage), not a
 	// downgrade of whether the command itself succeeded.
