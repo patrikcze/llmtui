@@ -51,6 +51,13 @@ func TestFetchRejectsSchemesAndPrivateHosts(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsURLUserinfo(t *testing.T) {
+	c := NewClient(2*time.Second, 64)
+	if _, err := c.Fetch(context.Background(), "https://user:secret@example.com/path"); err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("want userinfo rejection, got %v", err)
+	}
+}
+
 func TestFetchBlocksLoopbackServer(t *testing.T) {
 	srv := testutil.NewHTTPServer(t, nil)
 	defer srv.Close()

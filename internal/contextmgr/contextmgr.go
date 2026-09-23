@@ -245,15 +245,27 @@ func (HeuristicSummarizer) Summarize(_ context.Context, in SummaryInput) (Summar
 // process lists, git state, clipboard text) never persist as current facts.
 func condenseMessage(m provider.Message) []string {
 	out := make([]string, 0, len(m.ToolCalls)+1)
-	for _, reference := range m.References {
-		if reference.Kind != "vision_observation" || reference.ID == "" {
+	const maxReferences = 16
+	for index, reference := range m.References {
+		if index >= maxReferences {
+			out = append(out, "- additional runtime references omitted from compact summary")
+			break
+		}
+		if reference.ID == "" {
 			continue
 		}
 		label := strings.TrimSpace(reference.Label)
-		if label == "" {
-			label = "user-provided image"
+		if reference.Kind == "vision_observation" {
+			if label == "" {
+				label = "user-provided image"
+			}
+			out = append(out, fmt.Sprintf("- user attached image; visual observation stored as %s kind=%s label=%q", reference.ID, reference.Kind, capLine(label, 160)))
+			continue
 		}
-		out = append(out, fmt.Sprintf("- user attached image; visual observation stored as %s kind=%s label=%q", reference.ID, reference.Kind, capLine(label, 160)))
+		if label == "" {
+			label = "runtime evidence"
+		}
+		out = append(out, fmt.Sprintf("- runtime reference stored as %s kind=%s label=%q", reference.ID, capLine(reference.Kind, 80), capLine(label, 160)))
 	}
 	for _, call := range m.ToolCalls {
 		if call.Name == localContextToolName {

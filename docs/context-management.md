@@ -55,6 +55,19 @@ retained and leaves `tool_search` available for a narrower query. Discovery
 does not bypass the context budget, make a hidden tool callable, or weaken its
 approval policy.
 
+Web pages and bounded web-search result sets follow the same reference model:
+the preview enters the next prompt, while the retained body and acquisition
+metadata stay behind an ephemeral entity reference. Compaction preserves the
+reference marker without copying the body into every summary. A later web
+fetch can request an eligible cached observation or explicitly refresh it;
+current-data requests therefore cannot be satisfied silently by stale text.
+
+Optional disk-backed entity bodies use the same session-local references and
+quotas as memory storage. The spool is temporary and owner-only; it is not
+history, durable memory, or a cross-session lookup service. Secret-shaped text
+is redacted before it crosses into the spool, and failed cleanup or quota
+reclamation leaves retention unavailable rather than exceeding the cap.
+
 ## The summary
 
 Built by a **heuristic summarizer** (no extra LLM call, deterministic): it
@@ -122,6 +135,9 @@ tool-result continuation, Harmony continuation, verifier request/retry, or
 resumable agent cycle owns context. The status snapshot names the exact blocker.
 
 ## Agent and verifier scope
+
+The Phase 8 calibration baseline and its explicit live-model/platform gates are
+recorded in the [runtime calibration report](architecture/next-generation-tool-runtime-phase8-report.md).
 
 An ordinary chat request uses the **session summary**. An agent's first cycle
 may use its bounded captured **agent start summary** and start turns. Later

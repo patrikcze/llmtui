@@ -68,7 +68,10 @@ func TestLiveEvaluationMatrix(t *testing.T) {
 		Commit: os.Getenv("LLMTUI_EVAL_COMMIT"), Provider: p.Name(),
 		EndpointType: endpointType, Model: model, ToolSchema: "conformance_echo:v1",
 		MaxTokens: 4096, VerifierMode: "contract-stage", AssistanceMode: "shadow",
-		WarmModel: os.Getenv("LLMTUI_EVAL_WARM") == "true",
+		WarmModel:    os.Getenv("LLMTUI_EVAL_WARM") == "true",
+		BaselineSHA:  os.Getenv("LLMTUI_EVAL_BASELINE_SHA"),
+		CandidateSHA: os.Getenv("LLMTUI_EVAL_CANDIDATE_SHA"),
+		FixtureHash:  os.Getenv("LLMTUI_EVAL_FIXTURE_HASH"),
 	}
 	if err := ValidateMetadata(metadata); err != nil {
 		t.Fatal(err)

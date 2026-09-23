@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -17,6 +18,30 @@ type stubWeb struct {
 	err     error
 	gotMax  int
 	gotURL  string
+}
+
+type stubWebFresh struct {
+	stubWeb
+	pageCalls int
+	lastOpts  web.FetchOptions
+}
+
+func (s *stubWebFresh) FetchWithOptions(ctx context.Context, u string, opts web.FetchOptions) (web.Page, error) {
+	s.pageCalls++
+	s.gotURL, s.lastOpts = u, opts
+	return s.page, s.err
+}
+
+type stubWebSnapshots struct {
+	page web.Page
+	hit  bool
+}
+
+func (s *stubWebSnapshots) GetWebSnapshot(context.Context, string, string, string, time.Duration) (web.Page, bool, error) {
+	return s.page, s.hit, nil
+}
+func (s *stubWebSnapshots) PutWebSnapshot(context.Context, string, web.Page) (string, error) {
+	return "", nil
 }
 
 func (s *stubWeb) Search(ctx context.Context, q string, max int) ([]web.SearchResult, error) {
@@ -73,6 +98,9 @@ func TestWebSearchFormatsResults(t *testing.T) {
 	if len(res.Entities) != 2 || res.Entities[0].Kind != entity.KindWebResult || res.Entities[0].Metadata.URL != "https://a.example" {
 		t.Fatalf("web result entities = %+v", res.Entities)
 	}
+	if len(res.Captures) != 1 || res.Captures[0].Kind != entity.KindSearchResult {
+		t.Fatalf("web search capture = %+v", res.Captures)
+	}
 }
 
 func TestWebSearchClampsMax(t *testing.T) {
@@ -121,6 +149,59 @@ func TestWebFetchFormatsPage(t *testing.T) {
 	}
 	if len(res.Entities) != 1 || res.Entities[0].Kind != entity.KindWebPage || res.Entities[0].Metadata.StatusCode != 200 {
 		t.Fatalf("web page entities = %+v", res.Entities)
+	}
+}
+
+func TestWebFetchRetainsBodyBeforePreviewCap(t *testing.T) {
+	full := strings.Repeat("x", 2048)
+	stub := &stubWeb{page: web.Page{URL: "https://a.example/x", Content: "preview", Body: full, Bytes: len(full), Status: 200}}
+	res := webRunner(t, stub).Execute(Call{Tool: ToolWebFetch, Path: "https://a.example/x"})
+	if res.Err != nil || len(res.Captures) != 1 || string(res.Captures[0].Body) != full {
+		t.Fatalf("retained body missing: err=%v captures=%d", res.Err, len(res.Captures))
+	}
+}
+
+func TestWebFetchCacheModesAndConditionalValidators(t *testing.T) {
+	fresh := &stubWebFresh{stubWeb: stubWeb{page: web.Page{URL: "https://a.example/x", Content: "network", Body: "network", Status: 200}}}
+	r := webRunner(t, fresh)
+	r.WebSnapshots = &stubWebSnapshots{page: web.Page{URL: "https://a.example/x", Content: "cached", Body: "cached", Status: 200, ETag: `"v1"`}, hit: true}
+	res := r.Execute(Call{Tool: ToolWebFetch, Path: "https://a.example/x", WebCacheMode: "auto", WebCacheMaxAge: 60})
+	if res.Err != nil || !res.Meta.Reused || !strings.Contains(res.Output, "cached") || fresh.pageCalls != 0 {
+		t.Fatalf("cache hit failed: %+v calls=%d", res, fresh.pageCalls)
+	}
+	r.WebSnapshots = &stubWebSnapshots{page: web.Page{URL: "https://a.example/x", Body: "old", Content: "old", ETag: `"v1"`}, hit: false}
+	res = r.Execute(Call{Tool: ToolWebFetch, Path: "https://a.example/x", WebCacheMode: "auto", WebCacheMaxAge: 60})
+	if res.Err != nil || fresh.lastOpts.ETag != `"v1"` {
+		t.Fatalf("validator not forwarded: err=%v opts=%+v", res.Err, fresh.lastOpts)
+	}
+	res = r.Execute(Call{Tool: ToolWebFetch, Path: "https://a.example/x", WebCacheMode: "cached"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "no retained web snapshot") {
+		t.Fatalf("cached miss err=%v", res.Err)
+	}
+}
+
+func BenchmarkWebFetchCached(b *testing.B) {
+	r := NewRunner("/tmp", 64)
+	r.Web = &stubWebFresh{stubWeb: stubWeb{page: web.Page{URL: "https://a.example/x", Content: "cached", Body: "cached", Status: 200}}}
+	r.WebSnapshots = &stubWebSnapshots{page: web.Page{URL: "https://a.example/x", Content: "cached", Body: "cached", Status: 200, ETag: `"v1"`}, hit: true}
+	call := Call{Tool: ToolWebFetch, Path: "https://a.example/x", WebCacheMode: "auto", WebCacheMaxAge: 60}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if res := r.Execute(call); res.Err != nil {
+			b.Fatal(res.Err)
+		}
+	}
+}
+
+func BenchmarkWebSearchCapture(b *testing.B) {
+	r := NewRunner("/tmp", 64)
+	r.Web = &stubWeb{results: []web.SearchResult{{Title: "A", URL: "https://a.example", Snippet: "alpha"}}}
+	call := Call{Tool: ToolWebSearch, Body: "weather"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if res := r.Execute(call); res.Err != nil {
+			b.Fatal(res.Err)
+		}
 	}
 }
 

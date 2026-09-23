@@ -58,6 +58,12 @@ removed from future provider history. Failed capture leaves it attached; no
 visual observation is fabricated. Visual payloads are untrusted reference data
 and never become durable memory or web provenance.
 
+Optional entity disk backing applies redaction before staging, uses owner-only
+random filenames and an ownership marker, confines operations to the configured
+root, and publishes verified bodies atomically. Quota or filesystem failures
+leave no usable resource ID; the default remains memory. Portability and
+calibration evidence is recorded in the [Phase 8 report](architecture/next-generation-tool-runtime-phase8-report.md).
+
 Retrieved memory is reference data, not authorization. The unified Active
 Context marks source/scope/trust/freshness and frames every record separately;
 it cannot grant tools, network access, or prove that an agent action succeeded.
@@ -170,12 +176,17 @@ unwanted save and `/memory off` stops future ones.
   - **Surgical edits** — `edit_file` replaces one exact, unique text fragment
     in an *existing* file and shares every `write_file` guardrail (workspace
     confinement, `.git`/key-material/shell-startup blocks, symlink-escape
-    rejection, the `tools.max_file_kb` cap). It never creates a file, refuses
-    a non-UTF-8 file, fails without writing on zero or multiple matches, and
-    aborts if the file changed between the read it was computed from and the
-    write — so a concurrent external change is never clobbered. A ranged
-    `read_file` is still a `read_file`: the same secret-file approval and
-    workspace confinement apply regardless of the line range.
+    rejection, a write-only rejection of a symlink target or symlinked
+    parent directory, the `tools.max_file_kb` cap). It never creates a file,
+    refuses a non-UTF-8 file, fails without writing on zero or multiple
+    matches, and aborts if the file changed between the read it was computed
+    from and the write, checked again immediately before the confined
+    stage-then-rename publish — but this is optimistic staleness detection,
+    not compare-and-swap: a writer outside llmtui's control landing after
+    that last check can still have its change silently overwritten by the
+    rename. A ranged `read_file` is still a `read_file`: the same
+    secret-file approval and workspace confinement apply regardless of the
+    line range.
   - **Clarification is not authorization** — `ask_user` pauses for one
     bounded decision or missing fact and returns the answer through the
     original tool call. It cannot approve a write, command, web request, or

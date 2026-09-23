@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -106,20 +107,33 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 	executedIndex := 0
 	for i, call := range p.calls {
 		if reason := p.blocked[i]; reason != "" {
+			err := fmt.Errorf(
+				"%s. Use different arguments, a different approach, or report the observable state",
+				reason,
+			)
 			merged = append(merged, tools.Result{
 				Call: call,
-				Err: fmt.Errorf(
-					"%s. Use different arguments, a different approach, or report the observable state",
-					reason,
-				),
+				Err:  err,
+				// A ledger block never reaches a producer, so its outcome is
+				// unknown — paired with agent.ActionBlocked, which is what
+				// actually records "the controller withheld execution."
+				Meta: tools.ResultMeta{
+					Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+					Error: &tools.ErrorInfo{Code: "repeat_block", Retry: tools.RetryCorrectInput, Message: err.Error()},
+				},
 			})
 			statuses = append(statuses, agent.ActionBlocked)
 			continue
 		}
 		if executedIndex >= len(executed) {
+			err := fmt.Errorf("tool result missing for accepted call; it was not reported as completed")
 			merged = append(merged, tools.Result{
 				Call: call,
-				Err:  fmt.Errorf("tool result missing for accepted call; it was not reported as completed"),
+				Err:  err,
+				Meta: tools.ResultMeta{
+					Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+					Error: &tools.ErrorInfo{Code: "outcome_unknown", Retry: tools.RetryLater, Message: err.Error()},
+				},
 			})
 			statuses = append(statuses, agent.ActionUnknown)
 			continue
@@ -183,23 +197,35 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 			resource = "opaque\x1e" + strings.TrimSpace(c.Body)
 		}
 	case tools.ToolGlob, tools.ToolGrep:
-		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strings.TrimSpace(c.Body), strings.TrimSpace(c.Filter)}, "\x1e")
+		resource = strings.Join([]string{
+			normalizeWorkspacePath(root, resource), strings.TrimSpace(c.ResourceID),
+			normalizeText(c.Body), strings.TrimSpace(c.Filter),
+			strconv.FormatBool(c.SearchLiteral), searchCaseIdentity(c.SearchCaseSensitive),
+			strconv.Itoa(c.SearchContext), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor),
+		}, "\x1e")
 	case tools.ToolWriteFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolEditFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolWebFetch:
-		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness)
+		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness) + "\x1e" + strings.TrimSpace(c.WebCacheMode) + "\x1e" + strconv.Itoa(c.WebCacheMaxAge) + "\x1e" + strings.TrimSpace(c.WebRefreshEpoch)
 	case tools.ToolReadFile:
 		// A different line range is a different operation, so paginating
 		// through a file is never mistaken for a repeated no-progress call.
 		start, count, ranged := tools.CanonicalReadRange(c.Offset, c.Limit)
-		resource = normalizeWorkspacePath(root, resource)
+		if strings.TrimSpace(c.ResourceID) != "" {
+			resource = "resource:" + strings.TrimSpace(c.ResourceID)
+		} else {
+			resource = normalizeWorkspacePath(root, resource)
+		}
 		if ranged {
 			resource += "\x1e" + strconv.Itoa(start) + "\x1e" + strconv.Itoa(count)
 		}
+		if c.ByteOffset != nil {
+			resource += "\x1ebyte\x1e" + strconv.FormatInt(*c.ByteOffset, 10)
+		}
 	case tools.ToolListDir:
-		resource = normalizeWorkspacePath(root, resource)
+		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor)}, "\x1e")
 	case tools.ToolSearch:
 		resource = normalizeText(c.SearchQuery) + "\x1e" + strconv.Itoa(c.Max)
 	default:
@@ -208,6 +234,13 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 		}
 	}
 	return strings.Join([]string{c.Tool, resource}, "\x1f")
+}
+
+func searchCaseIdentity(v *bool) string {
+	if v == nil {
+		return "default"
+	}
+	return strconv.FormatBool(*v)
 }
 
 func normalizeWorkspacePath(root, raw string) string {
@@ -294,7 +327,25 @@ func digestText(text string) string {
 // the same way twice in a row is recognized as no new evidence, while a
 // command whose error message changes (different line, different reason)
 // is not treated as a repeat.
+//
+// A Phase 1a-adapted producer's typed Meta (Meta.Outcome != "") is digested
+// instead of the formatted text — see progressDigestFromMeta. This is the
+// fix for plan §11 rule 9/§20's "changing call ID/time/resource ID is
+// irrelevant" progress rule: formatted Output or Err text can carry volatile
+// content a producer never intended as evidence (a personal_apps result's
+// ObservedAt timestamp, an MCP response echoing a request id), which made
+// the old text digest change on every call and defeat repeat detection for
+// those producers entirely. The typed digest below carries none of that —
+// only stable operation shape (Outcome, Effect, Error.Code/Retry, Coverage
+// counts/reasons, Window coordinates, ContentDigest) — so a call repeated
+// with no new evidence still digests identically even when its formatted
+// text differs only in a timestamp or id. A Result whose Meta was never
+// populated (Meta.Outcome == "" — see tools.Result's doc comment) falls back
+// to the legacy formatted-text digest unchanged.
 func progressDigest(r tools.Result) string {
+	if r.Meta.Outcome != "" {
+		return progressDigestFromMeta(r.Meta)
+	}
 	h := sha256.New()
 	if r.Err != nil {
 		h.Write([]byte("err:"))
@@ -304,6 +355,63 @@ func progressDigest(r tools.Result) string {
 	} else {
 		h.Write([]byte("ok:"))
 		h.Write([]byte(r.Output))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// progressDigestFromMeta hashes only stable, typed operation shape — never a
+// call ID, timestamp, or any other formatted text. Two calls whose Meta is
+// otherwise identical digest identically regardless of what varies in their
+// raw Output/Err text; two calls whose Meta genuinely differs (a changed
+// Outcome, a changed Coverage count, a different Window) digest differently.
+func progressDigestFromMeta(m tools.ResultMeta) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "outcome:%s\x1feffect:%s\x1fprecondition:%s\x1freused:%t", m.Outcome, m.Effect, m.Precondition, m.Reused)
+	if m.Error != nil {
+		fmt.Fprintf(h, "\x1fcode:%s\x1fretry:%s", m.Error.Code, m.Error.Retry)
+	}
+	cov := m.Coverage
+	fmt.Fprintf(h, "\x1fcoverage:%t,%t,%t,%d,%d",
+		cov.SourceComplete, cov.CaptureComplete, cov.PreviewComplete, cov.ObservedBytes, cov.RetainedBytes)
+	if cov.TotalBytes != nil {
+		fmt.Fprintf(h, ",total_bytes=%d", *cov.TotalBytes)
+	}
+	if cov.TotalLines != nil {
+		fmt.Fprintf(h, ",total_lines=%d", *cov.TotalLines)
+	}
+	for _, reason := range cov.Reasons {
+		fmt.Fprintf(h, ",%s", reason)
+	}
+	sc := m.Search
+	fmt.Fprintf(h, "\x1fsearch:%d,%d,%t,%d,%d,%d", sc.MatchesReturned, sc.MatchesCaptured, sc.TextComplete, sc.FilesEligible, sc.FilesScanned, sc.SourceBytes)
+	if sc.MatchesTotal != nil {
+		fmt.Fprintf(h, ",matches_total=%d", *sc.MatchesTotal)
+	}
+	keys := make([]string, 0, len(sc.Skipped))
+	for reason := range sc.Skipped {
+		keys = append(keys, reason)
+	}
+	sort.Strings(keys)
+	for _, reason := range keys {
+		fmt.Fprintf(h, ",skip=%s:%d", reason, sc.Skipped[reason])
+	}
+	if w := m.Window; w != nil {
+		fmt.Fprintf(h, "\x1fwindow:%d,%d,%d,%d,%t", w.StartLine, w.EndLine, w.StartByte, w.EndByte, w.PartialLine)
+		if w.NextOffset != nil {
+			fmt.Fprintf(h, ",next_offset=%d", *w.NextOffset)
+		}
+		if w.NextCursor != "" {
+			fmt.Fprintf(h, ",next_cursor=%s", w.NextCursor)
+		}
+	}
+	if m.ContentDigest != "" {
+		fmt.Fprintf(h, "\x1fcontent_digest:%s", m.ContentDigest)
+	}
+	if m.SourceDigest != "" {
+		fmt.Fprintf(h, "\x1fsource_digest:%s", m.SourceDigest)
+	}
+	if m.FileVersion != nil {
+		fmt.Fprintf(h, "\x1ffile_version:%s,%s,%d,%t", m.FileVersion.Path, m.FileVersion.Digest, m.FileVersion.SizeBytes, m.FileVersion.Complete)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

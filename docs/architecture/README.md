@@ -13,6 +13,9 @@ comments, but this file is authoritative.
 - **Agent calibration:** [`../agent-evaluation.md`](../agent-evaluation.md)
   defines the deterministic baseline and the opt-in live-endpoint procedure;
   it does not treat synthetic fixture success as a model-quality claim.
+- **Phase 8 calibration evidence:** [`next-generation-tool-runtime-phase8-report.md`](next-generation-tool-runtime-phase8-report.md)
+  records the commit/fixture binding, deterministic results, benchmark
+  snapshot, and the local-model/platform gates that remain open.
 
 Current inventory: 40 internal Go packages plus `cmd/llmtui` (41 Go packages
 total), Go 1.27. Verify version-sensitive details (the embedded runtime pin,

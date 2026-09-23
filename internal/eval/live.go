@@ -33,6 +33,14 @@ type Metadata struct {
 	VerifierMode   string  `json:"verifier_mode,omitempty"`
 	AssistanceMode string  `json:"assistance_mode,omitempty"`
 	WarmModel      bool    `json:"warm_model"`
+
+	// BaselineSHA and CandidateSHA identify the two git commits a Phase 8
+	// A/B comparison run measures; FixtureHash identifies the exact fixture
+	// set used. All three are additive and zero-value safe so synthetic
+	// callers can continue to omit them.
+	BaselineSHA  string `json:"baseline_sha,omitempty"`
+	CandidateSHA string `json:"candidate_sha,omitempty"`
+	FixtureHash  string `json:"fixture_hash,omitempty"`
 }
 
 // RunConfig controls repetition and the bounded provider request settings.
@@ -168,6 +176,21 @@ type ConformanceTrial struct {
 	ErrorCategory     string                     `json:"error_category,omitempty"`
 }
 
+// AgentTrialStatus is the closed-vocabulary trial outcome the plan's Phase 8
+// report template records (§28, §4 validation table). It is additive:
+// AgentTrial.Status is zero-value safe (empty string, omitted from JSON) and
+// nothing in this package sets it yet — a future harness populates it, this
+// phase only reserves the field and its vocabulary.
+type AgentTrialStatus string
+
+const (
+	AgentTrialStatusCompleted      AgentTrialStatus = "completed"
+	AgentTrialStatusFailed         AgentTrialStatus = "failed"
+	AgentTrialStatusTimedOut       AgentTrialStatus = "timed_out"
+	AgentTrialStatusProviderFailed AgentTrialStatus = "provider_failed"
+	AgentTrialStatusSkipped        AgentTrialStatus = "skipped"
+)
+
 // AgentTrial is a content-safe summary emitted by a full controller harness.
 // The TUI live test supplies these fields after running synthetic tasks in a
 // disposable workspace; no prompt, tool argument, result, or reasoning is
@@ -195,6 +218,20 @@ type AgentTrial struct {
 	FalseSuccess     bool          `json:"false_success"`
 	ErrorCategory    string        `json:"error_category,omitempty"`
 	Elapsed          time.Duration `json:"elapsed_ns"`
+
+	// Status is the Phase 8 closed-vocabulary trial outcome (see
+	// AgentTrialStatus). Empty means the producing caller predates Phase 8
+	// and has not been updated to set it — existing consumers see no
+	// behavior change. PromptTokens/CompletionTokens above already carry the
+	// per-trial token totals the Phase 8 template calls for, so this field
+	// only adds what was actually missing: a closed-vocabulary status and a
+	// network-call count.
+	Status AgentTrialStatus `json:"status,omitempty"`
+	// NetworkCalls counts outbound network calls made during the trial
+	// (provider requests plus any tool-initiated network access such as
+	// web_search, web_fetch, or an MCP server call). Additive and
+	// zero-value safe; nothing in this package populates it yet.
+	NetworkCalls int `json:"network_calls,omitempty"`
 
 	// The fields below are independent, fixture-defined postconditions —
 	// deterministic filesystem/answer checks the driver performs itself,
@@ -395,7 +432,8 @@ func ValidateMetadata(metadata Metadata) error {
 		"endpoint_type": metadata.EndpointType, "backend_version": metadata.BackendVersion,
 		"quantization": metadata.Quantization, "tool_schema_fingerprint": metadata.ToolSchema,
 		"chat_template": metadata.ChatTemplate, "verifier_mode": metadata.VerifierMode,
-		"assistance_mode": metadata.AssistanceMode,
+		"assistance_mode": metadata.AssistanceMode, "baseline_sha": metadata.BaselineSHA,
+		"candidate_sha": metadata.CandidateSHA, "fixture_hash": metadata.FixtureHash,
 	} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("metadata %s contains a line break", name)

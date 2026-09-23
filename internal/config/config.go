@@ -251,6 +251,24 @@ type EntitiesConfig struct {
 	MaxFullExpansions    int  `mapstructure:"max_full_expansions" yaml:"max_full_expansions"`
 	VisionEnabled        bool `mapstructure:"vision_enabled" yaml:"vision_enabled"`
 	VisionMaxTokens      int  `mapstructure:"vision_max_tokens" yaml:"vision_max_tokens"`
+	// OutputStorage gates whether large tool-result bodies (Phase 2b) are
+	// retained for later resource_id read-back. "memory" (default) retains
+	// them bounded in-process; "disk" uses an optional private temporary spool;
+	// "off" disables retention while leaving every
+	// other entity feature (semantic entities via Put, get_entity_details)
+	// unaffected — a capped tool result still shows its preview, just no
+	// resource_id to recover the rest. An explicitly empty value behaves like
+	// the default and is accepted for compatibility with generated config.
+	OutputStorage     string `mapstructure:"output_storage" yaml:"output_storage"`
+	OutputStoragePath string `mapstructure:"output_storage_path" yaml:"output_storage_path"`
+	// MaxOutputBytes/MaxTotalOutputBytes bound Registry.Publish bodies,
+	// mirroring MaxPayloadBytes/MaxTotalPayloadBytes above for the separate
+	// body-retention budget. Zero uses entity.DefaultMaxBodyBytes/
+	// DefaultMaxTotalBodyBytes (this package does not import internal/entity,
+	// so those defaults are not referenced here by name; internal/tui wires
+	// these fields into entity.Limits at registry construction).
+	MaxOutputBytes      int `mapstructure:"max_output_bytes" yaml:"max_output_bytes"`
+	MaxTotalOutputBytes int `mapstructure:"max_total_output_bytes" yaml:"max_total_output_bytes"`
 }
 
 // PromptConfig configures prompt composition.
@@ -361,9 +379,10 @@ func (c AgentVerifierConfig) ResolvedMode() string {
 // read, and write files and run commands under the directory llmtui was
 // started from).
 type ToolsConfig struct {
-	Enabled       bool `mapstructure:"enabled" yaml:"enabled"`
-	MaxIterations int  `mapstructure:"max_iterations" yaml:"max_iterations"`
-	MaxFileKB     int  `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	Enabled       bool            `mapstructure:"enabled" yaml:"enabled"`
+	MaxIterations int             `mapstructure:"max_iterations" yaml:"max_iterations"`
+	MaxFileKB     int             `mapstructure:"max_file_kb" yaml:"max_file_kb"`
+	Read          ToolsReadConfig `mapstructure:"read" yaml:"read"`
 	// Approve gates mutating actions (writes, non-read-only commands):
 	// "ask" prompts in the TUI, "auto" runs them without asking.
 	Approve        string `mapstructure:"approve" yaml:"approve"`
@@ -386,6 +405,13 @@ type ToolsConfig struct {
 	// Discovery progressively exposes large dynamic MCP catalogs while core
 	// tools remain visible. Discovery changes visibility, never permission.
 	Discovery ToolsDiscoveryConfig `mapstructure:"discovery" yaml:"discovery"`
+}
+
+// ToolsReadConfig controls the default file window. Zero keeps the direct
+// Runner API's legacy whole-file behavior; the application default is a
+// bounded 200-line window.
+type ToolsReadConfig struct {
+	DefaultLines int `mapstructure:"default_lines" yaml:"default_lines"`
 }
 
 // ToolsDiscoveryConfig controls deterministic task-local progressive tool
@@ -817,6 +843,11 @@ func Load(v *viper.Viper) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	switch cfg.Entities.OutputStorage {
+	case "", "memory", "disk", "off":
+	default:
+		return nil, fmt.Errorf("entities.output_storage: must be empty, memory, disk, or off (got %q)", cfg.Entities.OutputStorage)
+	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderConfig{}
 	}
@@ -916,6 +947,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("entities.max_full_expansions", 8)
 	v.SetDefault("entities.vision_enabled", true)
 	v.SetDefault("entities.vision_max_tokens", 800)
+	v.SetDefault("entities.output_storage", "memory")
+	v.SetDefault("entities.max_output_bytes", 4*1024*1024)
+	v.SetDefault("entities.max_total_output_bytes", 16*1024*1024)
 
 	v.SetDefault("prompt.mode", "balanced")
 	v.SetDefault("prompt.include_session_summary", true)
@@ -952,6 +986,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
 	v.SetDefault("tools.max_file_kb", 512)
+	v.SetDefault("tools.read.default_lines", 200)
 	v.SetDefault("tools.approve", "ask")
 	v.SetDefault("tools.command_timeout", "30s")
 	v.SetDefault("tools.native", "auto")
@@ -1153,6 +1188,10 @@ entities:
   max_full_expansions: 8
   vision_enabled: true
   vision_max_tokens: 800
+  output_storage: memory # memory | disk | off — disk uses a private session spool; off disables recovery
+  output_storage_path: "" # optional owner-only root for disk spools
+  max_output_bytes: 4194304
+  max_total_output_bytes: 16777216
 
 # Prompt composition: helpers are visible via /prompt composed.
 prompt:
@@ -1211,6 +1250,8 @@ tools:
   max_iterations: 10 # tool rounds per user message; when spent, a prompt
   #                    asks whether to grant more rounds or wrap up
   max_file_kb: 512 # per-file read/write and command output size cap
+  read:
+    default_lines: 200 # bounded default read window; 0 preserves whole-file reads
   command_timeout: "30s"
   # Web tools: web_search (DuckDuckGo, no API key) and web_fetch (page as
   # Markdown). Off by default; fetches ask for approval per URL. Toggle per

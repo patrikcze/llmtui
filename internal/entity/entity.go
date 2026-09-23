@@ -24,6 +24,12 @@ const (
 	DefaultMaxTotalPayload   = 4 * 1024 * 1024
 	DefaultMaxPreviewBytes   = 768
 	DefaultMaxFullExpansions = 8
+	// DefaultMaxBodyBytes and DefaultMaxTotalBodyBytes bound Registry.Publish
+	// bodies. This is a separate budget from the small-payload accounting
+	// above (MaxPayloadBytes/MaxTotalPayload): body bytes are never merged
+	// into the semantic-entity payload total.
+	DefaultMaxBodyBytes      = 4 * 1024 * 1024
+	DefaultMaxTotalBodyBytes = 16 * 1024 * 1024
 )
 
 // Kind identifies the normalized object represented by an entity.
@@ -39,6 +45,12 @@ const (
 	// user-provided image. It is evidence about visible pixels, not external
 	// source provenance or durable memory.
 	KindVisionObservation Kind = "vision_observation"
+	// KindToolOutput identifies a retained command/generic-text body
+	// published via Registry.Publish.
+	KindToolOutput Kind = "tool_output"
+	// KindSearchResult identifies a captured search result row published
+	// via Registry.Publish.
+	KindSearchResult Kind = "search_result"
 )
 
 // Level controls progressive disclosure.
@@ -90,17 +102,25 @@ var idPattern = regexp.MustCompile(`^` + IDPrefix + `[0-9]{` + fmt.Sprint(idDigi
 // source identity, path, URL, secret, or pointer address.
 type ID string
 
-// ParseID validates the exact model-facing identifier format.
+// ParseID validates the exact model-facing identifier format. It accepts
+// both the legacy sequential shape minted by Registry.Put (ent_ plus a
+// fixed 5-digit number) and the random shape minted by Registry.Publish
+// (ent_ plus a fixed 26-char lowercase base32 string) — see idRandomPattern
+// in id_random.go for why the two shapes can never collide. There is no
+// migration from one shape to the other: an unrecognized ent_-prefixed
+// string is simply invalid, exactly as before this ID family existed.
 func ParseID(raw string) (ID, error) {
-	if !idPattern.MatchString(raw) {
+	if !idPattern.MatchString(raw) && !idRandomPattern.MatchString(raw) {
 		return "", fmt.Errorf("invalid entity ID %q", raw)
 	}
 	return ID(raw), nil
 }
 
-// Valid reports whether id is a canonical entity identifier.
+// Valid reports whether id is a canonical entity identifier, in either the
+// legacy sequential or random shape.
 func (id ID) Valid() bool {
-	return idPattern.MatchString(string(id))
+	s := string(id)
+	return idPattern.MatchString(s) || idRandomPattern.MatchString(s)
 }
 
 func (id ID) String() string { return string(id) }
@@ -154,6 +174,9 @@ type Candidate struct {
 	Preview    string
 	ExpiresAt  time.Time
 	Redacted   bool
+	// Resource carries the body-identity metadata for Registry.Publish
+	// candidates. Registry.Put ignores it; Put callers never set it.
+	Resource ResourceMetadata
 }
 
 // View is a progressive model-facing representation of one entity. Payload
@@ -189,6 +212,10 @@ type Limits struct {
 	MaxTotalPayload   int
 	MaxPreviewBytes   int
 	MaxFullExpansions int
+	// MaxBodyBytes and MaxTotalBodyBytes bound Registry.Publish bodies. This
+	// is a separate budget from MaxPayloadBytes/MaxTotalPayload above.
+	MaxBodyBytes      int
+	MaxTotalBodyBytes int
 	Now               func() time.Time
 }
 
@@ -210,6 +237,15 @@ func (l Limits) normalized() Limits {
 	}
 	if l.MaxPayloadBytes > l.MaxTotalPayload {
 		l.MaxPayloadBytes = l.MaxTotalPayload
+	}
+	if l.MaxBodyBytes <= 0 {
+		l.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if l.MaxTotalBodyBytes <= 0 {
+		l.MaxTotalBodyBytes = DefaultMaxTotalBodyBytes
+	}
+	if l.MaxBodyBytes > l.MaxTotalBodyBytes {
+		l.MaxBodyBytes = l.MaxTotalBodyBytes
 	}
 	if l.Now == nil {
 		l.Now = time.Now
@@ -264,7 +300,8 @@ func validCandidate(c Candidate) error {
 // but controller lookup filters accept only this closed vocabulary.
 func ValidKind(kind Kind) bool {
 	switch kind {
-	case KindWebResult, KindWebPage, KindFile, KindMCPResult, KindCollection, KindVisionObservation:
+	case KindWebResult, KindWebPage, KindFile, KindMCPResult, KindCollection, KindVisionObservation,
+		KindToolOutput, KindSearchResult:
 		return true
 	default:
 		return false

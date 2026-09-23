@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,13 +109,13 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		// The path says which file is clobbered; the body says with what.
 		// Approving "overwrite README.md with these bytes" must not approve
 		// "overwrite README.md with anything at all".
-		sum := sha256.Sum256([]byte(c.Body))
+		sum := sha256.Sum256([]byte(c.Body + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolEditFile:
 		// Path identifies the file; the exact old→new pair identifies the
 		// change. Approving one replacement must never authorise a different
 		// old_text or a different new_text against the same file.
-		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText))
+		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""
@@ -122,7 +123,7 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		sum := sha256.Sum256([]byte(strings.TrimSpace(c.Body)))
 		return c.Tool, hex.EncodeToString(sum[:]), ""
 	case tools.ToolWebFetch:
-		return c.Tool, strings.TrimSpace(c.Path), ""
+		return c.Tool, strings.TrimSpace(c.Path), strings.Join([]string{strings.TrimSpace(c.WebCacheMode), strconv.Itoa(c.WebCacheMaxAge), strings.TrimSpace(c.WebRefreshEpoch)}, "\x00")
 	case tools.ToolWebSearch:
 		return c.Tool, strings.TrimSpace(c.Body), ""
 	case tools.ToolLocalContext:

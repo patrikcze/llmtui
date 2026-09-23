@@ -23,6 +23,9 @@ func checkURL(u *url.URL) error {
 	if u.Hostname() == "" {
 		return errors.New("URL has no host")
 	}
+	if u.User != nil {
+		return errors.New("URL userinfo is not allowed")
+	}
 	return nil
 }
 

@@ -720,6 +720,18 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 	add("reasoning events", caps.ReasoningEvents.String())
 	add("structured output", caps.StructuredOutput.String())
 	add("context window", fmt.Sprintf("%d from %s", window, windowSource))
+	storage := cfg.Entities.OutputStorage
+	if storage == "" {
+		storage = "memory"
+	}
+	storagePath := cfg.Entities.OutputStoragePath
+	if storagePath == "" && storage == "disk" {
+		storagePath = "(temporary private root)"
+	}
+	add("entity storage", fmt.Sprintf("%s, quota %d bytes", storage, cfg.Entities.MaxTotalOutputBytes))
+	if storagePath != "" {
+		add("entity spool root", storagePath)
+	}
 	if diagnostics, ok := prov.(interface {
 		NativeDiagnostics() embedded.NativeDiagnostics
 	}); ok {
@@ -854,6 +866,11 @@ func (m *Model) entityStatusOverlay() string {
 	m.kv(&b, "enabled", "yes")
 	m.kv(&b, "entities", fmt.Sprintf("%d / %d", s.Entities, s.MaxEntities))
 	m.kv(&b, "payload bytes", fmt.Sprintf("%d / %d", s.PayloadBytes, s.MaxTotalPayload))
+	m.kv(&b, "retained bodies", fmt.Sprintf("%d / %d bytes", s.BodyBytes, s.MaxTotalBodyBytes))
+	m.kv(&b, "body per-item cap", fmt.Sprintf("%d bytes", s.MaxBodyBytes))
+	if disk := m.entities.DiskStorageStatus(); disk.SessionDir != "" {
+		m.kv(&b, "disk spool", fmt.Sprintf("%d / %d bytes", disk.Bytes, disk.MaxBytes))
+	}
 	m.kv(&b, "representation", fmt.Sprintf("minimal (full expansions this request: %d / %d)", s.ExpandedThisReq, s.MaxFullExpansions))
 	m.kv(&b, "context budget", fmt.Sprintf("%d tokens", m.cfg.Entities.MaxContextTokens))
 	b.WriteString("\n" + m.theme.SystemNote.Render("/entities list · /entities inspect <id>"))

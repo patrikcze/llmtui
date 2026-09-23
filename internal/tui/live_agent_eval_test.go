@@ -257,7 +257,10 @@ func TestLiveAgentMatrix(t *testing.T) {
 		Commit: os.Getenv("LLMTUI_EVAL_COMMIT"), Provider: counted.Name(),
 		EndpointType: endpointType, Model: model, ToolSchema: "workspace-tools:v1",
 		MaxTokens: 4096, VerifierMode: "always", AssistanceMode: "shadow",
-		WarmModel: os.Getenv("LLMTUI_EVAL_WARM") == "true",
+		WarmModel:    os.Getenv("LLMTUI_EVAL_WARM") == "true",
+		BaselineSHA:  os.Getenv("LLMTUI_EVAL_BASELINE_SHA"),
+		CandidateSHA: os.Getenv("LLMTUI_EVAL_CANDIDATE_SHA"),
+		FixtureHash:  os.Getenv("LLMTUI_EVAL_FIXTURE_HASH"),
 	}
 	if err := eval.ValidateMetadata(metadata); err != nil {
 		t.Fatal(err)

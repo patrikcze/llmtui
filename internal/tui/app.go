@@ -126,7 +126,8 @@ type Model struct {
 	turnRuntime
 	// entities is ephemeral session runtime state. It is never serialized as
 	// history, memory, cache content, or agent-run state.
-	entities *entity.Registry
+	entities             *entity.Registry
+	entityStorageWarning string
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -150,9 +151,13 @@ type Model struct {
 	showReasoning        bool
 	reasoningDisplaySet  bool
 	attachments          []provider.Image
-	frame                int
-	renderWidth          int
-	mouseEnabled         bool
+	// pendingMessageReferences is consumed synchronously by dispatch when a
+	// fenced tool-result message is appended. References remain controller
+	// metadata and never enter the provider wire payload or persisted history.
+	pendingMessageReferences []provider.MessageReference
+	frame                    int
+	renderWidth              int
+	mouseEnabled             bool
 	// transcriptCache holds the last rendered settled history, reused across
 	// refreshViewport calls whose transcriptCacheKey is unchanged (see
 	// settledTranscriptCached).
@@ -222,6 +227,8 @@ type Model struct {
 	toolErr              int         // failed or denied tool calls (exit summary)
 	webOn                bool        // web tools (web_search/web_fetch) enabled
 	webClient            *web.Client // shared web client; nil if the runner is unavailable
+	webSnapshots         *webSnapshotStore
+	webRefreshEpoch      uint64
 
 	// Optional Apple Mail/Calendar integration (disabled by default; see
 	// personal_apps.go). personalApps is nil unless personal_apps.enabled is
@@ -317,6 +324,11 @@ type Model struct {
 	// toolRecoveryFeedback is a one-request protocol reminder after a dropped
 	// pseudo-call. It never contains model output or arguments.
 	toolRecoveryFeedback string
+	// observedFileVersions contains versions the model has actually received
+	// in a delivered tool-result message. It is deliberately controller-only
+	// state and is never persisted or sent as prompt text.
+	observedFileVersions map[string]observedFileVersion
+	pendingVersionPins   []entity.ID
 	// lastPersonalAppsResult survives a lastDebug reset (every request-prep
 	// path replaces lastDebug wholesale); each debugInfo{} construction site
 	// copies it back in. See sendToolResults.
@@ -383,26 +395,23 @@ func New(opts Options) *Model {
 	}
 
 	m := &Model{
-		cfg:          opts.Config,
-		theme:        t,
-		prov:         opts.Provider,
-		model:        opts.Model,
-		session:      chat.NewSession(opts.Config.Chat.SystemPrompt),
-		input:        ta,
-		spinner:      sp,
-		mouseEnabled: true,
-		sessionName:  history.NewSessionName(time.Now()),
-		inputLines:   1,
-		exit:         exitSummaryState{startedAt: time.Now()},
-		turnRuntime:  newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
-		entities: entity.NewRegistry(entity.Limits{
-			MaxEntities:       cfg.Entities.MaxSessionEntities,
-			MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
-			MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
-			MaxFullExpansions: cfg.Entities.MaxFullExpansions,
-		}),
+		cfg:                       opts.Config,
+		theme:                     t,
+		prov:                      opts.Provider,
+		model:                     opts.Model,
+		session:                   chat.NewSession(opts.Config.Chat.SystemPrompt),
+		input:                     ta,
+		spinner:                   sp,
+		mouseEnabled:              true,
+		sessionName:               history.NewSessionName(time.Now()),
+		inputLines:                1,
+		exit:                      exitSummaryState{startedAt: time.Now()},
+		turnRuntime:               newTurnRuntime(cfg.Tools.NoProgress.Threshold, ""),
+		entities:                  entity.NewRegistry(entity.Limits{}),
+		entityStorageWarning:      "",
 		visionObservationIDs:      make(map[string]entity.ID),
 		visionObservationAttempts: make(map[string]bool),
+		webSnapshots:              newWebSnapshotStore(nil),
 
 		memEnabled:    cfg.Memory.Enabled,
 		profileMode:   profileMode,
@@ -417,6 +426,9 @@ func New(opts Options) *Model {
 	}
 	m.resetNativeToolMode()
 	m.rebuildFromConfig()
+	if m.entityStorageWarning != "" {
+		m.notice = m.entityStorageWarning
+	}
 	if opts.ResumeSession != nil {
 		m.adoptSession(opts.ResumeSessionName, *opts.ResumeSession)
 		m.notice = fmt.Sprintf("resumed %s (%d messages, %s/%s)",
@@ -454,18 +466,40 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	}
 }
 
+func newEntityRegistry(cfg *config.Config) (*entity.Registry, string) {
+	limits := entity.Limits{
+		MaxEntities:       cfg.Entities.MaxSessionEntities,
+		MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
+		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
+		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
+		MaxBodyBytes:      cfg.Entities.MaxOutputBytes,
+		MaxTotalBodyBytes: cfg.Entities.MaxTotalOutputBytes,
+	}
+	root := cfg.Entities.OutputStoragePath
+	if root != "" {
+		if expanded, err := history.ExpandHome(root); err == nil {
+			root = expanded
+		}
+	}
+	registry, err := entity.NewRegistryWithStorage(limits, entity.StorageOptions{
+		Mode: cfg.Entities.OutputStorage, Root: root, MaxBytes: cfg.Entities.MaxTotalOutputBytes,
+	})
+	if err == nil {
+		return registry, ""
+	}
+	return entity.NewRegistry(limits), fmt.Sprintf("entity disk storage unavailable; using memory: %v", err)
+}
+
 // rebuildFromConfig (re)derives the components that mirror the config:
 // history dir, response cache, memory store, and model profiles. It runs at
 // startup and after /config reload; session-scoped choices the user made at
 // runtime (/profile, /context strategy, /memory on|off) are left alone.
 func (m *Model) rebuildFromConfig() {
 	cfg := m.cfg
-	m.entities = entity.NewRegistry(entity.Limits{
-		MaxEntities:       cfg.Entities.MaxSessionEntities,
-		MaxPayloadBytes:   cfg.Entities.MaxPayloadBytes,
-		MaxTotalPayload:   cfg.Entities.MaxTotalPayloadBytes,
-		MaxFullExpansions: cfg.Entities.MaxFullExpansions,
-	})
+	m.entities, m.entityStorageWarning = newEntityRegistry(cfg)
+	if m.entityStorageWarning != "" {
+		m.notice = m.entityStorageWarning
+	}
 	m.resetVisionObservations()
 	if !m.reasoningDisplaySet {
 		m.showReasoning = cfg.UI.ShowReasoning
@@ -510,6 +544,17 @@ func (m *Model) rebuildFromConfig() {
 	m.toolRunner = nil
 	if wd, err := os.Getwd(); err == nil {
 		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
+		m.toolRunner.SetDefaultReadLines(cfg.Tools.Read.DefaultLines)
+		m.toolRunner.SetSearchCaptureEnabled(m.outputStorageEnabled())
+		// Always wired, independent of entities.enabled/output_storage: the
+		// registry itself always exists (see m.entities above), and
+		// read_file's resource_id path against an empty/disabled registry
+		// already fails cleanly (resource_unavailable) with nothing ever
+		// published to it — there is no separate "disabled" state for the
+		// adapter itself to represent.
+		m.toolRunner.Resources = newResourceAdapter(m.entities)
+		m.webSnapshots.registry = m.entities
+		m.toolRunner.WebSnapshots = m.webSnapshots
 		if d, err := time.ParseDuration(cfg.Tools.CommandTimeout); err == nil && d > 0 {
 			m.toolRunner.CommandTimeout = d
 		}
@@ -1487,6 +1532,7 @@ func (m *Model) send() tea.Cmd {
 		return m.answerAskUser(text)
 	}
 	m.resetToolDisclosure()
+	m.releasePendingVersionPins()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
@@ -1555,6 +1601,8 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 	if len(calls) == 0 {
 		return nil
 	}
+	calls = m.admitWebRefresh(calls)
+	calls = m.bindObservedEditVersions(calls)
 	for _, call := range calls {
 		if call.ID == "" {
 			continue // legacy fenced protocol is not provider-native evidence.
@@ -1611,6 +1659,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
 		m.keys.keysMode = false
+		m.pinPendingVersions(plan)
 		m.waitForApproval(plan, true)
 		m.refreshViewport()
 		return nil
@@ -1622,6 +1671,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 			}
 			m.overlayOpen = false
 			m.keys.keysMode = false
+			m.pinPendingVersions(plan)
 			m.waitForApproval(plan, false)
 			m.refreshViewport()
 			return nil
@@ -1721,9 +1771,13 @@ func (m *Model) runToolPlan(plan toolBatchPlan) tea.Cmd {
 // matters for the token-burn failure this closes.
 func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, terminal bool) tea.Cmd {
 	err := fmt.Errorf("%s. Use different arguments, a different approach, or report the observable state", reason)
+	meta := tools.ResultMeta{
+		Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+		Error: &tools.ErrorInfo{Code: "repeat_block", Retry: tools.RetryCorrectInput, Message: err.Error()},
+	}
 	results := make([]tools.Result, len(calls))
 	for i, call := range calls {
-		results[i] = tools.Result{Call: call, Err: err}
+		results[i] = tools.Result{Call: call, Err: err, Meta: meta}
 	}
 	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.toolErr += len(results)
@@ -1751,6 +1805,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 func (m *Model) denyPendingTools() tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.releasePendingVersionPins()
 	m.clearPendingTools()
 	for _, call := range calls {
 		if call.ID != "" {
@@ -1802,9 +1857,15 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 		for _, msg := range tools.NativeResults(results) {
 			m.session.AddMessage(msg)
 		}
+		m.recordDeliveredFileVersions(results)
 		return m.continueChat()
 	}
-	cmd := m.dispatch(tools.FormatResults(results), nil)
+	var references []provider.MessageReference
+	for _, result := range results {
+		references = appendMessageReferences(references, result.References...)
+	}
+	cmd := m.dispatchWithReferences(tools.FormatResults(results), nil, references)
+	m.recordDeliveredFileVersions(results)
 	// Attach the write diffs to the just-added results message so the TUI
 	// can show what changed (display only; the model sees FormatResults).
 	if diff := tools.CollectDiffs(results); diff != "" {
@@ -1819,21 +1880,61 @@ func (m *Model) sendToolResults(results []tools.Result) tea.Cmd {
 // call when the controller terminates without another model round. Native
 // calls remain role:"tool" messages; fenced calls retain the protocol's
 // single [tool results] user message.
+//
+// Registers entities/publishes captures first, exactly like sendToolResults
+// does for the continuing-conversation path: the terminal path is the last
+// batch of an agent run, so skipping this step would silently lose the
+// resource_id for a capped result's retained body — the model never gets
+// another turn to ask for it after this. registerResultEntities already
+// no-ops for Err != nil results and for entities/output_storage being off,
+// so this is safe to call unconditionally, matching every existing caller
+// of this function (agent-run termination, budget blocks, ask_user).
 func (m *Model) appendTerminalToolResults(results []tools.Result) {
 	if len(results) == 0 {
 		return
 	}
+	results = m.registerResultEntities(results)
 	if results[0].Call.ID != "" {
 		for _, msg := range tools.NativeResults(results) {
 			m.session.AddMessage(msg)
 		}
+		m.recordDeliveredFileVersions(results)
 		return
 	}
 	m.session.AddMessage(provider.Message{
-		Role:    provider.RoleUser,
-		Content: tools.FormatResults(results),
-		Display: tools.CollectDiffs(results),
+		Role:       provider.RoleUser,
+		Content:    tools.FormatResults(results),
+		Display:    tools.CollectDiffs(results),
+		References: resultReferences(results),
 	})
+	m.recordDeliveredFileVersions(results)
+}
+
+func resultReferences(results []tools.Result) []provider.MessageReference {
+	var references []provider.MessageReference
+	for _, result := range results {
+		references = appendMessageReferences(references, result.References...)
+	}
+	return references
+}
+
+func appendMessageReferences(dst []provider.MessageReference, refs ...provider.MessageReference) []provider.MessageReference {
+	for _, ref := range refs {
+		if ref.ID == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range dst {
+			if existing.ID == ref.ID && existing.Kind == ref.Kind {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			dst = append(dst, ref)
+		}
+	}
+	return dst
 }
 
 // Approval menu rows, Claude-Code style: pick with ↑/↓ + Enter, or jump
@@ -1946,6 +2047,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 	case approvalYes:
 		plan := m.pendingPlan()
 		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.releasePendingVersionPins()
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
 		m.approvePersonalAppsCalls(calls)
@@ -1960,6 +2062,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 		}
 		plan := m.pendingPlan()
 		calls := append([]tools.Call{}, m.pendingCalls...)
+		m.releasePendingVersionPins()
 		m.clearPendingTools()
 		m.approveWorkspaceSkills(calls)
 		m.approvePersonalAppsCalls(calls)
@@ -1980,6 +2083,7 @@ func (m *Model) resolveApproval(choice int) tea.Cmd {
 func (m *Model) resolveBudget(choice int) tea.Cmd {
 	plan := m.pendingPlan()
 	calls := append([]tools.Call{}, m.pendingCalls...)
+	m.releasePendingVersionPins()
 	m.clearPendingTools()
 	if choice == 0 {
 		m.renewToolBudget()
@@ -2016,6 +2120,7 @@ func (m *Model) retryLast() tea.Cmd {
 			m.session.DropLast()
 		}
 	}
+	m.releasePendingVersionPins()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	m.errText = ""
 	m.notice = "retrying last message"
@@ -2134,6 +2239,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		return m, m.quit()
 	}
 	m.ctrlCAt = time.Now()
+	m.releasePendingVersionPins()
 	var agentSave tea.Cmd
 	switch {
 	case m.agentVerifying() || m.agentContracting():

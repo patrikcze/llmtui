@@ -1246,7 +1246,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 			cacheErr = err
 		}
 		if ok {
-			m.session.AddUser(raw)
+			m.addUserMessage(raw)
 			m.session.AddAssistant(entry.Response)
 			m.exit.replyCount++
 			st := m.session.RecordUsage(provider.Usage{
@@ -1285,7 +1285,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	}
 
 	m.commitPrepared(prepared)
-	m.session.AddUser(raw, images...)
+	m.addUserMessage(raw, images...)
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.reasoningLen = 0
@@ -1341,6 +1341,31 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	}
 
 	return m.startRequest(req)
+}
+
+// dispatchWithReferences attaches ephemeral runtime references to the user
+// message created by dispatch. The field is consumed synchronously while
+// dispatch builds the request, then restored so nested or later dispatches
+// cannot inherit stale references.
+func (m *Model) dispatchWithReferences(raw string, images []provider.Image, refs []provider.MessageReference) tea.Cmd {
+	previous := m.pendingMessageReferences
+	m.pendingMessageReferences = append([]provider.MessageReference(nil), refs...)
+	cmd := m.dispatch(raw, images)
+	m.pendingMessageReferences = previous
+	return cmd
+}
+
+func (m *Model) addUserMessage(raw string, images ...provider.Image) {
+	if len(m.pendingMessageReferences) == 0 {
+		m.session.AddUser(raw, images...)
+		return
+	}
+	m.session.AddMessage(provider.Message{
+		Role:       provider.RoleUser,
+		Content:    raw,
+		Images:     images,
+		References: append([]provider.MessageReference(nil), m.pendingMessageReferences...),
+	})
 }
 
 // activeToolSpecs returns the exact native snapshot offered to the next
