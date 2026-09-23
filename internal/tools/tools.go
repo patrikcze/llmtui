@@ -134,6 +134,13 @@ type Call struct {
 	// See CanonicalReadRange / ValidateReadRange.
 	Offset int
 	Limit  int
+	// ResourceID is read_file's alternative selector: a previously published
+	// entity.Registry body (Registry.Publish/OpenBody) to recover instead of
+	// a workspace path. Exactly one of Path/ResourceID may be set — see
+	// ExecuteContext's ToolReadFile case. Offset/Limit do not apply to a
+	// resource read this phase (no ranged/offset windowing over a retained
+	// body yet).
+	ResourceID string
 	// OldText and NewText carry edit_file's single exact replacement. OldText
 	// must match the target file exactly once; NewText may be empty (a
 	// controlled deletion of that exact fragment).
@@ -196,6 +203,15 @@ type Result struct {
 	Diff     string
 	Err      error
 	Entities []entity.Candidate
+	// Captures is an additive, unpublished set of bounded bodies this result's
+	// producer retained beyond what Output shows (e.g. run_command's full
+	// bounded-capture buffer when its preview was truncated). It is nil for
+	// every producer this phase does not wire (everything except a capped
+	// run_command) and for a run_command result whose output was not capped —
+	// there is nothing beyond Output to retain in that case. The TUI layer
+	// (internal/tui/entity_context.go) publishes these into the entity
+	// registry; this package never publishes anything itself.
+	Captures []Capture
 	Meta     ResultMeta
 }
 
@@ -329,6 +345,13 @@ type Runner struct {
 	// one of those decisions lives in the Service and is re-checked there
 	// on every call, so this field only wires the entry point.
 	PersonalApps PersonalAppsService
+
+	// Resources enables read_file's resource_id selector when non-nil,
+	// mirroring Web/Skills/PersonalApps above. It never enables a producer
+	// to retain bytes on its own — that decision is the TUI layer's
+	// (entities.output_storage); Resources only lets read_file recover a
+	// body some other path already published.
+	Resources ResourceReader
 }
 
 // PersonalAppsService is what the runner needs from
@@ -454,9 +477,17 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolListDir:
 		res.Output, meta, res.Err = r.listDir(c.Path)
 	case ToolReadFile:
-		res.Output, meta, res.Err = r.readFileMeta(c.Path, c.Offset, c.Limit)
-		if res.Err == nil && !IsSecretPath(c.Path) {
-			res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
+		switch {
+		case c.Path != "" && c.ResourceID != "":
+			res.Err = withCode(fmt.Errorf("read_file accepts exactly one of path or resource_id, not both"), "invalid_arguments", RetryCorrectInput)
+			meta.Effect = EffectNone
+		case c.ResourceID != "":
+			res.Output, meta, res.Err = r.readResourceMeta(ctx, c.ResourceID)
+		default:
+			res.Output, meta, res.Err = r.readFileMeta(c.Path, c.Offset, c.Limit)
+			if res.Err == nil && !IsSecretPath(c.Path) {
+				res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
+			}
 		}
 	case ToolEditFile:
 		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
@@ -467,7 +498,7 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolWriteFile:
 		res.Output, res.Diff, meta, res.Err = r.writeFileMeta(c.Path, c.Body)
 	case ToolRunCommand:
-		res.Output, meta, res.Err = r.runCommandContext(ctx, c.Body)
+		res.Output, meta, res.Captures, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
 		res.Output, res.Entities, meta, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
@@ -881,11 +912,11 @@ func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, 
 // the parent process never reach the command (or, through its output, the
 // model).
 func (r *Runner) runCommand(body string) (string, error) {
-	output, _, err := r.runCommandContext(context.Background(), body)
+	output, _, _, err := r.runCommandContext(context.Background(), body)
 	return output, err
 }
 
-func (r *Runner) runCommandContext(parent context.Context, body string) (string, ResultMeta, error) {
+func (r *Runner) runCommandContext(parent context.Context, body string) (string, ResultMeta, []Capture, error) {
 	// run_command runs an arbitrary shell command: even a "successful" run
 	// (exit 0) may have changed the workspace, and this package has no way
 	// to know either way, so Effect is always unknown — never inferred as
@@ -893,13 +924,13 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	meta := ResultMeta{Effect: EffectUnknown}
 	cmdline := strings.TrimSpace(body)
 	if cmdline == "" {
-		return "", meta, withCode(fmt.Errorf("run_command needs a command in the block body"), "invalid_arguments", RetryCorrectInput)
+		return "", meta, nil, withCode(fmt.Errorf("run_command needs a command in the block body"), "invalid_arguments", RetryCorrectInput)
 	}
 	if strings.ContainsAny(cmdline, "\n\r") {
-		return "", meta, withCode(fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first"), "invalid_arguments", RetryCorrectInput)
+		return "", meta, nil, withCode(fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first"), "invalid_arguments", RetryCorrectInput)
 	}
 	if commandReferencesOutsideWorkspace(cmdline, r.root) {
-		return "", meta, withCode(fmt.Errorf("run_command blocked: command references a path outside the workspace"), "safety_block", RetryCorrectInput)
+		return "", meta, nil, withCode(fmt.Errorf("run_command blocked: command references a path outside the workspace"), "safety_block", RetryCorrectInput)
 	}
 	execLine, gitEnv := hardenGitInvocation(cmdline)
 
@@ -933,12 +964,12 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	cmd.Stdout = capture
 	cmd.Stderr = capture
 	if err := cmd.Start(); err != nil {
-		return "", meta, fmt.Errorf("start command: %w", err)
+		return "", meta, nil, fmt.Errorf("start command: %w", err)
 	}
 	if err := procutil.TrackProcess(cmd); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return "", meta, fmt.Errorf("contain command process tree: %w", err)
+		return "", meta, nil, fmt.Errorf("contain command process tree: %w", err)
 	}
 	err := cmd.Wait()
 	// Commands are synchronous by contract (one command per block), so any
@@ -972,28 +1003,45 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	// actual output never collide — a later phase's repeat-detection/dedup
 	// logic must be able to tell them apart.
 	meta.ContentDigest = capture.Digest()
+	// A Capture is only ever produced when the preview was actually capped —
+	// an uncapped result has nothing beyond Output worth retaining a second
+	// time. This runs regardless of the command's own outcome (timeout,
+	// cancelled, failed, ok): the truncation marker above is applied to
+	// output the same way in every branch below, so the retained body that
+	// backs it is built once, here, rather than duplicated at each return.
+	var captures []Capture
+	if capped {
+		captures = append(captures, Capture{
+			Kind:        entity.KindToolOutput,
+			Label:       "run_command output",
+			Trust:       entity.TrustWorkspaceUntrusted,
+			ContentType: "text/plain",
+			Body:        capture.Bytes(),
+			BodyDigest:  capture.Digest(), // no need to rehash; Phase 2a already did
+		})
+	}
 	// run_command's own Outcome states are OK/Failed/Timeout/Cancelled — never
 	// Partial: an output cap is a capture-completeness fact (Coverage), not a
 	// downgrade of whether the command itself succeeded.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		meta.Outcome = OutcomeTimeout
 		meta.Error = &ErrorInfo{Code: "timeout", Retry: RetryLater, Message: boundErrorMessage(fmt.Errorf("command timed out after %s", timeout))}
-		return output, meta, fmt.Errorf("command timed out after %s", timeout)
+		return output, meta, captures, fmt.Errorf("command timed out after %s", timeout)
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		meta.Outcome = OutcomeCancelled
 		meta.Error = &ErrorInfo{Code: "cancelled", Retry: RetryNone, Message: boundErrorMessage(fmt.Errorf("command cancelled: %w", ctx.Err()))}
-		return output, meta, fmt.Errorf("command cancelled: %w", ctx.Err())
+		return output, meta, captures, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 	if err != nil {
 		meta.Outcome = OutcomeFailed
-		return output, meta, fmt.Errorf("command failed: %w", err)
+		return output, meta, captures, fmt.Errorf("command failed: %w", err)
 	}
 	meta.Outcome = OutcomeOK
 	if output == "" {
 		output = "(no output)"
 	}
-	return output, meta, nil
+	return output, meta, captures, nil
 }
 
 // skillLoad activates a skill for the current run via the configured
@@ -1412,6 +1460,9 @@ func (c Call) Describe() string {
 	case ToolEditFile:
 		return fmt.Sprintf("edit_file %s (exact replacement)", c.Path)
 	case ToolReadFile:
+		if c.ResourceID != "" {
+			return "read_file resource_id=" + c.ResourceID
+		}
 		if start, count, ranged := CanonicalReadRange(c.Offset, c.Limit); ranged {
 			return fmt.Sprintf("%s %s (lines %d-%d)", c.Tool, c.Path, start, start+count-1)
 		}
@@ -1455,7 +1506,7 @@ func Instructions(root string, withWeb bool) string {
 To use a tool, emit a fenced code block whose info string is "tool <name> [path]". Available tools:
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
-- read_file <path> — return a file's contents; an optional JSON body {"offset":1,"limit":200} returns just that 1-based line range
+- read_file <path> — return a file's contents; an optional JSON body {"offset":1,"limit":200} returns just that 1-based line range. Pass {"resource_id":"ent_..."} instead of a path to recover a previously retained tool output body instead of rerunning the command.
 - glob [path] — recursively find files; the glob pattern is the block's body
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body

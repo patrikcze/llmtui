@@ -82,9 +82,11 @@ type ErrorInfo struct {
 }
 
 // errorCodeVocabulary is the closed set of ErrorInfo.Code values this phase
-// may produce. Codes that depend on Phase 2b+ substrate (resource_unavailable,
-// cursor_expired, stale_source, snapshot_incomplete, retention_unavailable,
-// capture_limit, poll_not_due) are intentionally absent.
+// may produce. resource_unavailable was added in Phase 2b-ii (read_file's
+// resource_id selector); the remaining codes that depend on Phase 3+
+// substrate (cursor_expired, stale_source, snapshot_incomplete,
+// retention_unavailable, capture_limit, poll_not_due) are still
+// intentionally absent.
 var errorCodeVocabulary = map[string]bool{
 	"invalid_arguments":        true,
 	"invalid_pattern":          true,
@@ -111,6 +113,13 @@ var errorCodeVocabulary = map[string]bool{
 	// admission rejects this outright rather than writing through or
 	// replacing the link — see rejectSymlinkWriteTarget in file_write.go.
 	"symlink_write_unsupported": true,
+	// resource_unavailable (Phase 2b-ii): read_file's resource_id selector
+	// could not open the requested entity body — not present, not a resource
+	// body (entity.ErrNotAResourceBody), or its lifetime ended. This phase
+	// does not distinguish those cases (see readResourceMeta in
+	// resource.go); a finer §23 vocabulary (cursor_expired/snapshot_incomplete)
+	// is Phase 3+.
+	"resource_unavailable": true,
 }
 
 // Coverage states how much of the intended source a producer actually

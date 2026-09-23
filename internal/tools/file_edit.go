@@ -15,8 +15,9 @@ const MaxEditFilePayloadBytes = 512 * 1024
 const maxReadFilePayloadBytes = 512
 
 type readFileArgs struct {
-	Offset int `json:"offset,omitempty"`
-	Limit  int `json:"limit,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	ResourceID string `json:"resource_id,omitempty"`
 }
 
 type editFileArgs struct {
@@ -24,11 +25,13 @@ type editFileArgs struct {
 	NewText string `json:"new_text"`
 }
 
-// decodeReadFileBody parses the optional JSON range object from a fenced
-// read_file block. The legacy form — path in the info string, empty body — is
-// left untouched, and so is a non-JSON body (a model that mistakenly pasted
-// content there still gets the old "body ignored" behavior rather than a new
-// hard error).
+// decodeReadFileBody parses the optional JSON range/resource_id object from a
+// fenced read_file block. The legacy form — path in the info string, empty
+// body — is left untouched, and so is a non-JSON body (a model that
+// mistakenly pasted content there still gets the old "body ignored" behavior
+// rather than a new hard error). resource_id is validated at execution time
+// (ExecuteContext's ToolReadFile case), not here — this function only
+// extracts it.
 func decodeReadFileBody(call *Call) {
 	body := strings.TrimSpace(call.Body)
 	if !strings.HasPrefix(body, "{") {
@@ -48,6 +51,7 @@ func decodeReadFileBody(call *Call) {
 		return
 	}
 	call.Offset, call.Limit = args.Offset, args.Limit
+	call.ResourceID = strings.TrimSpace(args.ResourceID)
 	call.Body = ""
 }
 

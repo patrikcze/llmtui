@@ -27,15 +27,15 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolReadFile,
-			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file.",
+			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file. Pass resource_id instead of path to recover a previously retained tool output body (see run_command) without rerunning it.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root."},
-					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start."},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500)."}
-				},
-				"required": ["path"]
+					"path": {"type": "string", "description": "File path relative to the project root. Omit when passing resource_id instead."},
+					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start. Not supported with resource_id."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500). Not supported with resource_id."},
+					"resource_id": {"type": "string", "description": "Recover a previously retained tool output body by its ent_... ID instead of reading a path. Exactly one of path or resource_id must be set."}
+				}
 			}`),
 		},
 		{
@@ -171,6 +171,7 @@ type nativeArgs struct {
 	Freshness  string   `json:"freshness_token"`
 	Offset     int      `json:"offset"`
 	Limit      int      `json:"limit"`
+	ResourceID string   `json:"resource_id"`
 	OldText    string   `json:"old_text"`
 	NewText    string   `json:"new_text"`
 	EntityIDs  []string `json:"entity_ids"`
@@ -373,6 +374,7 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
 		case ToolReadFile:
+			c.ResourceID = strings.TrimSpace(args.ResourceID)
 			if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
 				c.InputErr = err.Error()
 			} else {
