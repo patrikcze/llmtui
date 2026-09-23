@@ -69,6 +69,13 @@ sampling or context fields into remote requests.
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
 
+Provider behavior is calibrated separately from the runtime safety contract.
+The opt-in local-model matrices and their content-safe reporting fields are
+documented in [agent evaluation](agent-evaluation.md); an unconfigured or
+skipped model run is never treated as evidence of non-regression. See the
+[Phase 8 report](architecture/next-generation-tool-runtime-phase8-report.md)
+for the current denominators and open native-model gate.
+
 ## GPT-OSS and Harmony
 
 `gpt-oss-20b` uses OpenAI's Harmony protocol. Harmony is rendered exactly

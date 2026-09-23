@@ -152,6 +152,11 @@ and the same per-body and aggregate quotas. Disk setup or quota failures fall
 back to bounded memory at startup with a visible diagnostic; the registry
 never turns a failed write into a usable resource ID.
 
+Phase 8 calibration keeps the bounded defaults at 200 read lines and 512 KiB
+file/output caps because no configured local-model run justified a change. The
+content-safe evidence and benchmark snapshot are in the
+[Phase 8 report](architecture/next-generation-tool-runtime-phase8-report.md).
+
 This phase's shared formatter (`formatResultContent`, called by both
 `FormatResults` and `NativeResults`) renders `Meta`-blind: model-visible
 text is byte-identical to before `Meta` existed. `Meta` is available for a

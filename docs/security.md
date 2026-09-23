@@ -58,6 +58,12 @@ removed from future provider history. Failed capture leaves it attached; no
 visual observation is fabricated. Visual payloads are untrusted reference data
 and never become durable memory or web provenance.
 
+Optional entity disk backing applies redaction before staging, uses owner-only
+random filenames and an ownership marker, confines operations to the configured
+root, and publishes verified bodies atomically. Quota or filesystem failures
+leave no usable resource ID; the default remains memory. Portability and
+calibration evidence is recorded in the [Phase 8 report](architecture/next-generation-tool-runtime-phase8-report.md).
+
 Retrieved memory is reference data, not authorization. The unified Active
 Context marks source/scope/trust/freshness and frames every record separately;
 it cannot grant tools, network access, or prove that an agent action succeeded.

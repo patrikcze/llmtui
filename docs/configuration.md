@@ -226,6 +226,11 @@ failed capture leaves the raw image available. vision_max_tokens is capped at
 800. See
 [`architecture/entity-context-runtime.md`](architecture/entity-context-runtime.md).
 
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `output_storage` | `memory` | Retained entity bodies use bounded process memory; `disk` opts into the private session spool and `off` disables body retention |
+| `output_storage_path` | OS temporary directory | Optional owner-controlled root for the explicit disk spool; invalid or unavailable roots fall back to bounded memory with a diagnostic |
+
 ### `agent`
 
 Optional bounded multi-cycle execution with a pre-execution task contract and

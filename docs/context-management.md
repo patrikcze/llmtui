@@ -136,6 +136,9 @@ resumable agent cycle owns context. The status snapshot names the exact blocker.
 
 ## Agent and verifier scope
 
+The Phase 8 calibration baseline and its explicit live-model/platform gates are
+recorded in the [runtime calibration report](architecture/next-generation-tool-runtime-phase8-report.md).
+
 An ordinary chat request uses the **session summary**. An agent's first cycle
 may use its bounded captured **agent start summary** and start turns. Later
 cycles retain structured **verified cycle memory** and current-cycle messages
