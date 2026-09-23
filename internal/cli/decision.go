@@ -28,8 +28,8 @@ func newDecisionCmd(r *Root) *cobra.Command {
 	return cmd
 }
 
-func newDecisionManager() (*decision.ModelManager, error) {
-	return decision.NewModelManager(decision.ModelManagerOptions{})
+func newDecisionManager(r *Root) (*decision.ModelManager, error) {
+	return decision.NewModelManager(decision.ModelManagerOptions{RootDir: r.cfg.DecisionEngine.Laya.ModelDir})
 }
 
 func newDecisionModelsCmd(r *Root) *cobra.Command {
@@ -38,7 +38,7 @@ func newDecisionModelsCmd(r *Root) *cobra.Command {
 		Short: "List available and installed Laya checkpoints",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func newDecisionPullCmd(r *Root) *cobra.Command {
 		Short: "Download and verify one Laya source checkpoint",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}
@@ -118,7 +118,7 @@ func newDecisionInspectCmd(r *Root) *cobra.Command {
 		Short: "Inspect installed Laya model metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}
@@ -144,7 +144,7 @@ func newDecisionVerifyCmd(r *Root) *cobra.Command {
 		Short: "Verify installed Laya artifact checksums",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}
@@ -180,7 +180,7 @@ func newDecisionRemoveCmd(r *Root) *cobra.Command {
 			if revision == "" {
 				return fmt.Errorf("--revision is required; removal never deletes all revisions implicitly")
 			}
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}

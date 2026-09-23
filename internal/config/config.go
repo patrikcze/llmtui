@@ -339,6 +339,7 @@ type DecisionEngineConfig struct {
 // LayaConfig names installed checkpoints and their lifecycle policy. Paths
 // are optional because the model manager has a platform-default store.
 type LayaConfig struct {
+	ModelDir     string                     `mapstructure:"model_dir" yaml:"model_dir,omitempty"`
 	MLXPython    string                     `mapstructure:"mlx_python" yaml:"mlx_python,omitempty"`
 	DefaultModel string                     `mapstructure:"default_model" yaml:"default_model"`
 	Preload      []string                   `mapstructure:"preload" yaml:"preload,omitempty"`
@@ -809,7 +810,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
-		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python",
+		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -980,6 +981,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("decision_engine.laya.default_model", "english")
 	v.SetDefault("decision_engine.laya.max_loaded", 1)
 	v.SetDefault("decision_engine.laya.mlx_python", "")
+	v.SetDefault("decision_engine.laya.model_dir", "")
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -1235,12 +1237,12 @@ decision_engine:
   provider: laya
   laya:
     default_model: english
+    model_dir: "" # empty uses the platform data directory; otherwise the exact Laya store root
     mlx_python: "" # Python 3.11+ with laya-mlx==0.2.0; empty uses python3 on PATH
     max_loaded: 1
     preload: []
-    # Models may pin a source revision or point at an explicitly installed
-    # runtime-compatible directory. SafeTensors downloads alone are source
-    # artifacts and are not executable by llmtui.
+    # Reserved per-model overrides; not consumed by decision commands yet.
+    # Use model_dir for the shared store and decision pull --revision to pin.
     models: {}
 
 # Workspace tools: lets the model list, read, and write files and run

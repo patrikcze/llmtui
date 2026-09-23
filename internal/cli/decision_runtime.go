@@ -77,7 +77,7 @@ laya:english-mlx, laya:multilingual-mlx, or laya:typed-decisions-mlx.`,
 			if err != nil {
 				return err
 			}
-			manager, err := newDecisionManager()
+			manager, err := newDecisionManager(r)
 			if err != nil {
 				return err
 			}

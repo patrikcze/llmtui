@@ -27,11 +27,23 @@ decision_engine:
   provider: laya
   laya:
     default_model: english-mlx
+    model_dir: "" # or an absolute path to the Laya model store
     max_loaded: 1
     mlx_python: /absolute/path/to/venv/bin/python
 ```
 
 The environment override is `LLMTUI_DECISION_ENGINE_LAYA_MLX_PYTHON`.
+`decision_engine.laya.model_dir` selects the exact shared Laya store root for
+`models`, `pull`, `inspect`, `verify`, `remove`, and `predict`. For example,
+`/Volumes/Models/laya` stores revisions under
+`/Volumes/Models/laya/english-mlx/<revision>/`. Use an absolute path; shell
+expansions such as `~` and `$HOME` are not performed. Empty retains the default:
+`$XDG_DATA_HOME/llmtui/models/laya` or `~/.local/share/llmtui/models/laya` on
+macOS/Linux, and `%LOCALAPPDATA%/llmtui/models/laya` on Windows.
+`LLMTUI_DECISION_ENGINE_LAYA_MODEL_DIR` overrides YAML. Changing the setting
+does not move existing installations; pull models into the selected store.
+This is separate from the Python environment selected by `mlx_python`.
+
 Explicit CLI commands opt in independently of the future chat-policy switch.
 Normal startup, `doctor`, and model inspection never launch Python or pip.
 
