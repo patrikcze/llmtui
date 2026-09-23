@@ -87,7 +87,7 @@ Concretely:
 1. `Parse` (fenced) or `CallsFromNative` (native, `native.go:167`) both normalize into `[]tools.Call{ID, Tool, Path, Body, ...}` — one shared internal representation regardless of transport.
 2. `m.startToolBatch(calls)` (`app.go:1107`) is the orchestrator. For each call, `callNeedsApproval` (`app.go:1084`) checks a layered policy: a time-limited grant from a previous "always allow" choice, then MCP server approval mode, then `Runner.NeedsApproval` which applies the guardrails (writes ask, non-read-only shell commands ask, secret-file reads ask, read-only stuff like `list_dir`/`glob` never asks).
 3. If anything needs approval, the loop **stops** and shows the y/n prompt (`renderApprovalPrompt`, `app.go:2492`) — nothing executes until the user answers.
-4. Approved calls run through `Runner.ExecuteContext` (`tools.go:246`) — serialized via a 1-slot channel so concurrent batches can't race on the workspace, every path resolved and symlink-checked against the workspace root, output size-capped, commands time-boxed.
+4. Approved calls run through `Runner.ExecuteContext` (`tools.go:246`) — serialized via a 1-slot channel so concurrent batches can't race on the workspace, every path resolved and symlink-checked against the workspace root, output size-capped, commands time-boxed. `run_command`'s cap is enforced *during* capture, not after: stdout/stderr are written into a bounded writer (`output_capture.go`) that never retains more than the cap regardless of how much the command produces, so memory stays flat even for a runaway command — it is not buffered in full before truncation.
 5. Results go back to the model as either a synthetic user message wrapped in `[tool results]` (fenced mode, `FormatResults`) or as proper `role:"tool"` messages carrying `ToolCallID`/`ToolName` (native mode, `NativeResults`, `native.go:276`).
 6. The model gets another turn with those results in context and can call more tools or answer normally. This repeats up to `tools.max_iterations` (default 10, `toolMaxIter`, `app.go:1155`) — after that the *user* decides whether to grant more rounds, so a long task never silently dies.
 
@@ -114,7 +114,15 @@ text:
 - `Meta.Coverage` — `SourceComplete`/`CaptureComplete`/`PreviewComplete`
   booleans plus observed/retained/total byte-and-line counts (nil totals
   mean genuinely unknown, never guessed). This is how a capped scan
-  discloses that a zero-match result is not proof of absence.
+  discloses that a zero-match result is not proof of absence. For
+  `run_command`, `ObservedBytes`/`RetainedBytes` come from the bounded
+  capture writer's own counters, not from measuring the final formatted
+  string.
+- `Meta.ContentDigest` — for `run_command`, the SHA-256 of every byte the
+  command wrote to stdout/stderr, retained or truncated away — the
+  full-stream digest, not a digest of only the retained/truncated prefix,
+  so two truncated results with an identical retained prefix but different
+  actual output never collide.
 - `Meta.Window` — the position of a bounded view inside a larger
   representation, where pagination applies; `nil` where it doesn't yet
   (list_dir, glob — a later phase adds their pagination).
