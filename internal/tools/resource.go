@@ -75,11 +75,9 @@ func (r *Runner) readResourceMeta(ctx context.Context, rawID string, offset, lim
 	}
 	view, lease, oerr := r.Resources.OpenBody(ctx, id)
 	if oerr != nil {
-		// This phase does not distinguish entity.ErrNotAResourceBody from any
-		// other not-found/expired case (both are Phase 3+ §23 granularity);
-		// every OpenBody failure is a uniform resource_unavailable so the
-		// model gets one stable, retryable-by-rereading code instead of a raw
-		// Go error string it cannot switch on.
+		// Keep not-found/wrong-kind failures stable while exposing lease expiry
+		// as its own retryable condition; callers can then distinguish a stale
+		// handle from a selector that never named a resource body.
 		code := "resource_unavailable"
 		if strings.Contains(strings.ToLower(oerr.Error()), "lifetime has ended") {
 			code = "resource_expired"
