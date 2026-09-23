@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +60,55 @@ func TestObservedFileVersionBindsEditsAfterDelivery(t *testing.T) {
 	}
 	if got := calls[0].ExpectedResourceID; got != "" {
 		t.Fatalf("resource ID = %q, want empty when no retained body was delivered", got)
+	}
+}
+
+func TestObservedFileVersionBindsOverwritesAndDoesNotReuseOldID(t *testing.T) {
+	m := newTestModel(t)
+	oldID := "ent_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	old := entity.FileVersion{Path: "src/main.go", Digest: "old", SizeBytes: 3, Complete: true}
+	m.recordDeliveredFileVersions([]tools.Result{{
+		Call: tools.Call{Tool: tools.ToolReadFile, Path: "src/main.go"}, ResourceID: oldID,
+		Meta: tools.ResultMeta{FileVersion: &old},
+	}})
+	calls := m.bindObservedEditVersions([]tools.Call{{
+		Tool: tools.ToolWriteFile, Path: "src/main.go", Body: "new",
+	}})
+	if calls[0].ExpectedVersion == nil || calls[0].ExpectedResourceID != oldID {
+		t.Fatalf("bound overwrite = %+v", calls[0])
+	}
+	updated := entity.FileVersion{Path: "src/main.go", Digest: "new", SizeBytes: 3, Complete: true}
+	m.recordDeliveredFileVersions([]tools.Result{{
+		Call: calls[0], Meta: tools.ResultMeta{FileVersion: &updated},
+	}})
+	if got := m.observedFileVersions["id:"+oldID].Version.Digest; got != "old" {
+		t.Fatalf("old resource ID now points at digest %q", got)
+	}
+	if got := m.observedFileVersions["path:src/main.go"].Version.Digest; got != "new" {
+		t.Fatalf("path version = %q, want new", got)
+	}
+}
+
+func TestUnrelatedReadDoesNotRecoverStaleEdit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.toolRunner = tools.NewRunner(root, 64)
+	target := m.toolRunner.Execute(tools.Call{Tool: tools.ToolReadFile, Path: "target.txt"})
+	if target.Err != nil || target.Meta.FileVersion == nil {
+		t.Fatalf("target read = %+v", target)
+	}
+	other := entity.FileVersion{Path: "other.txt", Digest: "other", SizeBytes: 5, Complete: true}
+	m.recordDeliveredFileVersions([]tools.Result{{Call: tools.Call{Tool: tools.ToolReadFile, Path: "target.txt"}, Meta: target.Meta}, {Call: tools.Call{Tool: tools.ToolReadFile, Path: "other.txt"}, Meta: tools.ResultMeta{FileVersion: &other}}})
+	if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := m.bindObservedEditVersions([]tools.Call{{Tool: tools.ToolEditFile, Path: "target.txt", OldText: "old", NewText: "new"}})
+	res := m.toolRunner.Execute(calls[0])
+	if res.Err == nil || res.Meta.Error == nil || res.Meta.Error.Code != "stale_source" {
+		t.Fatalf("edit = %+v, want stale_source", res)
 	}
 }
 

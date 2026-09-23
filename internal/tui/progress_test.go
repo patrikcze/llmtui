@@ -213,6 +213,10 @@ func TestProgressFingerprintIncludesStateChangingArguments(t *testing.T) {
 	if writeA == writeB {
 		t.Fatal("different write_file content collapsed to one fingerprint")
 	}
+	writeVersion := progressFingerprint(tools.Call{Tool: tools.ToolWriteFile, Path: "same.txt", Body: "alpha", ExpectedResourceID: "ent_aaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	if writeA == writeVersion {
+		t.Fatal("different write version selector collapsed to one fingerprint")
+	}
 
 	searchA := progressFingerprint(tools.Call{Tool: tools.ToolWebSearch, Body: "weather", Max: 2})
 	searchB := progressFingerprint(tools.Call{Tool: tools.ToolWebSearch, Body: "weather", Max: 8})
