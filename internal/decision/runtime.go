@@ -19,10 +19,17 @@ const (
 var ErrRuntimeArtifactUnavailable = errors.New("verified decision runtime artifact unavailable")
 
 // RuntimeLoader is the narrow boundary for a verified executable model. The
-// loader owns backend details (for example ONNX Runtime and its native
-// library); the decision package does not select or download a backend.
+// loader owns backend details (for example ONNX Runtime or a Python MLX
+// worker). Loading never downloads models or installs runtime dependencies.
 type RuntimeLoader interface {
 	Load(ctx context.Context, installation Installation) (Engine, error)
+}
+
+// SourceRuntimeLoader explicitly opts a backend into executing a verified
+// source bundle. Ready ONNX artifacts retain their independent validation.
+type SourceRuntimeLoader interface {
+	RuntimeLoader
+	SupportsSource(format string) bool
 }
 
 // LoadRuntime validates the installation again immediately before handing it
@@ -42,16 +49,32 @@ func LoadRuntime(ctx context.Context, installation Installation, loader RuntimeL
 		return UnavailableEngine{Reason: err.Error()}, fmt.Errorf("%w: %v", ErrRuntimeArtifactUnavailable, err)
 	}
 	if !installation.Manifest.Runtime.Ready {
-		return UnavailableEngine{Reason: installation.Manifest.Runtime.Note}, ErrRuntimeArtifactUnavailable
+		source, ok := loader.(SourceRuntimeLoader)
+		if !ok || !source.SupportsSource(installation.Manifest.Runtime.Format) || installation.Manifest.Runtime.Format != RuntimeFormatMLX {
+			return UnavailableEngine{Reason: installation.Manifest.Runtime.Note}, ErrRuntimeArtifactUnavailable
+		}
+		if err := verifyMLXInstallation(ctx, installation); err != nil {
+			return nil, err
+		}
+	} else {
+		path, err := RuntimeArtifactPath(installation)
+		if err != nil {
+			return UnavailableEngine{Reason: err.Error()}, err
+		}
+		if err := verifyFile(path, installation.Manifest.Runtime.Size, installation.Manifest.Runtime.SHA256); err != nil {
+			return UnavailableEngine{Reason: err.Error()}, fmt.Errorf("%w: verify runtime artifact: %v", ErrRuntimeArtifactUnavailable, err)
+		}
 	}
-	path, err := RuntimeArtifactPath(installation)
-	if err != nil {
-		return UnavailableEngine{Reason: err.Error()}, err
+	var engine Engine
+	var err error
+	// A package-owned loader may skip its redundant public-boundary check.
+	if verified, ok := loader.(interface {
+		loadVerified(context.Context, Installation) (Engine, error)
+	}); ok {
+		engine, err = verified.loadVerified(ctx, installation)
+	} else {
+		engine, err = loader.Load(ctx, installation)
 	}
-	if err := verifyFile(path, installation.Manifest.Runtime.Size, installation.Manifest.Runtime.SHA256); err != nil {
-		return UnavailableEngine{Reason: err.Error()}, fmt.Errorf("%w: verify runtime artifact: %v", ErrRuntimeArtifactUnavailable, err)
-	}
-	engine, err := loader.Load(ctx, installation)
 	if err != nil {
 		return nil, fmt.Errorf("load decision runtime: %w", err)
 	}

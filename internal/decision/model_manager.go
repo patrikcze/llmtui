@@ -240,7 +240,7 @@ type hubTreeEntry struct {
 }
 
 type hubLFS struct {
-	SHA256 string `json:"sha256"`
+	SHA256 string `json:"oid"`
 }
 
 type artifact struct {
@@ -377,10 +377,13 @@ func (m *ModelManager) resolveRevision(ctx context.Context, descriptor ModelDesc
 
 func (m *ModelManager) listTree(ctx context.Context, descriptor ModelDescriptor, revision string) ([]hubTreeEntry, error) {
 	path := "models/" + descriptor.Repository + "/tree/" + url.PathEscape(revision)
-	query := url.Values{"recursive": []string{"true"}, "expand": []string{"true"}, "limit": []string{"1000"}}
+	query := url.Values{"recursive": []string{"true"}, "limit": []string{"1000"}}
 	var entries []hubTreeEntry
 	if err := m.getJSON(ctx, m.apiURL(path, query), &entries); err != nil {
 		return nil, fmt.Errorf("list %s artifacts: %w", descriptor.Repository, err)
+	}
+	if len(entries) >= 1000 {
+		return nil, fmt.Errorf("model tree exceeds the supported 999-entry limit")
 	}
 	return entries, nil
 }

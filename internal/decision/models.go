@@ -28,8 +28,8 @@ var LayaModels = []ModelDescriptor{
 
 // LayaMLXModels are independently published FP16 conversions for the MLX
 // Python runtime on Apple Silicon. They are downloadable and checksummed by
-// this manager, but remain unavailable to Go until an explicit MLX bridge is
-// configured.
+// this manager; MLXRuntimeLoader executes them using an explicitly available
+// Python environment.
 var LayaMLXModels = []ModelDescriptor{
 	{Alias: "english-mlx", Repository: "aac6fef/laya-mlx", Description: "Laya English MLX checkpoint", RuntimeFormat: RuntimeFormatMLX, RuntimeNote: "MLX checkpoint acquired; requires the external laya-mlx Python runtime"},
 	{Alias: "multilingual-mlx", Repository: "aac6fef/laya-multilingual-mlx", Description: "Laya multilingual MLX checkpoint", RuntimeFormat: RuntimeFormatMLX, RuntimeNote: "MLX checkpoint acquired; requires the external laya-mlx Python runtime"},

@@ -38,6 +38,10 @@ Not runnable in a plain checkout:
   unless `LLMTUI_TEST_GGUF`, `LLMTUI_TEST_CPU` and `YZMA_LIB` are set (see
   `.github/workflows/ci.yml` `native-integration`). A green `go test ./...`
   does *not* mean native inference was exercised.
+- The real Laya MLX tests skip unless `LLMTUI_TEST_LAYA_MLX=1` and all three
+  pinned checkpoints plus Python/laya-mlx are installed. Ordinary tests use
+  fake workers. See `docs/decision-engine.md` for the offline integration run.
+
 - `make dist-archive` must run on the native target OS/arch — it installs and
   hash-verifies that platform's llama.cpp binaries (`Makefile:179`).
 
@@ -181,6 +185,9 @@ them **and add a regression test for the specific case it touches**:
   default** and a broken/disabled one must not block normal chat startup.
   The bounded entity runtime is enabled by default but remains inert unless
   tools are active; it is transient and must not block normal chat startup.
+- Laya MLX runs only through explicit decision runtime/predict commands or an
+  explicitly constructed decision loader. Python imports and model loading
+  never run during normal chat startup. See `docs/decision-engine.md`.
 - Declaring an MCP server starts nothing; only an explicit connect launches a
   subprocess.
 - `internal/tui/app.go` (~3000 LOC), `commands_local.go` (~1800),

@@ -68,6 +68,8 @@ func NewRouter(options RouterOptions) (*Router, error) {
 	}, nil
 }
 
+func (r *Router) Name() string { return "laya-router" }
+
 func (r *Router) Predict(ctx context.Context, state any, questions map[string]Question, options PredictOptions) (Result, error) {
 	if err := Validate(state, questions); err != nil {
 		return Result{}, err
@@ -87,6 +89,17 @@ func (r *Router) Predict(ctx context.Context, state any, questions map[string]Qu
 	defer release()
 	result, err := engine.Predict(ctx, state, questions, options)
 	if err != nil {
+		unusable := errors.Is(err, ErrUnavailable)
+		if health, ok := engine.(interface{ usable() bool }); ok {
+			unusable = unusable || !health.usable()
+		}
+		if unusable {
+			r.mu.Lock()
+			if entry := r.entries[alias]; entry != nil {
+				entry.closing = true
+			}
+			r.mu.Unlock()
+		}
 		return Result{}, err
 	}
 	result.Routing.Model = modelID(alias)
@@ -109,6 +122,9 @@ func (r *Router) acquire(ctx context.Context, alias string) (Engine, func(), err
 		return nil, nil, errors.New("decision router is closed")
 	}
 	r.clock++
+	if entry := r.entries[alias]; entry != nil && entry.closing {
+		return nil, nil, fmt.Errorf("%w: decision worker is retiring", ErrUnavailable)
+	}
 	if entry := r.entries[alias]; entry != nil && !entry.closing {
 		entry.refs++
 		entry.usedAt = r.clock
@@ -147,6 +163,7 @@ func (r *Router) releaseFunc(alias string, entry *routerEntry) func() {
 					delete(r.entries, alias)
 				}
 			}
+			r.evictLocked("")
 		})
 	}
 }

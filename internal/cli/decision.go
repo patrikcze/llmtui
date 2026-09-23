@@ -22,6 +22,8 @@ func newDecisionCmd(r *Root) *cobra.Command {
 		newDecisionInspectCmd(r),
 		newDecisionVerifyCmd(r),
 		newDecisionRemoveCmd(r),
+		newDecisionRuntimeCmd(r),
+		newDecisionPredictCmd(r),
 	)
 	return cmd
 }

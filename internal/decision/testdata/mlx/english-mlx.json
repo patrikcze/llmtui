@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "upstream_revision": "047678560251f28113ee8f5df4be82102c7bf336",
+  "cases": [
+    {
+      "name": "duplicate_charge",
+      "state": {
+        "body": "Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan.",
+        "from": "user@acme.com",
+        "subject": "Duplicate charge on invoice #4411"
+      },
+      "questions": {
+        "churn_risk": {
+          "instructions": "Is the customer threatening to cancel their plan?",
+          "type": "noul"
+        },
+        "department": {
+          "criteria": {
+            "billing": "invoices, payments, refunds",
+            "other": "anything else",
+            "sales": "new purchases and upgrades",
+            "technical": "bugs, outages, technical support"
+          },
+          "instructions": "Which department should handle this request?",
+          "type": "choice"
+        },
+        "refund_requested": {
+          "instructions": "Is the customer requesting a refund?",
+          "type": "noul"
+        },
+        "urgency": {
+          "criteria": [
+            "not urgent",
+            "soon",
+            "critical deadline or blocking issue"
+          ],
+          "instructions": "How urgent is this request?",
+          "type": "score"
+        }
+      },
+      "expected": {
+        "answers": {
+          "churn_risk": {
+            "type": "noul",
+            "confidence": 0.7383,
+            "probability": 0.7383
+          },
+          "department": {
+            "type": "choice",
+            "confidence": 0.8614,
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9645,
+              "other": 0.0097,
+              "sales": 0.0134,
+              "technical": 0.0124
+            }
+          },
+          "refund_requested": {
+            "type": "noul",
+            "confidence": 0.865,
+            "probability": 0.865
+          },
+          "urgency": {
+            "type": "score",
+            "confidence": 0.0556,
+            "score": 1.2308,
+            "probabilities": {
+              "0": 0.1774,
+              "1": 0.4145,
+              "2": 0.4081
+            }
+          }
+        }
+      }
+    }
+  ]
+}

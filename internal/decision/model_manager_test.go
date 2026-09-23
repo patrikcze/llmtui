@@ -177,6 +177,12 @@ func newHubTestServer(t *testing.T, revision string, files map[string][]byte) *h
 		case r.URL.Path == "/api/models/owner/repo":
 			writeJSON(t, w, map[string]string{"sha": revision})
 		case r.URL.Path == "/api/models/owner/repo/tree/"+revision:
+			// Expanded tree responses reject limit=1000; ordinary metadata already
+			// includes the LFS hashes needed by acquisition.
+			if r.URL.Query().Get("expand") == "true" {
+				http.Error(w, "invalid expanded pagination limit", http.StatusBadRequest)
+				return
+			}
 			entries := make([]hubTreeEntry, 0, len(files))
 			for path, body := range files {
 				sum := sha256.Sum256(body)

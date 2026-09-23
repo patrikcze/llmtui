@@ -339,6 +339,7 @@ type DecisionEngineConfig struct {
 // LayaConfig names installed checkpoints and their lifecycle policy. Paths
 // are optional because the model manager has a platform-default store.
 type LayaConfig struct {
+	MLXPython    string                     `mapstructure:"mlx_python" yaml:"mlx_python,omitempty"`
 	DefaultModel string                     `mapstructure:"default_model" yaml:"default_model"`
 	Preload      []string                   `mapstructure:"preload" yaml:"preload,omitempty"`
 	MaxLoaded    int                        `mapstructure:"max_loaded" yaml:"max_loaded"`
@@ -808,7 +809,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
-		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded",
+		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -978,6 +979,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("decision_engine.provider", "laya")
 	v.SetDefault("decision_engine.laya.default_model", "english")
 	v.SetDefault("decision_engine.laya.max_loaded", 1)
+	v.SetDefault("decision_engine.laya.mlx_python", "")
 
 	v.SetDefault("tools.enabled", false)
 	v.SetDefault("tools.max_iterations", 10)
@@ -1233,6 +1235,7 @@ decision_engine:
   provider: laya
   laya:
     default_model: english
+    mlx_python: "" # Python 3.11+ with laya-mlx==0.2.0; empty uses python3 on PATH
     max_loaded: 1
     preload: []
     # Models may pin a source revision or point at an explicitly installed
