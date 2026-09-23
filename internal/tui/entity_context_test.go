@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/prompt"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -278,5 +279,84 @@ func TestDisabledEntitiesAreNotModelVisible(t *testing.T) {
 		if spec.Name == tools.ToolGetEntityDetails {
 			t.Fatal("disabled entity capability was offered to the model")
 		}
+	}
+}
+
+// TestResourceScopeSurvivesAgentRunEnd is the regression test for a real
+// bug: registerResultEntities/publishResultCaptures used to apply a blanket
+// "agentRunActive() -> ScopeAgentRun" override to every candidate,
+// contradicting the plan's explicit §21 requirement that "safe published
+// read/search/web/MCP output intended for reuse is session-scoped even when
+// produced during /agent." endAgentRun (skills.go) unconditionally releases
+// every ScopeAgentRun entity on every run termination — success, failure,
+// budget exhaustion, cancellation, parking — so a file-version resource_id
+// captured during one agent run became unresolvable the instant that run
+// ended, even though the underlying file never changed. A model that
+// correctly remembered and reused an earlier resource_id on a later turn
+// then hit "entity body ... is not present in this session" on what was, in
+// fact, still a perfectly valid, unstale snapshot — observed live: a
+// resource_id from an ended run was rejected by edit_file's
+// expected_resource_id precondition, and only succeeded after a wasted
+// re-read produced a fresh ID.
+func TestResourceScopeSurvivesAgentRunEnd(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.cfg.Entities.Enabled = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.toolRunner.Resources = newResourceAdapter(m.entities)
+
+	run, err := agent.NewRun("scope-test", "read a file", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("read a file", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	if !m.agentRunActive() {
+		t.Fatal("test setup: expected an active agent run")
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := m.toolRunner.Execute(tools.Call{Tool: tools.ToolReadFile, Path: "notes.txt"})
+	if res.Err != nil {
+		t.Fatalf("read_file: %v", res.Err)
+	}
+	results := m.registerResultEntities([]tools.Result{res})
+	id := results[0].ResourceID
+	if id == "" {
+		t.Fatal("read_file result carries no resource_id to test scope against")
+	}
+
+	// The agent run ends for whatever reason (success here; endAgentRun's
+	// cleanup runs identically for failure/cancellation/budget exhaustion —
+	// see skills.go's doc comment) — it must not take a safe, reusable
+	// file-version resource down with it. endAgentRun itself early-returns
+	// unless run.Status already reflects a terminal decision, mirroring how
+	// the real controller sets Status before calling it (see agent_loop.go's
+	// callers).
+	run.Status = agent.DecisionDone
+	m.endAgentRun()
+	if m.agentRunActive() {
+		t.Fatal("test setup: expected the run to have ended")
+	}
+
+	editRes := m.toolRunner.Execute(tools.Call{
+		Tool: tools.ToolEditFile, Path: "notes.txt",
+		OldText: "hello\n", NewText: "goodbye\n",
+		ExpectedResourceID: id,
+	})
+	if editRes.Err != nil {
+		t.Fatalf("edit_file with a resource_id from an ended agent run: %v (this is exactly the reported bug if it fails)", editRes.Err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "goodbye\n" {
+		t.Fatalf("file content = %q, want %q", got, "goodbye\n")
 	}
 }
