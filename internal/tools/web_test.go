@@ -180,6 +180,31 @@ func TestWebFetchCacheModesAndConditionalValidators(t *testing.T) {
 	}
 }
 
+func BenchmarkWebFetchCached(b *testing.B) {
+	r := NewRunner("/tmp", 64)
+	r.Web = &stubWebFresh{stubWeb: stubWeb{page: web.Page{URL: "https://a.example/x", Content: "cached", Body: "cached", Status: 200}}}
+	r.WebSnapshots = &stubWebSnapshots{page: web.Page{URL: "https://a.example/x", Content: "cached", Body: "cached", Status: 200, ETag: `"v1"`}, hit: true}
+	call := Call{Tool: ToolWebFetch, Path: "https://a.example/x", WebCacheMode: "auto", WebCacheMaxAge: 60}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if res := r.Execute(call); res.Err != nil {
+			b.Fatal(res.Err)
+		}
+	}
+}
+
+func BenchmarkWebSearchCapture(b *testing.B) {
+	r := NewRunner("/tmp", 64)
+	r.Web = &stubWeb{results: []web.SearchResult{{Title: "A", URL: "https://a.example", Snippet: "alpha"}}}
+	call := Call{Tool: ToolWebSearch, Body: "weather"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if res := r.Execute(call); res.Err != nil {
+			b.Fatal(res.Err)
+		}
+	}
+}
+
 func TestWebResultsSanitizeTerminalControlSequences(t *testing.T) {
 	stub := &stubWeb{
 		results: []web.SearchResult{{Title: "safe\x1b]0;title\x07", URL: "https://example.com", Snippet: "clip\x1b]52;c;YQ==\x07"}},
