@@ -51,6 +51,11 @@ dropped, and any later structured call must pass normal validation and fresh
 approval. This recovery must remain enabled independently of any future
 assistance experiment.
 
+The current Phase 8 calibration snapshot is published in the [runtime report](architecture/next-generation-tool-runtime-phase8-report.md).
+It binds the deterministic fixture hash and candidate/baseline commits, keeps
+the measured defaults unchanged, and labels the absent local-model run as
+censored rather than successful.
+
 ## Live endpoint runs
 
 The contract probe is opt-in and never runs in CI:
@@ -114,6 +119,11 @@ answer/approval and never enables personal-app or production MCP actions. A
 bounded driver failure is written to the report before the test fails, so
 partial measurements remain inspectable. Both live tests skip unless the
 endpoint and model are explicitly configured.
+
+For reproducible Phase 8 comparisons, also set `LLMTUI_EVAL_BASELINE_SHA`,
+`LLMTUI_EVAL_CANDIDATE_SHA`, and `LLMTUI_EVAL_FIXTURE_HASH`. They are copied
+into each content-safe JSONL record. The fixture hash and current deterministic
+counts are published in the report linked above.
 
 Compare `off` and `shadow` first. A future `auto` mode is eligible only after
 it improves its declared target without new unsafe execution, approval

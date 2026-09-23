@@ -2,6 +2,7 @@ package contextmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -147,6 +148,36 @@ func TestSummarizerRetainsVisualObservationMarker(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q: %q", want, summary)
 		}
+	}
+}
+
+func TestSummarizerRetainsBoundedRuntimeReferences(t *testing.T) {
+	summary := summarize(t, 200, provider.Message{
+		Role: provider.RoleTool,
+		References: []provider.MessageReference{
+			{ID: "ent_00007", Kind: "file", Label: "internal/config.go"},
+			{ID: "ent_00008", Kind: "tool_output", Label: "command output"},
+		},
+		Content: "tool result",
+	})
+	for _, want := range []string{"ent_00007", "file", "internal/config.go", "ent_00008", "tool_output"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+}
+
+func TestSummarizerBoundsRuntimeReferenceMarkers(t *testing.T) {
+	refs := make([]provider.MessageReference, 32)
+	for i := range refs {
+		refs[i] = provider.MessageReference{ID: fmt.Sprintf("ent_%05d", i), Kind: "file", Label: "x"}
+	}
+	summary := summarize(t, 5000, provider.Message{Role: provider.RoleUser, References: refs})
+	if strings.Count(summary, "runtime reference stored as") != 16 {
+		t.Fatalf("summary retained %d reference markers, want 16: %q", strings.Count(summary, "runtime reference stored as"), summary)
+	}
+	if !strings.Contains(summary, "additional runtime references omitted") {
+		t.Fatalf("summary missing bounded omission marker: %q", summary)
 	}
 }
 

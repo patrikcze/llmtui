@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -15,20 +16,58 @@ const MaxEditFilePayloadBytes = 512 * 1024
 const maxReadFilePayloadBytes = 512
 
 type readFileArgs struct {
-	Offset int `json:"offset,omitempty"`
-	Limit  int `json:"limit,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	ByteOffset *int64 `json:"byte_offset,omitempty"`
+	ResourceID string `json:"resource_id,omitempty"`
 }
 
 type editFileArgs struct {
-	OldText string `json:"old_text"`
-	NewText string `json:"new_text"`
+	OldText            string `json:"old_text"`
+	NewText            string `json:"new_text"`
+	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
 }
 
-// decodeReadFileBody parses the optional JSON range object from a fenced
-// read_file block. The legacy form — path in the info string, empty body — is
-// left untouched, and so is a non-JSON body (a model that mistakenly pasted
-// content there still gets the old "body ignored" behavior rather than a new
-// hard error).
+type writeFileArgs struct {
+	Content            string `json:"content"`
+	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
+}
+
+// decodeWriteFileBody accepts the optional structured overwrite form while
+// retaining the legacy raw-body form (including raw JSON documents).
+func decodeWriteFileBody(call *Call) {
+	trimmed := strings.TrimSpace(call.Body)
+	if !strings.HasPrefix(trimmed, "{") {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil {
+		return // raw file content remains valid legacy syntax
+	}
+	// A raw JSON document is valid write_file content. The optional fenced
+	// envelope is therefore unambiguous only when it carries the selector;
+	// without expected_resource_id, preserve the legacy raw body byte-for-byte.
+	if _, hasID := fields["expected_resource_id"]; !hasID {
+		return
+	}
+	var args writeFileArgs
+	if err := decodeOneJSONObject(call.Body, &args); err != nil {
+		call.InputErr = "write_file structured body needs content and optional expected_resource_id: " + err.Error()
+		return
+	}
+	call.Body = args.Content
+	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
+	if err := ValidateWriteFileCall(call); err != nil {
+		call.InputErr = err.Error()
+	}
+}
+
+// decodeReadFileBody parses the optional JSON range/resource_id object from a
+// fenced read_file block. The legacy form — path in the info string, empty
+// body — is left untouched, and so is a non-JSON body (a model that
+// mistakenly pasted content there still gets the old "body ignored" behavior
+// rather than a new hard error). Selector and range shape validation happens
+// here; resource lifetime/ID ownership is checked at execution time.
 func decodeReadFileBody(call *Call) {
 	body := strings.TrimSpace(call.Body)
 	if !strings.HasPrefix(body, "{") {
@@ -43,11 +82,17 @@ func decodeReadFileBody(call *Call) {
 		call.InputErr = "read_file range needs one JSON object like {\"offset\":1,\"limit\":200}: " + err.Error()
 		return
 	}
-	if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
+	if err := ValidateReadArguments(args.Offset, args.Limit, args.ByteOffset); err != nil {
 		call.InputErr = err.Error()
 		return
 	}
 	call.Offset, call.Limit = args.Offset, args.Limit
+	call.ByteOffset = args.ByteOffset
+	call.ResourceID = strings.TrimSpace(args.ResourceID)
+	if err := ValidateReadSelectors(call.Path, call.ResourceID); err != nil {
+		call.InputErr = err.Error()
+		return
+	}
 	call.Body = ""
 }
 
@@ -65,6 +110,7 @@ func decodeEditFileBody(call *Call) {
 		return
 	}
 	call.OldText, call.NewText = args.OldText, args.NewText
+	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 	call.Body = ""
 	if err := ValidateEditFileCall(call); err != nil {
 		call.InputErr = err.Error()
@@ -86,6 +132,18 @@ func ValidateEditFileCall(call *Call) error {
 	}
 	if call.OldText == call.NewText {
 		return fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+	}
+	return nil
+}
+
+// ValidateWriteFileCall validates the optional version selector without doing
+// filesystem or resource I/O; resolution happens at execution time.
+func ValidateWriteFileCall(call *Call) error {
+	if call == nil {
+		return fmt.Errorf("write_file call is missing")
+	}
+	if strings.TrimSpace(call.Path) == "" {
+		return fmt.Errorf("write_file needs a target path")
 	}
 	return nil
 }

@@ -127,24 +127,30 @@ func (c *defaultLocalContextCollector) collectorNow() time.Time {
 	return time.Now()
 }
 
-func (r *Runner) localContext(ctx context.Context, call Call) (string, error) {
+func (r *Runner) localContext(ctx context.Context, call Call) (string, ResultMeta, error) {
+	// Every collector is bounded by design (a fixed kind, a capped limit) —
+	// local_context never has a partial-scan concept the way grep or
+	// read_file do, so Coverage is unconditionally complete on success.
+	meta := ResultMeta{Effect: EffectNone}
 	if err := ValidateLocalContextCall(&call); err != nil {
-		return "", err
+		return "", meta, withCode(err, "invalid_arguments", RetryCorrectInput)
 	}
 	if r.LocalContext == nil {
-		return "", errors.New("local context is not available")
+		return "", meta, withCode(errors.New("local context is not available"), "unsupported_content", RetryNone)
 	}
 	data, err := r.LocalContext.Collect(ctx, call.ContextKind, call.Max)
 	if err != nil {
-		return "", err
+		return "", meta, err
 	}
 	if len(data) > r.MaxResultBytes() {
-		return "", fmt.Errorf("local context result exceeds the %d byte limit", r.MaxResultBytes())
+		return "", meta, withCode(fmt.Errorf("local context result exceeds the %d byte limit", r.MaxResultBytes()), "unsupported_content", RetryCorrectInput)
 	}
 	if !json.Valid(data) {
-		return "", errors.New("local context collector returned invalid JSON")
+		return "", meta, errors.New("local context collector returned invalid JSON")
 	}
-	return string(data), nil
+	meta.Outcome = OutcomeOK
+	meta.Coverage = Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(data)), RetainedBytes: int64(len(data))}
+	return string(data), meta, nil
 }
 
 func (c *defaultLocalContextCollector) Collect(ctx context.Context, kind string, limit int) ([]byte, error) {

@@ -342,3 +342,120 @@ func TestNoProgressDetectionCanBeDisabledViaConfig(t *testing.T) {
 		t.Errorf("errText = %q, want empty: no_progress is disabled", m.errText)
 	}
 }
+
+// TestProgressDigestFromMetaIgnoresVolatileFormattingButNotEvidence proves
+// the three properties Phase 1a's progressDigest change requires: (a) two
+// calls with identical typed Meta but different call IDs/timestamps in their
+// formatted text digest identically (a repeat is still detected), and (b)
+// two calls whose typed Outcome or Coverage actually differs digest
+// differently (new evidence is still recognized), even when the formatted
+// text looks similar. This is the fix for the bug where a producer's own
+// volatile content (a personal_apps ObservedAt timestamp, an MCP response
+// echoing a request id) defeated repeat detection because the old digest
+// hashed that formatted text directly.
+func TestProgressDigestFromMetaIgnoresVolatileFormattingButNotEvidence(t *testing.T) {
+	baseMeta := tools.ResultMeta{
+		Outcome:  tools.OutcomeOK,
+		Effect:   tools.EffectNone,
+		Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: 42, RetainedBytes: 42},
+	}
+	call := tools.Call{Tool: tools.ToolPersonalApps}
+
+	// (a) Same typed content, different call ID and a volatile timestamp
+	// baked into Output — must digest identically.
+	first := tools.Result{
+		Call:   tools.Call{ID: "call-1", Tool: call.Tool},
+		Output: `{"operation":"status","observed_at":"2026-09-22T10:00:00Z"}`,
+		Meta:   baseMeta,
+	}
+	second := tools.Result{
+		Call:   tools.Call{ID: "call-2", Tool: call.Tool},
+		Output: `{"operation":"status","observed_at":"2026-09-22T10:00:07Z"}`,
+		Meta:   baseMeta,
+	}
+	if progressDigest(first) != progressDigest(second) {
+		t.Fatal("identical typed Meta with a different call ID/timestamp produced different digests — repeat detection broken")
+	}
+
+	// (b) A genuinely different Outcome must digest differently, even though
+	// the call identity (ID aside) is otherwise the same shape.
+	failedMeta := baseMeta
+	failedMeta.Outcome = tools.OutcomeFailed
+	failedMeta.Error = &tools.ErrorInfo{Code: "not_found", Retry: tools.RetryCorrectInput}
+	third := tools.Result{Call: tools.Call{ID: "call-3", Tool: call.Tool}, Output: first.Output, Meta: failedMeta}
+	if progressDigest(first) == progressDigest(third) {
+		t.Fatal("a changed Outcome did not change the digest — new evidence would be missed")
+	}
+
+	// (b, continued) A genuinely different Coverage must also digest
+	// differently, independent of Outcome.
+	partialMeta := baseMeta
+	partialMeta.Coverage.SourceComplete = false
+	partialMeta.Coverage.Reasons = []string{"bytes"}
+	fourth := tools.Result{Call: tools.Call{ID: "call-4", Tool: call.Tool}, Output: first.Output, Meta: partialMeta}
+	if progressDigest(first) == progressDigest(fourth) {
+		t.Fatal("a changed Coverage did not change the digest — new evidence would be missed")
+	}
+}
+
+// TestProgressLedgerMixedBatchCorrelatesTypedResultsToOriginatingCalls is
+// property (c): in a mixed batch where one call is already blocked by the
+// ledger and one is fresh, merging typed (Meta-populated) executed results
+// back in by toolBatchPlan.mergeResults still correlates each terminal
+// result to its originating call, and observing those results into the
+// ledger via the new Meta-based digest does not disturb that correlation.
+func TestProgressLedgerMixedBatchCorrelatesTypedResultsToOriginatingCalls(t *testing.T) {
+	l := newProgressLedger(1)
+	stuck := tools.Call{ID: "stuck", Tool: tools.ToolReadFile, Path: "stuck.txt"}
+	fresh := tools.Call{ID: "fresh", Tool: tools.ToolReadFile, Path: "fresh.txt"}
+	stuckMeta := tools.ResultMeta{Outcome: tools.OutcomeOK, Effect: tools.EffectNone, Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true}}
+	l.observeResults([]tools.Result{{Call: stuck, Output: "unchanged", Meta: stuckMeta}})
+
+	plan, terminal := l.planBatch([]tools.Call{stuck, fresh})
+	if terminal {
+		t.Fatal("a mixed batch (one runnable call) must never be terminal")
+	}
+	if plan.blockedCount() != 1 {
+		t.Fatalf("blockedCount = %d, want 1", plan.blockedCount())
+	}
+	runnable := plan.runnableCalls()
+	if len(runnable) != 1 || runnable[0].ID != "fresh" {
+		t.Fatalf("runnable = %+v, want only fresh", runnable)
+	}
+
+	executed := []tools.Result{{
+		Call: fresh, Output: "new content", Meta: tools.ResultMeta{
+			Outcome: tools.OutcomeOK, Effect: tools.EffectNone,
+			Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, RetainedBytes: 11},
+		},
+	}}
+	merged, observed, statuses := plan.mergeResults(executed)
+	if len(merged) != 2 || merged[0].Call.ID != "stuck" || merged[1].Call.ID != "fresh" {
+		t.Fatalf("merged = %+v, want [stuck(blocked), fresh(executed)] in original order", merged)
+	}
+	if merged[0].Err == nil {
+		t.Fatal("stuck slot should carry a synthetic block error")
+	}
+	if merged[1].Err != nil || merged[1].Output != "new content" {
+		t.Fatalf("fresh slot = %+v, want the executed result unmodified", merged[1])
+	}
+	if len(observed) != 1 || observed[0].Call.ID != "fresh" {
+		t.Fatalf("observed = %+v, want only fresh (the blocked slot is never observed)", observed)
+	}
+	if len(statuses) != 2 || statuses[0] != agent.ActionBlocked || statuses[1] != agent.ActionExecuted {
+		t.Fatalf("statuses = %+v, want [blocked, executed]", statuses)
+	}
+
+	// Observing the typed results must not panic or desync the ledger keyed
+	// by the same fingerprint function the plan itself used: a second
+	// identical observation must now be recognized as a repeat (threshold 1),
+	// proving the typed digest correlated correctly to the fresh call's
+	// fingerprint rather than, say, the blocked call's.
+	l.observeResults(observed)
+	if !l.wouldBlock(progressFingerprintAtRoot(l.root, fresh)) {
+		t.Fatal("observing the fresh result did not register against its own fingerprint")
+	}
+	if l.wouldBlock(progressFingerprintAtRoot(l.root, tools.Call{ID: "unrelated", Tool: tools.ToolReadFile, Path: "other.txt"})) {
+		t.Fatal("observing the fresh result incorrectly blocked an unrelated resource")
+	}
+}

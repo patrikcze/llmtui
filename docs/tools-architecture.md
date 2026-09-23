@@ -87,9 +87,81 @@ Concretely:
 1. `Parse` (fenced) or `CallsFromNative` (native, `native.go:167`) both normalize into `[]tools.Call{ID, Tool, Path, Body, ...}` — one shared internal representation regardless of transport.
 2. `m.startToolBatch(calls)` (`app.go:1107`) is the orchestrator. For each call, `callNeedsApproval` (`app.go:1084`) checks a layered policy: a time-limited grant from a previous "always allow" choice, then MCP server approval mode, then `Runner.NeedsApproval` which applies the guardrails (writes ask, non-read-only shell commands ask, secret-file reads ask, read-only stuff like `list_dir`/`glob` never asks).
 3. If anything needs approval, the loop **stops** and shows the y/n prompt (`renderApprovalPrompt`, `app.go:2492`) — nothing executes until the user answers.
-4. Approved calls run through `Runner.ExecuteContext` (`tools.go:246`) — serialized via a 1-slot channel so concurrent batches can't race on the workspace, every path resolved and symlink-checked against the workspace root, output size-capped, commands time-boxed.
+4. Approved calls run through `Runner.ExecuteContext` (`tools.go:246`) — serialized via a 1-slot channel so concurrent batches can't race on the workspace, every path resolved and symlink-checked against the workspace root, output size-capped, commands time-boxed. `run_command`'s cap is enforced *during* capture, not after: stdout/stderr are written into a bounded writer (`output_capture.go`) that never retains more than the cap regardless of how much the command produces, so memory stays flat even for a runaway command — it is not buffered in full before truncation.
 5. Results go back to the model as either a synthetic user message wrapped in `[tool results]` (fenced mode, `FormatResults`) or as proper `role:"tool"` messages carrying `ToolCallID`/`ToolName` (native mode, `NativeResults`, `native.go:276`).
 6. The model gets another turn with those results in context and can call more tools or answer normally. This repeats up to `tools.max_iterations` (default 10, `toolMaxIter`, `app.go:1155`) — after that the *user* decides whether to grant more rounds, so a long task never silently dies.
+
+### `tools.Result.Meta`: typed outcome and coverage
+
+`tools.Result` (`result.go`) additively carries `Meta ResultMeta` alongside
+the legacy `Output`/`Diff`/`Err`/`Entities` fields. This is *not* a second
+success/failure signal to reconcile with `Err` — it is the same operation's
+outcome, described in a form callers (the agent receipt ledger, the progress
+digest, future phases) can switch on instead of pattern-matching rendered
+text:
+
+- `Meta.Outcome` — `ok | partial | failed | cancelled | timeout | unknown`.
+  A successful-but-incomplete observation (e.g. `grep` skipping an
+  oversized file) is `partial` with `Err == nil` — it is not, and must
+  never be treated as, an execution failure. A clean, exhaustive zero-match
+  result is `ok`, not a fabricated failure.
+- `Meta.Error` — set only alongside a non-nil `Err`; carries a stable,
+  closed `Code` (see `errorCodeVocabulary` in `result.go`, e.g.
+  `not_found`, `stale_source`... — this phase's exact set is pinned by
+  `TestErrorCodeVocabularyIsClosedAndStable`) and a `Retry` hint
+  (`none | correct_input | reread | later | reconnect`). `Code` is never
+  `err.Error()` — it is a fixed vocabulary a caller can switch on.
+- `Meta.Coverage` — `SourceComplete`/`CaptureComplete`/`PreviewComplete`
+  booleans plus observed/retained/total byte-and-line counts (nil totals
+  mean genuinely unknown, never guessed). This is how a capped scan
+  discloses that a zero-match result is not proof of absence. For
+  `run_command`, `ObservedBytes`/`RetainedBytes` come from the bounded
+  capture writer's own counters, not from measuring the final formatted
+  string.
+- `Meta.ContentDigest` — for `run_command`, the SHA-256 of every byte the
+  command wrote to stdout/stderr, retained or truncated away — the
+  full-stream digest, not a digest of only the retained/truncated prefix,
+  so two truncated results with an identical retained prefix but different
+  actual output never collide.
+- `Meta.Window` — the position of a bounded view inside a larger
+  representation, where pagination applies; `nil` where it doesn't yet
+  (list_dir, glob — a later phase adds their pagination).
+- `Meta.Effect` — `none | changed | unchanged | unknown`, independent of
+  `Outcome`: an executed command that timed out can be `Effect=unknown`
+  without that implying the command never touched a file.
+
+`agent.ActionStatus` (`executed | denied | blocked | unknown`) is a
+separate, controller-owned concept recorded by the batch/approval layer —
+producers never set it, and it is not duplicated onto `Result`/`Meta`. A
+caller combines the two ("user denied," "controller blocked," "tool
+failed") rather than looking for a single merged field.
+
+Web fetches retain one bounded extracted body in the session entity registry
+before applying the model preview cap. `cache_mode=auto` can reuse that body
+only while its recorded freshness and `cache_max_age` permit it; `cached`
+fails visibly when no retained body is eligible, and `refresh` performs a new
+network observation. Validators are used for conditional requests and a 304
+reuses the same retained body. The requested URL identity is recorded
+separately from the final redirect URL, and URL userinfo is rejected.
+
+The body registry defaults to memory. Setting `entities.output_storage: disk`
+selects a private per-session spool under the configured
+`entities.output_storage_path` (or the OS temporary directory). Files use
+owner-only permissions, random names, an ownership marker, atomic staging,
+and the same per-body and aggregate quotas. Disk setup or quota failures fall
+back to bounded memory at startup with a visible diagnostic; the registry
+never turns a failed write into a usable resource ID.
+
+Phase 8 calibration keeps the bounded defaults at 200 read lines and 512 KiB
+file/output caps because no configured local-model run justified a change. The
+content-safe evidence and benchmark snapshot are in the
+[Phase 8 report](architecture/next-generation-tool-runtime-phase8-report.md).
+
+This phase's shared formatter (`formatResultContent`, called by both
+`FormatResults` and `NativeResults`) renders `Meta`-blind: model-visible
+text is byte-identical to before `Meta` existed. `Meta` is available for a
+later phase's formatter to surface; nothing today parses it out of the
+rendered string, and nothing should — read it off `Result.Meta` directly.
 
 ### The same round trip as a conversation
 
@@ -336,18 +408,29 @@ That's the whole shape: **schema → parse/convert → approval gate → sandbox
 
 `read_file` takes an optional 1-based `offset`/`limit` line range (default 200
 lines, hard cap `MaxReadLimit` = 500). Omitting both is the unchanged
-whole-file read. A ranged read returns the selected lines **verbatim** —
-`renderLineRange` adds one compact `[read_file: path lines A-B of N,
-next_offset=C]` header and never per-line numbers, so the model can copy a
-fragment straight into an `edit_file` `old_text`.
+whole-file read. A ranged read streams through the confined file, returns the
+selected lines **verbatim**, and keeps the returned body within
+`tools.max_file_kb`; scanning is separately bounded at 64 MiB. The result has
+one compact `[read_file: path lines A-B of N, next_offset=C]` header and never
+per-line numbers, so the model can copy a fragment straight into an
+`edit_file` `old_text`.
 
 `edit_file` performs exactly one literal, exact-match replacement in an
 existing text file: zero matches or more than one fails without writing.
 It does not extend the tool subsystem — it shares `write_file`'s
 `writeFileChecked` core (workspace confinement, blocked-path guardrails, the
-size cap, the display diff). The only addition is a precondition: `edit_file`
-passes the bytes it computed the change against, and `writeFileChecked`
-refuses the write if the file no longer holds exactly those bytes, so a
-concurrent external change is never silently clobbered. `old_text` itself is
-the deterministic precondition — there is no session state requiring a prior
-`read_file`.
+size cap, the confined staged-write-then-atomic-rename publish, the display
+diff). The only addition is a precondition: `edit_file` passes the bytes it
+computed the change against, and `writeFileChecked` refuses the write if the
+file no longer holds exactly those bytes — checked once before staging and
+again immediately before the publishing rename, so a change introduced
+while the write itself is in flight is also caught. That is optimistic
+staleness detection, not compare-and-swap: an external writer landing after
+that last check can still have its change overwritten by the rename (see
+`internal/tools/file_write.go`'s "honest concurrency guarantee" comment).
+When the controller has delivered a complete file snapshot, the model may
+pass its `resource_id` as `expected_resource_id` to `edit_file` or to the
+structured overwrite form of `write_file`. The controller pins that body
+through approval and execution rechecks the complete raw digest, so an
+external change fails as `stale_source`; without an observed version the
+legacy exact-text-only edit and unguarded overwrite paths remain available.

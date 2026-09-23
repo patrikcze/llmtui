@@ -13,8 +13,11 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,15 +26,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/personalapps"
 	"github.com/patrikcze/llmtui/internal/procutil"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/terminaltext"
+	"github.com/patrikcze/llmtui/internal/web"
 )
 
 // ResultsPrefix marks the follow-up message that carries tool output back to
@@ -78,6 +84,11 @@ const (
 const (
 	DefaultReadLimit = 200
 	MaxReadLimit     = 500
+	// MaxReadScanBytes bounds how far a ranged read may scan while looking
+	// for a late line window. The returned body remains bounded by maxKB;
+	// this separate ceiling prevents a request for a far-away range from
+	// turning into an unbounded full-file traversal.
+	MaxReadScanBytes = 64 << 20
 )
 
 // CanonicalReadRange normalizes read_file's optional line range. ranged is
@@ -119,6 +130,34 @@ func ValidateReadRange(offset, limit int) error {
 	return nil
 }
 
+// ValidateReadArguments validates mutually exclusive line and byte
+// continuations before any filesystem or resource I/O.
+func ValidateReadArguments(offset, limit int, byteOffset *int64) error {
+	if err := ValidateReadRange(offset, limit); err != nil {
+		return err
+	}
+	if byteOffset != nil {
+		if *byteOffset < 0 {
+			return fmt.Errorf("read_file byte_offset must be zero or greater")
+		}
+		if offset != 0 || limit != 0 {
+			return fmt.Errorf("read_file byte_offset cannot be combined with offset or limit")
+		}
+	}
+	return nil
+}
+
+// ValidateReadSelectors enforces the protocol-level exactly-one selector
+// contract before a read reaches filesystem or resource I/O.
+func ValidateReadSelectors(path, resourceID string) error {
+	hasPath := strings.TrimSpace(path) != ""
+	hasResource := strings.TrimSpace(resourceID) != ""
+	if hasPath == hasResource {
+		return fmt.Errorf("read_file requires exactly one of path or resource_id")
+	}
+	return nil
+}
+
 // Call is one tool invocation: parsed from a fenced block in an assistant
 // reply, or converted from a native function call (in which case ID is set
 // and the results must go back as role:"tool" messages).
@@ -129,22 +168,47 @@ type Call struct {
 	Body string
 	// Filter optionally narrows search tools (for example grep's file glob).
 	Filter string
+	// Search options are shared by native and fenced grep forms. A nil
+	// CaseSensitive preserves legacy regex-body behavior and resolves to true.
+	SearchLiteral       bool
+	SearchCaseSensitive *bool
+	SearchContext       int
+	SearchLimit         int
+	SearchCursor        string
 	// Offset and Limit are read_file's optional 1-based line range. Both zero
 	// (or negative) means a whole-file read, preserving the legacy behavior.
 	// See CanonicalReadRange / ValidateReadRange.
 	Offset int
 	Limit  int
+	// ByteOffset is an optional raw-byte continuation. A pointer preserves
+	// presence so offset zero is distinct from omission.
+	ByteOffset *int64
+	// ResourceID is read_file's alternative selector: a previously published
+	// entity.Registry body (Registry.Publish/OpenBody) to recover instead of
+	// a workspace path. Exactly one of Path/ResourceID may be set for read_file;
+	// ToolGrep also uses it as its retained-body search target.
+	ResourceID string
 	// OldText and NewText carry edit_file's single exact replacement. OldText
 	// must match the target file exactly once; NewText may be empty (a
 	// controlled deletion of that exact fragment).
 	OldText string
 	NewText string
+	// ExpectedResourceID is the model-facing opaque snapshot selector for an
+	// edit. ExpectedVersion is controller-resolved metadata and never comes
+	// from provider JSON directly.
+	ExpectedResourceID string
+	ExpectedVersion    *entity.FileVersion
 	// InputErr records malformed native JSON arguments. The call remains in
 	// the batch so the model receives a correlated tool error, but Execute
 	// must not run a zero-valued approximation of the requested operation.
 	InputErr string
 	// Max caps web_search results (native max_results argument).
 	Max int
+	// WebCacheMode and WebRefreshEpoch control web_fetch freshness admission.
+	// Empty mode is auto; refresh epochs are controller-owned opaque values.
+	WebCacheMode    string
+	WebRefreshEpoch string
+	WebCacheMaxAge  int
 	// Freshness is an explicit caller-supplied observation epoch for volatile
 	// read tools. Reusing the same token remains the same operation; changing
 	// it deliberately requests a new poll without disguising it through
@@ -181,12 +245,38 @@ type Call struct {
 // Result is the outcome of executing one call. Diff is a display-only
 // rendering of what a write_file changed (see RenderWriteDiff); it is shown
 // in the TUI but never sent to the model.
+//
+// Meta is the additive typed outcome/coverage/window envelope (see
+// result.go). It is populated by every in-package producer and by the
+// controller-only producers in internal/tui that build a Result directly
+// (ask_user, tool_search, get_entity_details, MCP). A Result built before
+// Phase 1a landed, or by a path this phase did not reach, carries a
+// zero-value Meta (Meta.Outcome == "") — callers that read Meta must treat
+// that as "not classified," not as OutcomeUnknown, which is a distinct,
+// explicit value.
 type Result struct {
 	Call     Call
 	Output   string
 	Diff     string
 	Err      error
 	Entities []entity.Candidate
+	// Captures is an additive, unpublished set of bounded bodies this result's
+	// producer retained beyond what Output shows (e.g. run_command's full
+	// bounded-capture buffer when its preview was truncated). It is nil for
+	// every producer this phase does not wire (everything except a capped
+	// run_command) and for a run_command result whose output was not capped —
+	// there is nothing beyond Output to retain in that case. The TUI layer
+	// (internal/tui/entity_context.go) publishes these into the entity
+	// registry; this package never publishes anything itself.
+	Captures []Capture
+	// References are ephemeral controller metadata attached to the message
+	// carrying this result. They identify entities/resources registered after
+	// successful delivery; providers ignore them and history does not persist
+	// them.
+	References []provider.MessageReference
+	// ResourceID is filled by the controller when a Capture is published.
+	ResourceID string
+	Meta       ResultMeta
 }
 
 // fenceOpen matches a tool block opener: 3+ backticks, "tool", name, optional path.
@@ -243,8 +333,16 @@ func Parse(reply string) []Call {
 						decodeEntityDetailsBody(&call)
 					case ToolReadFile:
 						decodeReadFileBody(&call)
+					case ToolGrep:
+						decodeSearchBody(&call)
+					case ToolGlob, ToolListDir:
+						decodeListingBody(&call)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
+					case ToolWriteFile:
+						decodeWriteFileBody(&call)
+					case ToolWebFetch:
+						decodeWebFetchBody(&call)
 					case ToolPersonalApps:
 						decodePersonalAppsBody(&call)
 					}
@@ -284,8 +382,9 @@ func joinBody(lines []string) string {
 
 // Runner executes calls against a workspace directory.
 type Runner struct {
-	root  string
-	maxKB int
+	root             string
+	maxKB            int
+	defaultReadLines int
 	// execution serializes calls made through this runner. A tool batch is
 	// ordered, but cancellation/resend can briefly leave an old command
 	// goroutine alive while a new batch starts; allowing both to mutate the
@@ -299,6 +398,7 @@ type Runner struct {
 	// search hits per call.
 	Web           WebClient
 	WebMaxResults int
+	WebSnapshots  WebSnapshotStore
 
 	// Guardrails governs write blocks (.git, key material, shell startup
 	// files), command classification, and secret-read approval. Defaults to
@@ -319,7 +419,37 @@ type Runner struct {
 	// one of those decisions lives in the Service and is re-checked there
 	// on every call, so this field only wires the entry point.
 	PersonalApps PersonalAppsService
+
+	// Resources enables read_file's resource_id selector when non-nil,
+	// mirroring Web/Skills/PersonalApps above. It never enables a producer
+	// to retain bytes on its own — that decision is the TUI layer's
+	// (entities.output_storage); Resources only lets read_file recover a
+	// body some other path already published.
+	Resources ResourceReader
+
+	searchMu             sync.Mutex
+	searchCursors        map[string]searchCursor
+	searchCaptureEnabled bool
 }
+
+// WebSnapshotStore is the controller-owned metadata index for retained web
+// bodies. Implementations store bytes in the entity registry and keep only
+// references here; tools never persist or share snapshots across sessions.
+type WebSnapshotStore interface {
+	GetWebSnapshot(ctx context.Context, requestedURL, mode, refreshEpoch string, maxAge time.Duration) (web.Page, bool, error)
+	PutWebSnapshot(ctx context.Context, requestedURL string, page web.Page) (string, error)
+}
+
+// WebSnapshotIndexer lets the controller associate a published entity body
+// with the metadata-only URL index after normal result publication.
+type WebSnapshotIndexer interface {
+	IndexWebSnapshot(requestedURL string, id entity.ID, metadata entity.ResourceMetadata)
+}
+
+// readFileBeforeContentHook is a package-local test seam. Production leaves it
+// nil; tests use it to deterministically model a source mutation after the
+// descriptor was opened but before content was consumed.
+var readFileBeforeContentHook func(*os.File)
 
 // PersonalAppsService is what the runner needs from
 // internal/personalapps.Service: parse and execute one raw request against
@@ -345,13 +475,44 @@ func NewRunner(root string, maxKB int) *Runner {
 		maxKB = 512
 	}
 	return &Runner{
-		root:           root,
-		maxKB:          maxKB,
-		execution:      make(chan struct{}, 1),
-		CommandTimeout: 30 * time.Second,
-		Guardrails:     DefaultGuardrails(),
-		LocalContext:   NewLocalContextCollector(root),
+		root:                 root,
+		maxKB:                maxKB,
+		execution:            make(chan struct{}, 1),
+		CommandTimeout:       30 * time.Second,
+		Guardrails:           DefaultGuardrails(),
+		LocalContext:         NewLocalContextCollector(root),
+		searchCursors:        make(map[string]searchCursor),
+		searchCaptureEnabled: true,
 	}
+}
+
+// SetSearchCaptureEnabled controls whether search may advertise retained
+// result-set cursors. The TUI disables it together with output storage; direct
+// Runner users retain the historical in-memory default.
+func (r *Runner) SetSearchCaptureEnabled(enabled bool) { r.searchCaptureEnabled = enabled }
+
+// ResetSearchCursors invalidates all immutable search pages at a session
+// boundary. Existing bodies may remain available through their own resource
+// IDs, but an old cursor must never silently restart a source scan.
+func (r *Runner) ResetSearchCursors() {
+	if r == nil {
+		return
+	}
+	r.searchMu.Lock()
+	r.searchCursors = make(map[string]searchCursor)
+	r.searchMu.Unlock()
+}
+
+// SetDefaultReadLines configures the application-level default window. Zero
+// preserves the legacy whole-file behavior for direct Runner users/tests.
+func (r *Runner) SetDefaultReadLines(lines int) {
+	if lines < 0 {
+		lines = 0
+	}
+	if lines > MaxReadLimit {
+		lines = MaxReadLimit
+	}
+	r.defaultReadLines = lines
 }
 
 // Root returns the workspace directory.
@@ -435,51 +596,103 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		return res
 	}
 	if c.InputErr != "" {
-		res.Err = fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr)
+		res.Err = withCode(fmt.Errorf("invalid arguments for %s: %s", c.Tool, c.InputErr), "invalid_arguments", RetryCorrectInput)
+		res.Meta = finalizeMeta(ResultMeta{Effect: EffectNone}, res.Err)
 		return res
 	}
+	var meta ResultMeta
 	switch c.Tool {
 	case ToolListDir:
-		res.Output, res.Err = r.listDir(c.Path)
+		res.Output, meta, res.Captures, res.Err = r.listDirPage(ctx, c.Path, c.SearchLimit, c.SearchCursor)
 	case ToolReadFile:
-		res.Output, res.Err = r.readFile(c.Path, c.Offset, c.Limit)
-		if res.Err == nil && !IsSecretPath(c.Path) {
-			res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output)}
+		switch {
+		case c.Path != "" && c.ResourceID != "":
+			res.Err = withCode(fmt.Errorf("read_file accepts exactly one of path or resource_id, not both"), "invalid_arguments", RetryCorrectInput)
+			meta.Effect = EffectNone
+		case c.ResourceID != "":
+			res.Output, meta, res.Err = r.readResourceMeta(ctx, c.ResourceID, c.Offset, c.Limit, c.ByteOffset)
+			if res.Err == nil {
+				res.ResourceID = c.ResourceID
+			}
+		default:
+			if err := ValidateReadSelectors(c.Path, c.ResourceID); err != nil {
+				res.Err = withCode(err, "invalid_arguments", RetryCorrectInput)
+				meta.Effect = EffectNone
+				break
+			}
+			if err := ValidateReadArguments(c.Offset, c.Limit, c.ByteOffset); err != nil {
+				res.Err = withCode(err, "invalid_arguments", RetryCorrectInput)
+				meta.Effect = EffectNone
+				break
+			}
+			res.Output, meta, res.Err = r.readFileMetaContextByte(ctx, c.Path, c.Offset, c.Limit, c.ByteOffset)
+			if res.Err == nil && !IsSecretPath(c.Path) {
+				res.Entities = []entity.Candidate{fileEntityCandidate(c, res.Output, res.Meta)}
+				if meta.FileVersion != nil && meta.Snapshot != nil && meta.Encoding.UTF8Valid && !meta.Encoding.NUL {
+					res.Captures = []Capture{{
+						Kind: entity.KindFile, Label: c.Path, Trust: entity.TrustWorkspaceUntrusted,
+						ContentType: "text/plain", Body: append([]byte(nil), meta.Snapshot...), BodyDigest: meta.SourceDigest,
+						Resource: entity.ResourceMetadata{ContentType: "text/plain", BodyDigest: meta.SourceDigest, SourceDigest: meta.SourceDigest, FileVersion: meta.FileVersion},
+					}}
+				}
+			}
 		}
 	case ToolEditFile:
-		res.Output, res.Diff, res.Err = r.editFile(c.Path, c.OldText, c.NewText)
+		expected, resolveErr := r.resolveExpectedVersion(ctx, c.Path, c.ExpectedResourceID, c.ExpectedVersion)
+		if resolveErr != nil {
+			res.Err = resolveErr
+			meta.Effect = EffectNone
+			break
+		}
+		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, expected)
 	case ToolGlob:
-		res.Output, res.Err = r.globFiles(ctx, c.Path, c.Body)
+		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
-		res.Output, res.Err = r.grepFiles(ctx, c.Path, c.Body, c.Filter)
+		res.Output, meta, res.Captures, res.Err = r.grepFilesPage(ctx, c)
 	case ToolWriteFile:
-		res.Output, res.Diff, res.Err = r.writeFile(c.Path, c.Body)
+		expected, resolveErr := r.resolveExpectedVersion(ctx, c.Path, c.ExpectedResourceID, c.ExpectedVersion)
+		if resolveErr != nil {
+			res.Err = resolveErr
+			meta.Effect = EffectNone
+			break
+		}
+		res.Output, res.Diff, meta, res.Err = r.writeFileMetaExpected(c.Path, c.Body, expected)
 	case ToolRunCommand:
-		res.Output, res.Err = r.runCommandContext(ctx, c.Body)
+		res.Output, meta, res.Captures, res.Err = r.runCommandContext(ctx, c.Body)
 	case ToolWebSearch:
-		res.Output, res.Entities, res.Err = r.webSearch(ctx, c)
+		res.Output, res.Entities, res.Captures, meta, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
-		res.Output, res.Entities, res.Err = r.webFetch(ctx, c)
+		res.Output, res.Entities, res.Captures, meta, res.Err = r.webFetch(ctx, c)
 	case ToolSkillLoad:
-		res.Output, res.Err = r.skillLoad(c)
+		res.Output, meta, res.Err = r.skillLoad(c)
 	case ToolAskUser:
 		res.Err = errors.New("ask_user is a controller pause and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolLocalContext:
-		res.Output, res.Err = r.localContext(ctx, c)
+		res.Output, meta, res.Err = r.localContext(ctx, c)
 	case ToolSearch:
 		res.Err = errors.New("tool_search is handled by the controller and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolGetEntityDetails:
 		res.Err = errors.New("get_entity_details is handled by the controller and cannot be executed by the tool runner")
+		meta.Effect = EffectNone
 	case ToolPersonalApps:
-		res.Output, res.Err = r.personalApps(ctx, c)
+		res.Output, meta, res.Err = r.personalApps(ctx, c)
 	default:
-		res.Err = fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch)
+		res.Err = withCode(fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch), "not_found", RetryCorrectInput)
+		meta.Effect = EffectNone
 	}
+	res.Meta = finalizeMeta(meta, res.Err)
 	return res
 }
 
-func fileEntityCandidate(c Call, output string) entity.Candidate {
+func fileEntityCandidate(c Call, output string, meta ResultMeta) entity.Candidate {
+	resource := entity.ResourceMetadata{BodyDigest: meta.ContentDigest, SourceDigest: meta.SourceDigest}
+	if meta.FileVersion != nil {
+		version := *meta.FileVersion
+		resource.FileVersion = &version
+	}
 	return entity.Candidate{
 		Kind: entity.KindFile,
 		Provenance: entity.Provenance{
@@ -493,6 +706,39 @@ func fileEntityCandidate(c Call, output string) entity.Candidate {
 		Trust:    entity.TrustWorkspaceUntrusted,
 		Scope:    entity.ScopeSession,
 		Payload:  output,
+		Resource: resource,
+	}
+}
+
+func digestBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func countFileLines(data []byte) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := int64(bytes.Count(data, []byte{'\n'}))
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
+}
+
+func encodingInfo(data []byte, complete bool) EncodingInfo {
+	valid := utf8.Valid(data)
+	name := "utf-8"
+	if !valid {
+		name = "invalid-utf8"
+	}
+	nul := bytes.IndexByte(data, 0) >= 0
+	if nul {
+		name = "binary"
+	}
+	return EncodingInfo{
+		Name: name, UTF8Valid: valid, CRLF: bytes.Contains(data, []byte("\r\n")),
+		NUL: nul, Lossy: !valid, Complete: complete,
 	}
 }
 
@@ -504,74 +750,97 @@ func fileEntityCandidate(c Call, output string) entity.Candidate {
 // names to self-correct instead of concluding the tools don't exist.
 var ErrUnknownTool = errors.New("unknown tool")
 
-const maxDirEntries = 200
-
-func (r *Runner) listDir(rel string) (string, error) {
-	abs, err := r.resolve(rel)
-	if err != nil {
-		return "", err
-	}
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return "", fmt.Errorf("list directory: %w", err)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	var b strings.Builder
-	for i, e := range entries {
-		if i >= maxDirEntries {
-			fmt.Fprintf(&b, "… and %d more entries\n", len(entries)-maxDirEntries)
-			break
-		}
-		if e.IsDir() {
-			b.WriteString(e.Name() + "/\n")
-		} else {
-			b.WriteString(e.Name() + "\n")
-		}
-	}
-	if b.Len() == 0 {
-		return "(empty directory)", nil
-	}
-	return strings.TrimRight(b.String(), "\n"), nil
+func (r *Runner) readFile(rel string, offset, limit int) (string, error) {
+	output, _, err := r.readFileMeta(rel, offset, limit)
+	return output, err
 }
 
-func (r *Runner) readFile(rel string, offset, limit int) (output string, err error) {
+func (r *Runner) readFileMeta(rel string, offset, limit int) (output string, meta ResultMeta, err error) {
+	return r.readFileMetaContext(context.Background(), rel, offset, limit)
+}
+
+func (r *Runner) readFileMetaContext(ctx context.Context, rel string, offset, limit int) (output string, meta ResultMeta, err error) {
+	return r.readFileMetaContextByte(ctx, rel, offset, limit, nil)
+}
+
+func (r *Runner) readFileMetaContextByte(ctx context.Context, rel string, offset, limit int, byteOffset *int64) (output string, meta ResultMeta, err error) {
+	meta.Effect = EffectNone
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if rel == "" {
-		return "", fmt.Errorf("read_file needs a path")
+		return "", meta, withCode(fmt.Errorf("read_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
-	if err := ValidateReadRange(offset, limit); err != nil {
-		return "", err
+	if verr := ValidateReadArguments(offset, limit, byteOffset); verr != nil {
+		return "", meta, withCode(verr, "invalid_arguments", RetryCorrectInput)
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", err
+	if _, rerr := r.resolve(rel); rerr != nil {
+		return "", meta, withCode(rerr, "safety_block", RetryCorrectInput)
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
+		return "", meta, fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	name := filepath.Clean(rel)
 	info, err := root.Stat(name)
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, withCode(fmt.Errorf("read file: %w", err), "not_found", RetryCorrectInput)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("%q is a directory (use list_dir)", rel)
+		return "", meta, withCode(fmt.Errorf("%q is a directory (use list_dir)", rel), "invalid_arguments", RetryCorrectInput)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", rel)
+		return "", meta, withCode(fmt.Errorf("%q is not a regular file", rel), "unsupported_content", RetryCorrectInput)
 	}
 	byteLimit := int64(r.maxKB) * 1024
 	file, err := root.Open(name)
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, fmt.Errorf("read file: %w", err)
 	}
 	defer func() { err = errors.Join(err, file.Close()) }()
 	openedInfo, err := file.Stat()
 	if err != nil {
-		return "", fmt.Errorf("read file metadata: %w", err)
+		return "", meta, fmt.Errorf("read file metadata: %w", err)
 	}
 	if !openedInfo.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", rel)
+		return "", meta, withCode(fmt.Errorf("%q is not a regular file", rel), "unsupported_content", RetryCorrectInput)
+	}
+	if readFileBeforeContentHook != nil {
+		readFileBeforeContentHook(file)
+	}
+	if byteOffset != nil {
+		output, meta, readErr := r.readByteRangeContext(ctx, file, filepath.ToSlash(name), openedInfo.Size(), *byteOffset, int(byteLimit))
+		if changed, statErr := fileChangedSince(file, openedInfo); statErr != nil {
+			return output, meta, fmt.Errorf("read file metadata: %w", statErr)
+		} else if changed {
+			return output, sourceChangedMeta(meta), withCode(fmt.Errorf("%q changed while it was being read; retry the read for a stable observation", filepath.ToSlash(name)), "source_changed", RetryReread)
+		}
+		return output, meta, readErr
+	}
+	start, count, ranged := CanonicalReadRange(offset, limit)
+	if !ranged && r.defaultReadLines > 0 {
+		start, count, ranged = 1, r.defaultReadLines, true
+	}
+	if ranged {
+		// Ranged reads stream past the legacy whole-file prefix. This keeps the
+		// output bounded while allowing a late line window to be addressed without
+		// first materializing the intervening bytes.
+		output, rangeMeta, readErr := r.readLineRangeContext(ctx, file, filepath.ToSlash(name), openedInfo.Size(), start, count, int(byteLimit))
+		if changed, statErr := fileChangedSince(file, openedInfo); statErr != nil {
+			return output, rangeMeta, fmt.Errorf("read file metadata: %w", statErr)
+		} else if changed {
+			return output, sourceChangedMeta(rangeMeta), withCode(fmt.Errorf("%q changed while it was being read; retry the read for a stable observation", filepath.ToSlash(name)), "source_changed", RetryReread)
+		}
+		if readErr == nil && rangeMeta.FileVersion != nil && openedInfo.Size() <= byteLimit {
+			snapshot := make([]byte, int(openedInfo.Size()))
+			if _, serr := file.ReadAt(snapshot, 0); serr != nil && serr != io.EOF {
+				return output, rangeMeta, fmt.Errorf("read file snapshot: %w", serr)
+			}
+			rangeMeta.Snapshot = snapshot
+			rangeMeta.Encoding = encodingInfo(snapshot, true)
+		}
+		return output, rangeMeta, readErr
 	}
 	// A bounded read is enough for both modes: the whole-file read is capped
 	// at byteLimit as before, and a line range is sliced out of that same
@@ -579,87 +848,274 @@ func (r *Runner) readFile(rel string, offset, limit int) (output string, err err
 	// multi-gigabyte line).
 	data, err := io.ReadAll(io.LimitReader(file, byteLimit+1))
 	if err != nil {
-		return "", fmt.Errorf("read file: %w", err)
+		return "", meta, fmt.Errorf("read file: %w", err)
+	}
+	if changed, statErr := fileChangedSince(file, openedInfo); statErr != nil {
+		return "", meta, fmt.Errorf("read file metadata: %w", statErr)
+	} else if changed {
+		return "", sourceChangedMeta(meta), withCode(fmt.Errorf("%q changed while it was being read; retry the read for a stable observation", filepath.ToSlash(name)), "source_changed", RetryReread)
 	}
 	bytesTruncated := int64(len(data)) > byteLimit
 	if bytesTruncated {
 		data = data[:byteLimit]
 	}
 
-	start, count, ranged := CanonicalReadRange(offset, limit)
-	if !ranged {
-		text, consumed := boundedUTF8(data, int(byteLimit))
-		if bytesTruncated || consumed < len(data) {
-			total := openedInfo.Size()
-			if bytesTruncated && total < int64(len(data))+1 {
-				total = int64(len(data)) + 1
-			}
-			return text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total), nil
-		}
-		return text, nil
+	text, consumed := boundedUTF8(data, int(byteLimit))
+	cov := Coverage{
+		SourceComplete:  !bytesTruncated,
+		CaptureComplete: !bytesTruncated,
+		PreviewComplete: consumed >= len(data),
+		ObservedBytes:   int64(len(data)),
+		RetainedBytes:   int64(consumed),
 	}
-	return renderLineRange(filepath.ToSlash(name), data, bytesTruncated, start, count, int(byteLimit))
+	if !bytesTruncated {
+		cov.TotalBytes = int64Ptr(openedInfo.Size())
+		cov.TotalLines = int64Ptr(countFileLines(data))
+	}
+	meta.Encoding = encodingInfo(data, !bytesTruncated)
+	outcome := OutcomeOK
+	if bytesTruncated {
+		cov.Reasons = []string{"bytes"}
+		outcome = OutcomePartial
+	}
+	meta.Outcome, meta.Coverage = outcome, cov
+	if bytesTruncated || consumed < len(data) {
+		total := openedInfo.Size()
+		if bytesTruncated && total < int64(len(data))+1 {
+			total = int64(len(data)) + 1
+		}
+		output := text + fmt.Sprintf("\n… truncated (%d of %d bytes shown)", consumed, total)
+		meta.ContentDigest = digestBytes([]byte(output))
+		return output, meta, nil
+	}
+	meta.ContentDigest = digestBytes([]byte(text))
+	if int64(len(data)) == openedInfo.Size() {
+		meta.SourceDigest = digestBytes(data)
+		meta.FileVersion = &entity.FileVersion{Path: filepath.ToSlash(name), Digest: meta.SourceDigest, SizeBytes: openedInfo.Size(), Complete: true}
+		meta.Snapshot = append([]byte(nil), data...)
+	}
+	return text, meta, nil
 }
 
-// renderLineRange slices [start, start+count) 1-based lines out of the bounded
-// file bytes, verbatim, with one compact header line and no per-line numbers
-// (so the model cannot copy an artificial number into an edit_file old_text).
-// An offset past the last available line is a recoverable error, never a
-// silent empty success.
-func renderLineRange(displayPath string, data []byte, bytesTruncated bool, start, count, byteLimit int) (string, error) {
-	segments := splitKeepNewline(data)
-	totalKnown := !bytesTruncated
-	if start > len(segments) {
-		if totalKnown {
-			return "", fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, len(segments))
-		}
-		return "", fmt.Errorf("read_file offset %d is past the %d lines that fit within the %d KB read limit for %q", start, len(segments), byteLimit/1024, displayPath)
+func fileChangedSince(file *os.File, before os.FileInfo) (bool, error) {
+	after, err := file.Stat()
+	if err != nil {
+		return false, err
 	}
-	first := start - 1
-	last := first + count
-	if last > len(segments) {
-		last = len(segments)
-	}
-	selected := bytes.Join(segments[first:last], nil)
-	text, consumed := boundedUTF8(selected, byteLimit)
-	lineCapped := consumed < len(selected)
+	return after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()), nil
+}
 
+func sourceChangedMeta(meta ResultMeta) ResultMeta {
+	meta.Outcome = OutcomePartial
+	meta.SourceDigest = ""
+	meta.FileVersion = nil
+	meta.Coverage.SourceComplete = false
+	meta.Coverage.Reasons = append(meta.Coverage.Reasons, "source_changed")
+	return meta
+}
+
+func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displayPath string, size int64, start, count, byteLimit int) (string, ResultMeta, error) {
+	var meta ResultMeta
+	reader := bufio.NewReaderSize(io.LimitReader(file, MaxReadScanBytes+1), 32*1024)
+	rawHash := sha256.New()
+	var selected bytes.Buffer
+	var scanned int64
+	lineNo := 1
+	lineStartByte := int64(0)
+	windowStartByte := int64(-1)
+	windowEndByte := int64(-1)
+	selectedBytes := int64(0)
+	scanLimited := false
+	complete := false
+
+	process := func(part []byte, partStart int64, hasNewline bool) {
+		partLen := len(part)
+		_, _ = rawHash.Write(part)
+		if lineNo >= start && lineNo < start+count {
+			if windowStartByte < 0 {
+				windowStartByte = lineStartByte
+			}
+			selectedBytes += int64(len(part))
+			windowEndByte = partStart + int64(len(part))
+			if selected.Len() < byteLimit {
+				remaining := byteLimit - selected.Len()
+				if len(part) > remaining {
+					part = part[:remaining]
+				}
+				_, _ = selected.Write(part)
+			}
+		}
+		if hasNewline {
+			lineNo++
+			lineStartByte = partStart + int64(partLen)
+		}
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			meta.Outcome = OutcomeCancelled
+			meta.Error = &ErrorInfo{Code: "cancelled", Retry: RetryNone, Message: boundErrorMessage(fmt.Errorf("read_file cancelled: %w", err))}
+			return "", meta, fmt.Errorf("read file cancelled: %w", err)
+		}
+		part, err := reader.ReadSlice('\n')
+		partStart := scanned
+		scanned += int64(len(part))
+		if scanned > MaxReadScanBytes {
+			scanLimited = true
+			break
+		}
+		switch err {
+		case nil:
+			process(part, partStart, true)
+		case bufio.ErrBufferFull:
+			process(part, partStart, false)
+		case io.EOF:
+			if len(part) > 0 {
+				process(part, partStart, false)
+				lineNo++
+			}
+			complete = true
+		default:
+			return "", meta, fmt.Errorf("read file: %w", err)
+		}
+		if err != bufio.ErrBufferFull {
+			if err == nil || err == io.EOF {
+				if err == io.EOF {
+					break
+				}
+				// A complete line is enough to continue; the next iteration
+				// determines whether the requested window or source ends.
+			}
+		}
+	}
+
+	if !complete && !scanLimited {
+		complete = true
+	}
+	if start >= lineNo && complete {
+		return "", meta, withCode(fmt.Errorf("read_file offset %d is past the end of %q (%d lines)", start, displayPath, max(0, lineNo-1)), "range_after_eof", RetryCorrectInput)
+	}
+	if start >= lineNo && scanLimited {
+		return "", meta, withCode(fmt.Errorf("read_file offset %d is beyond the %d MB scan limit for %q", start, MaxReadScanBytes/(1<<20), displayPath), "capture_limit", RetryCorrectInput)
+	}
+	last := start + count - 1
+	if last >= lineNo && complete {
+		last = max(start, lineNo-1)
+	}
+	text, consumed := boundedUTF8(selected.Bytes(), byteLimit)
+	lineCapped := selectedBytes > int64(byteLimit) || consumed < selected.Len()
 	var header strings.Builder
 	fmt.Fprintf(&header, "[read_file: %s lines %d-%d", displayPath, start, last)
-	if totalKnown {
-		fmt.Fprintf(&header, " of %d", len(segments))
-	}
 	switch {
-	case last < len(segments):
-		fmt.Fprintf(&header, ", next_offset=%d]", last+1)
-	case bytesTruncated:
-		fmt.Fprintf(&header, ", more of the file is past the %d KB read limit]", byteLimit/1024)
-	case lineCapped:
-		fmt.Fprintf(&header, ", line %d truncated at the %d KB limit]", last, byteLimit/1024)
-	case totalKnown:
-		header.WriteString(", end of file]")
+	case scanLimited:
+		fmt.Fprintf(&header, ", scan limited at %d MB]", MaxReadScanBytes/(1<<20))
+	case last < lineNo-1:
+		fmt.Fprintf(&header, " of %d, next_offset=%d]", lineNo-1, last+1)
+	case complete:
+		fmt.Fprintf(&header, " of %d, end of file]", lineNo-1)
 	default:
 		header.WriteString("]")
 	}
-	if text == "" {
-		return header.String(), nil
+	if lineCapped {
+		fmt.Fprintf(&header, "\n… selected line range truncated at the %d KB read limit", byteLimit/1024)
 	}
-	return header.String() + "\n\n" + text, nil
+	cov := Coverage{
+		SourceComplete:  complete,
+		CaptureComplete: complete,
+		PreviewComplete: !lineCapped,
+		ObservedBytes:   scanned,
+		RetainedBytes:   int64(consumed),
+	}
+	if complete {
+		cov.TotalBytes = int64Ptr(size)
+		cov.TotalLines = int64Ptr(int64(lineNo - 1))
+	}
+	if scanLimited {
+		cov.Reasons = append(cov.Reasons, "scan")
+	}
+	if lineCapped {
+		cov.Reasons = append(cov.Reasons, "line")
+	}
+	outcome := OutcomeOK
+	if scanLimited || lineCapped {
+		outcome = OutcomePartial
+	}
+	meta.Outcome, meta.Coverage = outcome, cov
+	meta.Window = &Window{
+		StartLine:   int64(start),
+		EndLine:     int64(last),
+		StartByte:   max(0, windowStartByte),
+		EndByte:     max(0, windowEndByte),
+		PartialLine: lineCapped,
+	}
+	meta.Encoding = encodingInfo(selected.Bytes(), false)
+	if lineCapped && consumed > 0 {
+		meta.Window.NextByteOffset = int64Ptr(max(0, windowStartByte) + int64(consumed))
+		fmt.Fprintf(&header, "; next_byte_offset=%d", *meta.Window.NextByteOffset)
+	}
+	if !scanLimited && !complete {
+		meta.Window.NextOffset = int64Ptr(int64(last + 1))
+	}
+	if text == "" {
+		meta.ContentDigest = digestBytes(nil)
+		if complete && scanned == size {
+			meta.SourceDigest = hex.EncodeToString(rawHash.Sum(nil))
+			meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: size, Complete: true}
+		}
+		return header.String(), meta, nil
+	}
+	meta.ContentDigest = digestBytes([]byte(text))
+	if complete && scanned == size {
+		meta.SourceDigest = hex.EncodeToString(rawHash.Sum(nil))
+		meta.FileVersion = &entity.FileVersion{Path: displayPath, Digest: meta.SourceDigest, SizeBytes: size, Complete: true}
+	}
+	return header.String() + "\n\n" + text, meta, nil
 }
 
-// splitKeepNewline splits file bytes into line segments that each retain their
-// trailing "\n", so rejoining a slice reproduces the original bytes exactly. A
-// final empty segment after a trailing newline is dropped: "a\nb\n" is two
-// lines, not three.
-func splitKeepNewline(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
+func (r *Runner) readByteRangeContext(ctx context.Context, file *os.File, displayPath string, size, start int64, byteLimit int) (string, ResultMeta, error) {
+	var meta ResultMeta
+	if start > size {
+		return "", meta, withCode(fmt.Errorf("read_file byte_offset %d is past the end of %q (%d bytes)", start, displayPath, size), "range_after_eof", RetryCorrectInput)
 	}
-	segments := bytes.SplitAfter(data, []byte{'\n'})
-	if n := len(segments); n > 0 && len(segments[n-1]) == 0 {
-		segments = segments[:n-1]
+	reader := io.NewSectionReader(file, start, size-start)
+	data, err := io.ReadAll(io.LimitReader(reader, int64(byteLimit)+1))
+	if err != nil {
+		return "", meta, fmt.Errorf("read file: %w", err)
 	}
-	return segments
+	truncated := int64(len(data)) > int64(byteLimit)
+	if truncated {
+		data = data[:byteLimit]
+	}
+	text, consumed := boundedUTF8(data, byteLimit)
+	end := start + int64(consumed)
+	if consumed == 0 && len(data) > 0 {
+		end = start + int64(len(data))
+	}
+	encoding := encodingInfo(data, false)
+	meta.Encoding = encoding
+	meta.ContentDigest = digestBytes([]byte(text))
+	meta.Coverage = Coverage{
+		SourceComplete: false, CaptureComplete: !truncated && end == size,
+		PreviewComplete: !truncated && consumed == len(data), ObservedBytes: int64(len(data)), RetainedBytes: int64(consumed),
+		TotalBytes: int64Ptr(size), Reasons: []string{"byte_window"},
+	}
+	meta.Outcome = OutcomePartial
+	meta.Window = &Window{StartByte: start, EndByte: end, PartialLine: truncated || end < size}
+	if meta.Window.PartialLine {
+		meta.Window.NextByteOffset = int64Ptr(end)
+	}
+	var header strings.Builder
+	fmt.Fprintf(&header, "[read_file: %s bytes %d-%d", displayPath, start, end)
+	if meta.Window.NextByteOffset != nil {
+		fmt.Fprintf(&header, ", next_byte_offset=%d", *meta.Window.NextByteOffset)
+	} else {
+		header.WriteString(", end of source")
+	}
+	header.WriteByte(']')
+	if text == "" {
+		return header.String(), meta, nil
+	}
+	return header.String() + "\n\n" + text, meta, nil
 }
 
 // boundedUTF8 converts arbitrary file bytes into valid UTF-8 without letting
@@ -685,161 +1141,143 @@ func boundedUTF8(data []byte, maxBytes int) (text string, consumed int) {
 }
 
 func (r *Runner) writeFile(rel, content string) (output, diff string, err error) {
-	diff, err = r.writeFileChecked(rel, content, nil)
-	if err != nil {
-		return "", "", err
-	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, nil
+	output, diff, _, err = r.writeFileMeta(rel, content)
+	return output, diff, err
 }
 
-// writeFileChecked is the shared safe-write implementation behind both
-// write_file and edit_file: workspace confinement, blocked-path guardrails,
-// the size cap, parent-directory creation, the O_TRUNC write, and the
-// display diff. It returns only the diff; callers format their own result
-// line.
-//
-// When expectCurrent is non-nil the write is a surgical edit: the file must
-// already exist, be readable within the cap, and hold exactly the bytes the
-// edit was computed against. Any mismatch fails the write untouched so a
-// concurrent external change is never silently clobbered.
-func (r *Runner) writeFileChecked(rel, content string, expectCurrent *string) (diff string, err error) {
-	rel = strings.TrimSpace(rel)
-	if rel == "" {
-		return "", fmt.Errorf("write_file needs a path")
+func (r *Runner) writeFileMeta(rel, content string) (output, diff string, meta ResultMeta, err error) {
+	return r.writeFileMetaExpected(rel, content, nil)
+}
+
+func (r *Runner) writeFileMetaExpected(rel, content string, expected *entity.FileVersion) (output, diff string, meta ResultMeta, err error) {
+	if expected != nil {
+		meta.Precondition = "version"
 	}
-	rel = filepath.Clean(rel)
-	displayPath := filepath.ToSlash(rel)
-	// Block writes into .git (a hook would execute on the next git command),
-	// key-material directories, and shell startup files.
-	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
-		return "", errors.New(msg)
+	var current string
+	if expected != nil {
+		clean := filepath.Clean(strings.TrimSpace(rel))
+		if msg := r.Guardrails.checkWritePath(clean); msg != "" {
+			return "", "", meta, withCode(errors.New(msg), "safety_block", RetryCorrectInput)
+		}
+		if _, resolveErr := r.resolve(clean); resolveErr != nil {
+			return "", "", meta, withCode(resolveErr, "safety_block", RetryCorrectInput)
+		}
+		current, err = r.currentFileContent(rel)
+		if err != nil {
+			return "", "", meta, withCode(fmt.Errorf("%q changed or is unavailable; re-read the file before overwriting", filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), "stale_source", RetryReread)
+		}
+		if digestBytes([]byte(current)) != expected.Digest || int64(len(current)) != expected.SizeBytes {
+			return "", "", meta, withCode(fmt.Errorf("%q changed since the observed file version; re-read it before overwriting", filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), "stale_source", RetryReread)
+		}
 	}
-	if len(content) > r.maxKB*1024 {
-		return "", fmt.Errorf("content exceeds the %d KB write limit", r.maxKB)
+	diff, checked, err := r.writeFileChecked(rel, content, func() *string {
+		if expected == nil {
+			return nil
+		}
+		return &current
+	}())
+	checked.Precondition = meta.Precondition
+	if err != nil {
+		return "", "", checked, err
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", err
-	}
+	return fmt.Sprintf("wrote %d bytes to %s", len(content), filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))), diff, checked, nil
+}
+
+func (r *Runner) currentFileContent(rel string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(rel))
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
+		return "", err
 	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-	// Capture the previous content so the TUI can show what changed.
-	existed := false
-	oldContent := ""
-	oldTooBig := false
-	if info, err := root.Stat(rel); err == nil {
-		if info.IsDir() {
-			return "", fmt.Errorf("%q is a directory", rel)
-		}
-		existed = true
-		if info.Size() <= int64(r.maxKB)*1024 {
-			if data, rerr := readRootFileLimited(root, rel, int64(r.maxKB)*1024); rerr == nil {
-				oldContent = string(data)
-			} else {
-				oldTooBig = true // unreadable: treat like undiffable
-			}
-		} else {
-			oldTooBig = true
-		}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(clean)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(r.maxKB)*1024 {
+		return "", fmt.Errorf("current file is unavailable")
 	}
-	if expectCurrent != nil {
-		if !existed {
-			return "", fmt.Errorf("%q no longer exists; use write_file to create it", displayPath)
-		}
-		if oldTooBig {
-			return "", fmt.Errorf("%q changed and is no longer readable within the %d KB limit; re-read it and retry", displayPath, r.maxKB)
-		}
-		if oldContent != *expectCurrent {
-			return "", fmt.Errorf("%q changed since it was read; re-read the file and retry the edit against its current text", displayPath)
-		}
-	}
-	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
-		return "", fmt.Errorf("create parent directory: %w", err)
-	}
-	file, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", fmt.Errorf("open file for writing: %w", err)
-	}
-	if _, err := io.WriteString(file, content); err != nil {
-		_ = file.Close()
-		return "", fmt.Errorf("write file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("close written file: %w", err)
-	}
-	if oldTooBig {
-		return fmt.Sprintf("Update(%s) — previous content replaced (too large to diff)", displayPath), nil
-	}
-	return RenderWriteDiff(displayPath, oldContent, content, existed), nil
+	b, err := readRootFileLimited(root, clean, int64(r.maxKB)*1024)
+	return string(b), err
 }
 
 // editFile performs exactly one literal, exact-match replacement in an
 // existing text file. It never creates a file, never uses regex or fuzzy
 // matching, and fails without writing when old_text is absent or matches more
 // than once — the model is expected to re-read and retry with unique context.
-func (r *Runner) editFile(rel, oldText, newText string) (output, diff string, err error) {
+func (r *Runner) editFile(rel, oldText, newText string, expected *entity.FileVersion) (output, diff string, meta ResultMeta, err error) {
+	meta.Effect = EffectNone
+	meta.Precondition = "exact_text_only"
+	if expected != nil {
+		meta.Precondition = "version"
+	}
 	rel = strings.TrimSpace(rel)
 	if rel == "" {
-		return "", "", fmt.Errorf("edit_file needs a path")
+		return "", "", meta, withCode(fmt.Errorf("edit_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
 	if oldText == "" {
-		return "", "", fmt.Errorf("edit_file needs old_text — the exact fragment to replace")
+		return "", "", meta, withCode(fmt.Errorf("edit_file needs old_text — the exact fragment to replace"), "invalid_arguments", RetryCorrectInput)
 	}
 	if oldText == newText {
-		return "", "", fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+		return "", "", meta, withCode(fmt.Errorf("edit_file old_text and new_text are identical; nothing to change"), "no_change", RetryCorrectInput)
 	}
 	rel = filepath.Clean(rel)
 	displayPath := filepath.ToSlash(rel)
 	if msg := r.Guardrails.checkWritePath(rel); msg != "" {
-		return "", "", errors.New(msg)
+		return "", "", meta, withCode(errors.New(msg), "safety_block", RetryCorrectInput)
 	}
-	if _, err := r.resolve(rel); err != nil {
-		return "", "", err
+	if _, rerr := r.resolve(rel); rerr != nil {
+		return "", "", meta, withCode(rerr, "safety_block", RetryCorrectInput)
 	}
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
-		return "", "", fmt.Errorf("open workspace root: %w", err)
+		return "", "", meta, fmt.Errorf("open workspace root: %w", err)
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 	info, statErr := root.Stat(rel)
 	if errors.Is(statErr, os.ErrNotExist) {
-		return "", "", fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath), "not_found", RetryCorrectInput)
 	}
 	if statErr != nil {
-		return "", "", fmt.Errorf("edit file: %w", statErr)
+		return "", "", meta, fmt.Errorf("edit file: %w", statErr)
 	}
 	if info.IsDir() {
-		return "", "", fmt.Errorf("%q is a directory", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is a directory", displayPath), "invalid_arguments", RetryCorrectInput)
 	}
 	if !info.Mode().IsRegular() {
-		return "", "", fmt.Errorf("%q is not a regular file", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is not a regular file", displayPath), "unsupported_content", RetryCorrectInput)
 	}
 	byteLimit := int64(r.maxKB) * 1024
 	data, err := readRootFileLimited(root, rel, byteLimit)
 	if err != nil {
-		return "", "", fmt.Errorf("%q is larger than the %d KB edit limit; use write_file to replace it wholesale", displayPath, r.maxKB)
+		return "", "", meta, withCode(fmt.Errorf("%q is larger than the %d KB edit limit; use write_file to replace it wholesale", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
 	}
 	if !utf8.Valid(data) {
-		return "", "", fmt.Errorf("%q is not valid UTF-8 text; edit_file only edits text files", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("%q is not valid UTF-8 text; edit_file only edits text files", displayPath), "encoding_loss", RetryCorrectInput)
 	}
 	current := string(data)
+	if expected != nil {
+		currentDigest := digestBytes(data)
+		if expected.Path != displayPath || !expected.Complete || expected.Digest == "" || currentDigest != expected.Digest {
+			return "", "", meta, withCode(fmt.Errorf("%q changed since the observed file version; re-read it before editing", displayPath), "stale_source", RetryReread)
+		}
+	}
 	switch matches := strings.Count(current, oldText); {
 	case matches == 0:
-		return "", "", fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath)
+		return "", "", meta, withCode(fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath), "match_not_found", RetryReread)
 	case matches > 1:
-		return "", "", fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath)
+		return "", "", meta, withCode(fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath), "ambiguous_match", RetryCorrectInput)
 	}
 	updated := strings.Replace(current, oldText, newText, 1)
 	if int64(len(updated)) > byteLimit {
-		return "", "", fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB)
+		return "", "", meta, withCode(fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
 	}
-	diff, err = r.writeFileChecked(rel, updated, &current)
+	diff, meta, err = r.writeFileChecked(rel, updated, &current)
+	meta.Precondition = "exact_text_only"
+	if expected != nil {
+		meta.Precondition = "version"
+	}
 	if err != nil {
-		return "", "", err
+		return "", "", meta, err
 	}
-	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, nil
+	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, meta, nil
 }
 
 func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, err error) {
@@ -864,19 +1302,25 @@ func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, 
 // the parent process never reach the command (or, through its output, the
 // model).
 func (r *Runner) runCommand(body string) (string, error) {
-	return r.runCommandContext(context.Background(), body)
+	output, _, _, err := r.runCommandContext(context.Background(), body)
+	return output, err
 }
 
-func (r *Runner) runCommandContext(parent context.Context, body string) (string, error) {
+func (r *Runner) runCommandContext(parent context.Context, body string) (string, ResultMeta, []Capture, error) {
+	// run_command runs an arbitrary shell command: even a "successful" run
+	// (exit 0) may have changed the workspace, and this package has no way
+	// to know either way, so Effect is always unknown — never inferred as
+	// "none" or "changed" from the exit code or output alone.
+	meta := ResultMeta{Effect: EffectUnknown}
 	cmdline := strings.TrimSpace(body)
 	if cmdline == "" {
-		return "", fmt.Errorf("run_command needs a command in the block body")
+		return "", meta, nil, withCode(fmt.Errorf("run_command needs a command in the block body"), "invalid_arguments", RetryCorrectInput)
 	}
 	if strings.ContainsAny(cmdline, "\n\r") {
-		return "", fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first")
+		return "", meta, nil, withCode(fmt.Errorf("one command per block — multi-line scripts must be saved with write_file first"), "invalid_arguments", RetryCorrectInput)
 	}
 	if commandReferencesOutsideWorkspace(cmdline, r.root) {
-		return "", fmt.Errorf("run_command blocked: command references a path outside the workspace")
+		return "", meta, nil, withCode(fmt.Errorf("run_command blocked: command references a path outside the workspace"), "safety_block", RetryCorrectInput)
 	}
 	execLine, gitEnv := hardenGitInvocation(cmdline)
 
@@ -900,58 +1344,124 @@ func (r *Runner) runCommandContext(parent context.Context, body string) (string,
 	// blocked indefinitely after the context kills the direct shell.
 	cmd.WaitDelay = time.Second
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	limit := r.maxKB * 1024
+	// Bounded during capture, not just at formatting time: capture never
+	// retains more than limit bytes regardless of how much the command
+	// produces (Phase 2a, output_capture.go) — the post-hoc bytes.Buffer
+	// this replaced grew to the command's full output before any cap
+	// applied.
+	capture := newBoundedCapture(limit)
+	cmd.Stdout = capture
+	cmd.Stderr = capture
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start command: %w", err)
+		return "", meta, nil, fmt.Errorf("start command: %w", err)
 	}
 	if err := procutil.TrackProcess(cmd); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return "", fmt.Errorf("contain command process tree: %w", err)
+		return "", meta, nil, fmt.Errorf("contain command process tree: %w", err)
 	}
 	err := cmd.Wait()
 	// Commands are synchronous by contract (one command per block), so any
 	// process still in the group — a backgrounded `cmd &`, a timed-out tree —
 	// must not outlive the tool call.
 	procutil.KillGroup(cmd)
-	output := strings.TrimRight(out.String(), "\n")
-	if limit := r.maxKB * 1024; len(output) > limit {
+	observed := capture.Observed()
+	output := strings.TrimRight(string(capture.Bytes()), "\n")
+	// Capture-time truncation already happened (boundedCapture never
+	// retained more than limit bytes); a discarded tail is now just a
+	// question of applying the same UTF-8-safe trim and marker as before —
+	// the raw byte-cap cut can land mid-rune even though len(output) is
+	// already <= limit, so TruncateBytes still runs unconditionally here.
+	capped := capture.Retained() < observed
+	if capped {
 		output, _ = terminaltext.TruncateBytes(output, limit)
 		output += "\n… output truncated"
 	}
+	meta.Coverage = Coverage{
+		SourceComplete:  !capped,
+		CaptureComplete: !capped,
+		PreviewComplete: true,
+		ObservedBytes:   observed,
+		RetainedBytes:   int64(len(output)),
+	}
+	if capped {
+		meta.Coverage.Reasons = []string{"bytes"}
+	}
+	// Full-stream digest (retained or discarded bytes alike), so two
+	// truncated results with an identical retained prefix but different
+	// actual output never collide — a later phase's repeat-detection/dedup
+	// logic must be able to tell them apart.
+	meta.ContentDigest = capture.Digest()
+	// A Capture is only ever produced when the preview was actually capped —
+	// an uncapped result has nothing beyond Output worth retaining a second
+	// time. This runs regardless of the command's own outcome (timeout,
+	// cancelled, failed, ok): the truncation marker above is applied to
+	// output the same way in every branch below, so the retained body that
+	// backs it is built once, here, rather than duplicated at each return.
+	var captures []Capture
+	if capped {
+		captures = append(captures, Capture{
+			Kind:        entity.KindToolOutput,
+			Label:       "run_command output",
+			Trust:       entity.TrustWorkspaceUntrusted,
+			ContentType: "text/plain",
+			Body:        capture.Bytes(),
+			BodyDigest:  capture.Digest(), // no need to rehash; Phase 2a already did
+		})
+	}
+	// run_command's own Outcome states are OK/Failed/Timeout/Cancelled — never
+	// Partial: an output cap is a capture-completeness fact (Coverage), not a
+	// downgrade of whether the command itself succeeded.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return output, fmt.Errorf("command timed out after %s", timeout)
+		meta.Outcome = OutcomeTimeout
+		meta.Error = &ErrorInfo{Code: "timeout", Retry: RetryLater, Message: boundErrorMessage(fmt.Errorf("command timed out after %s", timeout))}
+		return output, meta, captures, fmt.Errorf("command timed out after %s", timeout)
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
-		return output, fmt.Errorf("command cancelled: %w", ctx.Err())
+		meta.Outcome = OutcomeCancelled
+		meta.Error = &ErrorInfo{Code: "cancelled", Retry: RetryNone, Message: boundErrorMessage(fmt.Errorf("command cancelled: %w", ctx.Err()))}
+		return output, meta, captures, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 	if err != nil {
-		return output, fmt.Errorf("command failed: %w", err)
+		meta.Outcome = OutcomeFailed
+		return output, meta, captures, fmt.Errorf("command failed: %w", err)
 	}
+	meta.Outcome = OutcomeOK
 	if output == "" {
 		output = "(no output)"
 	}
-	return output, nil
+	return output, meta, captures, nil
 }
 
 // skillLoad activates a skill for the current run via the configured
 // SkillLoader. It is deliberately side-effect free beyond prompt state:
 // unknown IDs and validation failures come back as recoverable tool errors
 // the model can correct from.
-func (r *Runner) skillLoad(c Call) (string, error) {
+func (r *Runner) skillLoad(c Call) (string, ResultMeta, error) {
 	id := strings.TrimSpace(c.Path)
 	if id == "" {
 		id = strings.TrimSpace(c.Body)
 	}
 	if id == "" {
-		return "", fmt.Errorf("skill_load needs a skill id")
+		return "", ResultMeta{Effect: EffectNone}, withCode(fmt.Errorf("skill_load needs a skill id"), "invalid_arguments", RetryCorrectInput)
 	}
 	if r.Skills == nil {
-		return "", fmt.Errorf("skills are not available in this session")
+		return "", ResultMeta{Effect: EffectNone}, withCode(fmt.Errorf("skills are not available in this session"), "unsupported_content", RetryNone)
 	}
-	return r.Skills.LoadSkillForRun(id)
+	output, err := r.Skills.LoadSkillForRun(id)
+	if err != nil {
+		return "", ResultMeta{Effect: EffectNone}, withCode(err, "not_found", RetryCorrectInput)
+	}
+	// Activating a skill mutates run-local prompt-composition state (the
+	// skill becomes active for the rest of the run) even though it writes no
+	// workspace file, so Effect is "changed" rather than "none".
+	meta := ResultMeta{
+		Outcome:  OutcomeOK,
+		Effect:   EffectChanged,
+		Coverage: Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(output)), RetainedBytes: int64(len(output))},
+	}
+	return output, meta, nil
 }
 
 // secretEnvPattern matches environment variable names that likely hold
@@ -1193,16 +1703,27 @@ func FormatResults(results []Result) string {
 			target += " " + res.Call.Path
 		}
 		fmt.Fprintf(&b, "\n### %s\n", target)
-		if res.Err != nil {
-			b.WriteString("error: " + res.Err.Error() + "\n")
-			if res.Output != "" {
-				b.WriteString(res.Output + "\n")
-			}
-			continue
-		}
-		b.WriteString(res.Output + "\n")
+		b.WriteString(formatResultContent(res) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatResultContent renders the model-facing body shared by FormatResults
+// (fenced) and NativeResults (native): the error line, if any, followed by
+// output. It is the "one shared formatter" Phase 1a adds (see result.go);
+// this phase renders exactly what the two callers already rendered
+// separately — Meta is populated but not yet part of the rendered text, so
+// this change is structural, not visible to a model. See
+// TestFormatResultContentUnchanged for the byte-identical proof.
+func formatResultContent(res Result) string {
+	if res.Err != nil {
+		content := "error: " + res.Err.Error()
+		if res.Output != "" {
+			content += "\n" + res.Output
+		}
+		return content
+	}
+	return res.Output
 }
 
 // CollapseBlocks replaces each fenced tool block in reply with a one-line
@@ -1329,6 +1850,18 @@ func (c Call) Describe() string {
 	case ToolEditFile:
 		return fmt.Sprintf("edit_file %s (exact replacement)", c.Path)
 	case ToolReadFile:
+		if c.ResourceID != "" {
+			if c.ByteOffset != nil {
+				return fmt.Sprintf("read_file resource_id=%s (byte %d)", c.ResourceID, *c.ByteOffset)
+			}
+			if start, count, ranged := CanonicalReadRange(c.Offset, c.Limit); ranged {
+				return fmt.Sprintf("read_file resource_id=%s (lines %d-%d)", c.ResourceID, start, start+count-1)
+			}
+			return "read_file resource_id=" + c.ResourceID
+		}
+		if c.ByteOffset != nil {
+			return fmt.Sprintf("%s %s (byte %d)", c.Tool, c.Path, *c.ByteOffset)
+		}
 		if start, count, ranged := CanonicalReadRange(c.Offset, c.Limit); ranged {
 			return fmt.Sprintf("%s %s (lines %d-%d)", c.Tool, c.Path, start, start+count-1)
 		}
@@ -1338,9 +1871,19 @@ func (c Call) Describe() string {
 	case ToolWebFetch:
 		return "fetch " + c.Path
 	case ToolGlob:
-		return fmt.Sprintf("glob %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+		return fmt.Sprintf("glob %q in %s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), describePageOptions(c))
 	case ToolGrep:
-		return fmt.Sprintf("grep %q in %s", strings.TrimSpace(c.Body), orWorkspace(c.Path))
+		target := orWorkspace(c.Path)
+		if c.ResourceID != "" {
+			target = "resource_id=" + c.ResourceID
+		}
+		return fmt.Sprintf("grep %q in %s%s", strings.TrimSpace(c.Body), target, describePageOptions(c))
+	case ToolListDir:
+		describePath := ""
+		if strings.TrimSpace(c.Path) != "" {
+			describePath = " " + c.Path
+		}
+		return "list_dir" + describePath + describePageOptions(c)
 	case ToolPersonalApps:
 		return describePersonalAppsCall(c)
 	default:
@@ -1349,6 +1892,29 @@ func (c Call) Describe() string {
 		}
 		return c.Tool + " " + c.Path
 	}
+}
+
+func describePageOptions(c Call) string {
+	var options []string
+	if c.SearchLiteral {
+		options = append(options, "literal")
+	}
+	if c.SearchCaseSensitive != nil {
+		options = append(options, "case_sensitive="+strconv.FormatBool(*c.SearchCaseSensitive))
+	}
+	if c.SearchContext != 0 {
+		options = append(options, fmt.Sprintf("context=%d", c.SearchContext))
+	}
+	if c.SearchLimit != 0 {
+		options = append(options, fmt.Sprintf("limit=%d", c.SearchLimit))
+	}
+	if c.SearchCursor != "" {
+		options = append(options, "cursor="+truncateLine(c.SearchCursor, 24))
+	}
+	if len(options) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(options, ", ") + "]"
 }
 
 func orWorkspace(path string) string {
@@ -1372,11 +1938,11 @@ func Instructions(root string, withWeb bool) string {
 To use a tool, emit a fenced code block whose info string is "tool <name> [path]". Available tools:
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
-- read_file <path> — return a file's contents; an optional JSON body {"offset":1,"limit":200} returns just that 1-based line range
+- read_file <path> — return a bounded default window; an optional JSON body {"offset":1,"limit":200} returns a line range, and {"byte_offset":N} continues a partial giant line. Pass {"resource_id":"ent_..."} instead of a path to page a retained body without rerunning the command.
 - glob [path] — recursively find files; the glob pattern is the block's body
 - grep [path] — recursively search file contents with a regular expression in the block's body
-- write_file <path> — create or overwrite a file with the block's body
-- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}
+- write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}
+- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}, optionally with "expected_resource_id" from a complete prior read
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 - local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval
@@ -1396,7 +1962,7 @@ grep -rn "TODO" scripts
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- Use ranged read_file when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
+- Use ranged read_file when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. When a complete prior read supplied a resource_id, pass it as expected_resource_id; stale versions are rejected and should be re-read. Use write_file only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`
@@ -1415,7 +1981,15 @@ var ErrDenied = errors.New("denied by the user")
 func DeniedResults(calls []Call) []Result {
 	out := make([]Result, len(calls))
 	for i, c := range calls {
-		out[i] = Result{Call: c, Err: ErrDenied}
+		// The call never reached a producer, so its outcome is genuinely
+		// unknown (never OutcomeFailed — the tool itself neither ran nor
+		// failed) — combined with agent.ActionDenied at the controller layer,
+		// which is what actually records "the user denied this."
+		out[i] = Result{Call: c, Err: ErrDenied, Meta: ResultMeta{
+			Outcome: OutcomeUnknown,
+			Effect:  EffectUnknown,
+			Error:   &ErrorInfo{Code: "permission_denied", Retry: RetryNone, Message: boundErrorMessage(ErrDenied)},
+		}}
 	}
 	return out
 }

@@ -64,6 +64,10 @@ func TestDefaultsApplyWithoutConfigFile(t *testing.T) {
 		!cfg.Entities.VisionEnabled || cfg.Entities.VisionMaxTokens != 800 {
 		t.Fatalf("entity defaults = %+v", cfg.Entities)
 	}
+	if cfg.Entities.OutputStorage != "memory" || cfg.Entities.MaxOutputBytes != 4*1024*1024 ||
+		cfg.Entities.MaxTotalOutputBytes != 16*1024*1024 {
+		t.Fatalf("entity output-storage defaults = %+v", cfg.Entities)
+	}
 }
 
 func TestConfigFileOverridesDefaults(t *testing.T) {
@@ -90,6 +94,32 @@ chat:
 	// Untouched keys keep defaults.
 	if cfg.Chat.MaxTokens != 4096 {
 		t.Errorf("MaxTokens = %d, want default 4096", cfg.Chat.MaxTokens)
+	}
+}
+
+func TestOutputStorageAcceptsDisk(t *testing.T) {
+	path := writeConfig(t, `
+entities:
+  output_storage: disk
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil || cfg.Entities.OutputStorage != "disk" {
+		t.Fatalf("Load() = cfg=%+v err=%v, want disk", cfg, err)
+	}
+}
+
+func TestOutputStorageRejectsUnknownValue(t *testing.T) {
+	path := writeConfig(t, "\nentities:\n  output_storage: network\n")
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	if _, err := Load(v); err == nil || !strings.Contains(err.Error(), "entities.output_storage") {
+		t.Fatalf("Load() error = %v, want output_storage validation error", err)
 	}
 }
 
@@ -334,6 +364,9 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	}
 	if !cfg.Tools.NoProgress.Enabled || cfg.Tools.NoProgress.Threshold != 3 {
 		t.Fatalf("tools.no_progress defaults = %+v, want enabled with threshold 3", cfg.Tools.NoProgress)
+	}
+	if cfg.Tools.Read.DefaultLines != 200 {
+		t.Fatalf("tools.read.default_lines = %d, want 200", cfg.Tools.Read.DefaultLines)
 	}
 	if !cfg.Tools.Discovery.Enabled || cfg.Tools.Discovery.Threshold != 16 || cfg.Tools.Discovery.MaxResults != 5 {
 		t.Fatalf("tools.discovery defaults = %+v", cfg.Tools.Discovery)

@@ -17,73 +17,88 @@ func Specs() []provider.ToolSpec {
 	return []provider.ToolSpec{
 		{
 			Name:        ToolListDir,
-			Description: "List a directory in the project workspace. Paths are relative to the project root; omit path for the root itself.",
+			Description: "List a directory in the project workspace. Paths are relative to the project root; omit path for the root itself. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Directory path relative to the project root. Optional; defaults to the root."}
-				}
+					"path": {"type": "string", "description": "Directory path relative to the project root. Optional; defaults to the root."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
+					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
+				},
+				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolReadFile,
-			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file.",
+			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file. Pass resource_id instead of path to recover a previously retained tool output body (see run_command) without rerunning it.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root."},
-					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start."},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500)."}
+					"path": {"type": "string", "description": "File path relative to the project root. Omit when passing resource_id instead."},
+					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start. Works for paths and retained resource bodies."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500). Not supported with byte_offset."},
+					"byte_offset": {"type": "integer", "minimum": 0, "description": "Continue a partial giant line from this raw byte offset; cannot combine with offset or limit."},
+					"resource_id": {"type": "string", "description": "Recover a previously retained tool output body by its ent_... ID instead of reading a path. Exactly one of path or resource_id must be set."}
 				},
-				"required": ["path"]
+				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolGlob,
-			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Paths are relative to the project root.",
+			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go or README*."},
-					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."}
+					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
+					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
 				},
 				"required": ["pattern"]
 			}`),
 		},
 		{
 			Name:        ToolGrep,
-			Description: "Recursively search project files with a Go regular expression and return path:line:content matches. Searches are read-only; recursive searches skip likely secret files.",
+			Description: "Recursively search project files. Legacy calls use a Go regular expression; literal/case/context/limit/cursor options provide bounded immutable pages. Searches are read-only; recursive searches skip likely secret files.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"pattern": {"type": "string", "description": "Go regular expression to search for."},
+					"pattern": {"type": "string", "description": "Go regular expression, unless literal=true."},
 					"path": {"type": "string", "description": "Optional file or directory to search, relative to the project root."},
-					"glob": {"type": "string", "description": "Optional file-name glob filter, for example *.go or **/*.md."}
+					"resource_id": {"type": "string", "description": "Search a retained body only; no workspace source is reopened."},
+					"glob": {"type": "string", "description": "Optional file-name glob filter for workspace files."},
+					"literal": {"type": "boolean", "default": false},
+					"case_sensitive": {"type": "boolean", "default": true},
+					"context": {"type": "integer", "minimum": 0, "maximum": 5, "default": 0},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+					"cursor": {"type": "string", "description": "Opaque continuation; omit all query/target fields."}
 				},
-				"required": ["pattern"]
+				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolWriteFile,
-			Description: "Create or overwrite a file in the project workspace with the given content. Paths are relative to the project root. May require the user's approval.",
+			Description: "Create or overwrite a file in the project workspace with the given content. Pass expected_resource_id from a complete prior read to reject stale overwrites. Paths are relative to the project root. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root."},
-					"content": {"type": "string", "description": "The full file content to write."}
+					"content": {"type": "string", "description": "The full file content to write."},
+					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
 				},
 				"required": ["path", "content"]
 			}`),
 		},
 		{
 			Name:        ToolEditFile,
-			Description: "Replace one exact, unique text fragment in an existing workspace file. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
+			Description: "Replace one exact, unique text fragment in an existing workspace file. Pass expected_resource_id from a complete prior read to reject stale edits. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root. The file must already exist."},
 					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate."},
-					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."}
+					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."},
+					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
 				},
 				"required": ["path", "old_text", "new_text"]
 			}`),
@@ -159,23 +174,33 @@ func Specs() []provider.ToolSpec {
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path       string   `json:"path"`
-	Content    string   `json:"content"`
-	Command    string   `json:"command"`
-	Query      string   `json:"query"`
-	URL        string   `json:"url"`
-	MaxResults int      `json:"max_results"`
-	Skill      string   `json:"skill"`
-	Pattern    string   `json:"pattern"`
-	Glob       string   `json:"glob"`
-	Freshness  string   `json:"freshness_token"`
-	Offset     int      `json:"offset"`
-	Limit      int      `json:"limit"`
-	OldText    string   `json:"old_text"`
-	NewText    string   `json:"new_text"`
-	EntityIDs  []string `json:"entity_ids"`
-	Level      string   `json:"level"`
-	Kinds      []string `json:"kinds"`
+	Path               string   `json:"path"`
+	Content            string   `json:"content"`
+	Command            string   `json:"command"`
+	Query              string   `json:"query"`
+	URL                string   `json:"url"`
+	MaxResults         int      `json:"max_results"`
+	Skill              string   `json:"skill"`
+	Pattern            string   `json:"pattern"`
+	Glob               string   `json:"glob"`
+	Freshness          string   `json:"freshness_token"`
+	Offset             int      `json:"offset"`
+	Limit              int      `json:"limit"`
+	Literal            bool     `json:"literal"`
+	CaseSensitive      *bool    `json:"case_sensitive"`
+	Context            int      `json:"context"`
+	Cursor             string   `json:"cursor"`
+	ByteOffset         *int64   `json:"byte_offset"`
+	ResourceID         string   `json:"resource_id"`
+	OldText            string   `json:"old_text"`
+	NewText            string   `json:"new_text"`
+	ExpectedResourceID string   `json:"expected_resource_id"`
+	CacheMode          string   `json:"cache_mode"`
+	CacheMaxAge        int      `json:"cache_max_age"`
+	RefreshEpoch       string   `json:"refresh_epoch"`
+	EntityIDs          []string `json:"entity_ids"`
+	Level              string   `json:"level"`
+	Kinds              []string `json:"kinds"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -372,24 +397,43 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		}
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
+		case ToolListDir:
+			c.SearchLimit, c.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
 		case ToolReadFile:
-			if err := ValidateReadRange(args.Offset, args.Limit); err != nil {
+			c.ResourceID = strings.TrimSpace(args.ResourceID)
+			if err := ValidateReadSelectors(c.Path, c.ResourceID); err != nil {
+				c.InputErr = err.Error()
+			} else if err := ValidateReadArguments(args.Offset, args.Limit, args.ByteOffset); err != nil {
 				c.InputErr = err.Error()
 			} else {
 				c.Offset, c.Limit = args.Offset, args.Limit
+				c.ByteOffset = args.ByteOffset
 			}
 		case ToolEditFile:
 			c.OldText, c.NewText = args.OldText, args.NewText
+			c.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 			if err := ValidateEditFileCall(&c); err != nil {
 				c.InputErr = err.Error()
 			}
 		case ToolGlob:
 			c.Body = args.Pattern
+			c.SearchLimit, c.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
 		case ToolGrep:
 			c.Body = args.Pattern
 			c.Filter = strings.TrimSpace(args.Glob)
+			c.ResourceID = strings.TrimSpace(args.ResourceID)
+			c.SearchLiteral, c.SearchCaseSensitive = args.Literal, args.CaseSensitive
+			c.SearchContext, c.SearchLimit = args.Context, args.Limit
+			c.SearchCursor = strings.TrimSpace(args.Cursor)
+			if err := ValidateSearchCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolWriteFile:
 			c.Body = args.Content
+			c.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
+			if err := ValidateWriteFileCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolRunCommand:
 			c.Body = args.Command
 		case ToolWebSearch:
@@ -399,6 +443,9 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 		case ToolWebFetch:
 			c.Path = args.URL
 			c.Freshness = strings.TrimSpace(args.Freshness)
+			c.WebCacheMode = strings.TrimSpace(args.CacheMode)
+			c.WebCacheMaxAge = args.CacheMaxAge
+			c.WebRefreshEpoch = strings.TrimSpace(args.RefreshEpoch)
 		case ToolSkillLoad:
 			c.Path = args.Skill
 		}
@@ -448,12 +495,15 @@ func WebSpecs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolWebFetch,
-			Description: "Fetch one web page and return its readable content as Markdown. May require the user's approval.",
+			Description: "Fetch one web page and return its readable content as Markdown. Use cache_mode=refresh for explicitly current data; cached/auto reuse only a retained session snapshot. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"url": {"type": "string", "description": "The http(s) URL to fetch."},
-					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."}
+					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."},
+					"cache_mode": {"type": "string", "enum": ["auto", "cached", "refresh"], "default": "auto"},
+					"cache_max_age": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "Maximum age in seconds for an automatic cached snapshot."},
+					"refresh_epoch": {"type": "string", "description": "Controller-issued refresh identity; changing it opts into a new observation."}
 				},
 				"required": ["url"]
 			}`),
@@ -720,19 +770,13 @@ const SkillInstructions = "- skill_load <skill-id> — activate one of the liste
 func NativeResults(results []Result) []provider.Message {
 	out := make([]provider.Message, 0, len(results))
 	for _, res := range results {
-		content := res.Output
-		if res.Err != nil {
-			content = "error: " + res.Err.Error()
-			if res.Output != "" {
-				content += "\n" + res.Output
-			}
-		}
 		out = append(out, provider.Message{
 			Role:       provider.RoleTool,
-			Content:    content,
+			Content:    formatResultContent(res),
 			ToolCallID: res.Call.ID,
 			ToolName:   res.Call.Tool,
 			Display:    res.Diff,
+			References: append([]provider.MessageReference(nil), res.References...),
 		})
 	}
 	return out
@@ -743,9 +787,14 @@ func NativeResults(results []Result) []provider.Message {
 // tells the model to wrap up, so the user still gets a final answer.
 func LimitResults(calls []Call, max int) []Result {
 	err := fmt.Errorf("tool iteration limit reached (%d rounds this turn, tools.max_iterations) — this call was not executed. Do not request more tools; give your final answer now using what you already know", max)
+	meta := ResultMeta{
+		Outcome: OutcomeUnknown,
+		Effect:  EffectUnknown,
+		Error:   &ErrorInfo{Code: "budget_block", Retry: RetryLater, Message: boundErrorMessage(err)},
+	}
 	out := make([]Result, len(calls))
 	for i, c := range calls {
-		out[i] = Result{Call: c, Err: err}
+		out[i] = Result{Call: c, Err: err, Meta: meta}
 	}
 	return out
 }
@@ -764,7 +813,7 @@ func NativeInstructions(root string, withWeb bool) string {
 Rules:
 - Paths are always relative to the project root; never use absolute paths or "..".
 - glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- Use read_file with offset/limit when you only need part of a large file. Use edit_file for a small change to an existing file — old_text must match exactly once, so include enough surrounding lines to make it unique. Use write_file only to create a file or deliberately replace all of it.
+- The default read is a bounded line window. Use read_file with offset/limit for complete lines, or byte_offset copied from next_byte_offset for a partial giant line. A returned resource_id reads the same retained snapshot without reopening its source. Use edit_file for a small change to an existing file — old_text must match exactly once; pass expected_resource_id from a complete prior file observation when one is available so stale edits are rejected. For guarded whole-file replacement, pass the same expected_resource_id with write_file. Use write_file without it only to create a file or deliberately replace all of it.
 - run_command takes exactly one command line; save multi-line scripts with write_file first.
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`

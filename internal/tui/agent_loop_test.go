@@ -592,6 +592,53 @@ func TestAgentEvolutionSyntheticResultDoesNotSetNewEvidence(t *testing.T) {
 	}
 }
 
+// TestRecordAgentToolResultsCountTreatsPartialCoverageAsSuccess is the
+// Phase 1a §31 counters/receipt requirement: an operation that actually
+// executed but only partially covered its source (e.g. grep's capped scan,
+// or — once a later phase adds retention — a capture/storage limitation) is
+// recorded as succeeded, never as an execution failure. Succeeded is driven
+// by Result.Err alone (nil here), independent of Meta.Outcome being
+// OutcomePartial — this proves that independence rather than assuming it.
+func TestRecordAgentToolResultsCountTreatsPartialCoverageAsSuccess(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("partial-coverage", "search the repo", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("search the repo", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+
+	m.recordAgentToolResultsCount([]tools.Result{{
+		Call:   tools.Call{ID: "grep-1", Tool: tools.ToolGrep, Path: ".", Body: "needle"},
+		Output: "no matches for \"needle\" in the first 3 eligible files",
+		Meta: tools.ResultMeta{
+			Outcome:  tools.OutcomePartial,
+			Effect:   tools.EffectNone,
+			Coverage: tools.Coverage{SourceComplete: false, Reasons: []string{"large"}},
+		},
+	}}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if len(m.agentLoop.execution.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(m.agentLoop.execution.ToolCalls))
+	}
+	record := m.agentLoop.execution.ToolCalls[0]
+	if !record.Succeeded {
+		t.Fatal("Succeeded = false, want true: a partial-but-executed observation is not an execution failure")
+	}
+	if record.ErrorKind != "" {
+		t.Fatalf("ErrorKind = %q, want empty: no Err was returned", record.ErrorKind)
+	}
+	if len(m.agentLoop.execution.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none recorded for a successful (if partial) observation", m.agentLoop.execution.Errors)
+	}
+	if !m.agentLoop.execution.NewEvidence {
+		t.Fatal("NewEvidence = false, want true: a partial observation is still real, novel evidence")
+	}
+}
+
 // TestProjectCompletedAgentHistoryRemovesRawToolOutput guards the raw
 // transcript-projection half of the fix Phase 3 completed: the projected
 // history itself must still never carry a completed cycle's raw tool
@@ -1975,6 +2022,58 @@ func TestToolSafetyFailureIsClassifiedForEscalation(t *testing.T) {
 	result := tools.Result{Call: tools.Call{Tool: tools.ToolReadFile}, Err: errors.New(`path "../secret" is outside the workspace`)}
 	if got := classifyToolError(result, false); got != agent.ErrorSafety {
 		t.Fatalf("kind = %q, want safety constraint", got)
+	}
+}
+
+// TestClassifyToolErrorPrefersTypedMetaOverText proves classifyToolError
+// reads result.Meta's typed Outcome/Error.Code, not result.Err's text: every
+// case below carries an error message that would classify differently (or
+// not at all) under the legacy text-only fallback, so a pass here is only
+// possible if the Meta-driven path actually ran.
+func TestClassifyToolErrorPrefersTypedMetaOverText(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta tools.ResultMeta
+		want agent.ErrorKind
+	}{
+		{
+			name: "safety_block code despite generic wording",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "safety_block"}},
+			want: agent.ErrorSafety,
+		},
+		{
+			name: "invalid_arguments code despite generic wording",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "invalid_arguments"}},
+			want: agent.ErrorToolValidation,
+		},
+		{
+			name: "OutcomeTimeout with no wrapped context error and no 'timed out' text",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeTimeout},
+			want: agent.ErrorTimeout,
+		},
+		{
+			name: "OutcomeCancelled with no wrapped context error",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeCancelled},
+			want: agent.ErrorCancelled,
+		},
+		{
+			name: "budget_block code",
+			meta: tools.ResultMeta{Outcome: tools.OutcomeFailed, Error: &tools.ErrorInfo{Code: "budget_block"}},
+			want: agent.ErrorBudget,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tools.Result{
+				Call: tools.Call{Tool: tools.ToolRunCommand},
+				// A message that would mislead the text-based fallback into a
+				// different classification (or none) if it were consulted.
+				Err:  errors.New("something happened"),
+				Meta: tc.meta,
+			}
+			if got := classifyToolError(result, false); got != tc.want {
+				t.Fatalf("kind = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

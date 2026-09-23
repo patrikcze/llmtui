@@ -230,21 +230,29 @@ func (c *StdioClient) CallTool(ctx context.Context, name string, input json.RawM
 	}
 	var payload struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type string          `json:"type"`
+			Text string          `json:"text"`
+			Data json.RawMessage `json:"data"`
 		} `json:"content"`
-		IsError bool `json:"isError"`
+		IsError    bool            `json:"isError"`
+		Structured json.RawMessage `json:"structuredContent"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Result{}, fmt.Errorf("mcp: decode tools/call: %w", err)
 	}
 	var b strings.Builder
+	parts := make([]ContentPart, 0, len(payload.Content))
 	for _, part := range payload.Content {
 		if part.Type == "text" {
 			b.WriteString(part.Text)
 		}
+		bytes := len(part.Text)
+		if bytes == 0 {
+			bytes = len(part.Data)
+		}
+		parts = append(parts, ContentPart{Type: part.Type, Bytes: bytes, Supported: part.Type == "text"})
 	}
-	return Result{Content: b.String(), IsError: payload.IsError}, nil
+	return Result{Content: b.String(), IsError: payload.IsError, Parts: parts, Structured: append(json.RawMessage(nil), payload.Structured...)}, nil
 }
 
 // Close closes stdin, then terminates the process (and, on Unix, its process

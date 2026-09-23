@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,21 @@ type Registry struct {
 	pinned   map[ID]int
 	total    int
 	expanded int
+
+	// Body storage (Registry.Publish/OpenBody). This is a parallel path
+	// with its own ID scheme, its own byte budget, and its own storage; it
+	// never merges into items/pinned/total above.
+	bodyBackend bodyBackend
+	bodies      map[ID]*bodyRecord
+	bodyPinned  map[ID]int
+	bodyTotal   int
+	// bodyGeneration increments on every Reset. Registry.Publish captures
+	// it before releasing the mutex to do backend I/O outside the lock, and
+	// checks it again before inserting the finished record — if Reset ran
+	// in between, the in-flight Publish discards its own write instead of
+	// resurrecting a byte reservation into a registry generation that never
+	// made it.
+	bodyGeneration int
 }
 
 type record struct {
@@ -31,11 +47,36 @@ type record struct {
 
 // NewRegistry constructs an empty registry with normalized bounds.
 func NewRegistry(limits Limits) *Registry {
-	return &Registry{
-		limits: limits.normalized(),
-		items:  make(map[ID]*record),
-		pinned: make(map[ID]int),
+	r, err := NewRegistryWithStorage(limits, StorageOptions{Mode: StorageMemory})
+	if err != nil {
+		// The memory backend has no expected construction failure. Keep the
+		// historical constructor total and panic only if that invariant breaks.
+		panic(err)
 	}
+	return r
+}
+
+// NewRegistryWithStorage constructs a registry with an explicit body backend.
+// Disk setup errors are returned so callers can report a bounded fallback to
+// memory; no partially initialized registry or body ID is exposed.
+func NewRegistryWithStorage(limits Limits, opts StorageOptions) (*Registry, error) {
+	backend := bodyBackend(newMemoryBodyBackend())
+	if strings.EqualFold(strings.TrimSpace(opts.Mode), StorageDisk) {
+		disk, err := newDiskBodyBackend(opts)
+		if err != nil {
+			return nil, err
+		}
+		backend = disk
+	}
+	r := &Registry{
+		limits:      limits.normalized(),
+		items:       make(map[ID]*record),
+		pinned:      make(map[ID]int),
+		bodyBackend: backend,
+		bodies:      make(map[ID]*bodyRecord),
+		bodyPinned:  make(map[ID]int),
+	}
+	return r, nil
 }
 
 // Put registers one candidate and returns its new opaque reference. Similar
@@ -197,8 +238,11 @@ func (r *Registry) Release(id ID) {
 	r.pinned[id]--
 }
 
-// ReleaseScope removes all entities owned by scopeID. Session-scoped records
-// are unaffected. This is used when a bounded agent run ends.
+// ReleaseScope removes all entities and bodies owned by scopeID.
+// Session-scoped records are unaffected. This is used when a bounded agent
+// run ends. Exactly like the existing item release above, a pinned body
+// (an open BodyLease) is left in place — ReleaseScope never evicts an
+// active retention or an active lease out from under its owner.
 func (r *Registry) ReleaseScope(scope Scope, scopeID string) {
 	if r == nil || scopeID == "" {
 		return
@@ -210,19 +254,44 @@ func (r *Registry) ReleaseScope(scope Scope, scopeID string) {
 			r.deleteLocked(id)
 		}
 	}
+	for id, rec := range r.bodies {
+		if rec.scope == scope && rec.scopeID == scopeID && r.bodyPinned[id] == 0 {
+			r.deleteBodyLocked(id)
+		}
+	}
 }
 
-// Reset removes all entities while preserving the sequence, so old IDs can
-// never resolve to a different object after a conversation reset.
+// Reset removes all entities and bodies while preserving the sequence, so
+// old IDs can never resolve to a different object after a conversation
+// reset. Reset is a hard wipe: exactly like the existing item map below (it
+// has never checked pins), Reset removes body storage unconditionally, even
+// for a body with a currently open BodyLease — a full session
+// reset/reload must never leave stale body bytes reachable via a fresh
+// OpenBody, and Reset is a session boundary, not routine eviction, so the
+// "eviction cannot remove an open body" contract intentionally does not
+// apply here. A BodyLease obtained before Reset keeps working: the memory
+// backend's open() hands back a reader over an independent byte-slice copy
+// (see body_memory.go), so already-open reads stay valid; only a new
+// OpenBody call for that ID is affected, and it correctly reports the body
+// as gone. bodyGeneration is bumped so an in-flight Publish that reserved
+// quota before this Reset discards its own write instead of resurrecting a
+// byte count into the new, empty generation.
 func (r *Registry) Reset() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
+	for _, rec := range r.bodies {
+		r.bodyBackend.remove(rec.handle)
+	}
 	r.items = make(map[ID]*record)
 	r.pinned = make(map[ID]int)
 	r.total = 0
 	r.expanded = 0
+	r.bodies = make(map[ID]*bodyRecord)
+	r.bodyPinned = make(map[ID]int)
+	r.bodyTotal = 0
+	r.bodyGeneration++
 	r.mu.Unlock()
 }
 
@@ -273,6 +342,9 @@ type Stats struct {
 	MaxTotalPayload   int
 	ExpandedThisReq   int
 	MaxFullExpansions int
+	BodyBytes         int
+	MaxBodyBytes      int
+	MaxTotalBodyBytes int
 }
 
 // Stats returns bounded registry counters without exposing payloads.
@@ -291,7 +363,22 @@ func (r *Registry) Stats() Stats {
 		MaxTotalPayload:   r.limits.MaxTotalPayload,
 		ExpandedThisReq:   r.expanded,
 		MaxFullExpansions: r.limits.MaxFullExpansions,
+		BodyBytes:         r.bodyTotal,
+		MaxBodyBytes:      r.limits.MaxBodyBytes,
+		MaxTotalBodyBytes: r.limits.MaxTotalBodyBytes,
 	}
+}
+
+// DiskStorageStatus reports the configured private spool without exposing
+// retained content. Memory registries return an empty status.
+func (r *Registry) DiskStorageStatus() DiskStorageStatus {
+	if r == nil {
+		return DiskStorageStatus{}
+	}
+	if disk, ok := r.bodyBackend.(*diskBodyBackend); ok {
+		return disk.status()
+	}
+	return DiskStorageStatus{}
 }
 
 func (r *Registry) purgeExpiredLocked(now time.Time) {

@@ -86,6 +86,21 @@ func TestCapabilityPolicyScopesEditReplacement(t *testing.T) {
 	}
 }
 
+func TestCapabilityPolicyScopesVersionSelector(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	reviewed := tools.Call{Tool: tools.ToolWriteFile, Path: "cfg.go", Body: "package p\n", ExpectedResourceID: "ent_aaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	policy.GrantCall(reviewed, now, time.Hour)
+	if !policy.Allows(reviewed, now) {
+		t.Fatal("the reviewed versioned write was not allowed")
+	}
+	other := reviewed
+	other.ExpectedResourceID = "ent_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if policy.Allows(other, now) {
+		t.Fatal("approval grant ignored expected_resource_id")
+	}
+}
+
 // A glob path grant carries no variant, so it must never match edit_file
 // (every edit is fingerprinted by its replacement).
 func TestCapabilityPolicyPathPatternNeverApprovesEdits(t *testing.T) {

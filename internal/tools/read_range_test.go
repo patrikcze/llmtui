@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/patrikcze/llmtui/internal/entity"
 	"github.com/patrikcze/llmtui/internal/provider"
 )
 
@@ -39,6 +43,74 @@ func TestReadFileLegacyWholeFileUnchanged(t *testing.T) {
 	}
 	if strings.Contains(got, "[read_file:") {
 		t.Fatal("legacy read must not add a range header")
+	}
+}
+
+func TestReadFileCompleteMetadataSeparatesSourceAndRenderedDigests(t *testing.T) {
+	root := t.TempDir()
+	content := "first\r\nsecond\r\n"
+	writeTemp(t, root, "f.txt", content)
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "f.txt"})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	sum := sha256.Sum256([]byte(content))
+	if got, want := res.Meta.SourceDigest, hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("SourceDigest = %q, want %q", got, want)
+	}
+	if res.Meta.ContentDigest == "" {
+		t.Fatal("ContentDigest is empty, want rendered-body digest")
+	}
+	if res.Meta.FileVersion == nil || !res.Meta.FileVersion.Complete || res.Meta.FileVersion.Path != "f.txt" {
+		t.Fatalf("FileVersion = %+v, want complete f.txt version", res.Meta.FileVersion)
+	}
+	if !res.Meta.Encoding.Complete || res.Meta.Encoding.Name != "utf-8" || !res.Meta.Encoding.CRLF {
+		t.Fatalf("Encoding = %+v, want complete UTF-8 CRLF metadata", res.Meta.Encoding)
+	}
+}
+
+func TestReadFileEncodingFlagsInvalidUTF8AndNUL(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'a', 0, 0xff, '\n'}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "binary.dat"})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if !res.Meta.Encoding.Complete || !res.Meta.Encoding.NUL || res.Meta.Encoding.UTF8Valid || res.Meta.Encoding.Name != "binary" {
+		t.Fatalf("Encoding = %+v, want complete binary/invalid UTF-8 flags", res.Meta.Encoding)
+	}
+}
+
+func TestReadFileEmptyDefaultSucceeds(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "empty.txt", "")
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "empty.txt"})
+	if res.Err != nil || res.Output != "" {
+		t.Fatalf("result = output %q error %v, want empty success", res.Output, res.Err)
+	}
+	if res.Meta.Coverage.TotalLines == nil || *res.Meta.Coverage.TotalLines != 0 {
+		t.Fatalf("coverage = %+v, want zero total lines", res.Meta.Coverage)
+	}
+}
+
+func TestReadFileReportsSourceMutation(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "mutable.txt", "before\n")
+	previous := readFileBeforeContentHook
+	readFileBeforeContentHook = func(file *os.File) {
+		if err := os.WriteFile(file.Name(), []byte("after and changed\n"), 0o600); err != nil {
+			t.Fatalf("mutate source: %v", err)
+		}
+	}
+	t.Cleanup(func() { readFileBeforeContentHook = previous })
+	res := NewRunner(root, 64).Execute(Call{Tool: ToolReadFile, Path: "mutable.txt"})
+	if res.Err == nil || res.Meta.Error == nil || res.Meta.Error.Code != "source_changed" {
+		t.Fatalf("result = %+v, want source_changed", res)
+	}
+	if res.Meta.FileVersion != nil || res.Meta.Coverage.SourceComplete {
+		t.Fatalf("metadata = %+v, want no complete version", res.Meta)
 	}
 }
 
@@ -86,6 +158,60 @@ func TestReadFileRange(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReadFileRangeStreamsBeyondLegacyPrefix(t *testing.T) {
+	root := t.TempDir()
+	content := numberedLines(1200)
+	writeTemp(t, root, "large.txt", content)
+	res := NewRunner(root, 1).Execute(Call{Tool: ToolReadFile, Path: "large.txt", Offset: 900, Limit: 2})
+	if res.Err != nil {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if !strings.Contains(res.Output, "lines 900-901 of 1200, next_offset=902") {
+		t.Fatalf("header = %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "line 900\nline 901\n") {
+		t.Fatalf("output = %q", res.Output)
+	}
+	if res.Meta.Coverage.TotalLines == nil || *res.Meta.Coverage.TotalLines != 1200 {
+		t.Fatalf("coverage = %+v, want exact total lines", res.Meta.Coverage)
+	}
+	if res.Meta.Window == nil {
+		t.Fatalf("window = %+v, want source byte coordinates", res.Meta.Window)
+	}
+	wantStart := strings.Index(content, "line 900\n")
+	wantEnd := strings.Index(content, "line 902\n")
+	if res.Meta.Window.StartByte != int64(wantStart) || res.Meta.Window.EndByte != int64(wantEnd) {
+		t.Fatalf("window = %+v, want byte range [%d,%d)", res.Meta.Window, wantStart, wantEnd)
+	}
+}
+
+func TestReadFileRangeCancellation(t *testing.T) {
+	root := t.TempDir()
+	writeTemp(t, root, "large.txt", numberedLines(10))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := NewRunner(root, 1).ExecuteContext(ctx, Call{Tool: ToolReadFile, Path: "large.txt", Offset: 2, Limit: 1})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "cancel") {
+		t.Fatalf("error = %v, want cancellation", res.Err)
+	}
+}
+
+func TestReadFileResourceSupportsRangeArguments(t *testing.T) {
+	r := NewRunner(t.TempDir(), 64)
+	id := entity.ID("ent_" + strings.Repeat("a", 26))
+	r.Resources = &fakeResourceReader{bodies: map[entity.ID][]byte{id: []byte("one\ntwo\nthree\n")}}
+	res := r.Execute(Call{Tool: ToolReadFile, ResourceID: string(id), Offset: 2, Limit: 1})
+	if res.Err != nil {
+		t.Fatalf("error = %v", res.Err)
+	}
+	if !strings.Contains(res.Output, "two\n") || strings.Contains(res.Output, "one\n") {
+		t.Fatalf("output = %q, want only the selected retained line", res.Output)
+	}
+	if res.Meta.Window == nil || res.Meta.Window.NextOffset == nil || *res.Meta.Window.NextOffset != 3 {
+		t.Fatalf("window = %+v, want next_offset=3", res.Meta.Window)
 	}
 }
 
@@ -196,6 +322,31 @@ func TestReadFileRangeUTF8AndByteCap(t *testing.T) {
 	}
 }
 
+func TestReadFileByteContinuationTracksPresenceAndCoordinates(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("x", 4096) + "\nend\n"
+	writeTemp(t, root, "giant.txt", content)
+	r := NewRunner(root, 1)
+	first := r.Execute(Call{Tool: ToolReadFile, Path: "giant.txt", ByteOffset: int64Ptr(0)})
+	if first.Err != nil {
+		t.Fatal(first.Err)
+	}
+	if first.Meta.Window == nil || first.Meta.Window.NextByteOffset == nil {
+		t.Fatalf("window = %+v, want a byte continuation for the giant line", first.Meta.Window)
+	}
+	if first.Meta.Window.StartByte != 0 || *first.Meta.Window.NextByteOffset <= 0 {
+		t.Fatalf("window = %+v, want a positive continuation from byte zero", first.Meta.Window)
+	}
+	next := *first.Meta.Window.NextByteOffset
+	second := r.Execute(Call{Tool: ToolReadFile, Path: "giant.txt", ByteOffset: &next})
+	if second.Err != nil {
+		t.Fatal(second.Err)
+	}
+	if second.Meta.Window == nil || second.Meta.Window.StartByte != next {
+		t.Fatalf("second window = %+v, want start byte %d", second.Meta.Window, next)
+	}
+}
+
 // A line range must not become a way to read a secret file without the
 // approval that a whole-file read of it would trigger.
 func TestReadFileRangeStillTriggersSecretReadApproval(t *testing.T) {
@@ -225,6 +376,18 @@ func TestReadFileRangeNativeDecoding(t *testing.T) {
 	if bad[0].InputErr == "" {
 		t.Fatal("limit over the cap should produce InputErr")
 	}
+	resource := CallsFromNative([]provider.ToolCall{
+		{ID: "c3", Name: ToolReadFile, Arguments: `{"resource_id":"ent_abc","offset":2}`},
+	})
+	if len(resource) != 1 || resource[0].ResourceID != "ent_abc" || resource[0].Offset != 2 {
+		t.Fatalf("resource call = %+v", resource)
+	}
+	byteCall := CallsFromNative([]provider.ToolCall{
+		{ID: "c4", Name: ToolReadFile, Arguments: `{"path":"a.go","byte_offset":0}`},
+	})
+	if len(byteCall) != 1 || byteCall[0].ByteOffset == nil || *byteCall[0].ByteOffset != 0 {
+		t.Fatalf("byte call = %+v", byteCall)
+	}
 }
 
 func TestReadFileRangeFencedDecoding(t *testing.T) {
@@ -234,6 +397,14 @@ func TestReadFileRangeFencedDecoding(t *testing.T) {
 	}
 	if calls[0].Offset != 201 || calls[0].Limit != 150 || calls[0].Body != "" {
 		t.Fatalf("call = %+v", calls[0])
+	}
+	resource := Parse("```tool read_file\n{\"resource_id\":\"ent_abc\",\"offset\":2}\n```")
+	if len(resource) != 1 || resource[0].ResourceID != "ent_abc" || resource[0].Offset != 2 {
+		t.Fatalf("resource call = %+v", resource)
+	}
+	byteResource := Parse("```tool read_file\n{\"resource_id\":\"ent_abc\",\"byte_offset\":0}\n```")
+	if len(byteResource) != 1 || byteResource[0].ByteOffset == nil || *byteResource[0].ByteOffset != 0 {
+		t.Fatalf("byte resource call = %+v", byteResource)
 	}
 
 	// Legacy fenced form — no body — still means a whole-file read.

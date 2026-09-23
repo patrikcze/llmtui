@@ -95,8 +95,14 @@ func mcpServerTimeout(mcpReg *mcp.Registry, server string) time.Duration {
 // arbitrarily large reply. 0 means uncapped.
 func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, maxBytes int) tools.Result {
 	res := tools.Result{Call: c}
+	// An MCP server is an arbitrary external process; this package has no way
+	// to know whether a call changed anything on the server side, success or
+	// failure alike — Effect is always unknown, never inferred as "none".
+	res.Meta.Effect = tools.EffectUnknown
 	if mcpReg == nil {
 		res.Err = fmt.Errorf("mcp server %q: MCP is not available", c.MCPServer)
+		res.Meta.Outcome = tools.OutcomeFailed
+		res.Meta.Error = &tools.ErrorInfo{Code: "unsupported_content", Retry: tools.RetryNone, Message: res.Err.Error()}
 		return res
 	}
 	timeout := mcpServerTimeout(mcpReg, c.MCPServer)
@@ -113,17 +119,47 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 		case errors.Is(callCtx.Err(), context.DeadlineExceeded):
 			res.Err = fmt.Errorf("mcp %s.%s timed out after %s: %w",
 				c.MCPServer, c.MCPTool, timeout, callCtx.Err())
+			res.Meta.Outcome = tools.OutcomeTimeout
+			res.Meta.Error = &tools.ErrorInfo{Code: "timeout", Retry: tools.RetryLater, Message: res.Err.Error()}
 		case errors.Is(ctx.Err(), context.Canceled):
 			res.Err = fmt.Errorf("mcp %s.%s cancelled by the user: %w", c.MCPServer, c.MCPTool, ctx.Err())
+			res.Meta.Outcome = tools.OutcomeCancelled
+			res.Meta.Error = &tools.ErrorInfo{Code: "cancelled", Retry: tools.RetryNone, Message: res.Err.Error()}
 		default:
+			// mcpReg.CallTool's remaining error shapes (unknown server,
+			// disconnected server, transport failure) are all connection-
+			// layer problems from this call site's perspective.
 			res.Err = err
+			res.Meta.Outcome = tools.OutcomeFailed
+			res.Meta.Error = &tools.ErrorInfo{Code: "network", Retry: tools.RetryReconnect, Message: err.Error()}
 		}
 		return res
 	}
-	content := terminaltext.Sanitize(out.Content)
+	fullContent := terminaltext.Sanitize(out.Content)
+	if len(out.Structured) > 0 {
+		structured := terminaltext.Sanitize(string(out.Structured))
+		if fullContent != "" {
+			fullContent += "\n"
+		}
+		fullContent += "[structured MCP content]\n" + structured
+	}
+	content := fullContent
+	truncated := false
 	if maxBytes > 0 && len(content) > maxBytes {
 		content, _ = terminaltext.TruncateBytes(content, maxBytes)
-		content += fmt.Sprintf("\n… truncated (%d of %d bytes shown)", len(content), len(out.Content))
+		truncated = true
+	}
+	unsupported := make([]string, 0)
+	for _, part := range out.Parts {
+		if !part.Supported {
+			unsupported = append(unsupported, terminaltext.Sanitize(part.Type))
+		}
+	}
+	if truncated {
+		content += fmt.Sprintf("\n… truncated (%d of %d bytes shown)", len(content), len(fullContent))
+	}
+	if len(unsupported) > 0 {
+		content += fmt.Sprintf("\n[omitted unsupported MCP content parts: %s]", strings.Join(unsupported, ", "))
 	}
 	server := terminaltext.Sanitize(c.MCPServer)
 	tool := terminaltext.Sanitize(c.MCPTool)
@@ -133,9 +169,26 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 		tool,
 		untrusted.Frame("mcp_result", server+"/"+tool, content),
 	)
+	res.Meta.Coverage = tools.Coverage{
+		SourceComplete: !truncated, CaptureComplete: !truncated, PreviewComplete: true,
+		ObservedBytes: int64(len(fullContent)), RetainedBytes: int64(len(content)),
+	}
+	if truncated {
+		res.Meta.Coverage.Reasons = []string{"bytes"}
+	}
 	if out.IsError {
+		// The server explicitly reported a tool-level failure (isError=true)
+		// — a known failure, not an unknown outcome — but no closed §23 code
+		// describes "the external tool itself reported an error," so this
+		// stays uncoded (Outcome alone is enough to distinguish it).
 		res.Err = errors.New(mcpErrorSummary(content))
+		res.Meta.Outcome = tools.OutcomeFailed
+		res.Meta.Error = &tools.ErrorInfo{Retry: tools.RetryCorrectInput, Message: res.Err.Error()}
 	} else {
+		res.Meta.Outcome = tools.OutcomeOK
+		if truncated {
+			res.Meta.Outcome = tools.OutcomePartial
+		}
 		res.Entities = []entity.Candidate{{
 			Kind: entity.KindMCPResult,
 			Provenance: entity.Provenance{
@@ -149,6 +202,16 @@ func executeMCPCall(ctx context.Context, mcpReg *mcp.Registry, c tools.Call, max
 			Trust:    entity.TrustMCPUntrusted,
 			Scope:    entity.ScopeSession,
 			Payload:  content,
+		}}
+		retained := fullContent
+		if maxBytes > 0 && len(retained) > maxBytes {
+			retained, _ = terminaltext.TruncateBytes(retained, maxBytes)
+		}
+		retainedDigest := digestText(retained)
+		res.Captures = []tools.Capture{{
+			Kind: entity.KindMCPResult, Label: c.MCPServer + "/" + c.MCPTool,
+			Trust: entity.TrustMCPUntrusted, ContentType: "text/plain", Body: []byte(retained),
+			BodyDigest: retainedDigest, Resource: entity.ResourceMetadata{ContentType: "text/plain", BodyDigest: retainedDigest},
 		}}
 	}
 	return res
@@ -331,24 +394,41 @@ func runPlannedToolBatch(
 }
 
 func executeDurableCall(c tools.Call, guard operationGuard, execute func() tools.Result) tools.Result {
+	// None of the guard's own early returns execute the call — its Effect is
+	// therefore always unknown here, never "none": the guard exists
+	// precisely because a mutation's actual effect on the target could not
+	// be established from the journal alone.
+	journalMeta := func(err error) tools.ResultMeta {
+		return tools.ResultMeta{
+			Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+			Error: &tools.ErrorInfo{Code: "outcome_unknown", Retry: tools.RetryLater, Message: err.Error()},
+		}
+	}
 	if guard.err != nil {
-		return tools.Result{Call: c, Err: fmt.Errorf("operation journal unavailable; side effect not executed: %w", guard.err)}
+		err := fmt.Errorf("operation journal unavailable; side effect not executed: %w", guard.err)
+		return tools.Result{Call: c, Err: err, Meta: journalMeta(err)}
 	}
 	if guard.log == nil {
-		return tools.Result{Call: c, Err: errors.New("operation journal unavailable; side effect not executed")}
+		err := errors.New("operation journal unavailable; side effect not executed")
+		return tools.Result{Call: c, Err: err, Meta: journalMeta(err)}
 	}
 	decision, err := guard.log.Begin(c)
 	if err != nil {
-		return tools.Result{Call: c, Err: fmt.Errorf("record operation intent; side effect not executed: %w", err)}
+		wrapped := fmt.Errorf("record operation intent; side effect not executed: %w", err)
+		return tools.Result{Call: c, Err: wrapped, Meta: journalMeta(wrapped)}
 	}
 	switch decision.State {
 	case history.OperationStarted:
-		return tools.Result{Call: c, Err: errors.New("operation may have run before an interruption; refusing to execute it again")}
+		err := errors.New("operation may have run before an interruption; refusing to execute it again")
+		return tools.Result{Call: c, Err: err, Meta: journalMeta(err)}
 	case history.OperationCompleted:
 		if decision.Succeeded {
-			return tools.Result{Call: c, Output: "operation was already completed and was not executed again"}
+			return tools.Result{Call: c, Output: "operation was already completed and was not executed again", Meta: tools.ResultMeta{
+				Outcome: tools.OutcomeOK, Effect: tools.EffectNone,
+			}}
 		}
-		return tools.Result{Call: c, Err: errors.New("operation previously completed with an error and was not executed again")}
+		err := errors.New("operation previously completed with an error and was not executed again")
+		return tools.Result{Call: c, Err: err, Meta: journalMeta(err)}
 	}
 
 	result := execute()
@@ -359,6 +439,13 @@ func executeDurableCall(c tools.Call, guard operationGuard, execute func() tools
 		} else {
 			result.Err = errors.Join(result.Err, journalErr)
 		}
+		// The call itself may have executed and changed something, but
+		// whether that is durably recorded is now unknown — downgrade Meta
+		// to reflect that uncertainty rather than leaving the producer's
+		// own (now potentially misleading) success classification in place.
+		result.Meta.Outcome = tools.OutcomeUnknown
+		result.Meta.Effect = tools.EffectUnknown
+		result.Meta.Error = &tools.ErrorInfo{Code: "outcome_unknown", Retry: tools.RetryLater, Message: journalErr.Error()}
 	}
 	return result
 }

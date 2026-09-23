@@ -1496,11 +1496,10 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))
 		}
 		if result.Err == nil && (result.Call.Tool == tools.ToolWriteFile || result.Call.Tool == tools.ToolEditFile) &&
-			strings.TrimSpace(result.Call.Path) != "" && !tools.IsNoChangeDiff(result.Diff) {
-			// A write that replaced a file with its own current content
-			// succeeds but changes nothing — do not score it as progress, or
-			// a pointless retry that re-writes the same bytes reads as new
-			// evidence.
+			strings.TrimSpace(result.Call.Path) != "" && result.Meta.Effect == tools.EffectChanged {
+			// Only the typed changed effect counts as a changed file. An
+			// idempotent overwrite succeeds but changes nothing, so it must not
+			// score as progress or make a pointless retry look productive.
 			m.agentLoop.execution.ChangedFiles = append(m.agentLoop.execution.ChangedFiles, result.Call.Path)
 			m.agentLoop.execution.Artifacts = append(m.agentLoop.execution.Artifacts, result.Call.Path)
 		}
@@ -1551,24 +1550,70 @@ func askUserEvidenceSummary(output string) string {
 	return "user answer received"
 }
 
+// classifyToolError classifies a failed tool result for the agent receipt
+// ledger. It prefers the typed classification a Phase 1a-adapted producer
+// attaches to result.Meta (see classifyByMeta) over parsing result.Err's
+// text, so renaming or rewording an error message can no longer change which
+// agent.ErrorKind a failure counts as. The text-based fallback below remains
+// for any Result whose Meta was never populated (Meta.Outcome == "" — see
+// tools.Result's doc comment) — do not remove it while any producer or test
+// path still constructs a bare Result.
 func classifyToolError(result tools.Result, denied bool) agent.ErrorKind {
-	errorText := ""
-	if result.Err != nil {
-		errorText = strings.ToLower(result.Err.Error())
-	}
 	switch {
 	case denied || errors.Is(result.Err, tools.ErrDenied):
 		return agent.ErrorPermissionDenied
 	case result.Call.InputErr != "":
 		return agent.ErrorToolValidation
+	}
+	if result.Err == nil {
+		return ""
+	}
+	if kind, ok := classifyByMeta(result.Meta); ok {
+		return kind
+	}
+	errorText := strings.ToLower(result.Err.Error())
+	switch {
 	case errors.Is(result.Err, context.Canceled):
 		return agent.ErrorCancelled
-	case errors.Is(result.Err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(result.Err.Error()), "timed out"):
+	case errors.Is(result.Err, context.DeadlineExceeded) || strings.Contains(errorText, "timed out"):
 		return agent.ErrorTimeout
 	case strings.Contains(errorText, "outside the workspace") || strings.Contains(errorText, " is not allowed"):
 		return agent.ErrorSafety
 	default:
 		return agent.ErrorToolExecution
+	}
+}
+
+// classifyByMeta maps a producer's typed tools.ResultMeta onto agent.ErrorKind.
+// ok is false when Meta was never populated (Meta.Outcome == ""), telling the
+// caller to fall back to the legacy text-based classification.
+func classifyByMeta(meta tools.ResultMeta) (kind agent.ErrorKind, ok bool) {
+	if meta.Outcome == "" {
+		return "", false
+	}
+	if meta.Error != nil {
+		switch meta.Error.Code {
+		case "invalid_arguments", "invalid_pattern":
+			return agent.ErrorToolValidation, true
+		case "safety_block":
+			return agent.ErrorSafety, true
+		case "permission_denied":
+			return agent.ErrorPermissionDenied, true
+		case "cancelled":
+			return agent.ErrorCancelled, true
+		case "timeout":
+			return agent.ErrorTimeout, true
+		case "budget_block":
+			return agent.ErrorBudget, true
+		}
+	}
+	switch meta.Outcome {
+	case tools.OutcomeCancelled:
+		return agent.ErrorCancelled, true
+	case tools.OutcomeTimeout:
+		return agent.ErrorTimeout, true
+	default:
+		return agent.ErrorToolExecution, true
 	}
 }
 
@@ -1659,9 +1704,13 @@ func (m *Model) terminateAgentModelRequestBudget(reason string) tea.Cmd {
 // just doesn't continue past it.
 func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd {
 	err := fmt.Errorf("%s; this call was not executed. Stop requesting tools and report the observable state", reason)
+	meta := tools.ResultMeta{
+		Outcome: tools.OutcomeUnknown, Effect: tools.EffectUnknown,
+		Error: &tools.ErrorInfo{Code: "budget_block", Retry: tools.RetryLater, Message: err.Error()},
+	}
 	results := make([]tools.Result, len(calls))
 	for i, call := range calls {
-		results[i] = tools.Result{Call: call, Err: err}
+		results[i] = tools.Result{Call: call, Err: err, Meta: meta}
 	}
 	m.recordAgentToolResultsCount(results, false, uniformActionStatuses(len(results), agent.ActionBlocked))
 	m.appendTerminalToolResults(results)
