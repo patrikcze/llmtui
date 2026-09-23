@@ -1032,6 +1032,7 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 	meta.Encoding = encodingInfo(selected.Bytes(), false)
 	if lineCapped && consumed > 0 {
 		meta.Window.NextByteOffset = int64Ptr(max(0, windowStartByte) + int64(consumed))
+		fmt.Fprintf(&header, "; next_byte_offset=%d", *meta.Window.NextByteOffset)
 	}
 	if !scanLimited && !complete {
 		meta.Window.NextOffset = int64Ptr(int64(last + 1))
