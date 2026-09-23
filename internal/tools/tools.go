@@ -1166,7 +1166,7 @@ func (r *Runner) currentFileContent(rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	info, err := root.Stat(clean)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(r.maxKB)*1024 {
 		return "", fmt.Errorf("current file is unavailable")

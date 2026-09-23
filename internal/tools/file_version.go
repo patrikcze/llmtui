@@ -46,7 +46,7 @@ func (r *Runner) resolveExpectedVersion(ctx context.Context, path, resourceID st
 		}
 		return nil, withCode(fmt.Errorf("expected_resource_id %q cannot be used: %w", resourceID, err), code, RetryReread)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if view.Kind != entity.KindFile {
 		return nil, withCode(fmt.Errorf("expected_resource_id %q refers to %s, not a file snapshot", resourceID, view.Kind), "wrong_resource_kind", RetryCorrectInput)
 	}
