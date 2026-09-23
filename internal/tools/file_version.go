@@ -11,15 +11,27 @@ import (
 )
 
 // resolveExpectedVersion turns the model-facing resource selector into the
-// exact complete file version that the write operation must still match. The
-// resource body is reopened at execution time so an approval-time pin cannot
-// hide eviction, kind changes, or a path mismatch.
+// exact complete file version that the write operation must still match.
+//
+// When expected is already resolved — internal/tui's bindObservedEditVersions
+// is the only caller that ever sets it, always from its own record of a
+// version already delivered to the model in this conversation, never from
+// unverified model input — it is trusted directly, the same way it is when
+// no resource ID is attached at all. It is deliberately NOT re-resolved
+// through the entity registry even when a resource ID also happens to be
+// attached: that registry is a separate, independently-bounded cache
+// (internal/entity's own retention/eviction), and requiring its retention
+// window to still cover an already-verified version adds an availability
+// dependency without adding safety — the write's real protection is
+// writeFileMetaExpected's digest comparison against the live file, which
+// runs unconditionally regardless of which branch resolved expected, and a
+// path mismatch is checked here either way. A bare, model-supplied resource
+// ID with no corroborating local record (expected == nil) still goes
+// through the full reopen-and-verify path below — that ID has no other
+// trust basis.
 func (r *Runner) resolveExpectedVersion(ctx context.Context, path, resourceID string, expected *entity.FileVersion) (*entity.FileVersion, error) {
 	resourceID = strings.TrimSpace(resourceID)
-	if resourceID == "" {
-		if expected == nil {
-			return nil, nil
-		}
+	if expected != nil {
 		if !expected.Complete || expected.Digest == "" {
 			return nil, withCode(fmt.Errorf("the expected file version is incomplete; re-read the whole file"), "snapshot_incomplete", RetryReread)
 		}
@@ -28,6 +40,9 @@ func (r *Runner) resolveExpectedVersion(ctx context.Context, path, resourceID st
 		}
 		version := *expected
 		return &version, nil
+	}
+	if resourceID == "" {
+		return nil, nil
 	}
 	if r.Resources == nil {
 		return nil, withCode(fmt.Errorf("expected_resource_id %q is unavailable; re-read the file", resourceID), "resource_unavailable", RetryReread)
@@ -58,8 +73,5 @@ func (r *Runner) resolveExpectedVersion(ctx context.Context, path, resourceID st
 		return nil, withCode(fmt.Errorf("expected_resource_id %q belongs to %q, not %q", resourceID, version.Path, path), "invalid_arguments", RetryCorrectInput)
 	}
 	resolved := *version
-	if expected != nil && (expected.Path != resolved.Path || expected.Digest != resolved.Digest || expected.SizeBytes != resolved.SizeBytes || !expected.Complete) {
-		return nil, withCode(fmt.Errorf("expected_resource_id %q no longer matches the observed file version; re-read the file", resourceID), "stale_source", RetryReread)
-	}
 	return &resolved, nil
 }
