@@ -304,7 +304,18 @@ func appendEntityReferences(output string, views []entity.View) string {
 	b.WriteString(output)
 	b.WriteString("\n\n[registered runtime entities — use the exact IDs for later detail requests]\n")
 	for _, view := range views {
-		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q\n", view.ID, view.Kind, view.Label, view.Source)
+		fmt.Fprintf(&b, "- %s kind=%s label=%q source=%q", view.ID, view.Kind, view.Label, view.Source)
+		// A read_file result registers both this citation entity and (when
+		// eligible) a separate retained resource body via
+		// appendResourceReferences below — only the latter's ID is a valid
+		// expected_resource_id. Without this, a model has no textual signal
+		// for which of the two near-identical kind=file lines to use where,
+		// and reliably picks the wrong one (observed twice independently,
+		// 2026-09-23).
+		if view.Kind == entity.KindFile {
+			b.WriteString(" (citation only — not a valid expected_resource_id)")
+		}
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -365,7 +376,11 @@ func appendResourceReferences(output string, views []entity.ResourceView) string
 	b.WriteString(output)
 	b.WriteString("\n\n[retained output — read it back with read_file resource_id instead of rerunning this command]\n")
 	for _, view := range views {
-		fmt.Fprintf(&b, "- %s kind=%s bytes=%d\n", view.ID, view.Kind, view.SizeBytes)
+		fmt.Fprintf(&b, "- %s kind=%s bytes=%d", view.ID, view.Kind, view.SizeBytes)
+		if view.Kind == entity.KindFile {
+			b.WriteString(" (use this exact id as expected_resource_id when writing or editing this file)")
+		}
+		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

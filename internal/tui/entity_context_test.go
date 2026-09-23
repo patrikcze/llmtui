@@ -298,6 +298,43 @@ func TestDisabledEntitiesAreNotModelVisible(t *testing.T) {
 // resource_id from an ended run was rejected by edit_file's
 // expected_resource_id precondition, and only succeeded after a wasted
 // re-read produced a fresh ID.
+// TestReadFileDualIDsAreDisambiguatedForExpectedResourceID reproduces a
+// recurring live failure (2026-09-23, observed twice independently while
+// manually testing the Laya shadow advisor): a complete small-file read_file
+// mints TWO entity IDs — a Put-based citation entity (for later detail
+// lookups) and a Publish-based resource body (the only one valid for a
+// subsequent write_file/edit_file's expected_resource_id) — and nothing in
+// the rendered tool output told the model which was which. Both times, the
+// model picked the citation ID and got wrong_resource_kind /
+// "entity is not a resource body". The output text must now say, inline,
+// which ID is which.
+func TestReadFileDualIDsAreDisambiguatedForExpectedResourceID(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.cfg.Entities.Enabled = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	if err := os.WriteFile(filepath.Join(root, "shadow-test.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := m.toolRunner.Execute(tools.Call{Tool: tools.ToolReadFile, Path: "shadow-test.txt"})
+	if res.Err != nil {
+		t.Fatalf("read_file: %v", res.Err)
+	}
+	results := m.registerResultEntities([]tools.Result{res})
+	output := results[0].Output
+	if results[0].ResourceID == "" {
+		t.Fatal("test setup: read_file result carries no resource_id — dual-ID scenario did not reproduce")
+	}
+	if !strings.Contains(output, "not a valid expected_resource_id") {
+		t.Fatalf("citation entity block does not warn it is unusable as expected_resource_id:\n%s", output)
+	}
+	if !strings.Contains(output, "use this exact id as expected_resource_id") {
+		t.Fatalf("resource body block does not say it is the id to use for expected_resource_id:\n%s", output)
+	}
+}
+
 func TestResourceScopeSurvivesAgentRunEnd(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
