@@ -488,6 +488,11 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 			res.Err = withCode(fmt.Errorf("read_file accepts exactly one of path or resource_id, not both"), "invalid_arguments", RetryCorrectInput)
 			meta.Effect = EffectNone
 		case c.ResourceID != "":
+			if c.Offset != 0 || c.Limit != 0 {
+				res.Err = withCode(fmt.Errorf("read_file resource_id does not support offset or limit; read the retained body from the start"), "invalid_arguments", RetryCorrectInput)
+				meta.Effect = EffectNone
+				break
+			}
 			res.Output, meta, res.Err = r.readResourceMeta(ctx, c.ResourceID)
 		default:
 			res.Output, meta, res.Err = r.readFileMetaContext(ctx, c.Path, c.Offset, c.Limit)
@@ -709,13 +714,20 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 	var selected bytes.Buffer
 	var scanned int64
 	lineNo := 1
+	lineStartByte := int64(0)
+	windowStartByte := int64(-1)
+	windowEndByte := int64(-1)
 	selectedBytes := int64(0)
 	scanLimited := false
 	complete := false
 
-	process := func(part []byte, hasNewline bool) {
+	process := func(part []byte, partStart int64, hasNewline bool) {
 		if lineNo >= start && lineNo < start+count {
+			if windowStartByte < 0 {
+				windowStartByte = lineStartByte
+			}
 			selectedBytes += int64(len(part))
+			windowEndByte = partStart + int64(len(part))
 			if selected.Len() < byteLimit {
 				remaining := byteLimit - selected.Len()
 				if len(part) > remaining {
@@ -726,6 +738,7 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		}
 		if hasNewline {
 			lineNo++
+			lineStartByte = partStart + int64(len(part))
 		}
 	}
 
@@ -736,6 +749,7 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 			return "", meta, fmt.Errorf("read file cancelled: %w", err)
 		}
 		part, err := reader.ReadSlice('\n')
+		partStart := scanned
 		scanned += int64(len(part))
 		if scanned > MaxReadScanBytes {
 			scanLimited = true
@@ -743,12 +757,12 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		}
 		switch err {
 		case nil:
-			process(part, true)
+			process(part, partStart, true)
 		case bufio.ErrBufferFull:
-			process(part, false)
+			process(part, partStart, false)
 		case io.EOF:
 			if len(part) > 0 {
-				process(part, false)
+				process(part, partStart, false)
 				lineNo++
 			}
 			complete = true
@@ -818,7 +832,13 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		outcome = OutcomePartial
 	}
 	meta.Outcome, meta.Coverage = outcome, cov
-	meta.Window = &Window{StartLine: int64(start), EndLine: int64(last), PartialLine: lineCapped}
+	meta.Window = &Window{
+		StartLine:   int64(start),
+		EndLine:     int64(last),
+		StartByte:   max(0, windowStartByte),
+		EndByte:     max(0, windowEndByte),
+		PartialLine: lineCapped,
+	}
 	if !scanLimited && !complete {
 		meta.Window.NextOffset = int64Ptr(int64(last + 1))
 	}

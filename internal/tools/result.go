@@ -161,8 +161,8 @@ type Coverage struct {
 type Window struct {
 	// StartLine/EndLine are 1-based inclusive; zero for an empty window.
 	StartLine, EndLine int64
-	// StartByte/EndByte are 0-based half-open, over the retained
-	// representation (not necessarily the original source).
+	// StartByte/EndByte are 0-based half-open source coordinates when the
+	// producer can establish them; zero is valid for a range at file start.
 	StartByte, EndByte int64
 	// NextOffset is the next complete line to request, only when valid.
 	NextOffset *int64
