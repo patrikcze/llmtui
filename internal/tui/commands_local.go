@@ -979,10 +979,18 @@ func (m *Model) debugOverlay() string {
 	if d.DecisionShadowUnavailableReason != "" {
 		m.kv(&b, "laya shadow", "unavailable: "+d.DecisionShadowUnavailableReason)
 	} else if d.DecisionShadowCycleAction != "" {
-		m.kv(&b, "laya shadow", fmt.Sprintf("model=%s action=%s (p=%.2f conf=%.2f) goal_complete=%.2f verifier_needed=%.2f latency=%s vs actual=%s/%s",
+		m.kv(&b, "laya shadow", fmt.Sprintf("model=%s action=%s (p=%.2f conf=%.2f) [%s] goal_complete=%.2f verifier_needed=%.2f latency=%s vs actual=%s/%s",
 			d.DecisionShadowModel, d.DecisionShadowCycleAction, d.DecisionShadowCycleActionProbability, d.DecisionShadowCycleActionConfidence,
+			formatProbabilityDistribution(d.DecisionShadowCycleActionProbabilities),
 			d.DecisionShadowGoalCompleteProbability, d.DecisionShadowVerifierNeededProbability,
 			d.DecisionShadowLatency.Round(time.Millisecond), d.DecisionShadowActualVerifierPath, d.DecisionShadowActualDecision))
+	}
+	if d.DecisionShadowPreVerifierUnavailableReason != "" {
+		m.kv(&b, "laya pre-verifier", "unavailable: "+d.DecisionShadowPreVerifierUnavailableReason)
+	} else if d.DecisionShadowPreVerifierNeededProbability != 0 || d.DecisionShadowPreVerifierEvidenceSufficientProbability != 0 {
+		m.kv(&b, "laya pre-verifier", fmt.Sprintf("verifier_needed=%.2f evidence_sufficient=%.2f vs actual_semantic_verifier_ran=%v",
+			d.DecisionShadowPreVerifierNeededProbability, d.DecisionShadowPreVerifierEvidenceSufficientProbability,
+			d.DecisionShadowActualSemanticVerifierRan))
 	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")

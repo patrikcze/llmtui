@@ -64,6 +64,13 @@ type agentLoopState struct {
 	// needed alongside it: the shadow call is fire-and-forget with its own
 	// bounded context, never something the controller blocks on or cancels.
 	decisionShadowGen int
+	// preVerifierShadowGen guards the pre-verifier counterfactual shadow's
+	// async result the same way decisionShadowGen guards the post-cycle
+	// shadow's — deliberately a separate counter (never decisionShadowGen)
+	// since the two shadows have different question sets and arrival timing
+	// and must never be able to satisfy each other's staleness check. See
+	// agent_decision_shadow.go's "Pre-verifier counterfactual shadow" section.
+	preVerifierShadowGen int
 	// verifierModel and verifierStartedAt describe only a real semantic
 	// verifier request. Deterministic verification never sets them, so the UI
 	// cannot imply that a model is running when the controller decided locally.
@@ -984,6 +991,13 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
+	// Pre-verifier counterfactual shadow (Phase 2): dispatched here, right
+	// after deterministic criteria are applied and before any verifier-mode
+	// branching below, so it fires exactly once per cycle regardless of
+	// which downstream path (a synthetic shortcut or a real verifier
+	// dispatch) is taken next, and so run.Criteria at capture time is
+	// provably deterministic-only — see agent_decision_shadow.go.
+	preVerifierCmd := m.dispatchAgentDecisionPreVerifierShadow(run, execution)
 	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
@@ -1000,9 +1014,9 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	syntheticResult := func(result agent.VerificationResult) tea.Cmd {
 		m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verified deterministically", shortRunID(runID), cycle, run.Limits.MaxCycles)
 		m.refreshViewport()
-		return func() tea.Msg {
+		return tea.Batch(func() tea.Msg {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
-		}
+		}, preVerifierCmd)
 	}
 	// Criteria resolved from controller-observed evidence do not need a
 	// semantic verifier, regardless of verification mode. Sending a verifier
@@ -1078,7 +1092,10 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verifying in fresh context", shortRunID(runID), cycle, run.Limits.MaxCycles)
 	m.refreshViewport()
 
-	return m.dispatchVerifierAttempt(run, execution, ctx, gen)
+	// The pre-verifier shadow call runs concurrently with the real verifier
+	// dispatch, never gating it — semantic verification proceeds regardless
+	// of Laya's latency, timeout, or availability.
+	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), preVerifierCmd)
 }
 
 // dispatchVerifierAttempt builds and sends one fresh-context, tool-free
@@ -1258,6 +1275,16 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	// and ApplyStop has already run; nothing below this line may change
 	// because of what shadowCmd eventually returns.
 	shadowCmd := m.dispatchAgentDecisionShadow(run, m.agentLoop.execution, decisionShadowVerifierPath, stop.Decision, result.Verdict)
+	// Records the actual-outcome half of the pre-verifier correlation
+	// (see agent_decision_shadow.go) — purely bookkeeping, same as the
+	// post-cycle shadow dispatch above; reads nothing it doesn't already
+	// have in scope and writes nothing that changes stop or run. Gated on
+	// decisionShadow being wired: when it isn't, no pre-verifier prediction
+	// was ever dispatched for this cycle, so recording an actual half here
+	// would only create a correlation entry that can never be finalized.
+	if m.decisionShadow != nil {
+		m.recordPreVerifierActual(run.ID, run.Cycle, decisionShadowVerifierPath == "semantic", result.Verdict, stop.Decision)
+	}
 	switch stop.Decision {
 	case agent.DecisionContinue, agent.DecisionRetry:
 		m.notice = fmt.Sprintf("agent %s · verification %s · %s", shortRunID(run.ID), result.Verdict, stop.Decision)

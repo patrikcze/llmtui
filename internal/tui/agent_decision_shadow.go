@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -376,6 +379,7 @@ func (m *Model) recordAgentDecisionShadowResult(msg agentDecisionShadowMsg) {
 		m.lastDebug.DecisionShadowCycleAction = ""
 		m.lastDebug.DecisionShadowCycleActionConfidence = 0
 		m.lastDebug.DecisionShadowCycleActionProbability = 0
+		m.lastDebug.DecisionShadowCycleActionProbabilities = nil
 		m.lastDebug.DecisionShadowGoalCompleteProbability = 0
 		m.lastDebug.DecisionShadowVerifierNeededProbability = 0
 		m.lastDebug.DecisionShadowLatency = msg.elapsed
@@ -393,6 +397,18 @@ func (m *Model) recordAgentDecisionShadowResult(msg agentDecisionShadowMsg) {
 	m.lastDebug.DecisionShadowCycleAction = action.Choice
 	m.lastDebug.DecisionShadowCycleActionConfidence = action.Confidence
 	m.lastDebug.DecisionShadowCycleActionProbability = action.Probabilities[action.Choice]
+	// The full distribution, not just the winning choice's own probability —
+	// Confidence and the single winning probability were both shown to be
+	// close to uninterpretable in isolation during manual calibration
+	// (e.g. a clearly-correct choice can carry Confidence well under 0.5).
+	// Seeing every option's probability is what actually answers "was
+	// ask_user ever seriously considered, or is it structurally near-zero."
+	if len(action.Probabilities) > 0 {
+		m.lastDebug.DecisionShadowCycleActionProbabilities = make(map[string]float64, len(action.Probabilities))
+		for choice, p := range action.Probabilities {
+			m.lastDebug.DecisionShadowCycleActionProbabilities[choice] = p
+		}
+	}
 
 	if goalComplete, ok := msg.result.Answers["goal_complete"]; ok {
 		m.lastDebug.DecisionShadowGoalCompleteProbability = goalComplete.Probability
@@ -422,4 +438,312 @@ func (m *Model) recordAgentDecisionShadowResult(msg agentDecisionShadowMsg) {
 			m.decisionShadowMetrics.VerifierNeededFalseNeg++
 		}
 	}
+}
+
+// ============================================================================
+// Pre-verifier counterfactual shadow (Phase 2)
+//
+// The shadow above always fires after agent.Decide() — it measures "did Laya
+// predict the cycle's final outcome," but by the time it's asked, a semantic
+// verifier (if one ran) has already happened, so it can never cleanly
+// isolate "is Laya good at judging whether semantic verification was
+// needed" from "is Laya good at predicting the final action." A future
+// guarded_assist phase (docs/decision-engine.md) would need exactly that
+// narrower judgment BEFORE the verifier runs, to decide whether to force one
+// adaptive mode would otherwise skip. This second, earlier observation
+// exists purely to gather that calibration evidence now, still 100%
+// non-authoritative — see docs/architecture/decisions/0011-pre-verifier-laya-shadow-observation.md.
+// ============================================================================
+
+// preVerifierQuestions is deliberately NOT the 5-way cycle_action set: at
+// this point in the cycle there is no "final action" to predict yet, only
+// whether the deterministic evidence gathered so far looks sufficient.
+var preVerifierQuestions = map[string]decision.Question{
+	"semantic_verifier_needed": {
+		Type:         decision.QuestionNoul,
+		Instructions: "Based only on the supplied observable execution evidence, is semantic verification needed before this cycle can safely be considered complete?",
+	},
+	"evidence_sufficient": {
+		Type:         decision.QuestionNoul,
+		Instructions: "Is the supplied deterministic evidence sufficient to determine whether the current objective and acceptance criteria are complete?",
+	},
+}
+
+// agentDecisionPreVerifierShadowMsg mirrors agentDecisionShadowMsg's shape
+// exactly, with its own dedicated generation field (agentLoopState's
+// preVerifierShadowGen, never decisionShadowGen) — the two shadows have
+// different question sets and different arrival timing, so their staleness
+// checks must never be able to cross-contaminate each other.
+type agentDecisionPreVerifierShadowMsg struct {
+	runID   string
+	cycle   int
+	gen     int
+	result  decision.Result
+	err     error
+	elapsed time.Duration
+}
+
+// dispatchAgentDecisionPreVerifierShadow returns a tea.Cmd for one Predict
+// call built from the state as it exists immediately after
+// ApplyDeterministicCriteria and before any verifier has run — see the call
+// site in startAgentVerification for why that ordering is safe. Reuses
+// buildAgentDecisionShadowState unmodified: that function only ever reads
+// run/execution fields, and run.Criteria at this point in the real flow has
+// not yet received any verifier CriteriaUpdates (those land only inside
+// AgentRun.CompleteVerification, which has not been called yet), so the
+// snapshot is provably pre-verifier without needing a second builder.
+func (m *Model) dispatchAgentDecisionPreVerifierShadow(run *agent.AgentRun, execution agent.ExecutionResult) tea.Cmd {
+	if m.decisionShadow == nil || m.decisionShadow.service == nil || m.agentLoop == nil {
+		return nil
+	}
+	m.agentLoop.preVerifierShadowGen++
+	gen := m.agentLoop.preVerifierShadowGen
+	runID, cycle := run.ID, run.Cycle
+	state := m.buildAgentDecisionShadowState(run, execution)
+	svc := m.decisionShadow.service
+	model := m.decisionShadow.model
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), decisionShadowTimeout)
+		defer cancel()
+		start := time.Now()
+		result, err := svc.Predict(ctx, state, preVerifierQuestions, decision.PredictOptions{Model: model})
+		return agentDecisionPreVerifierShadowMsg{runID: runID, cycle: cycle, gen: gen, result: result, err: err, elapsed: time.Since(start)}
+	}
+}
+
+// handleAgentDecisionPreVerifierShadow applies the stale-message guard, then
+// only ever calls recordPreVerifierPrediction — never touches run,
+// execution, stop, or any authoritative field.
+func (m *Model) handleAgentDecisionPreVerifierShadow(msg agentDecisionPreVerifierShadowMsg) (tea.Model, tea.Cmd) {
+	if m.agentLoop == nil || m.agentLoop.run == nil ||
+		msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
+		msg.gen != m.agentLoop.preVerifierShadowGen {
+		return m, nil
+	}
+	m.recordPreVerifierPrediction(msg)
+	return m, nil
+}
+
+// maxPreVerifierCorrelations bounds Model.preVerifierCorrelations so a run
+// that never reaches handleAgentVerification (cancelled, crashed) cannot
+// leak an entry forever — mirrors evictedResourceKeys' bounded-eviction
+// pattern in agent_loop.go.
+const maxPreVerifierCorrelations = 16
+
+// maxPreVerifierShadowSamples bounds Model.preVerifierShadowSamples, the raw
+// probability/outcome pairs a future threshold-sweep report reads. Oldest
+// evicted first; this is observability data, not a decision input.
+const maxPreVerifierShadowSamples = 256
+
+// preVerifierCorrelation reconciles one cycle's async Laya prediction with
+// its later-arriving authoritative outcome. Either half may arrive first —
+// see recordPreVerifierPrediction/recordPreVerifierActual — and the record
+// is only folded into metrics and deleted once both halves are present.
+type preVerifierCorrelation struct {
+	runID string
+	cycle int
+
+	predictionArrived             bool
+	verifierNeededProbability     float64
+	evidenceSufficientProbability float64
+	predictionErr                 string
+	predictionLatency             time.Duration
+
+	actualArrived             bool
+	actualSemanticVerifierRan bool
+	actualVerifierVerdict     agent.VerificationVerdict
+	actualDecision            agent.Decision
+}
+
+func preVerifierCorrelationKey(runID string, cycle int) string {
+	return runID + ":" + strconv.Itoa(cycle)
+}
+
+// preVerifierSample is one finalized (prediction, actual) pair retained for
+// a later threshold sweep. Bounded and content-free: a probability and a
+// boolean, nothing else.
+type preVerifierSample struct {
+	Probability float64
+	ActualRan   bool
+}
+
+// preVerifierShadowMetrics is the pre-verifier counterpart to
+// agentDecisionShadowMetrics: session-scoped, in-memory, not persisted. The
+// four confusion-matrix counters are diagnostic only, computed at a fixed
+// 0.5 probability threshold purely for a first-glance /debug read — no
+// production behavior ever reads or acts on them. FalseNegative (Laya said
+// verification was NOT needed, but the authoritative pipeline ran one
+// anyway) is the priority safety metric for any future guarded_assist gate:
+// a false negative here is exactly the case where a future active gate
+// would have wrongly skipped a verification that was actually required.
+type preVerifierShadowMetrics struct {
+	Total              int
+	Available          int
+	ActualVerifierRuns int
+	// Diagnostic-only 0.5-threshold confusion matrix. Never used to gate
+	// anything; see the type doc comment.
+	TruePositive  int
+	FalsePositive int
+	TrueNegative  int
+	FalseNegative int
+}
+
+// recordPreVerifierPrediction stores the prediction half of a correlation
+// record, creating it if the actual half hasn't arrived yet, and finalizes
+// immediately if the actual half already has (verifier-first ordering).
+func (m *Model) recordPreVerifierPrediction(msg agentDecisionPreVerifierShadowMsg) {
+	m.preVerifierShadowMetrics.Total++
+	entry := m.preVerifierCorrelationEntry(msg.runID, msg.cycle)
+	entry.predictionArrived = true
+	entry.predictionLatency = msg.elapsed
+	if msg.err != nil {
+		entry.predictionErr = msg.err.Error()
+	} else {
+		m.preVerifierShadowMetrics.Available++
+		if needed, ok := msg.result.Answers["semantic_verifier_needed"]; ok {
+			entry.verifierNeededProbability = needed.Probability
+		}
+		if sufficient, ok := msg.result.Answers["evidence_sufficient"]; ok {
+			entry.evidenceSufficientProbability = sufficient.Probability
+		}
+	}
+	m.lastDebug.DecisionShadowPreVerifierUnavailableReason = entry.predictionErr
+	m.lastDebug.DecisionShadowPreVerifierNeededProbability = entry.verifierNeededProbability
+	m.lastDebug.DecisionShadowPreVerifierEvidenceSufficientProbability = entry.evidenceSufficientProbability
+	m.finalizePreVerifierCorrelationIfReady(entry)
+}
+
+// recordPreVerifierActual stores the authoritative-outcome half, called from
+// handleAgentVerification once agent.Decide() has resolved — see that call
+// site for why decisionShadowVerifierPath's value is exactly
+// "did a semantic verifier run this cycle."
+func (m *Model) recordPreVerifierActual(runID string, cycle int, semanticVerifierRan bool, verdict agent.VerificationVerdict, decision agent.Decision) {
+	entry := m.preVerifierCorrelationEntry(runID, cycle)
+	entry.actualArrived = true
+	entry.actualSemanticVerifierRan = semanticVerifierRan
+	entry.actualVerifierVerdict = verdict
+	entry.actualDecision = decision
+	m.finalizePreVerifierCorrelationIfReady(entry)
+}
+
+// preVerifierCorrelationEntry returns the existing entry for (runID, cycle)
+// or creates one, evicting the oldest unfinalized entry first if the bounded
+// map is already full.
+func (m *Model) preVerifierCorrelationEntry(runID string, cycle int) *preVerifierCorrelation {
+	if m.preVerifierCorrelations == nil {
+		m.preVerifierCorrelations = make(map[string]*preVerifierCorrelation)
+	}
+	key := preVerifierCorrelationKey(runID, cycle)
+	if entry, ok := m.preVerifierCorrelations[key]; ok {
+		return entry
+	}
+	if len(m.preVerifierCorrelations) >= maxPreVerifierCorrelations {
+		for oldestKey := range m.preVerifierCorrelations {
+			delete(m.preVerifierCorrelations, oldestKey)
+			break
+		}
+	}
+	entry := &preVerifierCorrelation{runID: runID, cycle: cycle}
+	m.preVerifierCorrelations[key] = entry
+	return entry
+}
+
+// finalizePreVerifierCorrelationIfReady folds a correlation record into the
+// rolling metrics and a bounded raw sample once both the prediction and the
+// actual-outcome halves have arrived, then deletes it — the map only ever
+// holds in-flight cycles, never a growing history.
+func (m *Model) finalizePreVerifierCorrelationIfReady(entry *preVerifierCorrelation) {
+	if !entry.predictionArrived || !entry.actualArrived {
+		return
+	}
+	defer delete(m.preVerifierCorrelations, preVerifierCorrelationKey(entry.runID, entry.cycle))
+
+	m.lastDebug.DecisionShadowActualSemanticVerifierRan = entry.actualSemanticVerifierRan
+
+	if entry.predictionErr != "" {
+		return
+	}
+	m.preVerifierShadowMetrics.ActualVerifierRuns += boolToInt(entry.actualSemanticVerifierRan)
+
+	predictedNeeded := entry.verifierNeededProbability >= 0.5
+	switch {
+	case predictedNeeded && entry.actualSemanticVerifierRan:
+		m.preVerifierShadowMetrics.TruePositive++
+	case predictedNeeded && !entry.actualSemanticVerifierRan:
+		m.preVerifierShadowMetrics.FalsePositive++
+	case !predictedNeeded && !entry.actualSemanticVerifierRan:
+		m.preVerifierShadowMetrics.TrueNegative++
+	case !predictedNeeded && entry.actualSemanticVerifierRan:
+		m.preVerifierShadowMetrics.FalseNegative++
+	}
+
+	m.preVerifierShadowSamples = append(m.preVerifierShadowSamples, preVerifierSample{
+		Probability: entry.verifierNeededProbability, ActualRan: entry.actualSemanticVerifierRan,
+	})
+	if len(m.preVerifierShadowSamples) > maxPreVerifierShadowSamples {
+		m.preVerifierShadowSamples = m.preVerifierShadowSamples[len(m.preVerifierShadowSamples)-maxPreVerifierShadowSamples:]
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// formatProbabilityDistribution renders a cycle_action probability map as a
+// sorted, compact "choice=p.pp" list for /debug last — sorted by choice name
+// so the line is stable across cycles/renders rather than reflecting Go's
+// randomized map iteration order.
+func formatProbabilityDistribution(probabilities map[string]float64) string {
+	if len(probabilities) == 0 {
+		return ""
+	}
+	choices := make([]string, 0, len(probabilities))
+	for choice := range probabilities {
+		choices = append(choices, choice)
+	}
+	sort.Strings(choices)
+	parts := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		parts = append(parts, fmt.Sprintf("%s=%.2f", choice, probabilities[choice]))
+	}
+	return strings.Join(parts, " ")
+}
+
+// thresholdRow is one row of a threshold-sweep confusion matrix over
+// preVerifierSample data. No threshold here is ever selected as a default
+// or acted on — this is purely a reporting function for a human (or a
+// future PR) to read.
+type thresholdRow struct {
+	Threshold                   float64
+	TruePositive, FalsePositive int
+	TrueNegative, FalseNegative int
+}
+
+// computeThresholdSweep evaluates samples against each threshold in
+// thresholds, treating Probability >= threshold as "predicted needed". Pure
+// and side-effect free, reusable by both a future /debug view and the
+// opt-in calibration harness (internal/tui/agent_decision_calibration_test.go).
+func computeThresholdSweep(samples []preVerifierSample, thresholds []float64) []thresholdRow {
+	rows := make([]thresholdRow, 0, len(thresholds))
+	for _, threshold := range thresholds {
+		row := thresholdRow{Threshold: threshold}
+		for _, sample := range samples {
+			predictedNeeded := sample.Probability >= threshold
+			switch {
+			case predictedNeeded && sample.ActualRan:
+				row.TruePositive++
+			case predictedNeeded && !sample.ActualRan:
+				row.FalsePositive++
+			case !predictedNeeded && !sample.ActualRan:
+				row.TrueNegative++
+			case !predictedNeeded && sample.ActualRan:
+				row.FalseNegative++
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }

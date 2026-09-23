@@ -348,6 +348,15 @@ type Model struct {
 	// path. See internal/tui/agent_decision_shadow.go.
 	decisionShadow        *decisionShadowService
 	decisionShadowMetrics agentDecisionShadowMetrics
+
+	// preVerifierCorrelations/preVerifierShadowMetrics/preVerifierShadowSamples
+	// back the pre-verifier counterfactual shadow (Phase 2) — see
+	// agent_decision_shadow.go. Same SHADOW-ONLY contract as decisionShadow*
+	// above: read only by pre-verifier shadow bookkeeping, never by any
+	// authoritative path.
+	preVerifierCorrelations  map[string]*preVerifierCorrelation
+	preVerifierShadowMetrics preVerifierShadowMetrics
+	preVerifierShadowSamples []preVerifierSample
 }
 
 // New builds the chat model.
@@ -1137,6 +1146,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDecisionShadowMsg:
 		return m.handleAgentDecisionShadow(msg)
+
+	case agentDecisionPreVerifierShadowMsg:
+		return m.handleAgentDecisionPreVerifierShadow(msg)
 
 	case agentPersistedMsg:
 		if msg.err != nil && m.agentLoop != nil && msg.runID == m.agentRunID() {
