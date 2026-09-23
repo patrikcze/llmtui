@@ -195,6 +195,72 @@ can consume `Service` results conservatively. They must preserve deterministic
 checks, tool approvals, and the existing generative fallback. Those policy
 changes are intentionally outside this runtime implementation.
 
+### Shadow advisor (this phase)
+
+`internal/tui` now owns a long-lived `decision.Service`/`decision.Router`
+(`internal/tui/agent_decision_shadow.go`), constructed in `rebuildFromConfig`
+only when `decision_engine.enabled` is true and closed on `/config reload`
+and application shutdown. Nothing about model loading changes: the Router's
+own lazy `acquire` still only spawns a worker on the first `Predict` for a
+model alias, so enabling the flag alone launches nothing.
+
+After `agent.Decide()` resolves each agent-loop cycle (`internal/tui`'s
+`handleAgentVerification`, immediately after `ApplyStop`), a bounded snapshot
+of the cycle — task and objective (truncated), cycle number, acceptance
+criteria and their statuses, succeeded/failed tool names, permission-denied
+and needs-user-input flags, changed files, test pass/fail counts,
+deterministic error kinds, and the unresolved-criteria counts — is sent to
+Laya in one batched `Predict` call asking three questions: `cycle_action`
+(choice: `finish`/`semantic_verify`/`continue`/`ask_user`/`blocked`),
+`goal_complete` (noul), and `semantic_verifier_needed` (noul). The prediction
+is recorded in `/debug last` under `laya shadow`, alongside the cycle's
+actual verifier path and decision, and in a small in-memory rolling-metrics
+counter (cycle-action agreement, false-finish count — the priority metric —
+ask-user agreement, verifier-needed agreement/false-negative rate).
+
+This is **shadow-only**: the call happens after `stop.Decision` is already
+final, its result is never read by `agent.Decide()`, the verifier, tool
+approval, or any criteria-update path, and a decision-runtime error (engine
+disabled, unavailable, worker crash, timeout, malformed answer) only ever
+records an unavailable reason. Its purpose is calibration evidence — see the
+metrics above — not behavior change.
+
+### The Snake-demo analogy
+
+The design mirrors [laya-mlx's Snake
+demo](https://github.com/mizorewww/laya-mlx/blob/main/docs/SNAKE_DEMO.md):
+
+```text
+deterministic planner  → bounded facts / admissible actions → Laya decision → deterministic safety shield
+```
+
+mapped onto this integration as:
+
+```text
+deterministic controller state → bounded controller actions → Laya shadow recommendation → existing deterministic/verifier policy remains authoritative
+```
+
+The compact snapshot above is the "bounded facts"; the fixed five-choice
+`cycle_action` vocabulary is the "admissible actions" set; the shadow
+prediction is currently observed only, never applied; and `agent.Decide()`
+together with the existing verifier/criteria machinery is the safety shield
+that never moves.
+
+### Future phase (doc-only, not implemented here): `guarded_assist`
+
+A possible next phase, not built in this PR, would give Laya exactly one
+active capability: a **one-way escalation** to semantic verification. Today,
+adaptive mode (`agent.verifier.mode: adaptive`) skips a real verifier request
+whenever deterministic evidence already settles a cycle. In `guarded_assist`,
+if `semantic_verifier_needed`'s probability clears a calibrated threshold on
+a cycle adaptive mode would otherwise skip, the controller would run the
+semantic verifier anyway — never the reverse. Laya must never be allowed to
+skip a verifier that would otherwise run, mark a run done, or bypass any
+existing policy in this future phase; escalation-only, one direction, is the
+constraint any implementation of `guarded_assist` must preserve. No
+confidence threshold exists yet — this phase requires calibration evidence
+from the shadow advisor above first.
+
 ## Measured bridge validation (2026-09-23)
 
 Real Metal integration passed on this development machine with Python 3.14.3
