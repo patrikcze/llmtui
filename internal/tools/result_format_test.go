@@ -127,7 +127,8 @@ func TestErrorCodeVocabularyIsClosedAndStable(t *testing.T) {
 		"unsupported_content_type", "cancelled", "timeout", "permission_denied",
 		"safety_block", "repeat_block", "budget_block", "outcome_unknown",
 		"symlink_write_unsupported", "resource_unavailable", "capture_limit",
-		"source_changed", "resource_expired", "stale_source",
+		"source_changed", "resource_expired", "stale_source", "cursor_expired",
+		"retention_unavailable", "wrong_resource_kind",
 	}
 	if len(errorCodeVocabulary) != len(want) {
 		t.Fatalf("errorCodeVocabulary has %d codes, want %d", len(errorCodeVocabulary), len(want))
