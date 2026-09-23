@@ -276,7 +276,7 @@ section and [security.md](security.md)):
 | `approve` | `ask` | `ask` prompts y/n before writes and non-read-only commands; `auto` runs them unprompted |
 | `native` | `auto` | Tool-calling protocol: `auto` uses standard function calling (tools declared in the request, results returned as `role:"tool"` messages) and falls back automatically to the fenced-block prompt protocol when the backend rejects tools; `off` always uses fenced blocks |
 | `max_iterations` | `10` | Tool rounds per user message. When spent, a prompt asks whether to grant more rounds or have the model answer with what it already has |
-| `max_file_kb` | `512` | Per-file read/write, command output, and MCP tool result size cap |
+| `max_file_kb` | `512` | Whole-file read/write, command output, and MCP tool result output cap; ranged `read_file` output keeps this cap while scanning is separately bounded |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
 
 The core set also includes `ask_user`, bounded `local_context`, and local

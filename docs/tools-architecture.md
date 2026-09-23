@@ -387,10 +387,12 @@ That's the whole shape: **schema → parse/convert → approval gate → sandbox
 
 `read_file` takes an optional 1-based `offset`/`limit` line range (default 200
 lines, hard cap `MaxReadLimit` = 500). Omitting both is the unchanged
-whole-file read. A ranged read returns the selected lines **verbatim** —
-`renderLineRange` adds one compact `[read_file: path lines A-B of N,
-next_offset=C]` header and never per-line numbers, so the model can copy a
-fragment straight into an `edit_file` `old_text`.
+whole-file read. A ranged read streams through the confined file, returns the
+selected lines **verbatim**, and keeps the returned body within
+`tools.max_file_kb`; scanning is separately bounded at 64 MiB. The result has
+one compact `[read_file: path lines A-B of N, next_offset=C]` header and never
+per-line numbers, so the model can copy a fragment straight into an
+`edit_file` `old_text`.
 
 `edit_file` performs exactly one literal, exact-match replacement in an
 existing text file: zero matches or more than one fails without writing.
