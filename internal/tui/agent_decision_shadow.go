@@ -96,6 +96,7 @@ func (m *Model) configureDecisionShadow() {
 	if !m.cfg.DecisionEngine.Enabled {
 		if old != nil {
 			_ = old.Close()
+			m.censorPendingPreVerifierCorrelations("")
 		}
 		return
 	}
@@ -104,12 +105,21 @@ func (m *Model) configureDecisionShadow() {
 		m.errText = err.Error()
 		if old != nil {
 			_ = old.Close()
+			m.censorPendingPreVerifierCorrelations("")
 		}
 		return
 	}
 	m.decisionShadow = svc
 	if old != nil {
 		_ = old.Close()
+		// Any prediction still pending against the just-closed service can
+		// no longer be assumed to belong to the same wiring a future
+		// dispatch will use; censor it now rather than let it either wait
+		// forever (if the old worker was killed outright) or, more
+		// subtly, finalize later using a probability meant for a model
+		// alias/runtime this reload just replaced. See
+		// censorPendingPreVerifierCorrelations's own doc comment.
+		m.censorPendingPreVerifierCorrelations("")
 	}
 }
 
@@ -499,6 +509,17 @@ func (m *Model) dispatchAgentDecisionPreVerifierShadow(run *agent.AgentRun, exec
 	m.agentLoop.preVerifierShadowGen++
 	gen := m.agentLoop.preVerifierShadowGen
 	runID, cycle := run.ID, run.Cycle
+	// Register the correlation entry synchronously, before the async Predict
+	// call is even scheduled — see preVerifierCorrelation's dispatched/
+	// dispatchGen fields. This is what lets a later arrival be matched
+	// against the exact dispatch it belongs to (by cycle+gen) instead of
+	// against the model's live cycle/gen at arrival time, which is the
+	// measurement defect this phase fixes: a fast multi-cycle run could
+	// previously make a still-legitimate late result indistinguishable from
+	// a genuinely stale/superseded one.
+	entry := m.preVerifierCorrelationEntry(runID, cycle)
+	entry.dispatched = true
+	entry.dispatchGen = gen
 	state := m.buildAgentDecisionShadowState(run, execution)
 	svc := m.decisionShadow.service
 	model := m.decisionShadow.model
@@ -511,13 +532,26 @@ func (m *Model) dispatchAgentDecisionPreVerifierShadow(run *agent.AgentRun, exec
 	}
 }
 
-// handleAgentDecisionPreVerifierShadow applies the stale-message guard, then
-// only ever calls recordPreVerifierPrediction — never touches run,
+// handleAgentDecisionPreVerifierShadow applies the stale-dispatch guard,
+// then only ever calls recordPreVerifierPrediction — never touches run,
 // execution, stop, or any authoritative field.
+//
+// The guard is against the correlation entry's OWN recorded dispatch
+// generation (set synchronously by dispatchAgentDecisionPreVerifierShadow),
+// not against the model's live cycle/gen: a result for a cycle that has
+// since been superseded by the next cycle's own dispatch is still a
+// legitimate, correlatable observation (see recordPreVerifierPrediction and
+// finalizePreVerifierCorrelationIfReady's Late accounting) — only a result
+// whose own dispatch was never registered, or was itself since evicted or
+// superseded by a second dispatch for the exact same cycle, is truly
+// unmatchable and counted Dropped.
 func (m *Model) handleAgentDecisionPreVerifierShadow(msg agentDecisionPreVerifierShadowMsg) (tea.Model, tea.Cmd) {
-	if m.agentLoop == nil || m.agentLoop.run == nil ||
-		msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
-		msg.gen != m.agentLoop.preVerifierShadowGen {
+	if m.agentLoop == nil {
+		return m, nil
+	}
+	entry, ok := m.preVerifierCorrelations[preVerifierCorrelationKey(msg.runID, msg.cycle)]
+	if !ok || !entry.dispatched || entry.dispatchGen != msg.gen {
+		m.preVerifierShadowMetrics.Dropped++
 		return m, nil
 	}
 	m.recordPreVerifierPrediction(msg)
@@ -543,6 +577,20 @@ type preVerifierCorrelation struct {
 	runID string
 	cycle int
 
+	// sequence is the insertion order used for deterministic bounded
+	// eviction (see preVerifierCorrelationEntry) — Go's map iteration order
+	// is randomized, so evicting "the first key iteration yields" silently
+	// stopped being oldest-first; sequence makes true-oldest eviction
+	// reproducible.
+	sequence int
+	// dispatched/dispatchGen record that dispatchAgentDecisionPreVerifierShadow
+	// registered this entry before returning its async command, and which
+	// generation that dispatch was. A prediction result is only accepted by
+	// handleAgentDecisionPreVerifierShadow when both match — see that
+	// function's doc comment.
+	dispatched  bool
+	dispatchGen int
+
 	predictionArrived             bool
 	verifierNeededProbability     float64
 	evidenceSufficientProbability float64
@@ -553,6 +601,11 @@ type preVerifierCorrelation struct {
 	actualSemanticVerifierRan bool
 	actualVerifierVerdict     agent.VerificationVerdict
 	actualDecision            agent.Decision
+	// baselineRoute is the verifier path the deployed policy actually took
+	// this cycle ("deterministic" or "semantic"), captured verbatim from the
+	// same value agent_loop.go already computes for the post-cycle shadow —
+	// this is "which route ran," not a ground-truth necessity label.
+	baselineRoute string
 }
 
 func preVerifierCorrelationKey(runID string, cycle int) string {
@@ -560,11 +613,58 @@ func preVerifierCorrelationKey(runID string, cycle int) string {
 }
 
 // preVerifierSample is one finalized (prediction, actual) pair retained for
-// a later threshold sweep. Bounded and content-free: a probability and a
-// boolean, nothing else.
+// a later threshold sweep. Bounded and content-free: probabilities,
+// booleans, and short closed-vocabulary labels, never raw task/criterion
+// text.
 type preVerifierSample struct {
 	Probability float64
-	ActualRan   bool
+	// ActualRan is the deployed POLICY's outcome — whether a semantic
+	// verifier actually ran this cycle. It is not ground truth about
+	// whether verification was actually necessary (see IndependentNeed):
+	// ApplyDeterministicCriteria's own shortcuts, `always` mode, and
+	// first-cycle behavior all influence it independently of need. Keep
+	// computeThresholdSweep (which uses this field) named and documented as
+	// policy agreement, never accuracy.
+	ActualRan bool
+
+	// Cycle and BaselineRoute are the run-relative provenance of this
+	// sample: which cycle produced it, and which verifier route the policy
+	// actually took ("deterministic" or "semantic") — set from the same
+	// value agent_loop.go already computes for the post-cycle shadow.
+	Cycle         int
+	BaselineRoute string
+
+	// IndependentNeed is an optional, externally supplied ground-truth
+	// label for whether semantic verification was actually necessary for
+	// this cycle. Production code never sets it — only an evaluation
+	// harness with an independent label source (a fixture's known answer, a
+	// reviewed record) attaches it to a copy of a sample before computing
+	// computeNeedThresholdSweep. nil means unlabeled/unknown; treating an
+	// unknown label as a known negative would silently understate the
+	// false-negative rate, so computeNeedThresholdSweep excludes it instead.
+	IndependentNeed *bool
+	// LabelSource names where IndependentNeed came from (e.g. "fixture",
+	// "manual_review"); always empty when IndependentNeed is nil.
+	LabelSource string
+	// FixtureHash identifies the exact fixture set a labeled sample came
+	// from, mirroring eval.Metadata.FixtureHash's purpose for this
+	// narrower, per-sample case.
+	FixtureHash string
+
+	// Availability is a closed-vocabulary outcome for this specific
+	// prediction: "available" (a real probability was obtained and is
+	// legitimate to include in a sweep — even when that probability is
+	// exactly 0), "unavailable" (a Predict error — never treated as
+	// probability 0), "late" (correlated successfully but after its cycle
+	// was no longer live), "dropped" (could never be correlated: no
+	// matching dispatch found), or "cancelled" (a pending entry was
+	// invalidated by run cancellation or decision-engine reload before it
+	// could resolve). Only "available" and "late" samples are ever
+	// appended to Model.preVerifierShadowSamples; dropped/cancelled/
+	// unavailable observations are counted in preVerifierShadowMetrics but
+	// never appended, so they can never masquerade as a confident
+	// probability of zero.
+	Availability string
 }
 
 // preVerifierShadowMetrics is the pre-verifier counterpart to
@@ -580,8 +680,34 @@ type preVerifierShadowMetrics struct {
 	Total              int
 	Available          int
 	ActualVerifierRuns int
-	// Diagnostic-only 0.5-threshold confusion matrix. Never used to gate
-	// anything; see the type doc comment.
+	// Unavailable counts a Predict error (worker crash, timeout, malformed
+	// answer) — tracked separately so an unavailable prediction is never
+	// conflated with a legitimate, confident probability of zero.
+	Unavailable int
+	// Late counts a prediction or actual-outcome arrival that correlated
+	// and finalized successfully (contributing to the confusion matrix and
+	// preVerifierShadowSamples below) but arrived after its cycle was no
+	// longer the model's live cycle — see finalizePreVerifierCorrelationIfReady.
+	// A late result may still finalize metrics; it may never overwrite
+	// lastDebug's fields for whatever cycle is live at arrival time.
+	Late int
+	// Dropped counts an arrival that could never be correlated at all: no
+	// registered dispatch entry matched it (never dispatched, matched a
+	// generation that was itself superseded, or the entry was evicted from
+	// the bounded correlation map before both halves arrived).
+	Dropped int
+	// Cancelled counts a pending (dispatched, not yet both-arrived-and-
+	// finalized) correlation entry that was proactively invalidated by run
+	// cancellation or a decision-engine config reload, rather than left to
+	// wait for a half that will now never arrive.
+	Cancelled int
+	// Duplicate counts a second arrival for a half (prediction or actual)
+	// that had already been recorded for the same correlation entry — never
+	// double-counted into Total/Available/the confusion matrix below.
+	Duplicate int
+	// Diagnostic-only 0.5-threshold confusion matrix, computed against the
+	// deployed POLICY's outcome (ActualRan), never ground truth. Never used
+	// to gate anything; see the type doc comment and preVerifierSample.ActualRan.
 	TruePositive  int
 	FalsePositive int
 	TrueNegative  int
@@ -590,14 +716,21 @@ type preVerifierShadowMetrics struct {
 
 // recordPreVerifierPrediction stores the prediction half of a correlation
 // record, creating it if the actual half hasn't arrived yet, and finalizes
-// immediately if the actual half already has (verifier-first ordering).
+// immediately if the actual half already has (verifier-first ordering). A
+// second arrival for a half already recorded is a duplicate: counted, not
+// reprocessed, so Total/Available/the confusion matrix can never double-count.
 func (m *Model) recordPreVerifierPrediction(msg agentDecisionPreVerifierShadowMsg) {
-	m.preVerifierShadowMetrics.Total++
 	entry := m.preVerifierCorrelationEntry(msg.runID, msg.cycle)
+	if entry.predictionArrived {
+		m.preVerifierShadowMetrics.Duplicate++
+		return
+	}
+	m.preVerifierShadowMetrics.Total++
 	entry.predictionArrived = true
 	entry.predictionLatency = msg.elapsed
 	if msg.err != nil {
 		entry.predictionErr = msg.err.Error()
+		m.preVerifierShadowMetrics.Unavailable++
 	} else {
 		m.preVerifierShadowMetrics.Available++
 		if needed, ok := msg.result.Answers["semantic_verifier_needed"]; ok {
@@ -607,29 +740,52 @@ func (m *Model) recordPreVerifierPrediction(msg agentDecisionPreVerifierShadowMs
 			entry.evidenceSufficientProbability = sufficient.Probability
 		}
 	}
-	m.lastDebug.DecisionShadowPreVerifierAvailable = entry.predictionErr == ""
-	m.lastDebug.DecisionShadowPreVerifierUnavailableReason = entry.predictionErr
-	m.lastDebug.DecisionShadowPreVerifierNeededProbability = entry.verifierNeededProbability
-	m.lastDebug.DecisionShadowPreVerifierEvidenceSufficientProbability = entry.evidenceSufficientProbability
+	if m.preVerifierEntryIsLive(entry) {
+		m.lastDebug.DecisionShadowPreVerifierAvailable = entry.predictionErr == ""
+		m.lastDebug.DecisionShadowPreVerifierUnavailableReason = entry.predictionErr
+		m.lastDebug.DecisionShadowPreVerifierNeededProbability = entry.verifierNeededProbability
+		m.lastDebug.DecisionShadowPreVerifierEvidenceSufficientProbability = entry.evidenceSufficientProbability
+	}
 	m.finalizePreVerifierCorrelationIfReady(entry)
 }
 
 // recordPreVerifierActual stores the authoritative-outcome half, called from
 // handleAgentVerification once agent.Decide() has resolved — see that call
-// site for why decisionShadowVerifierPath's value is exactly
-// "did a semantic verifier run this cycle."
-func (m *Model) recordPreVerifierActual(runID string, cycle int, semanticVerifierRan bool, verdict agent.VerificationVerdict, decision agent.Decision) {
+// site for why verifierRan's value is exactly "did a semantic verifier run
+// this cycle," and verifierPath for the same route captured as a string
+// ("deterministic" | "semantic") for preVerifierSample.BaselineRoute. A
+// second arrival for a half already recorded is a duplicate, counted and
+// otherwise ignored — see recordPreVerifierPrediction.
+func (m *Model) recordPreVerifierActual(runID string, cycle int, verifierRan bool, verdict agent.VerificationVerdict, decision agent.Decision, verifierPath string) {
 	entry := m.preVerifierCorrelationEntry(runID, cycle)
+	if entry.actualArrived {
+		m.preVerifierShadowMetrics.Duplicate++
+		return
+	}
 	entry.actualArrived = true
-	entry.actualSemanticVerifierRan = semanticVerifierRan
+	entry.actualSemanticVerifierRan = verifierRan
 	entry.actualVerifierVerdict = verdict
 	entry.actualDecision = decision
+	entry.baselineRoute = verifierPath
 	m.finalizePreVerifierCorrelationIfReady(entry)
 }
 
+// preVerifierEntryIsLive reports whether entry belongs to the model's
+// current, still-running cycle — the only case in which a correlation
+// arrival may write to m.lastDebug's pre-verifier fields. A prediction or
+// actual-outcome half that finalizes an older cycle's entry (the run moved
+// on, or ended, before it arrived) must never clobber the debug view of
+// whatever cycle is live now; see recordPreVerifierPrediction and
+// finalizePreVerifierCorrelationIfReady.
+func (m *Model) preVerifierEntryIsLive(entry *preVerifierCorrelation) bool {
+	return m.agentLoop != nil && m.agentLoop.run != nil &&
+		entry.runID == m.agentLoop.run.ID && entry.cycle == m.agentLoop.run.Cycle
+}
+
 // preVerifierCorrelationEntry returns the existing entry for (runID, cycle)
-// or creates one, evicting the oldest unfinalized entry first if the bounded
-// map is already full.
+// or creates one, evicting the true-oldest entry first (by insertion
+// sequence, never Go's randomized map order) if the bounded map is already
+// full.
 func (m *Model) preVerifierCorrelationEntry(runID string, cycle int) *preVerifierCorrelation {
 	if m.preVerifierCorrelations == nil {
 		m.preVerifierCorrelations = make(map[string]*preVerifierCorrelation)
@@ -639,14 +795,55 @@ func (m *Model) preVerifierCorrelationEntry(runID string, cycle int) *preVerifie
 		return entry
 	}
 	if len(m.preVerifierCorrelations) >= maxPreVerifierCorrelations {
-		for oldestKey := range m.preVerifierCorrelations {
-			delete(m.preVerifierCorrelations, oldestKey)
-			break
-		}
+		m.evictOldestPreVerifierCorrelation()
 	}
-	entry := &preVerifierCorrelation{runID: runID, cycle: cycle}
+	m.preVerifierSequence++
+	entry := &preVerifierCorrelation{runID: runID, cycle: cycle, sequence: m.preVerifierSequence}
 	m.preVerifierCorrelations[key] = entry
 	return entry
+}
+
+// evictOldestPreVerifierCorrelation removes the entry with the smallest
+// insertion sequence, i.e. the true oldest regardless of Go's map iteration
+// order, and counts it Dropped: whichever half of it (if any) had already
+// arrived can no longer be correlated with the other.
+func (m *Model) evictOldestPreVerifierCorrelation() {
+	var oldestKey string
+	oldestSeq := -1
+	for key, entry := range m.preVerifierCorrelations {
+		if oldestSeq == -1 || entry.sequence < oldestSeq {
+			oldestSeq = entry.sequence
+			oldestKey = key
+		}
+	}
+	if oldestKey == "" {
+		return
+	}
+	delete(m.preVerifierCorrelations, oldestKey)
+	m.preVerifierShadowMetrics.Dropped++
+}
+
+// censorPendingPreVerifierCorrelations invalidates every still-pending
+// (dispatched, not yet both-arrived) correlation entry for runID, or every
+// pending entry regardless of run when runID is empty. Called on run
+// cancellation (the cycle's actual-outcome half will now never be recorded,
+// since handleAgentVerification's resolution path is bypassed) and on
+// decision-engine config reload (the wired service producing future
+// predictions is being replaced). A pending entry that gets a late arrival
+// anyway after being censored is simply unmatchable — see
+// handleAgentDecisionPreVerifierShadow — and counts Dropped, not Cancelled,
+// keeping the two counters mutually exclusive.
+func (m *Model) censorPendingPreVerifierCorrelations(runID string) {
+	for key, entry := range m.preVerifierCorrelations {
+		if runID != "" && entry.runID != runID {
+			continue
+		}
+		if entry.predictionArrived && entry.actualArrived {
+			continue // already finalized/being deleted; nothing pending to censor
+		}
+		delete(m.preVerifierCorrelations, key)
+		m.preVerifierShadowMetrics.Cancelled++
+	}
 }
 
 // finalizePreVerifierCorrelationIfReady folds a correlation record into the
@@ -659,7 +856,12 @@ func (m *Model) finalizePreVerifierCorrelationIfReady(entry *preVerifierCorrelat
 	}
 	defer delete(m.preVerifierCorrelations, preVerifierCorrelationKey(entry.runID, entry.cycle))
 
-	m.lastDebug.DecisionShadowActualSemanticVerifierRan = entry.actualSemanticVerifierRan
+	live := m.preVerifierEntryIsLive(entry)
+	if live {
+		m.lastDebug.DecisionShadowActualSemanticVerifierRan = entry.actualSemanticVerifierRan
+	} else {
+		m.preVerifierShadowMetrics.Late++
+	}
 
 	if entry.predictionErr != "" {
 		return
@@ -678,12 +880,59 @@ func (m *Model) finalizePreVerifierCorrelationIfReady(entry *preVerifierCorrelat
 		m.preVerifierShadowMetrics.FalseNegative++
 	}
 
+	availability := "available"
+	if !live {
+		availability = "late"
+	}
 	m.preVerifierShadowSamples = append(m.preVerifierShadowSamples, preVerifierSample{
 		Probability: entry.verifierNeededProbability, ActualRan: entry.actualSemanticVerifierRan,
+		Cycle: entry.cycle, BaselineRoute: entry.baselineRoute, Availability: availability,
 	})
 	if len(m.preVerifierShadowSamples) > maxPreVerifierShadowSamples {
 		m.preVerifierShadowSamples = m.preVerifierShadowSamples[len(m.preVerifierShadowSamples)-maxPreVerifierShadowSamples:]
 	}
+}
+
+// computeNeedThresholdSweep is computeThresholdSweep's ground-truth
+// counterpart: it evaluates samples against each threshold using
+// IndependentNeed (an externally supplied label a caller has attached to a
+// copy of its samples) instead of ActualRan (the deployed policy's own
+// outcome). A sample with IndependentNeed == nil (unlabeled) or
+// Availability != "available"/"late" (no legitimate probability was ever
+// obtained) is excluded rather than silently counted as a known negative —
+// see preVerifierSample's field docs for why that distinction matters. Pure
+// and side-effect free, like computeThresholdSweep.
+func computeNeedThresholdSweep(samples []preVerifierSample, thresholds []float64) []thresholdRow {
+	labeled := make([]preVerifierSample, 0, len(samples))
+	for _, sample := range samples {
+		if sample.IndependentNeed == nil {
+			continue
+		}
+		if sample.Availability != "available" && sample.Availability != "late" {
+			continue
+		}
+		labeled = append(labeled, sample)
+	}
+	rows := make([]thresholdRow, 0, len(thresholds))
+	for _, threshold := range thresholds {
+		row := thresholdRow{Threshold: threshold}
+		for _, sample := range labeled {
+			predictedNeeded := sample.Probability >= threshold
+			needed := *sample.IndependentNeed
+			switch {
+			case predictedNeeded && needed:
+				row.TruePositive++
+			case predictedNeeded && !needed:
+				row.FalsePositive++
+			case !predictedNeeded && !needed:
+				row.TrueNegative++
+			case !predictedNeeded && needed:
+				row.FalseNegative++
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func boolToInt(b bool) int {
