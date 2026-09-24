@@ -130,3 +130,56 @@ func TestLayaCalibrationHarness(t *testing.T) {
 		t.Logf("%.2f       %d   %d   %d   %d", row.Threshold, row.TruePositive, row.FalsePositive, row.TrueNegative, row.FalseNegative)
 	}
 }
+
+// TestComputeNeedThresholdSweepExcludesUnknownAndUnavailableLabels covers
+// Phase 0a's ground-truth confusion matrix (computeNeedThresholdSweep),
+// distinct from computeThresholdSweep's policy-agreement one: it must
+// compute against IndependentNeed (an externally supplied label), and must
+// exclude any sample without a legitimate, labeled probability rather than
+// silently treating it as a known negative. Each case below names the
+// measurement-integrity scenario it stands in for.
+func TestComputeNeedThresholdSweepExcludesUnknownAndUnavailableLabels(t *testing.T) {
+	need := func(b bool) *bool { return &b }
+	samples := []preVerifierSample{
+		// Independently labeled would-skip false completion: the deployed
+		// policy did not run the verifier and Laya's own probability was
+		// also low, but ground truth says it actually was needed — a real
+		// miss against ground truth regardless of what the policy did.
+		{Probability: 0.2, ActualRan: false, Availability: "available", IndependentNeed: need(true), LabelSource: "fixture", Cycle: 1},
+		// Would-run unnecessary call: the policy ran the verifier and Laya
+		// predicted high, but ground truth says it was not necessary.
+		{Probability: 0.9, ActualRan: true, Availability: "available", IndependentNeed: need(false), LabelSource: "fixture", Cycle: 1},
+		// Unknown truth: no ground-truth label at all — must be excluded,
+		// never silently counted as a known negative.
+		{Probability: 0.95, ActualRan: true, Availability: "available", IndependentNeed: nil, Cycle: 2},
+		// Missing model / unavailable prediction: no legitimate probability
+		// was ever obtained, even though a label happens to be attached —
+		// Availability, not the label, gates inclusion.
+		{Probability: 0, ActualRan: false, Availability: "unavailable", IndependentNeed: need(true), LabelSource: "fixture", Cycle: 2},
+		// Verifier failure: the semantic verifier itself errored this
+		// cycle, leaving ground truth unknown — excluded like any other
+		// unlabeled sample.
+		{Probability: 0.5, ActualRan: true, Availability: "available", IndependentNeed: nil, Cycle: 3},
+		// Mixed-cycle outcome: labeled, available samples from different
+		// cycles must both still count toward the same sweep.
+		{Probability: 0.85, ActualRan: true, Availability: "available", IndependentNeed: need(true), LabelSource: "fixture", Cycle: 4},
+		{Probability: 0.15, ActualRan: false, Availability: "late", IndependentNeed: need(false), LabelSource: "fixture", Cycle: 5},
+		// Zero legitimate probability: a real, available, confidently-zero
+		// probability must be included as a legitimate negative, never
+		// treated as if it were an unavailable/missing prediction.
+		{Probability: 0, ActualRan: false, Availability: "available", IndependentNeed: need(false), LabelSource: "fixture", Cycle: 6},
+	}
+
+	rows := computeNeedThresholdSweep(samples, []float64{0.5})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.TruePositive != 1 || row.FalsePositive != 1 || row.TrueNegative != 2 || row.FalseNegative != 1 {
+		t.Fatalf("row = %+v, want TP=1 FP=1 TN=2 FN=1", row)
+	}
+	total := row.TruePositive + row.FalsePositive + row.TrueNegative + row.FalseNegative
+	if total != 5 {
+		t.Fatalf("labeled+available samples counted = %d, want 5 (3 of 8 excluded: 2 unknown-truth, 1 unavailable)", total)
+	}
+}

@@ -30,16 +30,24 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 	if trial.Status != "" || trial.NetworkCalls != 0 {
 		t.Fatalf("AgentTrial zero value = %+v, want empty new fields", trial)
 	}
+	if trial.LayaPreVerifierAvailability != "" || trial.LayaIndependentNeed != nil || trial.LayaLabelSource != "" || trial.LayaCensorReason != "" {
+		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 0a fields", trial)
+	}
 	trialJSON, err := json.Marshal(trial)
 	if err != nil {
 		t.Fatalf("marshal AgentTrial: %v", err)
 	}
-	for _, key := range []string{"\"status\"", "network_calls"} {
+	for _, key := range []string{
+		"\"status\"", "network_calls",
+		"laya_pre_verifier_availability", "laya_independent_need", "laya_label_source", "laya_censor_reason",
+	} {
 		if strings.Contains(string(trialJSON), key) {
 			t.Errorf("zero-value AgentTrial JSON unexpectedly carries %q: %s", key, trialJSON)
 		}
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 // TestReportFieldsRoundTripWhenPopulated guards the actual wiring contract:
 // once a caller sets the new fields, WriteJSONL must carry them through
@@ -56,6 +64,9 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 				Status: AgentTrialStatusCompleted, NetworkCalls: 2},
 			{Scenario: "s1", Trial: 2, ObservedAction: "read", FinalResult: "error",
 				Status: AgentTrialStatusProviderFailed},
+			{Scenario: "s1", Trial: 3, ObservedAction: "read", FinalResult: "ok",
+				LayaPreVerifierAvailability: "late", LayaIndependentNeed: boolPtr(true),
+				LayaLabelSource: "fixture", LayaCensorReason: "config_reload"},
 		},
 	}
 	var buf strings.Builder
@@ -66,6 +77,8 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 	for _, want := range []string{
 		`"baseline_sha":"abc1234"`, `"candidate_sha":"def5678"`, `"fixture_hash":"sha256:deadbeef"`,
 		`"status":"completed"`, `"network_calls":2`, `"status":"provider_failed"`,
+		`"laya_pre_verifier_availability":"late"`, `"laya_independent_need":true`,
+		`"laya_label_source":"fixture"`, `"laya_censor_reason":"config_reload"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("WriteJSONL output missing %q:\n%s", want, out)
