@@ -1,3 +1,17 @@
+╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                │
+│     ▄▄▄▄▄▄▄     │  llmtui  /  Welcome back                                                     │
+│     ██          │  demo-model                                                                  │
+│     ██          │                                                                              │
+│     ██          │  Get started                                                                 │
+│     ███████     │  Type a message to begin                                                     │
+│     ▀▀▀▀▀▀▀     │  /models  models   /history  sessions                                        │
+│                    /help    commands and shortcuts                                             │
+│                                                                                                │
+│  Workspace tools off  ·  /tools on to enable                                                   │
+│                                                                                                │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+
 - Thought
 Inspecting the current frame.
 

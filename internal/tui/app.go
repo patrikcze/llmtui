@@ -3094,6 +3094,7 @@ func (m *Model) refreshViewport() {
 // go stale and show old content. session.Rev() alone is not enough — it
 // only tells us the message set changed, not how the change should render.
 type transcriptCacheKey struct {
+	model              string
 	rev                int
 	width              int
 	theme              string
@@ -3123,6 +3124,7 @@ func (m *Model) settledTranscriptKey() transcriptCacheKey {
 		ragLen = m.ragIndex.Len()
 	}
 	return transcriptCacheKey{
+		model:              m.model,
 		rev:                m.session.Rev(),
 		width:              m.width,
 		theme:              m.theme.Name,
@@ -3208,15 +3210,11 @@ func (m *Model) renderSettledTranscript() string {
 		b.WriteString("\n\n")
 	}
 
-	// Standing disclosure while agent mode is on: the user must always be
-	// able to see that the model can act on this directory, and which one.
-	if m.toolsOn && m.toolRunner != nil {
-		mode := "asks before writes & commands"
-		if m.toolsAutoApprove {
-			mode = "auto-approve"
-		}
-		b.WriteString(m.theme.SystemNote.Render(fmt.Sprintf(
-			"⚒ workspace tools on (%s) — the model can act on files and run commands only in\n  %s — /tools off to disable", mode, terminaltext.Sanitize(m.toolRunner.Root()))))
+	if !m.hasConversation() {
+		b.WriteString(m.renderWelcomePanel())
+		b.WriteString("\n\n")
+	} else if m.toolsOn && m.toolRunner != nil {
+		b.WriteString(m.renderWorkspacePanel())
 		b.WriteString("\n\n")
 	}
 
