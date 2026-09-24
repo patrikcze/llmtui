@@ -62,3 +62,27 @@ func TestWorkspacePanelPreservesDisclosure(t *testing.T) {
 		}
 	}
 }
+
+func TestWelcomeDividerAlignment(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	column := -1
+	rows := 0
+	for _, line := range strings.Split(ansi.Strip(m.renderWelcomePanel()), "\n") {
+		// Ignore the outer frame; the remaining vertical stroke is the logo rail.
+		inner := strings.TrimSuffix(strings.TrimPrefix(line, "│"), "│")
+		before, _, found := strings.Cut(inner, "│")
+		if !found {
+			continue
+		}
+		got := lipgloss.Width(before)
+		if column >= 0 && got != column {
+			t.Fatalf("divider shifted from column %d to %d: %q", column, got, line)
+		}
+		column = got
+		rows++
+	}
+	if rows != 6 {
+		t.Fatalf("divider rows = %d, want 6", rows)
+	}
+}

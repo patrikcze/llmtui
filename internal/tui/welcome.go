@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"strings"
-
 	"charm.land/lipgloss/v2"
 
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -67,7 +65,7 @@ func (m *Model) welcomeFrame(content string) string {
 	// Width includes padding; the two border cells are additional.
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.theme.PanelEdge).Padding(1, 2).
-		Width(width - 2).Render(strings.TrimSpace(content))
+		Width(width - 2).Render(content)
 }
 
 func (m *Model) hasConversation() bool {
