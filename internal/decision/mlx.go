@@ -20,7 +20,11 @@ import (
 //go:embed mlx_worker.py
 var mlxWorker string
 
-const mlxProtocol = 1
+// mlxProtocol 2 adds the strict-capacity-admission request field and the
+// per-question input_usage response field (Phase 0b); a worker/Go side on
+// mismatched protocol numbers fails the handshake exactly as protocol 1 did
+// on any other mismatch — see exchange's protocol check.
+const mlxProtocol = 2
 const mlxFrameLimit = 8 << 20
 
 // MLXRuntimeLoader executes verified local checkpoints with laya-mlx 0.2.0.
@@ -106,6 +110,10 @@ type mlxRequest struct {
 	ModelPath string              `json:"model_path,omitempty"`
 	State     any                 `json:"state"`
 	Questions map[string]Question `json:"questions,omitempty"`
+	// Strict carries PredictOptions.RequireCompleteInput to the worker,
+	// which measures exact token usage before running inference and
+	// rejects with code="capacity" if any question would lose content.
+	Strict bool `json:"strict,omitempty"`
 }
 
 type mlxResponse struct {
@@ -115,7 +123,8 @@ type mlxResponse struct {
 	Code     string `json:"code"`
 	MLXRuntimeInfo
 	Result struct {
-		Answers map[string]mlxAnswer `json:"answers"`
+		Answers    map[string]mlxAnswer          `json:"answers"`
+		InputUsage map[string]QuestionInputUsage `json:"input_usage,omitempty"`
 	} `json:"result"`
 }
 
@@ -225,11 +234,14 @@ func (e *MLXEngine) RuntimeInfo() MLXRuntimeInfo { return e.info }
 // must never be inserted into a prompt or displayed as trusted terminal text.
 func (e *MLXEngine) Diagnostics() string { return e.stderr.String() }
 
-func (e *MLXEngine) Predict(ctx context.Context, state any, questions map[string]Question, _ PredictOptions) (Result, error) {
+func (e *MLXEngine) Predict(ctx context.Context, state any, questions map[string]Question, opts PredictOptions) (Result, error) {
 	if err := Validate(state, questions); err != nil {
 		return Result{}, err
 	}
-	response, err := e.exchange(ctx, mlxRequest{Type: "predict", Protocol: mlxProtocol, State: state, Questions: questions})
+	response, err := e.exchange(ctx, mlxRequest{
+		Type: "predict", Protocol: mlxProtocol, State: state, Questions: questions,
+		Strict: opts.RequireCompleteInput,
+	})
 	if err != nil {
 		return Result{}, &MLXRuntimeError{Err: err, diagnostics: e.Diagnostics()}
 	}
@@ -237,7 +249,7 @@ func (e *MLXEngine) Predict(ctx context.Context, state any, questions map[string
 		_ = e.Close()
 		return Result{}, fmt.Errorf("%w: expected MLX result", ErrUnavailable)
 	}
-	result, err := convertMLXAnswers(questions, response.Result.Answers)
+	result, err := convertMLXAnswers(questions, response.Result.Answers, response.Result.InputUsage)
 	if err != nil {
 		_ = e.Close()
 		return Result{}, fmt.Errorf("%w: invalid MLX result: %v", ErrUnavailable, err)
@@ -313,6 +325,12 @@ func (e *MLXEngine) exchange(ctx context.Context, request mlxRequest) (mlxRespon
 		if out.response.Type == "error" {
 			if out.response.Code == "request" && request.Type == "predict" {
 				return mlxResponse{}, fmt.Errorf("%w: Laya rejected the question format or token budget", ErrInvalid)
+			}
+			if out.response.Code == "capacity" && request.Type == "predict" {
+				// A strict rejection is a verdict about this request's
+				// content, not a worker health problem — the worker stays
+				// usable for the next request, matching "request" above.
+				return mlxResponse{}, fmt.Errorf("%w: input would be truncated under strict capacity admission", ErrInvalid)
 			}
 			_ = e.Close()
 			return mlxResponse{}, mlxWorkerError(out.response.Code)
