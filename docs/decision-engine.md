@@ -102,7 +102,10 @@ references, MaxLoaded/LRU eviction, and closing. Busy entries may temporarily
 exceed MaxLoaded; release evicts idle surplus entries. Failed workers retire
 and are recreated on a subsequent request, without retrying a failed prediction.
 The Python Laya Router is deliberately unused: there is only one residency
-manager. `Router.Close` waits for in-flight references before closing engines.
+manager. `Router.Close` never waits for an in-flight prediction or a cold
+model load (Phase 0c, below): a busy loaded entry is marked for its
+releasing caller to close later, and a load still in progress is cancelled
+and left for its own goroutine to unwind and discard.
 
 Each engine serializes an entire exchange using a cancellable gate. A queued
 cancellation leaves the active exchange alone. Cancellation during I/O kills
@@ -111,6 +114,51 @@ consumed by a later request. Close is idempotent, closes pipes, kills the
 contained process group, and joins the sole child waiter. Stderr is continuously
 drained into a bounded 16 KiB tail, available via `Diagnostics` for explicit
 debugging; it is never copied into a decision or ordinary error message.
+
+### Non-blocking reload/close during a cold load (Phase 0c)
+
+`Router.acquire` previously held the Router mutex across the entire
+`LoadRuntime` call — disk verification, spawning the Python subprocess, and
+its `ready` handshake. `Router.Close` (invoked synchronously from
+`/config reload` and application shutdown, see `agent_decision_shadow.go`)
+takes the same mutex, so a config reload or shutdown while any alias was
+cold-loading would block behind that load for as long as it took, up to
+`startMLX`'s own two-minute import/init bound. This is fixed, still purely a
+lifecycle change: no loading, eviction, or `MaxLoaded` policy is different.
+
+- **acquire reserves, then releases the lock before I/O.** The first caller
+  to observe no cached entry for an alias inserts a placeholder entry and
+  launches exactly one background goroutine (`runLoad`) to perform the
+  actual `Installation` lookup and `LoadRuntime` call, then returns to
+  waiting like every other caller. No goroutine ever runs that I/O while
+  holding the mutex.
+- **Every caller for that alias waits on the same load**, including the one
+  that started it, via a channel closed once `runLoad` publishes a result —
+  never by polling or holding the lock. Concurrently calling `Predict` many
+  times for a brand-new alias still triggers exactly one `Load` call
+  (`TestRouterConcurrentAcquireLoadsOnce`).
+- **A cancelled waiter's ctx never cancels the shared load.** The load's own
+  context is independent of any individual caller's; one caller giving up
+  only releases that caller's own reservation, and a second, still-waiting
+  caller's `Predict` still succeeds from the same load
+  (`TestRouterAcquireWaiterCancellationDoesNotAbortLoadForOthers`).
+- **`Close` cancels pending loads and returns immediately** — it never waits
+  for a load's goroutine to actually unwind
+  (`TestRouterCloseDoesNotBlockOnInFlightLoad`). A load that fails from that
+  cancellation is removed without ever being cached
+  (`TestRouterLoadFailsAfterCloseNeverPublishes`); a load that finishes
+  successfully anyway (a loader that doesn't check `ctx` promptly) is closed
+  immediately instead of published
+  (`TestRouterLateSuccessfulLoadClosesEngineAfterClose`).
+- **Eviction never touches a still-loading entry.** An idle, fully loaded
+  entry beyond `MaxLoaded` is still evicted as before; an entry with a load
+  in flight has no engine yet and is skipped regardless of map iteration
+  order (`TestRouterEvictionSkipsEntryStillLoading`).
+- **No Engine.Close call — eviction's, a busy release's, or Close's own —
+  ever runs while `r.mu` is held.** Every closed engine is collected under
+  the lock and closed only after unlocking, so a slow worker teardown can
+  never block an unrelated `acquire`/`Predict`/`Close` either
+  (`TestRouterReleaseAfterCloseClosesBusyEngine`, `TestRouterCloseIsIdempotent`).
 
 ## Protocol and result contract
 

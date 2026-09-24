@@ -71,10 +71,13 @@ func newDecisionShadowService(cfg *config.Config) (*decisionShadowService, error
 }
 
 // Close is nil-receiver safe and idempotent (decision.Service.Close and
-// decision.Router.Close both are). Router.Close never blocks on an in-flight
-// prediction — a busy worker is marked for lazy close by the releasing
-// Predict call instead — so this is safe to call synchronously from the
-// Update() goroutine during /config reload or shutdown.
+// decision.Router.Close both are). Router.Close never blocks on an
+// in-flight prediction — a busy worker is marked for lazy close by the
+// releasing Predict call instead — nor on an in-flight cold model load
+// (Phase 0c: acquire never holds the Router mutex across LoadRuntime, and
+// Close cancels a pending load instead of waiting for it) — so this is
+// safe to call synchronously from the Update() goroutine during /config
+// reload or shutdown.
 func (d *decisionShadowService) Close() error {
 	if d == nil || d.service == nil {
 		return nil
@@ -87,9 +90,10 @@ func (d *decisionShadowService) Close() error {
 // mcpRegistry/personalApps (which are silently dropped and rebuilt on
 // reload, an accepted tradeoff documented at their call sites), the old
 // service here is explicitly closed before being replaced: an un-Closed
-// Router leaks its MLX subprocess indefinitely, and Router.Close is verified
-// non-blocking on any in-flight prediction (see Close's doc comment above),
-// so there is no Update()-blocking risk in doing this synchronously.
+// Router leaks its MLX subprocess indefinitely, and Router.Close is
+// verified non-blocking on any in-flight prediction or in-flight cold load
+// (see Close's doc comment above), so there is no Update()-blocking risk
+// in doing this synchronously.
 func (m *Model) configureDecisionShadow() {
 	old := m.decisionShadow
 	m.decisionShadow = nil
