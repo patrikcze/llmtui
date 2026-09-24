@@ -17,11 +17,21 @@ import (
 // internal/decision/*_test.go are unexported and package-scoped, so this is
 // a small standalone one for package tui.
 type fakeDecisionEngine struct {
-	result   decision.Result
-	err      error
-	delay    time.Duration
-	predicts atomic.Int32
-	closed   atomic.Bool
+	result decision.Result
+	// preVerifierResult, when non-nil, is returned for a Predict call whose
+	// questions match the pre-verifier set (identified by the presence of
+	// "evidence_sufficient", which never appears in the post-cycle
+	// question set) instead of result. nil falls back to result — which
+	// will fail decision.Service's ValidateResult for the pre-verifier
+	// question set (different question count/names), surfacing as a
+	// recorded-but-harmless "unavailable" for that call, exactly like a
+	// real malformed-answer failure would. Existing tests that don't set
+	// this field are unaffected either way.
+	preVerifierResult *decision.Result
+	err               error
+	delay             time.Duration
+	predicts          atomic.Int32
+	closed            atomic.Bool
 }
 
 func (e *fakeDecisionEngine) Name() string { return "fake" }
@@ -37,6 +47,11 @@ func (e *fakeDecisionEngine) Predict(ctx context.Context, state any, questions m
 	}
 	if e.err != nil {
 		return decision.Result{}, e.err
+	}
+	if e.preVerifierResult != nil {
+		if _, ok := questions["evidence_sufficient"]; ok {
+			return *e.preVerifierResult, nil
+		}
 	}
 	return e.result, nil
 }
@@ -102,8 +117,10 @@ func TestDecisionShadowUnavailableAgentUnchanged(t *testing.T) {
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 1 {
 		t.Fatalf("run = %+v, want unaffected by decision engine error", m.agentLoop.run)
 	}
-	if fake.predicts.Load() != 1 {
-		t.Fatalf("predicts = %d, want exactly 1 shadow call", fake.predicts.Load())
+	// One cycle now dispatches two shadow calls sharing this engine: the
+	// pre-verifier counterfactual shadow and the post-cycle shadow.
+	if fake.predicts.Load() != 2 {
+		t.Fatalf("predicts = %d, want exactly 2 shadow calls (pre-verifier + post-cycle)", fake.predicts.Load())
 	}
 	if m.lastDebug.DecisionShadowUnavailableReason == "" {
 		t.Fatal("want DecisionShadowUnavailableReason set for a worker error")
@@ -298,8 +315,10 @@ func TestDecisionShadowSameServiceAcrossCycles(t *testing.T) {
 	if m.decisionShadow != svc {
 		t.Fatal("decisionShadow was reconstructed mid-run")
 	}
-	if fake.predicts.Load() != 2 {
-		t.Fatalf("predicts = %d, want exactly one shadow call per cycle (2)", fake.predicts.Load())
+	// 2 cycles x 2 shadow calls each (pre-verifier + post-cycle), all
+	// sharing this one engine instance.
+	if fake.predicts.Load() != 4 {
+		t.Fatalf("predicts = %d, want exactly 4 shadow calls (2 cycles x pre-verifier+post-cycle)", fake.predicts.Load())
 	}
 }
 

@@ -92,8 +92,14 @@ reasoning, or full tool output) is sent to the configured Laya model, and its
 recorded in `/debug last` next to the authoritative decision. Like the
 format-assistance tracker, this is shadow-only: no prediction changes
 verifier mode, skips verification, forces success, ends a run, or authorizes
-anything. See [decision-engine.md](decision-engine.md) for the engine itself,
-the Snake-demo design analogy, and the future-phase roadmap.
+anything. A second, earlier Laya observation runs immediately after
+deterministic criteria are applied — before any verifier call exists —
+asking only whether semantic verification looks needed, specifically to
+calibrate the future one-way escalation gate described below; it is
+reconciled against the cycle's later actual outcome and is equally
+shadow-only. See [decision-engine.md](decision-engine.md) for both
+observations, the engine itself, the Snake-demo design analogy, and the
+future-phase roadmap.
 
 ## Lifecycle
 

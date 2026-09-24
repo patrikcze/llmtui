@@ -248,6 +248,20 @@ type AgentTrial struct {
 	UnexpectedSideEffect bool   `json:"unexpected_side_effect,omitempty"`
 	DuplicateEffect      bool   `json:"duplicate_effect,omitempty"`
 	MutationCount        int    `json:"mutation_count,omitempty"`
+
+	// Laya* fields carry the optional pre-verifier/post-cycle shadow advisor
+	// calibration data for one trial (internal/tui/agent_decision_shadow.go).
+	// Additive and zero-value safe, matching Status/NetworkCalls above:
+	// nothing in this package populates them, and no consumer here reads
+	// them — a caller (the opt-in calibration harness in
+	// internal/tui/agent_decision_calibration_test.go) sets them from its
+	// own trial run. Never a raw prompt, tool argument, or reasoning
+	// excerpt — probabilities and identifiers only.
+	LayaModel                        string  `json:"laya_model,omitempty"`
+	LayaPreVerifierAvailable         bool    `json:"laya_pre_verifier_available,omitempty"`
+	LayaPreVerifierNeededProbability float64 `json:"laya_pre_verifier_needed_probability,omitempty"`
+	LayaPostCycleAction              string  `json:"laya_post_cycle_action,omitempty"`
+	LayaPostCycleActionProbability   float64 `json:"laya_post_cycle_action_probability,omitempty"`
 }
 
 // RunConformanceMatrix repeats the existing harmless provider probe. A

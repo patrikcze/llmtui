@@ -100,13 +100,36 @@ type debugInfo struct {
 	// option's own probability even on a clean, correctly-answered,
 	// in-distribution example (see internal/decision/testdata/mlx/typed-decisions-mlx.json's
 	// "department" case: probabilities.billing=0.7448 but confidence=0.3903).
-	DecisionShadowCycleActionProbability    float64
+	DecisionShadowCycleActionProbability float64
+	// DecisionShadowCycleActionProbabilities is the full cycle_action
+	// distribution (every choice, not just the winning one) — added after
+	// manual calibration found the single winning probability alone cannot
+	// tell you whether a losing option (e.g. ask_user) was ever seriously
+	// considered or sits structurally near zero for this question framing.
+	DecisionShadowCycleActionProbabilities  map[string]float64
 	DecisionShadowGoalCompleteProbability   float64
 	DecisionShadowVerifierNeededProbability float64
 	DecisionShadowLatency                   time.Duration
 	DecisionShadowUnavailableReason         string
 	DecisionShadowActualVerifierPath        string
 	DecisionShadowActualDecision            string
+	// DecisionShadowPreVerifier* fields are the Phase 2 pre-verifier
+	// counterfactual shadow's most recent prediction — see
+	// internal/tui/agent_decision_shadow.go's "Pre-verifier counterfactual
+	// shadow" section. Same SHADOW-ONLY contract as the DecisionShadow*
+	// fields above. DecisionShadowPreVerifierAvailable is the "was a
+	// successful prediction received" signal — deliberately a separate
+	// bool, not inferred from either probability being non-zero: 0.0 is a
+	// legitimate probability value, so that would silently hide a real
+	// prediction whenever both answers happened to be exactly zero.
+	DecisionShadowPreVerifierAvailable                     bool
+	DecisionShadowPreVerifierNeededProbability             float64
+	DecisionShadowPreVerifierEvidenceSufficientProbability float64
+	DecisionShadowPreVerifierUnavailableReason             string
+	// DecisionShadowActualSemanticVerifierRan is set once a cycle's
+	// correlation record finalizes (both the prediction and the actual
+	// outcome have arrived) — see finalizePreVerifierCorrelationIfReady.
+	DecisionShadowActualSemanticVerifierRan bool
 	// PersonalAppsResult is the bounded, already-sanitized Output of the most
 	// recent personal_apps tool call — the exact JSON (outcomes, codes,
 	// detail messages) the model itself received. A live investigation found
