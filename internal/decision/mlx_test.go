@@ -36,21 +36,23 @@ func TestMLXWorkerHelper(t *testing.T) {
 		os.Exit(0)
 	}
 	if mode == "protocol" {
-		fmt.Println(`{"type":"ready","protocol":2}`)
+		// A stale/mismatched worker reporting an older protocol number than
+		// the current mlxProtocol must still be rejected as a mismatch.
+		fmt.Println(`{"type":"ready","protocol":1}`)
 		os.Exit(0)
 	}
 	if mode == "dependencies" {
-		fmt.Println(`{"type":"error","protocol":1,"code":"dependencies"}`)
+		fmt.Printf(`{"type":"error","protocol":%d,"code":"dependencies"}`+"\n", mlxProtocol)
 		os.Exit(0)
 	}
 	if mode == "handshake_type" {
-		fmt.Println(`{"type":"result","protocol":1}`)
+		fmt.Printf(`{"type":"result","protocol":%d}`+"\n", mlxProtocol)
 		os.Exit(0)
 	}
 	if mode == "stderr" {
 		fmt.Fprint(os.Stderr, strings.Repeat("x", 128<<10)+"tail marker")
 	}
-	fmt.Println(`{"type":"ready","protocol":1,"version":"0.2.0"}`)
+	fmt.Printf(`{"type":"ready","protocol":%d,"version":"0.2.0"}`+"\n", mlxProtocol)
 	if mode == "exit" {
 		os.Exit(3)
 	}
@@ -74,6 +76,10 @@ func TestMLXWorkerHelper(t *testing.T) {
 		if mode == "wrong_id" {
 			req.ID++
 		}
+		if mode == "strict_reject" {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "error", "protocol": mlxProtocol, "id": req.ID, "code": "capacity"})
+			continue
+		}
 		answers := map[string]any{
 			"department": map[string]any{"type": "choice", "choice": "billing", "confidence": 0.8332, "probabilities": map[string]float64{"billing": 0.9554, "technical": 0.0446}},
 			"urgency":    map[string]any{"type": "score", "score": 1.4465, "confidence": 0.1588, "probabilities": map[string]float64{"0": 0.0956, "1": 0.3624, "2": 0.542}},
@@ -85,7 +91,26 @@ func TestMLXWorkerHelper(t *testing.T) {
 		if mode == "missing_noul" {
 			answers["refund"] = map[string]any{"type": "noul", "confidence": 0.9}
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "result", "protocol": mlxProtocol, "id": req.ID, "result": map[string]any{"answers": answers}})
+		result := map[string]any{"answers": answers}
+		usage := map[string]any{
+			"department": map[string]any{"head_tokens": 6, "option_tokens": 8, "state_tokens": 20, "max_len": 512, "state_budget": 494, "head_truncated": false, "options_truncated": false, "state_truncated": false},
+			"urgency":    map[string]any{"head_tokens": 5, "option_tokens": 20, "state_tokens": 20, "max_len": 512, "state_budget": 480, "head_truncated": false, "options_truncated": false, "state_truncated": false},
+			"refund":     map[string]any{"head_tokens": 4, "option_tokens": 10, "state_tokens": 20, "max_len": 512, "state_budget": 490, "head_truncated": false, "options_truncated": false, "state_truncated": false},
+		}
+		switch mode {
+		case "usage_unknown_question":
+			usage["nonexistent"] = map[string]any{"head_tokens": 1, "option_tokens": 1, "state_tokens": 1, "max_len": 512, "state_budget": 500}
+		case "usage_negative":
+			usage["department"] = map[string]any{"head_tokens": -1, "option_tokens": 8, "state_tokens": 20, "max_len": 512, "state_budget": 494}
+		case "usage_over_budget":
+			usage["department"] = map[string]any{"head_tokens": 6, "option_tokens": 8, "state_tokens": 600, "max_len": 512, "state_budget": 494}
+		case "no_usage":
+			usage = nil
+		}
+		if usage != nil {
+			result["input_usage"] = usage
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "result", "protocol": mlxProtocol, "id": req.ID, "result": result})
 	}
 	os.Exit(0)
 }
@@ -148,6 +173,81 @@ func TestMLXProtocolReuseAndMapping(t *testing.T) {
 		t.Fatalf("closed predict: %v", err)
 	}
 }
+
+// TestMLXInputUsagePopulatedNonStrict covers Phase 0b: a non-strict predict
+// call still receives per-question capacity diagnostics from the worker,
+// and existing answer semantics are unaffected.
+func TestMLXInputUsagePopulatedNonStrict(t *testing.T) {
+	e := fakeMLX(t, "ok")
+	result, err := e.Predict(context.Background(), map[string]any{"body": "refund"}, mlxQuestions(), PredictOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.InputUsage) != 3 {
+		t.Fatalf("InputUsage entries = %d, want 3", len(result.InputUsage))
+	}
+	usage, ok := result.InputUsage["department"]
+	if !ok || usage.HeadTokens != 6 || usage.MaxLen != 512 || usage.Truncated() {
+		t.Fatalf("department usage = %+v, want the fake worker's fixed values untruncated", usage)
+	}
+}
+
+// TestMLXNoUsageInResponseLeavesInputUsageEmpty covers a backend/older
+// worker that never reports usage: Result.InputUsage must stay nil/empty,
+// never fabricated, and the answers themselves are unaffected.
+func TestMLXNoUsageInResponseLeavesInputUsageEmpty(t *testing.T) {
+	e := fakeMLX(t, "no_usage")
+	result, err := e.Predict(context.Background(), nil, mlxQuestions(), PredictOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.InputUsage) != 0 {
+		t.Fatalf("InputUsage = %+v, want empty when the worker reports none", result.InputUsage)
+	}
+	if result.Answers["department"].Choice != "billing" {
+		t.Fatalf("answers affected by absent usage: %+v", result.Answers)
+	}
+}
+
+// TestMLXStrictCapacityRejectionDoesNotKillWorker covers Phase 0b's
+// invariant "capacity rejection need not imply a permanently dead worker":
+// a strict request the worker rejects for capacity must surface as
+// ErrInvalid (a verdict about this request, not the worker's health), and
+// the same engine must remain usable for the very next request.
+func TestMLXStrictCapacityRejectionDoesNotKillWorker(t *testing.T) {
+	e := fakeMLX(t, "strict_reject")
+	_, err := e.Predict(context.Background(), nil, mlxQuestions(), PredictOptions{RequireCompleteInput: true})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("strict rejection error = %v, want ErrInvalid", err)
+	}
+	select {
+	case <-e.done:
+		t.Fatal("worker was killed/reaped after a capacity rejection")
+	default:
+	}
+}
+
+// TestMLXMalformedInputUsageRejected covers robustness against a corrupted
+// or hand-crafted usage map: it must never be silently trusted for capacity
+// accounting, and (matching existing malformed-answer handling such as
+// "missing"/"missing_noul") the engine is closed rather than reused with an
+// unverified result.
+func TestMLXMalformedInputUsageRejected(t *testing.T) {
+	for _, mode := range []string{"usage_unknown_question", "usage_negative", "usage_over_budget"} {
+		t.Run(mode, func(t *testing.T) {
+			e := fakeMLX(t, mode)
+			if _, err := e.Predict(context.Background(), nil, mlxQuestions(), PredictOptions{}); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("error = %v, want ErrUnavailable", err)
+			}
+			select {
+			case <-e.done:
+			default:
+				t.Fatal("worker not reaped after a malformed usage response")
+			}
+		})
+	}
+}
+
 func TestMLXHandshakeFailures(t *testing.T) {
 	for _, mode := range []string{"malformed_handshake", "protocol", "dependencies", "handshake_type"} {
 		t.Run(mode, func(t *testing.T) {

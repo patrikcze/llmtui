@@ -3,10 +3,12 @@ package decision
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,8 +77,48 @@ func TestMLXIntegration(t *testing.T) {
 					if got.Answers["department"].Choice != "billing" {
 						t.Fatalf("department=%s", got.Answers["department"].Choice)
 					}
+					// Routing.Revision is bound by Router.Predict (see
+					// TestRouterBindsLoadedRevisionNotNewestCatalog), not by
+					// the engine directly — this test calls engine.Predict
+					// without a Router, so Routing.Revision is intentionally
+					// not asserted here.
+					// Phase 0b: real tokenizer-backed capacity diagnostics
+					// for this small, non-truncated golden fixture state —
+					// every question gets a usage entry, and none of this
+					// fixture's short questions should be flagged truncated.
+					if len(got.InputUsage) != len(c.Questions) {
+						t.Fatalf("InputUsage has %d entries, want one per question (%d)", len(got.InputUsage), len(c.Questions))
+					}
+					for id, usage := range got.InputUsage {
+						if usage.Truncated() {
+							t.Fatalf("question %q unexpectedly truncated on a small golden fixture: %+v", id, usage)
+						}
+						if usage.MaxLen <= 0 || usage.HeadTokens <= 0 {
+							t.Fatalf("question %q has implausible usage: %+v", id, usage)
+						}
+					}
 				}
 				t.Logf("%s: first %s; warm mean (5) %s", c.Name, first, warm/5)
+
+				// Phase 0b: strict admission must succeed unchanged on input
+				// that comfortably fits the budget.
+				strictGot, err := engine.Predict(ctx, c.State, c.Questions, PredictOptions{RequireCompleteInput: true})
+				if err != nil {
+					t.Fatalf("strict predict on small input: %v", err)
+				}
+				compareMLXGolden(t, c.Expected, strictGot, 0.002)
+
+				// Phase 0b: strict admission must reject — before any
+				// answer is produced — input that would lose content to
+				// the tokenizer's budget, and must leave the worker usable
+				// for the next (non-strict or fitting) request.
+				overflowState := map[string]any{"body": strings.Repeat("duplicate charge refund billing dispute ", 400)}
+				if _, err := engine.Predict(ctx, overflowState, c.Questions, PredictOptions{RequireCompleteInput: true}); err == nil || !errors.Is(err, ErrInvalid) {
+					t.Fatalf("strict predict on oversized input: err = %v, want ErrInvalid", err)
+				}
+				if _, err := engine.Predict(ctx, c.State, c.Questions, PredictOptions{}); err != nil {
+					t.Fatalf("engine unusable after a strict capacity rejection: %v", err)
+				}
 			}
 		})
 	}

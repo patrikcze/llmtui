@@ -117,3 +117,50 @@ func TestRouterRejectsUnknownModel(t *testing.T) {
 		t.Fatalf("NewRouter() error = %v, want ErrInvalid", err)
 	}
 }
+
+// TestRouterBindsLoadedRevisionNotNewestCatalog covers Phase 0b: the
+// revision attached to a prediction is the one actually loaded, bound once
+// at load time — not re-derived from a later, possibly-newer installation
+// that appears in the store while the loaded engine is still cached and in
+// use. This is exactly the gap the plan's §3 flagged: "newestValidInstallation
+// chooses the newest revision; Predict re-queries the catalog for
+// Repository but never carried a bound Revision at all."
+func TestRouterBindsLoadedRevisionNotNewestCatalog(t *testing.T) {
+	root := t.TempDir()
+	english := readyInstallation(t, root, "english")
+	store := routerStore{
+		catalog:       []ModelDescriptor{LayaModels[0]},
+		installations: map[string][]Installation{modelID("english"): {english}},
+	}
+	loader := &routerLoader{}
+	router, err := NewRouter(RouterOptions{Store: store, Loader: loader, MaxLoaded: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := map[string]Question{"q": {Type: QuestionChoice, Criteria: []string{"yes", "no"}}}
+	first, err := router.Predict(context.Background(), nil, question, PredictOptions{Model: "english"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Routing.Revision != "english-revision" {
+		t.Fatalf("Routing.Revision = %q, want %q", first.Routing.Revision, "english-revision")
+	}
+
+	// A newer installation appears in the store — the router never
+	// re-inspects while the cached engine (MaxLoaded=1, single alias, never
+	// evicted) is still loaded, so the bound revision must not change.
+	newer := english
+	newer.Manifest.Source.Revision = "english-revision-newer"
+	store.installations[modelID("english")] = append(store.installations[modelID("english")], newer)
+
+	second, err := router.Predict(context.Background(), nil, question, PredictOptions{Model: "english"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Routing.Revision != "english-revision" {
+		t.Fatalf("Routing.Revision drifted to %q after a newer installation appeared, want the still-loaded %q", second.Routing.Revision, "english-revision")
+	}
+	if len(loader.engines) != 1 {
+		t.Fatalf("loader calls = %d, want 1 (engine reused, never reloaded)", len(loader.engines))
+	}
+}
