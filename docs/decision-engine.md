@@ -114,13 +114,14 @@ debugging; it is never copied into a decision or ordinary error message.
 
 ## Protocol and result contract
 
-The embedded worker uses version 1 JSON lines over stdin/stdout. `init`
-contains `model_path`; `ready` includes package/Python versions and timing.
-`probe` checks platform, imports, pinned package version, and Metal without
-loading a model. `predict` contains `state`, `questions`, and a monotonically
-increasing ID; `result` must echo the protocol and ID. Both sides bound frames
-to 8 MiB. Native and Python diagnostic stdout are redirected to stderr before
-MLX imports, preserving the protocol channel.
+The embedded worker uses version 2 JSON lines over stdin/stdout (bumped from
+1 by Phase 0b, see below). `init` contains `model_path`; `ready` includes
+package/Python versions and timing. `probe` checks platform, imports, pinned
+package version, and Metal without loading a model. `predict` contains
+`state`, `questions`, a monotonically increasing ID, and an optional `strict`
+flag; `result` must echo the protocol and ID. Both sides bound frames to 8
+MiB. Native and Python diagnostic stdout are redirected to stderr before MLX
+imports, preserving the protocol channel.
 
 Loads use FP16, GPU, batch_size=16, compile=false, cache_prompts=false. These
 match the baseline reference; compilation and prompt caching are deliberately
@@ -135,12 +136,64 @@ used for policy. Go never calls `DecodeLogits` on already calibrated MLX
 answers. `BuildSequence` and `DecodeLogits` remain for future native backends.
 Map keys are sorted by Go JSON encoding; ordered choice lists preserve order.
 
+### Token-capacity and provenance diagnostics (Phase 0b)
+
+Two gaps existed before any active-influence phase could be trusted: a
+question's head/options/state could be silently truncated by the pinned
+tokenizer's fixed budget with no way to tell, and a prediction's `Routing`
+carried no binding to the exact installation revision that actually produced
+it (`Router.Predict` re-derived `Repository` from a fresh catalog query,
+which can drift if a newer installation appears while the loaded engine is
+still cached). Both are fixed, still 100% diagnostic — neither changes any
+answer or agent behavior on its own:
+
+- **Exact token usage, not a Go-side estimate.** `mlx_worker.py` measures
+  every question's admitted head/option/state token counts and whether raw
+  (untruncated) content exceeded them, using the exact pinned tokenizer
+  (`agent.tok`) and the exact upstream sequence-construction functions
+  (`laya_mlx.common.build_prefix`/`render_options`/`serialize_state`) that
+  `agent.predict()` itself uses — never a second, independent tokenizer, and
+  never estimated from Go byte counts. This runs before every predict call
+  (cheap, tokenizer-only, no GPU forward pass) and is reported in the
+  `result.input_usage` field, decoded into `decision.Result.InputUsage`
+  (`map[string]decision.QuestionInputUsage`). A missing entry for a question
+  means the backend could not measure it — never a confident zero-truncation
+  claim.
+- **`PredictOptions.RequireCompleteInput`** (wire: `strict`) requests
+  admission control: if any question's input would lose content, the worker
+  rejects with `code="capacity"` — mapped to `ErrInvalid` — *before* running
+  the GPU forward pass, so a strict caller can never receive an answer
+  computed from truncated input. Rejection is a verdict about that specific
+  request, not the worker's health: the same engine stays usable for the
+  next request (mirrors the existing `code="request"` handling). Default
+  `RequireCompleteInput` is `false`; every existing caller is unaffected
+  except that `Result.InputUsage` now also comes back populated.
+- **Exact loaded-installation provenance.** `Router.acquire` now binds the
+  selected installation's `Manifest.Source.Revision` onto the cached
+  `routerEntry` at load time and returns it alongside the engine;
+  `Router.Predict` sets `Routing.Revision` from that bound value, never from
+  a later catalog re-query — so it cannot silently relabel predictions if a
+  newer installation appears while the currently-loaded engine is still in
+  use (`TestRouterBindsLoadedRevisionNotNewestCatalog`).
+- **`validateQuestionInputUsage`** rejects a usage map that names an unknown
+  question, has non-positive `max_len`, negative counts, or admits more
+  tokens than its own budget — a corrupted or hand-crafted worker response
+  is never silently trusted for capacity accounting.
+
+Real-tokenizer boundary behavior (exact-fit, one-token overflow, head/option/
+state truncation independently, multilingual/non-ASCII content, and every
+question type) is verified against the real pinned tokenizer and checkpoint
+in `TestMLXIntegration`'s strict-mode assertions — protocol mocks alone
+cannot prove a real tokenizer boundary is measured correctly.
+
 ## Validation and reproducibility
 
 Normal tests use the Go test executable as a fake worker, without Python or
 models. They cover framing, mapping, reuse, concurrent requests, cancellation,
 crashes, stderr flooding, broken pipes, startup errors, close/reap, source
-integrity, router recovery/eviction, and platform gating.
+integrity, router recovery/eviction, platform gating, strict-mode capacity
+rejection without killing the worker, and rejection of a malformed/corrupted
+`input_usage` response.
 
 Real integration is explicit and performs no downloads:
 
@@ -164,7 +217,10 @@ python internal/decision/testdata/mlx/reference.py \
 This generator calls **direct** `Agent.predict`, without the bridge, with
 socket connections disabled. English, multilingual (including French input),
 and typed-decisions fixtures cover choice, score, and noul. Integration runs
-one first and five warm predictions per case in the same worker. It reports
+one first and five warm predictions per case in the same worker, then (Phase
+0b) one strict-mode predict on that same small fixture state (must succeed
+unchanged) and one on a deliberately oversized state (must reject with
+`ErrInvalid` and leave the engine usable for the next request). It reports
 process/bootstrap, Python import, model load, first, and warm timings
 separately. Process/bootstrap is measured handshake time less reported import
 and load, so includes interpreter and protocol overhead. Hash verification is
