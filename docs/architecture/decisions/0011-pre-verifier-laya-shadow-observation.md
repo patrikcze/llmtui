@@ -138,3 +138,25 @@ warn against accumulating without limit).
   real-checkpoint) cycles rather than starting from zero evidence — but no
   threshold exists yet, and this ADR's shadow-only boundary is not relaxed
   by that future work without a fresh ADR.
+
+## Update (Phase 0a measurement-integrity fixes, 2026-09-24)
+
+A follow-up review of this ADR's own correlation bookkeeping (§3/§10 of
+`.claude/tasks/plans/laya-decision-architecture.md`) found several defects
+that would have understated or overstated calibration evidence without
+changing agent behavior — see docs/decision-engine.md's "Measurement
+integrity (Phase 0a)" section for the full list. In summary: the correlation
+entry is now registered synchronously at dispatch time (not on first
+arrival), so a late-but-legitimate result from an old cycle can still
+finalize into the confusion matrix and sample history without overwriting
+`/debug last`'s fields for whatever cycle is actually live; bounded-map
+eviction is now deterministic (true insertion order, not Go's randomized map
+iteration); duplicate arrivals for an already-recorded half are idempotent;
+and a new, explicit ground-truth axis (`IndependentNeed`, set only by an
+evaluation harness, never production) is computed separately from the
+existing policy-agreement `ActualRan` sweep via a new pure
+`computeNeedThresholdSweep`, so a sample with unknown ground truth or no
+legitimate probability can never be silently counted as a known negative.
+This ADR's shadow-only boundary is unchanged: every fix here is either
+accounting or a correction to bookkeeping this ADR always intended to be
+shadow-only.

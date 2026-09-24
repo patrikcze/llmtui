@@ -133,6 +133,20 @@ disagreement, calls by purpose, token use, context omissions, recovery
 attempts, and elapsed time. Do not infer statistical universality from five
 trials.
 
+## Laya shadow-advisor calibration
+
+`eval.AgentTrial` additionally carries optional `Laya*` fields
+(`internal/tui/agent_decision_shadow.go`, `internal/tui/agent_decision_calibration_test.go`)
+populated only by the opt-in calibration harness, never by production code.
+As of Phase 0a, those fields distinguish two separate axes that must never be
+conflated: the deployed **policy's** own outcome (`ActualRan`/`BaselineRoute`,
+swept by `computeThresholdSweep`) versus an externally supplied **ground-truth**
+label for whether verification was actually necessary (`IndependentNeed`,
+swept separately by `computeNeedThresholdSweep`, which excludes any sample
+with an unknown label or without a legitimate, available probability). See
+docs/decision-engine.md's "Measurement integrity (Phase 0a)" section for the
+full accounting-category list (`Late`/`Dropped`/`Cancelled`/`Unavailable`/`Duplicate`).
+
 ## Saved-state compatibility
 
 Agent-run persistence remains schema version 1. New receipts and recovery
