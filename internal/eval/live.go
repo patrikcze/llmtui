@@ -262,6 +262,32 @@ type AgentTrial struct {
 	LayaPreVerifierNeededProbability float64 `json:"laya_pre_verifier_needed_probability,omitempty"`
 	LayaPostCycleAction              string  `json:"laya_post_cycle_action,omitempty"`
 	LayaPostCycleActionProbability   float64 `json:"laya_post_cycle_action_probability,omitempty"`
+
+	// The fields below are Phase 0a's measurement-integrity additions
+	// (see internal/tui/agent_decision_shadow.go's preVerifierSample and
+	// .claude/tasks/plans/laya-decision-architecture.md §11.0a). Additive
+	// and zero-value safe like the Laya* fields above: nothing in this
+	// package populates them, and no consumer here reads them — only an
+	// opt-in calibration harness with an independent label source sets
+	// them, on its own local copy of the trial, after the run completes.
+	//
+	// LayaPreVerifierAvailability is the closed-vocabulary outcome of the
+	// trial's final pre-verifier observation: "available", "unavailable",
+	// "late", "dropped", or "cancelled" — see preVerifierSample.Availability.
+	LayaPreVerifierAvailability string `json:"laya_pre_verifier_availability,omitempty"`
+	// LayaIndependentNeed is an externally supplied ground-truth label for
+	// whether semantic verification was actually necessary, distinct from
+	// whichever route the policy actually took. nil (omitted) means
+	// unlabeled — never interpreted as a known negative.
+	LayaIndependentNeed *bool `json:"laya_independent_need,omitempty"`
+	// LayaLabelSource names where LayaIndependentNeed came from (e.g.
+	// "fixture", "manual_review"); always empty when it is nil.
+	LayaLabelSource string `json:"laya_label_source,omitempty"`
+	// LayaCensorReason is non-empty only when the trial's final pre-verifier
+	// correlation was invalidated by run cancellation or a decision-engine
+	// config reload before it could resolve — see
+	// censorPendingPreVerifierCorrelations.
+	LayaCensorReason string `json:"laya_censor_reason,omitempty"`
 }
 
 // RunConformanceMatrix repeats the existing harmless provider probe. A

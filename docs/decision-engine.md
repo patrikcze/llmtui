@@ -262,6 +262,60 @@ found the single winning probability (and `Confidence`) both close to
 uninterpretable in isolation; seeing every option's probability is what
 actually answers whether a losing option was ever seriously considered.
 
+### Measurement integrity (Phase 0a)
+
+The pre-verifier correlation's bookkeeping had several defects that would
+have silently understated or overstated calibration evidence for any future
+`guarded_assist` gate, without changing agent behavior itself. All are fixed
+in `internal/tui/agent_decision_shadow.go`, still 100% shadow-only:
+
+- **Dispatch-time registration.** `dispatchAgentDecisionPreVerifierShadow`
+  now registers the correlation entry (and the generation that dispatch
+  used) synchronously, before returning its async command — not on first
+  arrival of either half. A later arrival is matched against that entry's
+  own recorded dispatch, not against whatever cycle happens to be live when
+  it shows up.
+- **Late vs. dropped vs. cancelled vs. unavailable, counted separately**
+  (`preVerifierShadowMetrics`). A prediction that finally arrives after a
+  fast multi-cycle run has already moved on is `Late`: it still finalizes
+  into the confusion matrix and the raw-sample history, but it can no
+  longer overwrite `/debug last`'s fields for whatever cycle is actually
+  live — only a genuinely current (same run, same cycle, same dispatch
+  generation) arrival may do that. An arrival that can't be matched to any
+  registered dispatch at all (never dispatched, or matched a generation a
+  later same-cycle dispatch superseded) is `Dropped`. A pending entry
+  invalidated by run cancellation or a decision-engine config reload —
+  because the missing half can now never arrive through the normal path —
+  is `Cancelled`. A `Predict` error is `Unavailable`, and is never treated
+  as a confident probability of zero; unavailable/dropped/cancelled
+  observations are counted but never appended to the raw-sample history.
+- **Deterministic bounded eviction.** The 16-entry correlation map now
+  evicts by a true insertion sequence, not Go's randomized map iteration
+  order, so a full map behaves reproducibly under test and in a real
+  calibration run.
+- **Duplicate arrivals are idempotent.** A second arrival for a half already
+  recorded is counted (`Duplicate`) and otherwise ignored — it can never
+  double-count `Total`/`Available`/the confusion matrix.
+- **Ground truth is a distinct axis from policy agreement.**
+  `preVerifierSample` now additionally carries `Cycle`, `BaselineRoute`
+  (which verifier path the deployed policy actually took), and three
+  fields an evaluation harness — never production code — attaches
+  afterward: `IndependentNeed` (an optional externally supplied label for
+  whether verification was *actually* necessary), `LabelSource`, and
+  `Availability`. The existing `computeThresholdSweep` stays exactly what
+  it always was — a policy-agreement sweep against `ActualRan` — and a new
+  `computeNeedThresholdSweep` computes the ground-truth sweep against
+  `IndependentNeed` instead, explicitly excluding any sample with an
+  unknown label or without a legitimate, available probability rather than
+  silently counting it as a known negative. `eval.AgentTrial` gained the
+  matching additive fields (`LayaPreVerifierAvailability`,
+  `LayaIndependentNeed`, `LayaLabelSource`, `LayaCensorReason`).
+
+None of this changes what any run does — every fix is either accounting
+(what gets counted, and how) or a correction to what was already supposed
+to be shadow-only bookkeeping. `decision_engine.enabled=false` still means
+zero prediction/worker/model-load activity, exactly as before.
+
 ### The Snake-demo analogy
 
 The design mirrors [laya-mlx's Snake

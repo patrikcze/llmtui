@@ -357,6 +357,10 @@ type Model struct {
 	preVerifierCorrelations  map[string]*preVerifierCorrelation
 	preVerifierShadowMetrics preVerifierShadowMetrics
 	preVerifierShadowSamples []preVerifierSample
+	// preVerifierSequence is a monotonic insertion counter for
+	// preVerifierCorrelations, used only for deterministic true-oldest
+	// bounded eviction — see evictOldestPreVerifierCorrelation.
+	preVerifierSequence int
 }
 
 // New builds the chat model.

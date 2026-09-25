@@ -1283,7 +1283,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	// was ever dispatched for this cycle, so recording an actual half here
 	// would only create a correlation entry that can never be finalized.
 	if m.decisionShadow != nil {
-		m.recordPreVerifierActual(run.ID, run.Cycle, decisionShadowVerifierPath == "semantic", result.Verdict, stop.Decision)
+		m.recordPreVerifierActual(run.ID, run.Cycle, decisionShadowVerifierPath == "semantic", result.Verdict, stop.Decision, decisionShadowVerifierPath)
 	}
 	switch stop.Decision {
 	case agent.DecisionContinue, agent.DecisionRetry:
@@ -1370,6 +1370,12 @@ func (m *Model) cancelVerifiedRun(reason string) {
 	}
 	m.clearVerifierActivity()
 	if m.agentRunActive() {
+		// A cancelled cycle's handleAgentVerification resolution path never
+		// runs, so recordPreVerifierActual will never supply this cycle's
+		// actual-outcome half — censor any still-pending pre-verifier
+		// correlation for this run now rather than leave it waiting for a
+		// half that can no longer arrive (see censorPendingPreVerifierCorrelations).
+		m.censorPendingPreVerifierCorrelations(m.agentLoop.run.ID)
 		m.agentLoop.run.Cancel(reason, time.Now())
 	}
 	if m.agentLoop.runCancel != nil {
