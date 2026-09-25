@@ -1053,7 +1053,12 @@ func (r *Runner) readLineRangeContext(ctx context.Context, file *os.File, displa
 		meta.Window.NextByteOffset = int64Ptr(max(0, windowStartByte) + int64(consumed))
 		fmt.Fprintf(&header, "; next_byte_offset=%d", *meta.Window.NextByteOffset)
 	}
-	if !scanLimited && !complete {
+	// last < lineNo-1 is the same condition the header uses to print
+	// "next_offset=..." (see the switch above). A fully scanned source
+	// (complete == true) with a narrower requested window still has more
+	// lines after last; the typed field must not go stale just because the
+	// whole file was read for identity/hashing purposes.
+	if !scanLimited && last < lineNo-1 {
 		meta.Window.NextOffset = int64Ptr(int64(last + 1))
 	}
 	if text == "" {

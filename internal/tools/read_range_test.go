@@ -186,6 +186,14 @@ func TestReadFileRangeStreamsBeyondLegacyPrefix(t *testing.T) {
 	if res.Meta.Window.StartByte != int64(wantStart) || res.Meta.Window.EndByte != int64(wantEnd) {
 		t.Fatalf("window = %+v, want byte range [%d,%d)", res.Meta.Window, wantStart, wantEnd)
 	}
+	// The header text above already advertises "next_offset=902" for this
+	// fully-scanned-but-partially-selected window. The typed field must agree
+	// with it: mechanical continuation logic reads Window.NextOffset, not the
+	// header prose, and a caller must not lose this signal on a normal
+	// (non-scan-limited) file just because the whole source was scanned.
+	if res.Meta.Window.NextOffset == nil || *res.Meta.Window.NextOffset != 902 {
+		t.Fatalf("window.NextOffset = %v, want typed 902 matching the header prose", res.Meta.Window.NextOffset)
+	}
 }
 
 func TestReadFileRangeCancellation(t *testing.T) {
