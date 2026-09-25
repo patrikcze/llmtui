@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/agentverify"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/decision"
 	"github.com/patrikcze/llmtui/internal/redact"
@@ -97,6 +98,33 @@ type agentCriterionAssessmentMsg struct {
 	model        string
 	measurements []criterionAssessmentMeasurement
 	elapsed      time.Duration
+	assist       bool
+	assistGen    int
+	verifyGen    int
+	fallback     agent.VerificationResult
+	profile      criterionAssistProfile
+}
+
+// criterionAssistProfile binds the one-way criterion-assist decision to an
+// independently reviewed G2 report. The shipped map is intentionally empty;
+// tests may inject a profile to exercise the guarded control flow without
+// granting production authority.
+type criterionAssistProfile struct {
+	ModelAlias             string
+	ModelRevision          string
+	ContradictionThreshold float64
+	MaxWait                time.Duration
+	EvidenceReport         string
+}
+
+var criterionAssistProfiles = map[string]criterionAssistProfile{}
+
+func resolveCriterionAssistProfile(alias string) (criterionAssistProfile, bool) {
+	profile, ok := criterionAssistProfiles[alias]
+	if !ok || profile.ModelAlias == "" || profile.MaxWait <= 0 || profile.ContradictionThreshold < 0 || profile.ContradictionThreshold > 1 {
+		return criterionAssistProfile{}, false
+	}
+	return profile, true
 }
 
 type criterionAssessmentMetrics struct {
@@ -350,6 +378,39 @@ func (m *Model) dispatchCriterionAssessment(run *agent.AgentRun, execution agent
 		!m.cfg.DecisionEngine.Enabled || m.cfg.DecisionEngine.ResolvedMode() != config.DecisionEngineModeCriterionShadow {
 		return nil
 	}
+	return m.dispatchCriterionAssessmentBatch(run, execution, false, agent.VerificationResult{}, 0, 0, criterionAssessmentBatchTimeout, nil, criterionAssistProfile{})
+}
+
+// dispatchCriterionAssessmentAssist starts the same bounded criterion batch
+// as the Phase 3 shadow path, but only for an eligible synthetic-success
+// route with an injected G2-backed profile. The prediction is awaited by the
+// controller and can only request the existing semantic verifier.
+func (m *Model) dispatchCriterionAssessmentAssist(run *agent.AgentRun, execution agent.ExecutionResult, fallback agent.VerificationResult, verifyGen int) tea.Cmd {
+	if m.agentLoop == nil || m.decisionShadow == nil || m.decisionShadow.service == nil ||
+		!m.cfg.DecisionEngine.Enabled || m.cfg.DecisionEngine.ResolvedMode() != config.DecisionEngineModeCriterionAssist {
+		return nil
+	}
+	profile, ok := resolveCriterionAssistProfile(m.decisionShadow.model)
+	if !ok {
+		return nil
+	}
+	remaining := time.Until(run.CreatedAt.Add(run.Limits.MaxElapsed))
+	deadline := profile.MaxWait
+	if remaining < deadline {
+		deadline = remaining
+	}
+	if deadline <= 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(m.agentContext(), deadline)
+	m.agentLoop.criterionAssistCancel = cancel
+	m.agentLoop.criterionAssistPending = true
+	m.agentLoop.criterionAssistGen++
+	assistGen := m.agentLoop.criterionAssistGen
+	return m.dispatchCriterionAssessmentBatch(run, execution, true, fallback, verifyGen, assistGen, deadline, ctx, profile)
+}
+
+func (m *Model) dispatchCriterionAssessmentBatch(run *agent.AgentRun, execution agent.ExecutionResult, assist bool, fallback agent.VerificationResult, verifyGen, assistGen int, timeout time.Duration, parentCtx context.Context, profile criterionAssistProfile) tea.Cmd {
 	m.agentLoop.criterionAssessmentGen++
 	gen := m.agentLoop.criterionAssessmentGen
 	requests := make([]criterionAssessmentRequest, 0, criterionAssessmentMaxCriteria)
@@ -383,7 +444,13 @@ func (m *Model) dispatchCriterionAssessment(run *agent.AgentRun, execution agent
 	runID, cycle, model := run.ID, run.Cycle, m.decisionShadow.model
 	svc := m.decisionShadow.service
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), criterionAssessmentBatchTimeout)
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if parentCtx != nil {
+			ctx, cancel = context.WithCancel(parentCtx)
+		} else {
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		}
 		defer cancel()
 		start := time.Now()
 		for i := range requests {
@@ -416,7 +483,11 @@ func (m *Model) dispatchCriterionAssessment(run *agent.AgentRun, execution agent
 				}
 			}
 		}
-		return agentCriterionAssessmentMsg{runID: runID, cycle: cycle, gen: gen, model: model, measurements: measurements, elapsed: time.Since(start)}
+		return agentCriterionAssessmentMsg{
+			runID: runID, cycle: cycle, gen: gen, model: model, measurements: measurements,
+			elapsed: time.Since(start), assist: assist, assistGen: assistGen, verifyGen: verifyGen,
+			fallback: fallback, profile: profile,
+		}
 	}
 }
 
@@ -466,7 +537,56 @@ func (m *Model) handleAgentCriterionAssessment(msg agentCriterionAssessmentMsg) 
 		return m, nil
 	}
 	m.recordCriterionAssessment(msg)
-	return m, nil
+	if !msg.assist {
+		return m, nil
+	}
+	if m.agentLoop.run == nil || msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
+		msg.gen != m.agentLoop.criterionAssessmentGen || msg.assistGen != m.agentLoop.criterionAssistGen || msg.verifyGen != m.agentLoop.verifyGen ||
+		!m.agentLoop.criterionAssistPending || m.agentLoop.run.Status != agent.DecisionRunning {
+		return m, nil
+	}
+	m.agentLoop.criterionAssistPending = false
+	if m.agentLoop.criterionAssistCancel != nil {
+		m.agentLoop.criterionAssistCancel()
+		m.agentLoop.criterionAssistCancel = nil
+	}
+	escalate, reason := criterionAssistRecommendation(msg.measurements, msg.profile)
+	m.lastDebug.DecisionCriterionAssistEligible = true
+	m.lastDebug.DecisionCriterionAssistProfile = msg.profile.ModelAlias
+	m.lastDebug.DecisionCriterionAssistEscalated = escalate
+	m.lastDebug.DecisionCriterionAssistReason = reason
+	if !escalate {
+		return m, func() tea.Msg {
+			return agentVerificationMsg{runID: msg.runID, cycle: msg.cycle, gen: msg.verifyGen, out: agentverify.Output{Result: msg.fallback}}
+		}
+	}
+	if m.agentLoop.verifyCancel != nil {
+		m.agentLoop.verifyCancel()
+	}
+	ctx, cancel := context.WithCancel(m.agentContext())
+	m.agentLoop.verifyCancel = cancel
+	m.agentLoop.verifying = true
+	return m, m.dispatchVerifierAttempt(m.agentLoop.run, m.agentLoop.execution, ctx, msg.verifyGen)
+}
+
+func criterionAssistRecommendation(measurements []criterionAssessmentMeasurement, profile criterionAssistProfile) (bool, string) {
+	available := false
+	for _, measurement := range measurements {
+		if measurement.Availability != criterionAssessmentAvailable {
+			continue
+		}
+		available = true
+		if measurement.Signal == criterionAssessmentContradiction && measurement.ContradictionProbability >= profile.ContradictionThreshold {
+			return true, "contradiction"
+		}
+		if measurement.Signal == criterionAssessmentAdvisoryAbstain {
+			return true, "ambiguous"
+		}
+	}
+	if !available {
+		return false, "unavailable"
+	}
+	return false, "support_only"
 }
 
 // criterionAssessmentStateFor uses the TUI-owned cache only after the pure

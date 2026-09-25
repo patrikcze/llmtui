@@ -448,6 +448,12 @@ func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, el
 		row.LayaCriterionAssessmentSupportProbability = m.lastDebug.DecisionCriterionAssessmentSupportProbability
 		row.LayaCriterionAssessmentContradictionProbability = m.lastDebug.DecisionCriterionAssessmentContradictionProbability
 	}
+	if m.cfg.DecisionEngine.ResolvedMode() == config.DecisionEngineModeCriterionAssist {
+		row.LayaCriterionAssistEligible = m.lastDebug.DecisionCriterionAssistEligible
+		row.LayaCriterionAssistProfile = m.lastDebug.DecisionCriterionAssistProfile
+		row.LayaCriterionAssistEscalated = m.lastDebug.DecisionCriterionAssistEscalated
+		row.LayaCriterionAssistReason = m.lastDebug.DecisionCriterionAssistReason
+	}
 	row.FinalResult = string(run.Status)
 	row.PromptTokens = run.PromptTokens
 	row.CompletionTokens = run.CompletionTokens

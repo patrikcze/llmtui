@@ -457,6 +457,8 @@ func TestDecisionEngineModeResolution(t *testing.T) {
 		{"empty resolves shadow", DecisionEngineConfig{}, DecisionEngineModeShadow},
 		{"explicit shadow", DecisionEngineConfig{Mode: "shadow"}, DecisionEngineModeShadow},
 		{"explicit guarded_assist", DecisionEngineConfig{Mode: "guarded_assist"}, DecisionEngineModeGuardedAssist},
+		{"explicit criterion_shadow", DecisionEngineConfig{Mode: "criterion_shadow"}, DecisionEngineModeCriterionShadow},
+		{"explicit criterion_assist", DecisionEngineConfig{Mode: "criterion_assist"}, DecisionEngineModeCriterionAssist},
 		{"explicit criterion shadow", DecisionEngineConfig{Mode: "criterion_shadow"}, DecisionEngineModeCriterionShadow},
 		{"case-insensitive", DecisionEngineConfig{Mode: "Guarded_Assist"}, DecisionEngineModeGuardedAssist},
 		{"whitespace trimmed", DecisionEngineConfig{Mode: "  guarded_assist  "}, DecisionEngineModeGuardedAssist},

@@ -41,6 +41,9 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 		trial.LayaCriterionAssessmentAvailability != "" || trial.LayaCriterionAssessmentSpecFingerprint != "" {
 		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 3 fields", trial)
 	}
+	if trial.LayaCriterionAssistEligible || trial.LayaCriterionAssistProfile != "" || trial.LayaCriterionAssistEscalated || trial.LayaCriterionAssistReason != "" {
+		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 4b fields", trial)
+	}
 	trialJSON, err := json.Marshal(trial)
 	if err != nil {
 		t.Fatalf("marshal AgentTrial: %v", err)
@@ -52,6 +55,7 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 		"laya_guarded_assist_threshold", "laya_guarded_assist_escalated", "laya_guarded_assist_reason",
 		"laya_criterion_assessment_mode", "laya_criterion_assessment_total", "laya_criterion_assessment_availability",
 		"laya_criterion_assessment_spec_fingerprint",
+		"laya_criterion_assist_eligible", "laya_criterion_assist_profile", "laya_criterion_assist_escalated", "laya_criterion_assist_reason",
 	} {
 		if strings.Contains(string(trialJSON), key) {
 			t.Errorf("zero-value AgentTrial JSON unexpectedly carries %q: %s", key, trialJSON)
@@ -90,6 +94,9 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 				LayaCriterionAssessmentSignal: "support", LayaCriterionAssessmentSpecFingerprint: "spec-hash",
 				LayaCriterionAssessmentEvidenceFingerprint: "evidence-hash", LayaCriterionAssessmentModelRevision: "rev-1",
 				LayaCriterionAssessmentSupportProbability: 0.82, LayaCriterionAssessmentContradictionProbability: 0.04},
+			{Scenario: "s1", Trial: 6, ObservedAction: "read", FinalResult: "ok",
+				LayaCriterionAssistEligible: true, LayaCriterionAssistProfile: "english-mlx",
+				LayaCriterionAssistEscalated: true, LayaCriterionAssistReason: "contradiction"},
 		},
 	}
 	var buf strings.Builder
@@ -109,6 +116,8 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 		`"laya_criterion_assessment_available":1`, `"laya_criterion_assessment_abstained":1`,
 		`"laya_criterion_assessment_signal":"support"`, `"laya_criterion_assessment_spec_fingerprint":"spec-hash"`,
 		`"laya_criterion_assessment_evidence_fingerprint":"evidence-hash"`, `"laya_criterion_assessment_model_revision":"rev-1"`,
+		`"laya_criterion_assist_eligible":true`, `"laya_criterion_assist_profile":"english-mlx"`,
+		`"laya_criterion_assist_escalated":true`, `"laya_criterion_assist_reason":"contradiction"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("WriteJSONL output missing %q:\n%s", want, out)

@@ -76,6 +76,12 @@ type agentLoopState struct {
 	// and must never be able to satisfy each other's staleness check. See
 	// agent_decision_shadow.go's "Pre-verifier counterfactual shadow" section.
 	preVerifierShadowGen int
+	// criterionAssistCancel/criterionAssistGen guard the optional Phase 4b
+	// criterion-assist wait. A live assist may only add the existing semantic
+	// verifier; cancellation or a later cycle invalidates its result.
+	criterionAssistGen     int
+	criterionAssistCancel  context.CancelFunc
+	criterionAssistPending bool
 	// guardedAssistGen/guardedAssistCancel/pendingVerificationPlan back
 	// Phase 1's guarded-assist decision wait (agent_decision_policy.go) —
 	// unlike decisionShadowGen/preVerifierShadowGen, this one IS something
@@ -1050,6 +1056,16 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 
 	if plan.Route == agentVerificationPlanSynthetic {
+		// Phase 4b is a measured, one-way criterion-assist gate. It is
+		// considered only for the same synthetic-success branches that Phase 1
+		// may guard, and only when a G2-backed profile is resolved. The shared
+		// criterion batch is awaited once; its result can request the existing
+		// semantic verifier but can never complete or mutate the run itself.
+		if plan.GuardEligible && mode == config.DecisionEngineModeCriterionAssist {
+			if cmd := m.dispatchCriterionAssessmentAssist(run, execution, plan.Result, gen); cmd != nil {
+				return tea.Batch(cmd, m.dispatchAgentDecisionPreVerifierShadow(run, execution))
+			}
+		}
 		// Phase 1: guarded_assist may intervene only for the two synthetic-
 		// PASS branches planAgentVerification marks GuardEligible, and only
 		// when actually active for this cycle (mode, wiring, and an
@@ -1359,6 +1375,12 @@ func (m *Model) cancelVerifiedRun(reason string) {
 		m.agentLoop.guardedAssistCancel = nil
 	}
 	m.agentLoop.guardedAssistGen++
+	if m.agentLoop.criterionAssistCancel != nil {
+		m.agentLoop.criterionAssistCancel()
+		m.agentLoop.criterionAssistCancel = nil
+	}
+	m.agentLoop.criterionAssistGen++
+	m.agentLoop.criterionAssistPending = false
 	m.agentLoop.pendingVerificationPlan = nil
 	m.clearVerifierActivity()
 	if m.agentRunActive() {

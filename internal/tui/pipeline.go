@@ -144,6 +144,13 @@ type debugInfo struct {
 	DecisionCriterionAssessmentModelRevision            string
 	DecisionCriterionAssessmentLatency                  time.Duration
 	DecisionCriterionAssessmentUnavailableReason        string
+	// DecisionCriterionAssist* describes the optional Phase 4b gate. It is
+	// populated only for a resolved G2-backed profile; the shipped profile
+	// set is empty, so normal operation remains inert.
+	DecisionCriterionAssistEligible  bool
+	DecisionCriterionAssistProfile   string
+	DecisionCriterionAssistEscalated bool
+	DecisionCriterionAssistReason    string
 	// DecisionGuardedAssist* fields describe the most recent guarded-assist
 	// decision (Phase 1, agent_decision_policy.go). Unlike every
 	// DecisionShadow* field above, DecisionGuardedAssistEscalated genuinely

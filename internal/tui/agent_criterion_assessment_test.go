@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/config"
@@ -175,6 +176,129 @@ func TestCriterionAssessmentDisabledModeDoesNotDispatch(t *testing.T) {
 	}
 	if len(engine.states) != 0 {
 		t.Fatalf("engine states = %d, want zero", len(engine.states))
+	}
+}
+
+func TestCriterionAssistRecommendationIsOneWayAndClamped(t *testing.T) {
+	profile := criterionAssistProfile{ContradictionThreshold: 0.7}
+	cases := []struct {
+		name         string
+		measurement  criterionAssessmentMeasurement
+		wantEscalate bool
+		wantReason   string
+	}{
+		{name: "support is inert", measurement: criterionAssessmentMeasurement{Availability: criterionAssessmentAvailable, Signal: criterionAssessmentSupport, SupportProbability: 0.95}, wantReason: "support_only"},
+		{name: "strong contradiction requests review", measurement: criterionAssessmentMeasurement{Availability: criterionAssessmentAvailable, Signal: criterionAssessmentContradiction, ContradictionProbability: 0.8}, wantEscalate: true, wantReason: "contradiction"},
+		{name: "weak contradiction stays clamped", measurement: criterionAssessmentMeasurement{Availability: criterionAssessmentAvailable, Signal: criterionAssessmentContradiction, ContradictionProbability: 0.2}, wantReason: "support_only"},
+		{name: "ambiguous requests review", measurement: criterionAssessmentMeasurement{Availability: criterionAssessmentAvailable, Signal: criterionAssessmentAdvisoryAbstain}, wantEscalate: true, wantReason: "ambiguous"},
+		{name: "missing proof is inert", measurement: criterionAssessmentMeasurement{Availability: criterionAssessmentMissingEvidence}, wantReason: "unavailable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			escalate, reason := criterionAssistRecommendation([]criterionAssessmentMeasurement{tc.measurement}, profile)
+			if escalate != tc.wantEscalate || reason != tc.wantReason {
+				t.Fatalf("recommendation = (%v, %q), want (%v, %q)", escalate, reason, tc.wantEscalate, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestCriterionAssistShipsInertWithoutG2Profile(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.DecisionEngine.Enabled = true
+	m.cfg.DecisionEngine.Mode = config.DecisionEngineModeCriterionAssist
+	m.agentLoop.run = &agent.AgentRun{ID: "criterion-assist-run", Cycle: 1, Status: agent.DecisionRunning}
+	m.agentLoop.observations = agent.NewObservationCache()
+	engine := &criterionAssessmentEngine{}
+	m.decisionShadow = &decisionShadowService{service: decision.NewService(true, engine), model: "criterion-model"}
+	if cmd := m.dispatchCriterionAssessmentAssist(m.agentLoop.run, agent.ExecutionResult{}, agent.VerificationResult{Verdict: agent.VerificationPassed}, 1); cmd != nil {
+		t.Fatal("criterion assist dispatched without an approved G2 profile")
+	}
+	if m.agentLoop.criterionAssistPending {
+		t.Fatal("inert criterion assist left an active pending wait")
+	}
+}
+
+func TestCriterionAssistUsesTheSharedBatchExactlyOnce(t *testing.T) {
+	oldProfiles := criterionAssistProfiles
+	criterionAssistProfiles = map[string]criterionAssistProfile{
+		"criterion-model": {ModelAlias: "criterion-model", ModelRevision: "g2-revision", ContradictionThreshold: 0.7, MaxWait: time.Second, EvidenceReport: "g2-fixture"},
+	}
+	t.Cleanup(func() { criterionAssistProfiles = oldProfiles })
+	m := newTestModel(t)
+	m.cfg.DecisionEngine.Enabled = true
+	m.cfg.DecisionEngine.Mode = config.DecisionEngineModeCriterionAssist
+	run := &agent.AgentRun{ID: "criterion-assist-run", Cycle: 2, Status: agent.DecisionRunning, CreatedAt: time.Now(), Limits: agent.Limits{MaxElapsed: time.Minute}, Criteria: []agent.Criterion{assessmentCriterion(agent.CriterionAssessmentLocalRead, "report.md")}}
+	m.agentLoop.run = run
+	m.agentLoop.observations = agent.NewObservationCache()
+	m.agentLoop.observations.Put(tools.ToolReadFile, "report.md", 2, "complete report", true)
+	m.decisionShadow = &decisionShadowService{service: decision.NewService(true, &criterionAssessmentEngine{}), model: "criterion-model"}
+	cmd := m.dispatchCriterionAssessmentAssist(run, agent.ExecutionResult{ToolCalls: []agent.ToolCallRecord{{
+		Name: tools.ToolReadFile, Detail: "report.md", Succeeded: true, Status: agent.ActionExecuted,
+	}}}, agent.VerificationResult{Verdict: agent.VerificationPassed}, 1)
+	if cmd == nil {
+		t.Fatal("approved criterion-assist profile did not dispatch")
+	}
+	msg, ok := cmd().(agentCriterionAssessmentMsg)
+	if !ok || !msg.assist || msg.assistGen != 1 || len(msg.measurements) != 1 {
+		t.Fatalf("message = %#v, want one shared assist batch", msg)
+	}
+	if !m.agentLoop.criterionAssistPending {
+		t.Fatal("criterion-assist dispatch did not mark the guarded wait pending")
+	}
+}
+
+func TestCriterionAssistContradictionOnlyDispatchesExistingVerifier(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop.run = &agent.AgentRun{ID: "criterion-assist-run", Cycle: 1, Status: agent.DecisionRunning, Limits: agent.Limits{MaxElapsed: time.Minute}, Criteria: []agent.Criterion{assessmentCriterion(agent.CriterionAssessmentReceipts, "read")}}
+	m.agentLoop.verifyGen = 1
+	m.agentLoop.criterionAssessmentGen = 1
+	m.agentLoop.criterionAssistPending = true
+	m.agentLoop.execution = agent.ExecutionResult{}
+	m.model = "test-model"
+	m.cfg.Agent.Verifier.Enabled = true
+	m.cfg.Agent.Verifier.Mode = config.VerifierModeAlways
+	m.cfg.Agent.Verifier.Timeout = "1s"
+	m.cfg.Agent.Verifier.MaxTokens = 64
+	m.prov = &scriptedAgentProvider{steps: []agentScriptStep{{text: verifierJSON("passed", "semantic review completed", "", false, false)}}}
+	msg := agentCriterionAssessmentMsg{
+		runID: m.agentLoop.run.ID, cycle: 1, gen: 1, verifyGen: 1, assist: true,
+		model: "test-model", profile: criterionAssistProfile{ModelAlias: "test-model", ContradictionThreshold: 0.5},
+		fallback:     agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "synthetic fallback"},
+		measurements: []criterionAssessmentMeasurement{{CriterionID: "c1", Availability: criterionAssessmentAvailable, Signal: criterionAssessmentContradiction, ContradictionProbability: 0.9}},
+	}
+	_, cmd := m.handleAgentCriterionAssessment(msg)
+	if cmd == nil {
+		t.Fatal("contradiction did not dispatch the existing semantic verifier")
+	}
+	verification, ok := cmd().(agentVerificationMsg)
+	if !ok || verification.err != nil {
+		t.Fatalf("verification message = %#v, want successful existing verifier result", verification)
+	}
+	if m.agentLoop.run.Criteria[0].Status != agent.CriterionPending {
+		t.Fatal("criterion-assist handler mutated authoritative criterion status")
+	}
+}
+
+func TestCriterionAssistSupportReturnsSyntheticFallbackWithoutVerifier(t *testing.T) {
+	m := newTestModel(t)
+	m.agentLoop.run = &agent.AgentRun{ID: "criterion-assist-run", Cycle: 1, Status: agent.DecisionRunning}
+	m.agentLoop.verifyGen = 1
+	m.agentLoop.criterionAssessmentGen = 1
+	m.agentLoop.criterionAssistPending = true
+	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "synthetic fallback"}
+	msg := agentCriterionAssessmentMsg{
+		runID: m.agentLoop.run.ID, cycle: 1, gen: 1, verifyGen: 1, assist: true,
+		profile: criterionAssistProfile{ModelAlias: "test-model", ContradictionThreshold: 0.5}, fallback: fallback,
+		measurements: []criterionAssessmentMeasurement{{Availability: criterionAssessmentAvailable, Signal: criterionAssessmentSupport, SupportProbability: 0.9}},
+	}
+	_, cmd := m.handleAgentCriterionAssessment(msg)
+	if cmd == nil {
+		t.Fatal("support-only criterion assist did not return the synthetic fallback")
+	}
+	result, ok := cmd().(agentVerificationMsg)
+	if !ok || result.out.Result.Summary != fallback.Summary {
+		t.Fatalf("fallback message = %#v, want %+v", result, fallback)
 	}
 }
 

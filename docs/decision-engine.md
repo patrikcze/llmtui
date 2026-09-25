@@ -5,11 +5,12 @@ text-generating providers. Laya returns `choice`, ordinal `score`, and boolean
 `noul` probabilities. The existing agent loop, verifier, and tool approval
 policy remain authoritative. A prediction is a signal, never authorization
 to execute a tool. Every observation this package makes is shadow-only
-(recorded, never acted on) with one narrow, structurally bounded exception:
+(recorded, never acted on) with two narrow, structurally bounded exceptions:
 `decision_engine.mode: guarded_assist` may force one additional semantic
-verification an adaptive policy would otherwise have skipped — see "Guarded
-verifier escalation (Phase 1)" below. That mode ships with zero behavioral
-effect in this codebase (no approved calibration profile exists yet), and
+verification an adaptive policy would otherwise have skipped, while
+`criterion_assist` may request the same verifier from a calibrated criterion
+assessment. Both modes ship with zero behavioral effect in this codebase (no
+approved calibration profile exists), and
 Laya can never skip, delay, or replace a verifier, satisfy a criterion, or
 otherwise author a status this package doesn't already compute
 deterministically.
@@ -598,6 +599,26 @@ signals; low support is not criterion failure, and no signal changes
 decisions, or persisted run authority. The mode is therefore safe to disable:
 removing the mode stops assessment requests while the existing agent loop and
 verifier behavior remain unchanged.
+
+### Measured criterion assist (Phase 4b)
+
+`decision_engine.mode: criterion_assist` is a separate, gated mode. It uses
+the same bounded Phase 3 criterion batch exactly once, and only on an adaptive
+synthetic-success route that would otherwise complete without semantic
+verification. The shipped `criterionAssistProfiles` set is empty because no
+approved G2 report exists; configuration alone therefore has no behavioral
+effect.
+
+When a future profile is explicitly added from held-out G2 evidence, a strong
+contradiction or ambiguous assessment may request the existing semantic
+verifier. Positive support is inert. Assessment errors, unavailable evidence,
+timeouts, cancellation, and below-threshold contradiction all return the
+original synthetic result. The verifier still receives the full unresolved
+semantic criterion set and the Phase 4a bounded proof projection; Laya
+probabilities are not inserted into its prompt. No handler applies criterion
+updates, grants permissions, reruns the executor, or cancels a verifier that
+policy already required. The active wait is bounded by both the profile and
+the run's remaining elapsed budget. See ADR 0016.
 
 ## Measured bridge validation (2026-09-23)
 

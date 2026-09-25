@@ -353,9 +353,11 @@ type DecisionEngineConfig struct {
 	// Mode selects what the engine may do once Enabled is true: "shadow"
 	// (observe every cycle, never influence it — the default),
 	// "guarded_assist" (may force at most one additional semantic verification
-	// on a calibrated adaptive path), or "criterion_shadow" (evaluate
-	// opt-in, pinned criterion propositions over admitted evidence, still
-	// without any authoritative effect — see docs/decision-engine.md).
+	// on a calibrated adaptive path), "criterion_shadow" (evaluate opt-in,
+	// pinned criterion propositions over admitted evidence, still without any
+	// authoritative effect), or "criterion_assist" (may request semantic
+	// review from a calibrated criterion assessment only — see
+	// docs/decision-engine.md).
 	// Empty/unknown falls back to shadow rather than blocking startup or
 	// silently becoming active. Enabled=false overrides every mode: a
 	// disabled engine is never constructed regardless of Mode's value.
@@ -373,6 +375,7 @@ const (
 	DecisionEngineModeShadow          = "shadow"
 	DecisionEngineModeGuardedAssist   = "guarded_assist"
 	DecisionEngineModeCriterionShadow = "criterion_shadow"
+	DecisionEngineModeCriterionAssist = "criterion_assist"
 )
 
 // ResolvedMode returns the effective decision-engine mode. An explicit valid
@@ -387,6 +390,8 @@ func (c DecisionEngineConfig) ResolvedMode() string {
 		return DecisionEngineModeGuardedAssist
 	case DecisionEngineModeCriterionShadow:
 		return DecisionEngineModeCriterionShadow
+	case DecisionEngineModeCriterionAssist:
+		return DecisionEngineModeCriterionAssist
 	default:
 		return DecisionEngineModeShadow
 	}
@@ -1313,9 +1318,10 @@ agent:
 decision_engine:
   enabled: false
   # "shadow" only ever observes; "guarded_assist" may additionally force one
-  # semantic verification an adaptive policy would otherwise skip, and only
-  # takes effect once a calibrated profile for the loaded model exists —
-  # see docs/decision-engine.md. Unknown values fall back to shadow.
+  # semantic verification an adaptive policy would otherwise skip;
+  # "criterion_shadow" measures pinned criterion evidence; and
+  # "criterion_assist" may request semantic review only with a separately
+  # approved G2 profile. Unknown values fall back to shadow.
   mode: shadow
   provider: laya
   laya:

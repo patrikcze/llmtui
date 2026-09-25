@@ -280,6 +280,13 @@ type AgentTrial struct {
 	LayaCriterionAssessmentModelRevision            string  `json:"laya_criterion_assessment_model_revision,omitempty"`
 	LayaCriterionAssessmentSupportProbability       float64 `json:"laya_criterion_assessment_support_probability,omitempty"`
 	LayaCriterionAssessmentContradictionProbability float64 `json:"laya_criterion_assessment_contradiction_probability,omitempty"`
+	// LayaCriterionAssist* are bounded Phase 4b gate diagnostics. They are
+	// populated only when a separately approved G2 profile actually ran; the
+	// shipped profile set is empty, so zero-value trials remain unchanged.
+	LayaCriterionAssistEligible  bool   `json:"laya_criterion_assist_eligible,omitempty"`
+	LayaCriterionAssistProfile   string `json:"laya_criterion_assist_profile,omitempty"`
+	LayaCriterionAssistEscalated bool   `json:"laya_criterion_assist_escalated,omitempty"`
+	LayaCriterionAssistReason    string `json:"laya_criterion_assist_reason,omitempty"`
 
 	// The fields below are Phase 0a's measurement-integrity additions
 	// (see internal/tui/agent_decision_shadow.go's preVerifierSample and
