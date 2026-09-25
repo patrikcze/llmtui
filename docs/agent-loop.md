@@ -286,6 +286,38 @@ or raise `tools.no_progress.threshold` (default `3`) if it blocks a
 legitimate pattern this fingerprinting doesn't yet recognize as
 progressing.
 
+## Same-episode yield continuation (opt-in)
+
+A "yield" is a clean, no-tool assistant completion — it is not task
+completion. By default (`agent.yield.enabled: false`) a yield goes straight
+to verification below, exactly as it always has. Set `agent.yield.enabled:
+true` to let a narrow, mechanically provable class of missing evidence
+continue in the *same* executor episode first: currently only an exact
+"Read the file `<path>`." acceptance criterion the executor has not yet
+proven with a successful `read_file` call. This is not a general "keep
+retrying" mode — a criterion requiring model judgment (comparison, review,
+open-ended inspection) is never treated as an obligation here and always
+falls through to verification unchanged, per
+[ADR 0013](architecture/decisions/0013-agent-execution-yield-policy.md).
+
+When an obligation is still outstanding and the required tool capability is
+offered, the executor receives one more bounded request in the same cycle —
+no new `BeginCycle`, no new user-facing message, no verifier dispatch — with
+a small "Runtime execution state" directive naming the still-missing
+criterion by its pinned ID. Two independent bounds keep this from looping:
+
+| Bound | Config key | Default | Behavior when exceeded |
+| --- | --- | --- | --- |
+| Nudges without new progress | `agent.yield.max_nudges_without_progress` | `2` | Episode stops as `no_progress`, same as the no-progress detection above |
+| Provider attempts per episode | `agent.yield.max_episode_requests` | `64` | Episode stops as `budget_exhausted` |
+
+"Progress" here means the set of outstanding obligations actually changed
+since the last continuation (a read succeeded, or the target dropped out
+some other way) — an unrelated tool call or a longer answer does not reset
+the counter. A vision capture already in flight is finished first; the
+capture's own completion callback re-enters this same decision point rather
+than always jumping to verification.
+
 ## Verification
 
 Verification is adaptive by default: deterministic evidence decides first,
@@ -416,6 +448,8 @@ Default hard limits are:
 | Elapsed time | `30m` | Wall-clock run duration |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
 | Verifier attempts | `2` | `agent.verifier.max_attempts` per cycle, see [Verification](#verification) |
+| Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation-opt-in) |
+| Yield episode requests | `64` | `agent.yield.max_episode_requests`, only when `agent.yield.enabled` |
 
 Passing all observable criteria ends as `done`. Verified progress with
 remaining criteria becomes `continue`. A failed/inconclusive but meaningfully

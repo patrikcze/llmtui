@@ -293,10 +293,24 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 }
 
 func isExactReadCriterion(text, path string) bool {
-	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
+	target, ok := ExactReadCriterionTarget(text)
 	path = strings.ToLower(strings.TrimSpace(path))
-	if path == "" || !strings.HasPrefix(text, "read ") {
-		return false
+	return ok && path != "" && target == path
+}
+
+// ExactReadCriterionTarget extracts the target path from a criterion
+// recognized as an atomic "read this exact file" instruction — the same
+// narrow grammar isExactReadCriterion's deterministic proof requires ("Read
+// [the/file/named] <path>."), shared here so Phase 2's yield-eligibility
+// check (agent-execution-harness plan §10) can recognize a *pending*
+// exact-read obligation before any tool call has proven it, not only verify
+// one after the fact. ok is false for anything not exactly this shape:
+// multi-step or ambiguous prose ("inspect", "review", "compare"), a quoted
+// shell fragment, or a criterion naming no target at all remain semantic.
+func ExactReadCriterionTarget(text string) (target string, ok bool) {
+	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
+	if !strings.HasPrefix(text, "read ") {
+		return "", false
 	}
 	text = strings.TrimSpace(strings.TrimPrefix(text, "read "))
 	for _, prefix := range []string{"the ", "file ", "named "} {
@@ -304,7 +318,52 @@ func isExactReadCriterion(text, path string) bool {
 			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
 		}
 	}
-	return text == path
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// ExactReadObligation is one pinned criterion this run's yield-eligibility
+// check recognizes as an atomic exact-read instruction not yet proven by the
+// given execution.
+type ExactReadObligation struct {
+	CriterionID string
+	// Target is the criterion's own extracted target text (lowercased,
+	// trimmed) — controller-owned criterion data, not raw model or tool
+	// output. A caller quoting it into a prompt must still frame it as data.
+	Target string
+}
+
+// PendingExactReadObligations previews, without mutating any criterion
+// status, which of r's currently unresolved criteria (CriterionSemantic, or
+// the legacy-untyped empty Kind) are atomic exact-read instructions not yet
+// proven by execution. It shares evaluateCriterion's own matching logic —
+// the same logic ApplyDeterministicCriteria commits at verification — so a
+// read that already succeeded earlier this cycle is never reported as still
+// outstanding merely because run.Criteria has not been committed yet (see
+// docs/architecture/decisions/0013-agent-execution-yield-policy.md). Only
+// Phase 2's narrow exact-read grammar is recognized; every other criterion
+// kind is left to the existing verifier untouched.
+func (r *AgentRun) PendingExactReadObligations(execution ExecutionResult) []ExactReadObligation {
+	if r == nil {
+		return nil
+	}
+	var out []ExactReadObligation
+	for _, criterion := range r.UnresolvedCriteria() {
+		if criterion.Kind != "" && criterion.Kind != CriterionSemantic {
+			continue
+		}
+		target, ok := ExactReadCriterionTarget(criterion.Text)
+		if !ok {
+			continue
+		}
+		if matched, passed, _ := evaluateCriterion(criterion, execution); matched && passed {
+			continue // already proven earlier this cycle; not outstanding
+		}
+		out = append(out, ExactReadObligation{CriterionID: criterion.ID, Target: target})
+	}
+	return out
 }
 
 // unresolvedCriteriaKey is a phrasing-immune fingerprint of the unresolved
