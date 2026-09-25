@@ -147,6 +147,31 @@ with an unknown label or without a legitimate, available probability). See
 docs/decision-engine.md's "Measurement integrity (Phase 0a)" section for the
 full accounting-category list (`Late`/`Dropped`/`Cancelled`/`Unavailable`/`Duplicate`).
 
+## Offline tool-ranking comparison (Phase 5)
+
+`TestToolRanking*` in `internal/tui/tool_decision_calibration_test.go` is a
+test-local, opt-in-style shadow harness. It snapshots the exact connected
+eligible candidate names returned by the existing discovery catalog, runs the
+unchanged lexical `SearchToolsWithTotal` shortlist, and asks a fake or
+configured `decision.Service` to choose among that bounded shortlist. The
+harness records baseline versus reranked necessary-tool recall, rank gain,
+bounded option cost/candidate counts, and failure category in the existing
+`eval.AgentTrial` fields when a caller writes a report.
+
+Descriptions and queries are redacted and framed as untrusted data; oversized
+heads/options and duplicate names are rejected. Empty, one-candidate,
+ambiguous, injection-shaped, unavailable/disconnected, and necessary-tool-
+outside-top-eight fixtures are explicit cases. The harness never connects to
+MCP, discloses a schema, changes approval state, changes the registry, adds a
+live hook, or invokes a model from a catalog getter. A necessary tool outside
+the lexical shortlist is counted as a retrieval failure, distinct from a
+reranking failure. Native and fenced discovery and approval behavior remain
+covered by the existing tool-search tests.
+
+No real Laya run is implied by the deterministic fixture tests. An installed
+MLX experiment may be added later using the existing opt-in environment
+contract; missing assets or skipped runs remain censored rather than passing.
+
 ## Saved-state compatibility
 
 Agent-run persistence remains schema version 1. New receipts and recovery

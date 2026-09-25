@@ -287,6 +287,19 @@ type AgentTrial struct {
 	LayaCriterionAssistProfile   string `json:"laya_criterion_assist_profile,omitempty"`
 	LayaCriterionAssistEscalated bool   `json:"laya_criterion_assist_escalated,omitempty"`
 	LayaCriterionAssistReason    string `json:"laya_criterion_assist_reason,omitempty"`
+	// LayaToolRanking* are bounded, offline Phase 5 comparison measurements.
+	// The production discovery pipeline never populates them; the opt-in test
+	// harness may write them to the existing AgentTrial report.
+	LayaToolRankingMode            string `json:"laya_tool_ranking_mode,omitempty"`
+	LayaToolRankingCandidateCount  int    `json:"laya_tool_ranking_candidate_count,omitempty"`
+	LayaToolRankingLexicalTotal    int    `json:"laya_tool_ranking_lexical_total,omitempty"`
+	LayaToolRankingOptionCost      int    `json:"laya_tool_ranking_option_cost,omitempty"`
+	LayaToolRankingNecessaryRecall *bool  `json:"laya_tool_ranking_necessary_recall,omitempty"`
+	LayaToolRankingRerankedRecall  *bool  `json:"laya_tool_ranking_reranked_recall,omitempty"`
+	LayaToolRankingLexicalRank     int    `json:"laya_tool_ranking_lexical_rank,omitempty"`
+	LayaToolRankingRerankedRank    int    `json:"laya_tool_ranking_reranked_rank,omitempty"`
+	LayaToolRankingRankGain        int    `json:"laya_tool_ranking_rank_gain,omitempty"`
+	LayaToolRankingFailure         string `json:"laya_tool_ranking_failure,omitempty"`
 
 	// The fields below are Phase 0a's measurement-integrity additions
 	// (see internal/tui/agent_decision_shadow.go's preVerifierSample and

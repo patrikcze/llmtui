@@ -44,6 +44,9 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 	if trial.LayaCriterionAssistEligible || trial.LayaCriterionAssistProfile != "" || trial.LayaCriterionAssistEscalated || trial.LayaCriterionAssistReason != "" {
 		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 4b fields", trial)
 	}
+	if trial.LayaToolRankingMode != "" || trial.LayaToolRankingCandidateCount != 0 || trial.LayaToolRankingOptionCost != 0 || trial.LayaToolRankingRankGain != 0 || trial.LayaToolRankingNecessaryRecall != nil || trial.LayaToolRankingRerankedRecall != nil || trial.LayaToolRankingFailure != "" {
+		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 5 fields", trial)
+	}
 	trialJSON, err := json.Marshal(trial)
 	if err != nil {
 		t.Fatalf("marshal AgentTrial: %v", err)
@@ -56,6 +59,7 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 		"laya_criterion_assessment_mode", "laya_criterion_assessment_total", "laya_criterion_assessment_availability",
 		"laya_criterion_assessment_spec_fingerprint",
 		"laya_criterion_assist_eligible", "laya_criterion_assist_profile", "laya_criterion_assist_escalated", "laya_criterion_assist_reason",
+		"laya_tool_ranking_mode", "laya_tool_ranking_candidate_count", "laya_tool_ranking_option_cost", "laya_tool_ranking_rank_gain", "laya_tool_ranking_necessary_recall", "laya_tool_ranking_reranked_recall", "laya_tool_ranking_failure",
 	} {
 		if strings.Contains(string(trialJSON), key) {
 			t.Errorf("zero-value AgentTrial JSON unexpectedly carries %q: %s", key, trialJSON)
@@ -97,6 +101,11 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 			{Scenario: "s1", Trial: 6, ObservedAction: "read", FinalResult: "ok",
 				LayaCriterionAssistEligible: true, LayaCriterionAssistProfile: "english-mlx",
 				LayaCriterionAssistEscalated: true, LayaCriterionAssistReason: "contradiction"},
+			{Scenario: "s1", Trial: 7, ObservedAction: "read", FinalResult: "ok",
+				LayaToolRankingMode: "offline_fixture", LayaToolRankingCandidateCount: 8,
+				LayaToolRankingLexicalTotal: 9, LayaToolRankingOptionCost: 8, LayaToolRankingRankGain: 3, LayaToolRankingNecessaryRecall: boolPtr(true),
+				LayaToolRankingRerankedRecall: boolPtr(true), LayaToolRankingLexicalRank: 4,
+				LayaToolRankingRerankedRank: 1},
 		},
 	}
 	var buf strings.Builder
@@ -118,6 +127,10 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 		`"laya_criterion_assessment_evidence_fingerprint":"evidence-hash"`, `"laya_criterion_assessment_model_revision":"rev-1"`,
 		`"laya_criterion_assist_eligible":true`, `"laya_criterion_assist_profile":"english-mlx"`,
 		`"laya_criterion_assist_escalated":true`, `"laya_criterion_assist_reason":"contradiction"`,
+		`"laya_tool_ranking_mode":"offline_fixture"`, `"laya_tool_ranking_candidate_count":8`,
+		`"laya_tool_ranking_lexical_total":9`, `"laya_tool_ranking_option_cost":8`, `"laya_tool_ranking_rank_gain":3`, `"laya_tool_ranking_necessary_recall":true`,
+		`"laya_tool_ranking_reranked_recall":true`, `"laya_tool_ranking_lexical_rank":4`,
+		`"laya_tool_ranking_reranked_rank":1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("WriteJSONL output missing %q:\n%s", want, out)

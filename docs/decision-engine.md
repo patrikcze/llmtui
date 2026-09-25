@@ -620,6 +620,22 @@ updates, grants permissions, reruns the executor, or cancels a verifier that
 policy already required. The active wait is bounded by both the profile and
 the run's remaining elapsed budget. See ADR 0016.
 
+### Offline tool ranking (Phase 5)
+
+Phase 5 is an offline experiment only. Its test-local harness snapshots the
+same connected eligible candidate names used by the existing discovery path,
+compares unchanged lexical `SearchToolsWithTotal` top-eight retrieval with a
+bounded `decision.Service` choice, and records necessary-tool recall and rank
+as additive evaluation data. It rejects oversized or colliding options,
+frames descriptions as untrusted data, and counts a necessary tool outside
+the lexical shortlist separately from a reranking failure.
+
+The harness never changes the registry, candidate eligibility, disclosure,
+approval, native/fenced discovery, or production tool pipeline. It makes no
+MCP connection and adds no model call to catalog getters. Deterministic
+fixtures are valid evidence even when a later opt-in MLX run is skipped; a
+skipped live run is censored, not a success claim.
+
 ## Measured bridge validation (2026-09-23)
 
 Real Metal integration passed on this development machine with Python 3.14.3
