@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -308,3 +309,54 @@ func TestEvaluateYieldContradictoryInputStaysDeterministic(t *testing.T) {
 		t.Fatalf("EvaluateYield is not deterministic: %+v != %+v", second, first)
 	}
 }
+
+// TestValidateEpisodeCheckpoint covers harness plan §16's checkpoint
+// validation requirement: decodeRun must reject a malformed
+// EpisodeCheckpoint rather than silently loading it. nil is always valid —
+// most cycles have no checkpoint, and every checkpoint this package's own
+// writer (internal/tui/agent_yield.go) produces stays within these bounds.
+func TestValidateEpisodeCheckpoint(t *testing.T) {
+	valid := EpisodeCheckpoint{
+		PolicyVersion: 1, EnabledAtStart: true, ExecutorRequests: 3, NoProgressNudges: 1,
+		LastYieldReason: ReasonMechanicalObligation, UnresolvedCriterionIDs: []string{"c1", "c2"}, Revision: 4,
+	}
+	cases := []struct {
+		name    string
+		ep      *EpisodeCheckpoint
+		wantErr bool
+	}{
+		{"nil checkpoint", nil, false},
+		{"valid checkpoint", &valid, false},
+		{"negative policy version", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint { e.PolicyVersion = -1; return e }(valid)), true},
+		{"unsupported future policy version", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint {
+			e.PolicyVersion = maxCheckpointPolicyVersion + 1
+			return e
+		}(valid)), true},
+		{"negative executor requests", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint { e.ExecutorRequests = -1; return e }(valid)), true},
+		{"negative no-progress nudges", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint { e.NoProgressNudges = -1; return e }(valid)), true},
+		{"negative revision", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint { e.Revision = -1; return e }(valid)), true},
+		{"unresolved criterion IDs exceed maximum", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint {
+			ids := make([]string, MaxCriteria+1)
+			for i := range ids {
+				ids[i] = "c"
+			}
+			e.UnresolvedCriterionIDs = ids
+			return e
+		}(valid)), true},
+		{"unknown yield reason", ptrEP(func(e EpisodeCheckpoint) EpisodeCheckpoint { e.LastYieldReason = "not_a_real_reason"; return e }(valid)), true},
+		{"zero-value checkpoint is valid", &EpisodeCheckpoint{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateEpisodeCheckpoint(tc.ep)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateEpisodeCheckpoint(%+v) error = %v, wantErr %v", tc.ep, err, tc.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrCorruptRun) {
+				t.Fatalf("error = %v, want it to wrap ErrCorruptRun", err)
+			}
+		})
+	}
+}
+
+func ptrEP(e EpisodeCheckpoint) *EpisodeCheckpoint { return &e }

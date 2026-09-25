@@ -1,5 +1,7 @@
 package agent
 
+import "fmt"
+
 // This file implements the pure yield policy from
 // docs/architecture/decisions/0013-agent-execution-yield-policy.md (Phase 1
 // of the agent-execution-harness plan). A "yield" is a clean, normalized
@@ -100,6 +102,54 @@ const (
 	// do not prevent this reason; they are the verifier's concern.
 	ReasonQuiescent YieldReason = "quiescent"
 )
+
+// validYieldReason reports whether s is the zero value or one of the closed
+// YieldReason vocabulary above. Used only to validate a persisted
+// checkpoint's LastYieldReason on load (see validateEpisodeCheckpoint) — a
+// live decision always gets its reason from EvaluateYield itself, which can
+// only ever produce one of these.
+func validYieldReason(s YieldReason) bool {
+	switch s {
+	case YieldReasonUnknown, ReasonCancelled, ReasonSafetyBlocked, ReasonBudgetExhausted,
+		ReasonPendingApproval, ReasonPendingAsk, ReasonProtocolRecoverable, ReasonProtocolFailure,
+		ReasonPendingToolBatch, ReasonPendingVisionCapture, ReasonNoProgressStalled,
+		ReasonMechanicalObligation, ReasonContextInfeasible, ReasonQuiescent:
+		return true
+	}
+	return false
+}
+
+// maxCheckpointPolicyVersion is the newest EpisodeCheckpoint.PolicyVersion
+// this build knows how to interpret. A checkpoint from a newer build must
+// never be silently accepted as if it had this version's shape.
+const maxCheckpointPolicyVersion = 1
+
+// validateEpisodeCheckpoint rejects a persisted EpisodeCheckpoint whose
+// counters, policy version, or reason could not have been produced by this
+// package's own writer (internal/tui/agent_yield.go's handleAgentYield is
+// the only production writer). nil is always valid — most cycles have no
+// checkpoint at all, and older persisted records predate the field entirely.
+// See harness plan §16: "add explicit versioned checkpoint validation in
+// decodeRun; reject malformed counters ... and unsupported checkpoint
+// policy versions."
+func validateEpisodeCheckpoint(ep *EpisodeCheckpoint) error {
+	if ep == nil {
+		return nil
+	}
+	if ep.PolicyVersion < 0 || ep.PolicyVersion > maxCheckpointPolicyVersion {
+		return fmt.Errorf("%w: unsupported checkpoint policy version %d", ErrCorruptRun, ep.PolicyVersion)
+	}
+	if ep.ExecutorRequests < 0 || ep.NoProgressNudges < 0 || ep.Revision < 0 {
+		return fmt.Errorf("%w: checkpoint counters must not be negative", ErrCorruptRun)
+	}
+	if len(ep.UnresolvedCriterionIDs) > MaxCriteria {
+		return fmt.Errorf("%w: checkpoint unresolved criterion IDs exceed maximum %d", ErrCorruptRun, MaxCriteria)
+	}
+	if !validYieldReason(ep.LastYieldReason) {
+		return fmt.Errorf("%w: unknown checkpoint yield reason %q", ErrCorruptRun, ep.LastYieldReason)
+	}
+	return nil
+}
 
 // MechanicalObligation is one bounded, controller-validated pending
 // execution requirement tied to an immutable pinned criterion — never a raw

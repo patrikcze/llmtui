@@ -117,6 +117,62 @@ func TestFileStoreLoadsPreReceiptRunWithoutInventingAttribution(t *testing.T) {
 	}
 }
 
+// TestStoreRoundTripsValidEpisodeCheckpoint proves an ordinary, well-formed
+// EpisodeCheckpoint survives a save/load cycle unchanged — the additive
+// field's happy path, not just the rejection path covered below.
+func TestStoreRoundTripsValidEpisodeCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("finish the requested change", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	run.LatestCycle().Episode = &EpisodeCheckpoint{
+		PolicyVersion: 1, EnabledAtStart: true, ExecutorRequests: 5, NoProgressNudges: 1,
+		LastYieldReason: ReasonMechanicalObligation, UnresolvedCriterionIDs: []string{"c1"}, Revision: 2,
+	}
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := loaded.Cycles[0].Episode
+	if ep == nil || ep.ExecutorRequests != 5 || ep.Revision != 2 || ep.LastYieldReason != ReasonMechanicalObligation {
+		t.Fatalf("loaded checkpoint = %+v, want it preserved exactly", ep)
+	}
+}
+
+// TestStoreRejectsCorruptEpisodeCheckpoint is harness plan §16's checkpoint
+// validation requirement exercised through the real file-backed store, not
+// just validateEpisodeCheckpoint's own unit test: a hand-authored record
+// with a malformed checkpoint (negative counters here — a value this
+// package's own writer could never produce) must fail to load instead of
+// being silently accepted.
+func TestStoreRejectsCorruptEpisodeCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	corrupt := `{
+		"version": 1,
+		"id": "corrupt-checkpoint-run",
+		"request": "long task",
+		"status": "running",
+		"limits": {"max_cycles": 8, "max_tool_calls": 32, "max_tokens": 100000, "max_elapsed": 1800000000000, "max_repeated_failures": 3},
+		"cycles": [{
+			"number": 1,
+			"objective": "long task",
+			"episode": {"policy_version": 1, "executor_requests": -3}
+		}]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "corrupt-checkpoint-run.json"), []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background(), "corrupt-checkpoint-run"); !errors.Is(err, ErrCorruptRun) {
+		t.Fatalf("Load error = %v, want ErrCorruptRun for a negative checkpoint counter", err)
+	}
+}
+
 func TestFileStorePreservesAndRedactsRunStartContext(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStore(dir, 64*1024, 4)
