@@ -334,6 +334,82 @@ func TestPrepareToolContinuationCompactsOversizedUserAsLastResort(t *testing.T) 
 	}
 }
 
+// TestPrepareYieldContinuationAddsCompactedAnchorWhenHistoryHasNoUser is the
+// controller-yield-continuation counterpart to
+// TestPrepareToolContinuationAddsCompactedAnchorWhenHistoryHasNoUser: the
+// trailing message is the executor's own no-tool text answer (what
+// agent_yield.go's continueAgentEpisode actually sees), not a tool result.
+// Before the harness plan's Phase 6 fix, prepareRequest only recognized a
+// trailing RoleTool message as a continuation worth this same-boundary
+// protection, so a user-less yield-continuation history got no anchor at
+// all here.
+func TestPrepareYieldContinuationAddsCompactedAnchorWhenHistoryHasNoUser(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Context.MaxContextTokens = 100_000
+	history := benchmarkToolRounds(1, 16)[1:]
+	history = append(history, provider.Message{Role: provider.RoleAssistant, Content: "premature answer, no tool call"})
+	m.session.Messages = history
+
+	prepared, err := m.prepareRequest("", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range prepared.composed.Messages {
+		if message.Role == provider.RoleUser && message.Content == compactedContinuationAnchor {
+			return
+		}
+	}
+	t.Fatal("user-less yield continuation did not receive a compacted anchor")
+}
+
+// TestPrepareYieldContinuationCompactsOversizedUserAsLastResort is the
+// controller-yield-continuation counterpart to
+// TestPrepareToolContinuationCompactsOversizedUserAsLastResort. Before the
+// Phase 6 fix, a yield continuation whose context still exceeded budget
+// after group-dropping had no fallback: prepareRequest returned a hard
+// error and the whole run failed, instead of compacting the oversized
+// original request into a summary the way an ordinary tool round already
+// does.
+func TestPrepareYieldContinuationCompactsOversizedUserAsLastResort(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Context.Strategy = "summarize"
+	m.cfg.Context.MaxContextTokens = 600
+	m.cfg.Context.ReserveResponseTokens = 100
+	m.cfg.Context.SummarizeAfterMessages = 1
+	m.cfg.Context.SummaryMaxTokens = 80
+	m.cfg.Prompt.IncludeFormattingHints = false
+	m.cfg.Prompt.IncludeModelHints = false
+	history := benchmarkToolRounds(1, 16)
+	history[0].Content = "Run the benchmark. " + strings.Repeat("preserve this detail ", 300)
+	history = append(history, provider.Message{Role: provider.RoleAssistant, Content: "premature answer, no tool call"})
+	original := history[0].Content
+	m.session.Messages = history
+
+	prepared, err := m.prepareRequest("", nil, true)
+	if err != nil {
+		t.Fatalf("prepareRequest returned an error instead of compacting: %v", err)
+	}
+	if prepared.summary == "" || !strings.Contains(prepared.summary, "Run the benchmark.") {
+		t.Fatalf("summary = %q, want compacted original request", prepared.summary)
+	}
+	users := 0
+	for _, message := range prepared.composed.Messages {
+		if message.Role != provider.RoleUser {
+			continue
+		}
+		users++
+		if message.Content != compactedContinuationAnchor {
+			t.Fatalf("user content = %q, want bounded continuation anchor", message.Content)
+		}
+	}
+	if users != 1 {
+		t.Fatalf("user messages = %d, want one compacted anchor", users)
+	}
+	if m.session.Messages[0].Content != original {
+		t.Fatal("request preparation mutated the stored user message")
+	}
+}
+
 func TestDropOldestGroupPreservesActiveUserAndNewestToolPair(t *testing.T) {
 	messages := benchmarkToolRounds(2, 16)
 	dropped, recent, ok := dropOldestGroup(messages, true)
