@@ -255,6 +255,11 @@ func decodeRun(data []byte) (*AgentRun, error) {
 	if err := validateLimits(run.Limits); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorruptRun, err)
 	}
+	for i := range run.Cycles {
+		if err := validateEpisodeCheckpoint(run.Cycles[i].Episode); err != nil {
+			return nil, fmt.Errorf("%w: cycle %d: %v", ErrCorruptRun, run.Cycles[i].Number, err)
+		}
+	}
 	return &run, nil
 }
 

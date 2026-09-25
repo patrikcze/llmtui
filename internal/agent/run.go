@@ -319,6 +319,14 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
 		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
+	if cycle := r.LatestCycle(); cycle != nil && cycle.Episode != nil && cycle.Execution == nil {
+		// This cycle's executor episode never reached CompleteExecution, so
+		// its live counters/progress describe abandoned, unfinished work —
+		// mark that explicitly rather than leaving the persisted record
+		// looking like an ordinary completed checkpoint. Resume below never
+		// reconstructs or replays it; a fresh cycle starts with Episode nil.
+		cycle.Episode.Interrupted = true
+	}
 	r.Status = DecisionRunning
 	r.Stage = StageStopCheck
 	r.StopReason = ""

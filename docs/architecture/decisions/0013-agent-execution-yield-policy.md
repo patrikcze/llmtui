@@ -303,3 +303,44 @@ counters/policy versions on load) and marking a persisted checkpoint
 `Interrupted: true` when `Resume` abandons its cycle — both still-open
 Phase 6 gate items from harness plan §16, orthogonal to this context-pressure
 fix.
+
+## Update (Phase 6b: checkpoint validation and interrupted-episode marking, 2026-09-25)
+
+Closes the two harness plan §16 items Phase 6a deferred, both concretely
+absent before this update: nothing anywhere in the codebase ever set
+`EpisodeCheckpoint.Interrupted`, and `decodeRun` validated `AgentRun.Limits`
+but not a persisted `Cycle.Episode` at all.
+
+`internal/agent/yield.go` gains `validateEpisodeCheckpoint`: rejects a
+non-nil checkpoint with a negative counter (`ExecutorRequests`,
+`NoProgressNudges`, `Revision`), a `PolicyVersion` outside `[0,
+maxCheckpointPolicyVersion]` (currently `1` — the only version this build's
+writer, `internal/tui/agent_yield.go`'s `handleAgentYield`, ever produces),
+more `UnresolvedCriterionIDs` than `MaxCriteria`, or a `LastYieldReason`
+outside the closed `YieldReason` vocabulary. `decodeRun` (`store.go`) calls
+it for every cycle. nil is always valid — most cycles have no checkpoint,
+and every pre-Phase-2 persisted record predates the field entirely.
+
+`internal/agent/run.go`'s `Resume` — the process-restart path (`§16`'s
+"same logical work has two cases": a live `ask_user` pause uses
+`ContinueExecutorWithUserInput` instead, which this update does not touch)
+— now marks the latest cycle's checkpoint `Interrupted = true` when that
+cycle's `Execution` is still nil, i.e. its executor episode never reached
+`CompleteExecution`. A cycle already `Parked`/blocked *after* completing
+execution (blocked at verification, not mid-executor) is correctly left
+alone. `Resume` still never reconstructs or replays the interrupted
+episode — the next `BeginCycle` starts with a fresh, nil `Episode`
+regardless; `Interrupted` is diagnostic history on the abandoned cycle's
+own record, not live state.
+
+Not implemented, and not claimed: the plan's broader "pending totals
+committed exactly once" accounting model. Tracing the actual
+implementation (not the plan's more elaborate original design) shows
+`EpisodeCheckpoint.ExecutorRequests` never feeds into `run.ToolCalls` or
+token usage at all — those accumulate independently via `RecordUsage` and
+`CompleteExecution` on every turn regardless of yield state — so there is
+no double-accounting path to guard against with the checkpoint's current,
+deliberately simpler (Phase 2) design. Building a "pending snapshot
+commit" mechanism for a hazard the actual code does not have would be
+exactly the speculative complexity this project's conventions warn
+against.
