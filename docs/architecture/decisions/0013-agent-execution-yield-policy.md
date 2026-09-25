@@ -160,3 +160,62 @@ but still only in memory — `persistAgentRun`'s snapshot does not yet
 special-case it beyond whatever plain JSON marshaling already does for an
 additive struct field, and restart-safety validation remains Phase 6 work as
 planned.
+
+## Update (Phase 4a coverage-aware read proof, 2026-09-25)
+
+Phase 2's exact-read proof had a real gap, recorded as harness plan §4
+finding #3: `evaluateCriterion`'s `CriterionSemantic` branch (and therefore
+`PendingExactReadObligations`, which shares its logic) treated *any*
+successful `read_file` call touching the criterion's target path as proof —
+including a narrow windowed read of a large file the model never fully saw.
+Phase 4's own gate text calls this out directly: "validate resource
+publication and full/read-range proof."
+
+The fix adds a new bounded receipt, `agent.ReadObservation` (`internal/agent/types.go`),
+to `ExecutionResult`: target identity, source digest (when known), the
+delivered 1-based line window, and the source's total line count (when the
+read's own scan reached EOF without a scan-limit truncation). `internal/tui/agent_loop.go`'s
+`readObservationFromResult` translates a successful `read_file` `tools.Result`
+into one — `internal/agent` still never imports `internal/tools`, per
+CLAUDE.md's dependency-direction rule. Two read shapes both need this
+translation: a windowed read (`tools.ResultMeta.Window` is set) and,
+separately, `readFileMetaContextByte`'s legacy whole-file path (no
+offset/limit given), which never populates `Window` at all — only
+`Coverage.TotalLines`, and only when the read was not byte-truncated. Both
+map to an observation; the byte-truncated and byte-range-only cases produce
+none (no line window exists to trust).
+
+`evaluateCriterion`'s exact-read branch and `readCoverageComplete`
+(`internal/agent/criteria.go`) now require the *union* of a target's
+observations — merged only within one consistent, non-conflicting source
+digest and total-line count — to gaplessly span `[1, TotalLines]`. A single
+full read still resolves in one observation, exactly as before; a sequence
+of partial reads resolves once their windows join up; a gap, or windows from
+two different file versions, never resolves it. `NextReadOffset` exposes the
+same coverage state as a precise "read starting at line N for M more lines"
+hint, which `internal/tui/agent_yield.go`'s `buildAgentYieldDirective` now
+uses to name an exact `read_file({"path":...,"offset":...,"limit":...})`
+call in the continuation directive instead of always saying "use the
+offered tool again" — closing the gap between this ADR's original §9
+example and what Phase 2 actually shipped. `ReadObservation` carries no raw
+body and is bounded to `MaxReadObservations` (32) entries via
+`AppendReadObservation`'s append-and-trim, matching `AppendEvidence`'s
+existing shape.
+
+Two existing tests needed their fixtures strengthened, exactly as the
+harness plan's §19 test-matrix note anticipated for
+`TestVerifiedAgentExactReadCriterionStopsWithoutSemanticReplay`: both used a
+bare `ToolCallRecord{Succeeded: true}` fixture with no observation at all,
+which the new coverage requirement correctly no longer accepts as proof.
+
+Deliberately out of scope for this update, left for a later Phase 4 pass:
+the generic `RecoveryHint` struct and producer table from harness plan §12
+(grep/glob/list_dir/web/MCP typed recovery — only `read_file`'s own
+existing `Window`/`Coverage` fields are consulted here, nothing new was
+added to `tools.ResultMeta`); the model-authored `read_coverage` contract
+requirement type from §10 (this update instead makes the *existing*
+exact-read grammar coverage-aware, rather than adding a new criterion
+kind or extending `agentverify.Contract`'s JSON schema); and the full
+three-file (`zscaler-mock`) target scenario from §19 — the new
+`TestAgentYieldContinuationNamesPreciseOffsetForPartialCoverage` covers the
+same coverage-proof mechanism with a single large fixture file instead.

@@ -294,17 +294,31 @@ to verification below, exactly as it always has. Set `agent.yield.enabled:
 true` to let a narrow, mechanically provable class of missing evidence
 continue in the *same* executor episode first: currently only an exact
 "Read the file `<path>`." acceptance criterion the executor has not yet
-proven with a successful `read_file` call. This is not a general "keep
-retrying" mode — a criterion requiring model judgment (comparison, review,
-open-ended inspection) is never treated as an obligation here and always
-falls through to verification unchanged, per
-[ADR 0013](architecture/decisions/0013-agent-execution-yield-policy.md).
+proven. This is not a general "keep retrying" mode — a criterion requiring
+model judgment (comparison, review, open-ended inspection) is never treated
+as an obligation here and always falls through to verification unchanged,
+per [ADR 0013](architecture/decisions/0013-agent-execution-yield-policy.md).
+
+Proof is coverage-aware, not just "a `read_file` call touching this path
+succeeded": a successful read that only delivered part of a larger file
+(e.g. lines 1-100 of a 220-line file) does not satisfy the criterion by
+itself. The delivered line windows from every `read_file` call on the same
+target this cycle are unioned — gaplessly, and only within one consistent
+source version — and the criterion resolves once that union covers the
+whole file. Windows from two different file versions (a changed
+`SourceDigest`) are never combined into one coverage claim.
 
 When an obligation is still outstanding and the required tool capability is
 offered, the executor receives one more bounded request in the same cycle —
 no new `BeginCycle`, no new user-facing message, no verifier dispatch — with
 a small "Runtime execution state" directive naming the still-missing
-criterion by its pinned ID. Two independent bounds keep this from looping:
+criterion by its pinned ID. When enough is already known about the file
+(its total line count and what has been delivered so far), the directive
+names the exact remaining window — `read_file({"path":"...","offset":101,"limit":120})`
+— instead of a generic "use the offered tool again"; it falls back to the
+generic phrasing when no useful hint can yet be derived (no read of that
+target has happened this cycle). Two independent bounds keep this from
+looping:
 
 | Bound | Config key | Default | Behavior when exceeded |
 | --- | --- | --- | --- |
