@@ -75,7 +75,7 @@ func (m *Model) handleAgentYield() tea.Cmd {
 			checkpoint.NoProgressNudges++
 		}
 		checkpoint.ExecutorRequests++
-		m.agentLoop.yieldDirective = buildAgentYieldDirective(decision, obligations)
+		m.agentLoop.yieldDirective = buildAgentYieldDirective(decision, obligations, m.agentLoop.execution.ReadObservations)
 		return m.continueAgentEpisode(decision)
 	case agent.YieldVerify:
 		return m.startAgentVerification()
@@ -187,11 +187,14 @@ func yieldTerminationReason(decision agent.YieldDecision) string {
 // small, clearly marked execution-state subsection for the bounded
 // AgentDirective slot (internal/prompt/compose.go's authority-limiting
 // preamble already wraps whatever agentDirective returns). It never copies
-// raw tool output into the template: only controller-owned criterion IDs
-// and each criterion's own already-pinned, bounded target text are quoted
-// as data. Bounded to maxAgentYieldObligations entries and, via the caller
-// truncating agentDirective's whole output, to maxAgentDirectiveBytes.
-func buildAgentYieldDirective(decision agent.YieldDecision, obligations []agent.ExactReadObligation) string {
+// raw tool output into the template: only controller-owned criterion IDs,
+// each criterion's own already-pinned, bounded target text, and a
+// coverage-derived next-offset/limit pair (agent.NextReadOffset — itself
+// computed only from typed ResultMeta window/total metadata, never raw
+// content) are quoted as data. Bounded to maxAgentYieldObligations entries
+// and, via the caller truncating agentDirective's whole output, to
+// maxAgentDirectiveBytes.
+func buildAgentYieldDirective(decision agent.YieldDecision, obligations []agent.ExactReadObligation, observations []agent.ReadObservation) string {
 	if decision.Action != agent.YieldContinue || len(decision.CriterionIDs) == 0 {
 		return ""
 	}
@@ -210,7 +213,11 @@ func buildAgentYieldDirective(decision agent.YieldDecision, obligations []agent.
 		if !ok {
 			continue
 		}
-		b = append(b, fmt.Sprintf("Criterion %s still lacks the requested file coverage for %q. Use the offered read_file tool to obtain it.\n", id, target)...)
+		if offset, limit, ok := agent.NextReadOffset(target, observations); ok {
+			b = fmt.Appendf(b, "Criterion %s still lacks the requested file coverage for %q. Call read_file({\"path\":%q,\"offset\":%d,\"limit\":%d}) to obtain the remaining lines.\n", id, target, target, offset, limit)
+			continue
+		}
+		b = fmt.Appendf(b, "Criterion %s still lacks the requested file coverage for %q. Use the offered read_file tool to obtain it.\n", id, target)
 	}
 	b = append(b, "Existing permissions and user constraints still apply.\n"...)
 	return string(b)

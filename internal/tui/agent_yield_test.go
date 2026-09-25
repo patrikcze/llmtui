@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -124,6 +125,60 @@ func TestAgentYieldStopsDeterministicallyWithoutProgress(t *testing.T) {
 	}
 	if !strings.Contains(run.StopReason, "no relevant progress") {
 		t.Fatalf("stop reason = %q, want an explicit no-progress explanation", run.StopReason)
+	}
+}
+
+// TestAgentYieldContinuationNamesPreciseOffsetForPartialCoverage is the
+// harness plan's §19 Test Case D ("Read recovery") adapted to Phase 4's
+// coverage-aware proof: a model that reads only the first 100 of 220 lines
+// of the criterion's target, then answers prematurely, must not have that
+// partial read mechanically satisfy "Read the file big.log" (Phase 2 alone
+// would have wrongly accepted it — see harness plan §4 finding #3). The
+// forced same-cycle continuation must name the exact remaining
+// offset/limit (agent.NextReadOffset), not a vague "use the tool again", and
+// once the model reads the rest, coverage is complete and the run finishes
+// in one cycle.
+func TestAgentYieldContinuationNamesPreciseOffsetForPartialCoverage(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-partial", Name: tools.ToolReadFile, Arguments: `{"path":"big.log","offset":1,"limit":100}`}}},
+		agentScriptStep{text: "big.log starts with line 1."},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-rest", Name: tools.ToolReadFile, Arguments: `{"path":"big.log","offset":101,"limit":120}`}}},
+		agentScriptStep{text: "big.log has 220 lines in total."},
+	)
+	prov.contractReplies = []string{`{"criteria":["Read the file big.log"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	var content strings.Builder
+	for i := 1; i <= 220; i++ {
+		fmt.Fprintf(&content, "line %d\n", i)
+	}
+	if err := os.WriteFile(root+"/big.log", []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Yield.Enabled = true
+	m.cfg.Agent.Yield.MaxEpisodeRequests = 64
+	m.cfg.Agent.Yield.MaxNudgesWithoutProgress = 2
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read big.log and summarize it.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionDone || run.Cycle != 1 {
+		t.Fatalf("run = %+v, want same-cycle completion", run)
+	}
+	if len(prov.requests) != 5 {
+		t.Fatalf("requests = %d, want 5 (contract, partial read, premature answer, forced precise-offset read, final answer)", len(prov.requests))
+	}
+	forced := prov.requests[3]
+	if !requestContains(forced, `"path":"big.log","offset":101,"limit":120`) {
+		t.Fatalf("continuation directive did not name the exact remaining window (offset 101, limit 120): %+v", forced.Messages)
+	}
+	for _, c := range run.Criteria {
+		if c.Status != agent.CriterionSatisfied {
+			t.Fatalf("criterion %+v, want satisfied — the union of both reads covers all 220 lines", c)
+		}
 	}
 }
 
