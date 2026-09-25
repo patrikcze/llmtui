@@ -130,6 +130,27 @@ type debugInfo struct {
 	// correlation record finalizes (both the prediction and the actual
 	// outcome have arrived) — see finalizePreVerifierCorrelationIfReady.
 	DecisionShadowActualSemanticVerifierRan bool
+	// DecisionCriterionAssessment* are the most recent content-free Phase 3
+	// shadow measurement. They are diagnostic only and never participate in
+	// criterion/status/verifier decisions.
+	DecisionCriterionAssessmentModel                    string
+	DecisionCriterionAssessmentCriterion                string
+	DecisionCriterionAssessmentSpecFingerprint          string
+	DecisionCriterionAssessmentEvidenceFingerprint      string
+	DecisionCriterionAssessmentAvailability             string
+	DecisionCriterionAssessmentSignal                   string
+	DecisionCriterionAssessmentSupportProbability       float64
+	DecisionCriterionAssessmentContradictionProbability float64
+	DecisionCriterionAssessmentModelRevision            string
+	DecisionCriterionAssessmentLatency                  time.Duration
+	DecisionCriterionAssessmentUnavailableReason        string
+	// DecisionCriterionAssist* describes the optional Phase 4b gate. It is
+	// populated only for a resolved G2-backed profile; the shipped profile
+	// set is empty, so normal operation remains inert.
+	DecisionCriterionAssistEligible  bool
+	DecisionCriterionAssistProfile   string
+	DecisionCriterionAssistEscalated bool
+	DecisionCriterionAssistReason    string
 	// DecisionGuardedAssist* fields describe the most recent guarded-assist
 	// decision (Phase 1, agent_decision_policy.go). Unlike every
 	// DecisionShadow* field above, DecisionGuardedAssistEscalated genuinely

@@ -997,6 +997,28 @@ func (m *Model) debugOverlay() string {
 			d.DecisionGuardedAssistProfile, d.DecisionGuardedAssistProbability, d.DecisionGuardedAssistThreshold,
 			d.DecisionGuardedAssistEscalated, d.DecisionGuardedAssistReason))
 	}
+	if d.DecisionCriterionAssessmentAvailability != "" {
+		m.kv(&b, "laya criterion shadow", fmt.Sprintf("criterion=%s availability=%s signal=%s support=%.2f contradiction=%.2f model=%s revision=%s spec=%s evidence=%s latency=%s",
+			d.DecisionCriterionAssessmentCriterion, d.DecisionCriterionAssessmentAvailability,
+			d.DecisionCriterionAssessmentSignal, d.DecisionCriterionAssessmentSupportProbability,
+			d.DecisionCriterionAssessmentContradictionProbability, d.DecisionCriterionAssessmentModel,
+			d.DecisionCriterionAssessmentModelRevision, d.DecisionCriterionAssessmentSpecFingerprint,
+			d.DecisionCriterionAssessmentEvidenceFingerprint, d.DecisionCriterionAssessmentLatency.Round(time.Millisecond)))
+	}
+	if d.DecisionCriterionAssistEligible {
+		m.kv(&b, "laya criterion assist", fmt.Sprintf("profile=%s escalated=%v reason=%s",
+			d.DecisionCriterionAssistProfile, d.DecisionCriterionAssistEscalated, d.DecisionCriterionAssistReason))
+	}
+	if m.cfg.DecisionEngine.YieldShadow || m.yieldShadowMetrics.Total > 0 {
+		last := m.yieldShadowLast
+		lastText := "none"
+		if last.Outcome != "" {
+			lastText = fmt.Sprintf("%s/%s→%s", last.Outcome, orNone(last.Advice), orNone(last.ActualAction))
+		}
+		m.kv(&b, "laya yield shadow", fmt.Sprintf("total=%d available=%d missing=%d censored=%d late=%d duplicate=%d last=%s",
+			m.yieldShadowMetrics.Total, m.yieldShadowMetrics.Available, m.yieldShadowMetrics.Missing,
+			m.yieldShadowMetrics.Censored, m.yieldShadowMetrics.Late, m.yieldShadowMetrics.Duplicate, lastText))
+	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
 		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")

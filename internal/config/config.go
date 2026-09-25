@@ -372,12 +372,18 @@ type AgentVerifierConfig struct {
 // It is disabled by default and never replaces the generative provider.
 type DecisionEngineConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// YieldShadow enables the opt-in, observational Phase 7 sample stream for
+	// clean agent yields. It never changes the existing verifier/stop policy
+	// and remains false until an ambiguous routing class has been measured.
+	YieldShadow bool `mapstructure:"yield_shadow" yaml:"yield_shadow"`
 	// Mode selects what the engine may do once Enabled is true: "shadow"
-	// (observe every cycle, never influence it — the default and the only
-	// behavior that existed before Phase 1) or "guarded_assist" (may force
-	// at most one additional semantic verification an adaptive policy
-	// would otherwise have skipped — see docs/decision-engine.md and
-	// docs/architecture/decisions/0012-laya-guarded-verifier-escalation.md).
+	// (observe every cycle, never influence it — the default),
+	// "guarded_assist" (may force at most one additional semantic verification
+	// on a calibrated adaptive path), "criterion_shadow" (evaluate opt-in,
+	// pinned criterion propositions over admitted evidence, still without any
+	// authoritative effect), or "criterion_assist" (may request semantic
+	// review from a calibrated criterion assessment only — see
+	// docs/decision-engine.md).
 	// Empty/unknown falls back to shadow rather than blocking startup or
 	// silently becoming active. Enabled=false overrides every mode: a
 	// disabled engine is never constructed regardless of Mode's value.
@@ -392,8 +398,10 @@ type DecisionEngineConfig struct {
 
 // Decision-engine operating modes; see DecisionEngineConfig.Mode.
 const (
-	DecisionEngineModeShadow        = "shadow"
-	DecisionEngineModeGuardedAssist = "guarded_assist"
+	DecisionEngineModeShadow          = "shadow"
+	DecisionEngineModeGuardedAssist   = "guarded_assist"
+	DecisionEngineModeCriterionShadow = "criterion_shadow"
+	DecisionEngineModeCriterionAssist = "criterion_assist"
 )
 
 // ResolvedMode returns the effective decision-engine mode. An explicit valid
@@ -406,6 +414,10 @@ func (c DecisionEngineConfig) ResolvedMode() string {
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
 	case DecisionEngineModeGuardedAssist:
 		return DecisionEngineModeGuardedAssist
+	case DecisionEngineModeCriterionShadow:
+		return DecisionEngineModeCriterionShadow
+	case DecisionEngineModeCriterionAssist:
+		return DecisionEngineModeCriterionAssist
 	default:
 		return DecisionEngineModeShadow
 	}
@@ -893,7 +905,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
-		"decision_engine.enabled", "decision_engine.mode", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
+		"decision_engine.enabled", "decision_engine.yield_shadow", "decision_engine.mode", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -1071,6 +1083,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.yield.max_nudges_without_progress", 2)
 
 	v.SetDefault("decision_engine.enabled", false)
+	v.SetDefault("decision_engine.yield_shadow", false)
 	v.SetDefault("decision_engine.mode", DecisionEngineModeShadow)
 	v.SetDefault("decision_engine.provider", "laya")
 	v.SetDefault("decision_engine.laya.default_model", "english")
@@ -1342,10 +1355,12 @@ agent:
 # provider and remains disabled until a verified decision runtime is installed.
 decision_engine:
   enabled: false
+  yield_shadow: false # opt-in Phase 7 observation; never changes agent policy
   # "shadow" only ever observes; "guarded_assist" may additionally force one
-  # semantic verification an adaptive policy would otherwise skip, and only
-  # takes effect once a calibrated profile for the loaded model exists —
-  # see docs/decision-engine.md. Unknown values fall back to shadow.
+  # semantic verification an adaptive policy would otherwise skip;
+  # "criterion_shadow" measures pinned criterion evidence; and
+  # "criterion_assist" may request semantic review only with a separately
+  # approved G2 profile. Unknown values fall back to shadow.
   mode: shadow
   provider: laya
   laya:

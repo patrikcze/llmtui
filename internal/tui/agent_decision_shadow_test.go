@@ -28,6 +28,7 @@ type fakeDecisionEngine struct {
 	// real malformed-answer failure would. Existing tests that don't set
 	// this field are unaffected either way.
 	preVerifierResult *decision.Result
+	yieldResult       *decision.Result
 	err               error
 	delay             time.Duration
 	predicts          atomic.Int32
@@ -51,6 +52,11 @@ func (e *fakeDecisionEngine) Predict(ctx context.Context, state any, questions m
 	if e.preVerifierResult != nil {
 		if _, ok := questions["evidence_sufficient"]; ok {
 			return *e.preVerifierResult, nil
+		}
+	}
+	if e.yieldResult != nil {
+		if _, ok := questions["yield_action"]; ok {
+			return *e.yieldResult, nil
 		}
 	}
 	return e.result, nil

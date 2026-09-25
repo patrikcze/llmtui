@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -193,6 +194,85 @@ func TestFileStorePreservesAndRedactsRunStartContext(t *testing.T) {
 	if strings.Contains(loaded.StartSummary, "super-secret-value") ||
 		len(loaded.StartTurns) != 1 || strings.Contains(loaded.StartTurns[0].Content, "another-secret-value") {
 		t.Fatalf("start context was not redacted: summary=%q turns=%+v", loaded.StartSummary, loaded.StartTurns)
+	}
+}
+
+func TestStoreRoundTripsCriterionAssessmentAndDropsRedactedClaim(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir, 64*1024, 4)
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginContract(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteContractWithAssessments(
+		[]string{"read report.md"},
+		map[int]CriterionAssessmentSpec{
+			0: {Version: 1, Proposition: "the report observation supports the criterion", EvidenceKind: CriterionAssessmentLocalRead, Target: "report.md"},
+		},
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Criteria[0].Assessment == nil || loaded.Criteria[0].Assessment.Proposition != "the report observation supports the criterion" {
+		t.Fatalf("round-tripped assessment = %+v", loaded.Criteria[0].Assessment)
+	}
+
+	secretRun, now := newTestRun(t, DefaultLimits())
+	if err := secretRun.BeginContract(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := secretRun.CompleteContractWithAssessments(
+		[]string{"read report.md"},
+		map[int]CriterionAssessmentSpec{
+			0: {Version: 1, Proposition: "token=super-secret-value", EvidenceKind: CriterionAssessmentLocalRead, Target: "report.md"},
+		},
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), secretRun); err != nil {
+		t.Fatal(err)
+	}
+	secretLoaded, err := store.Load(context.Background(), secretRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secretLoaded.Criteria[0].Assessment != nil {
+		t.Fatalf("redaction changed claim instead of dropping it: %+v", secretLoaded.Criteria[0].Assessment)
+	}
+	if secretRun.Criteria[0].Assessment == nil {
+		t.Fatal("persistence redaction mutated live run")
+	}
+}
+
+func TestDecodeRunStripsInvalidOptionalAssessment(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginContract(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteContract([]string{"read report.md"}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	run.Criteria[0].Assessment = &CriterionAssessmentSpec{
+		Version: 99, Proposition: "unsupported", EvidenceKind: CriterionAssessmentReceipts,
+	}
+	data, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := decodeRun(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Criteria[0].Assessment != nil {
+		t.Fatalf("invalid assessment survived load: %+v", loaded.Criteria[0].Assessment)
 	}
 }
 

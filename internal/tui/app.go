@@ -348,6 +348,10 @@ type Model struct {
 	// path. See internal/tui/agent_decision_shadow.go.
 	decisionShadow        *decisionShadowService
 	decisionShadowMetrics agentDecisionShadowMetrics
+	// criterionAssessmentMetrics backs the Phase 3 evaluation-only criterion
+	// shadow. It is session-scoped and content-free; no measurement is read by
+	// the agent controller.
+	criterionAssessmentMetrics criterionAssessmentMetrics
 
 	// preVerifierCorrelations/preVerifierShadowMetrics/preVerifierShadowSamples
 	// back the pre-verifier counterfactual shadow (Phase 2) — see
@@ -361,6 +365,13 @@ type Model struct {
 	// preVerifierCorrelations, used only for deterministic true-oldest
 	// bounded eviction — see evictOldestPreVerifierCorrelation.
 	preVerifierSequence int
+	// yieldShadowCorrelations/yieldShadowMetrics/yieldShadowSamples back the
+	// optional Phase 7 Laya observation. They are session-local, bounded, and
+	// never read by the agent controller.
+	yieldShadowCorrelations map[string]*agentYieldShadowCorrelation
+	yieldShadowMetrics      agentYieldShadowMetrics
+	yieldShadowSamples      []agentYieldShadowSample
+	yieldShadowLast         agentYieldShadowSample
 }
 
 // New builds the chat model.
@@ -1153,6 +1164,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDecisionPreVerifierShadowMsg:
 		return m.handleAgentDecisionPreVerifierShadow(msg)
+
+	case agentYieldShadowMsg:
+		return m.handleAgentYieldShadow(msg)
+
+	case agentCriterionAssessmentMsg:
+		return m.handleAgentCriterionAssessment(msg)
 
 	case agentDecisionGuardedAssistMsg:
 		return m.handleAgentDecisionGuardedAssist(msg)

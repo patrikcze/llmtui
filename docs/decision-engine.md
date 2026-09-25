@@ -5,11 +5,12 @@ text-generating providers. Laya returns `choice`, ordinal `score`, and boolean
 `noul` probabilities. The existing agent loop, verifier, and tool approval
 policy remain authoritative. A prediction is a signal, never authorization
 to execute a tool. Every observation this package makes is shadow-only
-(recorded, never acted on) with one narrow, structurally bounded exception:
+(recorded, never acted on) with two narrow, structurally bounded exceptions:
 `decision_engine.mode: guarded_assist` may force one additional semantic
-verification an adaptive policy would otherwise have skipped — see "Guarded
-verifier escalation (Phase 1)" below. That mode ships with zero behavioral
-effect in this codebase (no approved calibration profile exists yet), and
+verification an adaptive policy would otherwise have skipped, while
+`criterion_assist` may request the same verifier from a calibrated criterion
+assessment. Both modes ship with zero behavioral effect in this codebase (no
+approved calibration profile exists), and
 Laya can never skip, delay, or replace a verifier, satisfy a criterion, or
 otherwise author a status this package doesn't already compute
 deterministically.
@@ -521,6 +522,138 @@ guarded wait can never itself cause a run to exceed
 profile, probability, threshold, whether it escalated, and a bounded
 reason code (`escalated`, `below_threshold`, `unavailable`, `timeout`,
 `cancelled`, `malformed_result`).
+
+### Pinned criterion assessment metadata (Phase 2)
+
+Contract callers may explicitly request assessment metadata version 1 for
+evaluation fixtures through `ContractInput.AssessmentVersion`. Ordinary
+contracting leaves this field zero, so its response schema and prompt remain
+unchanged. The optional extension attaches at most one bounded neutral
+proposition to each existing criterion by its response index. It accepts only
+`receipts` or `local_read` evidence, and a `local_read` target must be one
+literal workspace-relative path. Globs, selectors, URLs, URIs, shell text and
+read instructions are rejected.
+
+The metadata is pinned inside the existing `AgentRun.Criteria` records, with
+the existing criterion ID and text, in one atomic contract transition. It is
+not a second criteria registry, question store, evidence ledger or Laya result
+cache. Invalid optional metadata is discarded as a whole while valid core
+criteria remain usable; clarification contracts and ask-user delegation never
+retain provisional assessments. The existing TUI contract path only passes
+validated attachments to the existing owner.
+
+Phase 2 is evaluation-only. The metadata does not affect deterministic
+criteria, verifier input, tool selection, approval, completion, or normal chat
+behavior. Persistence keeps only validated claims; if shared secret redaction
+would change a proposition or target, the attachment is omitted rather than
+persisted in altered form. Resume validates the optional field again and strips
+invalid historical attachments while keeping the schema-v1 run loadable. No
+Laya inference or new runtime mode is introduced by this phase.
+
+### Bounded verifier observation views (Phase 4a)
+
+The existing semantic verifier now receives an optional controller-owned
+`Observations` projection for content-bearing proof. The TUI selects at most
+four complete, successful, current-cycle local-read views in unresolved
+criterion order, using the same exact-read, freshness, privacy, and
+post-mutation rules as Phase 3. The aggregate excerpt cap is 2048 bytes. It
+never rereads the workspace, and a missing, stale, truncated, ambiguous,
+evicted, or resumed observation is omitted; the unresolved semantic
+`Criteria` list remains unchanged so omitted proof is still unknown.
+
+Every excerpt is redacted and framed as untrusted data in the user evidence
+message, never in the verifier system instruction. The prompt explicitly
+states that the bounded list is not exhaustive. Existing request admission
+counts the actual framed content. If the content-bearing request cannot fit,
+the controller retries the same authoritative verifier with the optional
+views removed. This is a verifier-context improvement only: Laya remains
+optional and does not participate in selection, authorization, criteria
+updates, routing, or completion. See ADR 0015.
+
+### Criterion assessment shadow (Phase 3)
+
+`decision_engine.mode: criterion_shadow` is an explicit evaluation mode. New
+task-contract requests in this mode opt into assessment metadata version 1;
+ordinary `shadow` and `guarded_assist` contracts keep the legacy schema. The
+metadata remains optional: a contract can be valid without any assessment
+attachment, and a clarification or ask-user delegation never carries one
+forward.
+
+After deterministic criteria have been applied and before verifier routing,
+the TUI builds at most one bounded batch from pinned semantic assessments. A
+`receipts` assessment uses exactly one successful, executed current-cycle
+receipt. A `local_read` assessment additionally requires exactly one matching
+`read_file`, one complete current-cycle observation-cache excerpt, and no later
+write/edit/command that could invalidate it. Missing, stale, truncated,
+evicted, or ambiguous evidence abstains before inference; the path never
+rereads the workspace or calls a tool. Each admitted state contains one
+framed/redacted proposition and at most one 512-byte excerpt, with a 2 KiB
+serialized-state ceiling and a five-second total batch budget.
+
+Each admitted criterion receives two fixed `noul` questions: direct support and
+direct contradiction. The result is recorded only as a content-free
+measurement bound to the criterion/spec/evidence fingerprints and model
+revision. Support, contradiction, and ambiguous probabilities are advisory
+signals; low support is not criterion failure, and no signal changes
+`Criterion.Status`, `Evidence`, verifier input/routing, tool approval, stop
+decisions, or persisted run authority. The mode is therefore safe to disable:
+removing the mode stops assessment requests while the existing agent loop and
+verifier behavior remain unchanged.
+
+### Measured criterion assist (Phase 4b)
+
+`decision_engine.mode: criterion_assist` is a separate, gated mode. It uses
+the same bounded Phase 3 criterion batch exactly once, and only on an adaptive
+synthetic-success route that would otherwise complete without semantic
+verification. The shipped `criterionAssistProfiles` set is empty because no
+approved G2 report exists; configuration alone therefore has no behavioral
+effect.
+
+When a future profile is explicitly added from held-out G2 evidence, a strong
+contradiction or ambiguous assessment may request the existing semantic
+verifier. Positive support is inert. Assessment errors, unavailable evidence,
+timeouts, cancellation, and below-threshold contradiction all return the
+original synthetic result. The verifier still receives the full unresolved
+semantic criterion set and the Phase 4a bounded proof projection; Laya
+probabilities are not inserted into its prompt. No handler applies criterion
+updates, grants permissions, reruns the executor, or cancels a verifier that
+policy already required. The active wait is bounded by both the profile and
+the run's remaining elapsed budget. See ADR 0016.
+
+### Offline tool ranking (Phase 5)
+
+Phase 5 is an offline experiment only. Its test-local harness snapshots the
+same connected eligible candidate names used by the existing discovery path,
+compares unchanged lexical `SearchToolsWithTotal` top-eight retrieval with a
+bounded `decision.Service` choice, and records necessary-tool recall and rank
+as additive evaluation data. It rejects oversized or colliding options,
+frames descriptions as untrusted data, and counts a necessary tool outside
+the lexical shortlist separately from a reranking failure.
+
+The harness never changes the registry, candidate eligibility, disclosure,
+approval, native/fenced discovery, or production tool pipeline. It makes no
+MCP connection and adds no model call to catalog getters. Deterministic
+fixtures are valid evidence even when a later opt-in MLX run is skipped; a
+skipped live run is censored, not a success claim.
+
+### Optional yield shadow (Phase 7)
+
+`decision_engine.yield_shadow: true` is a second, explicit opt-in layered on
+`decision_engine.enabled`. It is intended only after deterministic/semantic
+routing has produced a measured ambiguous class. At the existing cycle
+verification boundary it records one versioned, bounded observation using the
+shared Laya service: objective, criterion IDs/statuses, progress category,
+closed tool outcome codes, delivered file-version references, deterministic
+route and proposed action. Raw bodies, hidden reasoning, arbitrary arguments,
+and approval-bearing descriptions are excluded.
+
+The prediction is paired with the already-applied authoritative action for
+diagnostics only. `/debug last` separates available, missing, censored, late,
+and duplicate outcomes. The answer never changes tool availability,
+verification, criteria, completion, budgets, approvals, persistence, or
+ordinary chat. Samples are session-local and bounded; they are not checkpoint
+or memory state. No calibrated profile or active yield policy is part of this
+phase. See ADR 0017.
 
 ## Measured bridge validation (2026-09-23)
 

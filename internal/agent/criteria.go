@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -14,6 +15,11 @@ const (
 	// MaxReadObservations bounds one execution's ordered read-coverage
 	// receipt list, matching MaxEvidence's append-and-trim shape.
 	MaxReadObservations = 32
+	// CriterionAssessmentVersion is the version of the optional, evaluation-only
+	// criterion assessment metadata attached to a pinned criterion.
+	CriterionAssessmentVersion = 1
+	// CriterionAssessmentMaxBytes bounds each free-text assessment field.
+	CriterionAssessmentMaxBytes = 256
 )
 
 // CriterionStatus tracks one acceptance criterion across the whole run.
@@ -38,6 +44,25 @@ const (
 	CriterionNotApplicable CriterionStatus = "not_applicable"
 )
 
+// CriterionAssessmentEvidenceKind identifies the bounded evidence projection
+// a future shadow assessor may inspect. It never changes criterion authority.
+type CriterionAssessmentEvidenceKind string
+
+const (
+	CriterionAssessmentReceipts  CriterionAssessmentEvidenceKind = "receipts"
+	CriterionAssessmentLocalRead CriterionAssessmentEvidenceKind = "local_read"
+)
+
+// CriterionAssessmentSpec is optional metadata compiled from a task contract.
+// It is deliberately neutral: no threshold, status, action, or controller
+// instruction is persisted here. Phase 2 stores it for evaluation only.
+type CriterionAssessmentSpec struct {
+	Version      int                             `json:"version"`
+	Proposition  string                          `json:"proposition"`
+	EvidenceKind CriterionAssessmentEvidenceKind `json:"evidence_kind"`
+	Target       string                          `json:"target,omitempty"`
+}
+
 // ValidCriterionStatus reports whether a status value is one of the four
 // documented states. Control data with any other value is malformed.
 func ValidCriterionStatus(s CriterionStatus) bool {
@@ -51,20 +76,22 @@ func ValidCriterionStatus(s CriterionStatus) bool {
 // Criterion is one stable acceptance criterion, pinned near run start and
 // carried unchanged for the life of the run; only Status/Note evolve.
 type Criterion struct {
-	ID           string          `json:"id"`
-	Text         string          `json:"text"`
-	Status       CriterionStatus `json:"status"`
-	Note         string          `json:"note,omitempty"`
-	UpdatedCycle int             `json:"updated_cycle,omitempty"`
-	Kind         CriterionKind   `json:"kind,omitempty"`
-	Target       string          `json:"target,omitempty"`
+	ID           string                   `json:"id"`
+	Text         string                   `json:"text"`
+	Status       CriterionStatus          `json:"status"`
+	Note         string                   `json:"note,omitempty"`
+	UpdatedCycle int                      `json:"updated_cycle,omitempty"`
+	Kind         CriterionKind            `json:"kind,omitempty"`
+	Target       string                   `json:"target,omitempty"`
+	Assessment   *CriterionAssessmentSpec `json:"assessment,omitempty"`
 }
 
 // CriterionSpec defines a criterion before stable IDs are assigned.
 type CriterionSpec struct {
-	Text   string
-	Kind   CriterionKind
-	Target string
+	Text       string
+	Kind       CriterionKind
+	Target     string
+	Assessment *CriterionAssessmentSpec
 }
 
 // CriterionUpdate is a per-cycle status change keyed by pinned criterion ID.
@@ -111,10 +138,28 @@ func (r *AgentRun) PinCriteria(texts []string) {
 // PinTypedCriteria establishes controller-owned deterministic or semantic
 // criteria exactly once.
 func (r *AgentRun) PinTypedCriteria(specs []CriterionSpec) {
+	_ = r.pinTypedCriteria(specs)
+}
+
+// PinTypedCriteriaWithAssessments pins criteria and optional assessment
+// metadata atomically. Invalid metadata leaves the run unchanged.
+func (r *AgentRun) PinTypedCriteriaWithAssessments(specs []CriterionSpec) error {
+	return r.pinTypedCriteria(specs)
+}
+
+func (r *AgentRun) pinTypedCriteria(specs []CriterionSpec) error {
 	if r == nil || len(r.Criteria) > 0 {
-		return
+		return nil
+	}
+	if err := validateCriterionSpecs(specs); err != nil {
+		return err
 	}
 	if len(specs) > MaxCriteria {
+		for _, spec := range specs[MaxCriteria:] {
+			if spec.Assessment != nil {
+				return fmt.Errorf("%w: assessment criterion index exceeds maximum %d", ErrMalformedControl, MaxCriteria)
+			}
+		}
 		specs = specs[:MaxCriteria]
 	}
 	for _, spec := range specs {
@@ -126,14 +171,103 @@ func (r *AgentRun) PinTypedCriteria(specs []CriterionSpec) {
 		if kind == "" {
 			kind = CriterionSemantic
 		}
-		r.Criteria = append(r.Criteria, Criterion{
+		criterion := Criterion{
 			ID:     fmt.Sprintf("c%d", len(r.Criteria)+1),
 			Text:   truncate(text, 256),
 			Status: CriterionPending,
 			Kind:   kind,
 			Target: truncate(strings.TrimSpace(spec.Target), 256),
-		})
+		}
+		if spec.Assessment != nil {
+			assessment := canonicalCriterionAssessment(*spec.Assessment)
+			criterion.Assessment = &assessment
+		}
+		r.Criteria = append(r.Criteria, criterion)
 	}
+	return nil
+}
+
+// ValidateCriterionAssessmentSpec validates one optional assessment without
+// changing it. Callers that pin it use the canonical copy produced by the
+// controller-owned pinning path.
+func ValidateCriterionAssessmentSpec(spec CriterionAssessmentSpec) error {
+	_, err := normalizeCriterionAssessment(spec)
+	return err
+}
+
+func validateCriterionSpecs(specs []CriterionSpec) error {
+	for _, spec := range specs {
+		if spec.Assessment == nil {
+			continue
+		}
+		if spec.Kind != "" && spec.Kind != CriterionSemantic {
+			return fmt.Errorf("%w: assessment requires a semantic criterion", ErrMalformedControl)
+		}
+		if len([]byte(strings.TrimSpace(spec.Text))) > CriterionAssessmentMaxBytes {
+			return fmt.Errorf("%w: assessment source criterion is too long", ErrMalformedControl)
+		}
+		if _, err := normalizeCriterionAssessment(*spec.Assessment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeCriterionAssessment(spec CriterionAssessmentSpec) (CriterionAssessmentSpec, error) {
+	if spec.Version != CriterionAssessmentVersion {
+		return CriterionAssessmentSpec{}, fmt.Errorf("%w: unsupported criterion assessment version %d", ErrMalformedControl, spec.Version)
+	}
+	spec.Proposition = strings.TrimSpace(spec.Proposition)
+	if spec.Proposition == "" || !utf8.ValidString(spec.Proposition) || len([]byte(spec.Proposition)) > CriterionAssessmentMaxBytes {
+		return CriterionAssessmentSpec{}, fmt.Errorf("%w: invalid criterion assessment proposition", ErrMalformedControl)
+	}
+	switch spec.EvidenceKind {
+	case CriterionAssessmentReceipts:
+	case CriterionAssessmentLocalRead:
+		if err := validateLocalReadTarget(spec.Target); err != nil {
+			return CriterionAssessmentSpec{}, err
+		}
+	default:
+		return CriterionAssessmentSpec{}, fmt.Errorf("%w: unsupported criterion assessment evidence kind %q", ErrMalformedControl, spec.EvidenceKind)
+	}
+	spec.Target = strings.TrimSpace(spec.Target)
+	if !utf8.ValidString(spec.Target) || len([]byte(spec.Target)) > CriterionAssessmentMaxBytes {
+		return CriterionAssessmentSpec{}, fmt.Errorf("%w: invalid criterion assessment target", ErrMalformedControl)
+	}
+	if spec.Target != "" && containsUnsafeAssessmentTarget(spec.Target) {
+		return CriterionAssessmentSpec{}, fmt.Errorf("%w: unsafe criterion assessment target", ErrMalformedControl)
+	}
+	return spec, nil
+}
+
+func canonicalCriterionAssessment(spec CriterionAssessmentSpec) CriterionAssessmentSpec {
+	normalized, _ := normalizeCriterionAssessment(spec)
+	return normalized
+}
+
+func validateLocalReadTarget(target string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("%w: local_read assessment requires a target", ErrMalformedControl)
+	}
+	if strings.HasPrefix(target, "/") || strings.HasPrefix(target, "\\") || strings.Contains(target, ":") {
+		return fmt.Errorf("%w: local_read assessment target must be workspace-relative", ErrMalformedControl)
+	}
+	parts := strings.FieldsFunc(target, func(r rune) bool { return r == '/' || r == '\\' })
+	if len(parts) == 0 {
+		return fmt.Errorf("%w: local_read assessment target is empty", ErrMalformedControl)
+	}
+	for _, part := range parts {
+		if part == ".." || part == "." {
+			return fmt.Errorf("%w: local_read assessment target must be literal", ErrMalformedControl)
+		}
+	}
+	return nil
+}
+
+func containsUnsafeAssessmentTarget(target string) bool {
+	return strings.ContainsAny(target, "*?[]{};|&$`<>\x00\n\r") ||
+		strings.Contains(target, "://")
 }
 
 // HasCriteria reports whether stable criteria have been pinned.
@@ -170,10 +304,18 @@ func (r *AgentRun) UnresolvedCriteria() []Criterion {
 	var out []Criterion
 	for _, criterion := range r.Criteria {
 		if criterion.Status == CriterionPending || criterion.Status == CriterionFailed {
-			out = append(out, criterion)
+			out = append(out, cloneCriterion(criterion))
 		}
 	}
 	return out
+}
+
+func cloneCriterion(criterion Criterion) Criterion {
+	if criterion.Assessment != nil {
+		assessment := *criterion.Assessment
+		criterion.Assessment = &assessment
+	}
+	return criterion
 }
 
 // UnresolvedSemanticCriteria returns only criteria that require model

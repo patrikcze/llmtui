@@ -446,6 +446,9 @@ func TestDecisionEngineModeDefaultsToShadow(t *testing.T) {
 	if cfg.DecisionEngine.Mode != DecisionEngineModeShadow || cfg.DecisionEngine.ResolvedMode() != DecisionEngineModeShadow {
 		t.Fatalf("decision_engine mode default = %q resolved %q, want shadow", cfg.DecisionEngine.Mode, cfg.DecisionEngine.ResolvedMode())
 	}
+	if cfg.DecisionEngine.YieldShadow {
+		t.Fatal("decision_engine.yield_shadow defaults to true; want the optional Phase 7 observation disabled")
+	}
 }
 
 func TestDecisionEngineModeResolution(t *testing.T) {
@@ -457,6 +460,9 @@ func TestDecisionEngineModeResolution(t *testing.T) {
 		{"empty resolves shadow", DecisionEngineConfig{}, DecisionEngineModeShadow},
 		{"explicit shadow", DecisionEngineConfig{Mode: "shadow"}, DecisionEngineModeShadow},
 		{"explicit guarded_assist", DecisionEngineConfig{Mode: "guarded_assist"}, DecisionEngineModeGuardedAssist},
+		{"explicit criterion_shadow", DecisionEngineConfig{Mode: "criterion_shadow"}, DecisionEngineModeCriterionShadow},
+		{"explicit criterion_assist", DecisionEngineConfig{Mode: "criterion_assist"}, DecisionEngineModeCriterionAssist},
+		{"explicit criterion shadow", DecisionEngineConfig{Mode: "criterion_shadow"}, DecisionEngineModeCriterionShadow},
 		{"case-insensitive", DecisionEngineConfig{Mode: "Guarded_Assist"}, DecisionEngineModeGuardedAssist},
 		{"whitespace trimmed", DecisionEngineConfig{Mode: "  guarded_assist  "}, DecisionEngineModeGuardedAssist},
 		{"unknown falls back to shadow", DecisionEngineConfig{Mode: "active"}, DecisionEngineModeShadow},

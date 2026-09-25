@@ -70,10 +70,33 @@ func (r *AgentRun) BeginContract(now time.Time) error {
 // executor request can start. Empty or malformed control data cannot fall
 // through to execution.
 func (r *AgentRun) CompleteContract(criteria []string, now time.Time) error {
+	return r.CompleteContractWithAssessments(criteria, nil, now)
+}
+
+// CompleteContractWithAssessments pins the task contract and optional
+// evaluation-only metadata in one operation. A malformed optional extension
+// cannot partially pin criteria or change the run stage.
+func (r *AgentRun) CompleteContractWithAssessments(criteria []string, assessments map[int]CriterionAssessmentSpec, now time.Time) error {
 	if r == nil || r.Status != DecisionRunning || r.Stage != StageContract {
 		return r.transitionError(StageContract)
 	}
-	r.PinCriteria(criteria)
+	for index := range assessments {
+		if index < 0 || index >= len(criteria) {
+			return fmt.Errorf("%w: assessment criterion index %d is out of range", ErrMalformedControl, index)
+		}
+	}
+	specs := make([]CriterionSpec, 0, len(criteria))
+	for index, text := range criteria {
+		spec := CriterionSpec{Text: text, Kind: CriterionSemantic}
+		if assessment, ok := assessments[index]; ok {
+			assessmentCopy := assessment
+			spec.Assessment = &assessmentCopy
+		}
+		specs = append(specs, spec)
+	}
+	if err := r.PinTypedCriteriaWithAssessments(specs); err != nil {
+		return err
+	}
 	if !r.HasCriteria() {
 		return fmt.Errorf("%w: task contract has no acceptance criteria", ErrMalformedControl)
 	}

@@ -260,6 +260,16 @@ func decodeRun(data []byte) (*AgentRun, error) {
 			return nil, fmt.Errorf("%w: cycle %d: %v", ErrCorruptRun, run.Cycles[i].Number, err)
 		}
 	}
+	for i := range run.Criteria {
+		if run.Criteria[i].Assessment == nil {
+			continue
+		}
+		if err := ValidateCriterionAssessmentSpec(*run.Criteria[i].Assessment); err != nil {
+			// Optional metadata is evaluation-only. An old or redacted
+			// attachment must not make an otherwise valid v1 run unloadable.
+			run.Criteria[i].Assessment = nil
+		}
+	}
 	return &run, nil
 }
 
@@ -343,7 +353,8 @@ var _ Store = (*FileStore)(nil)
 var _ Store = (*MemoryStore)(nil)
 
 func encodePersistedRun(run *AgentRun, indent bool) ([]byte, error) {
-	data, err := json.Marshal(run)
+	persisted := cloneRunForPersistence(run)
+	data, err := json.Marshal(persisted)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +367,31 @@ func encodePersistedRun(run *AgentRun, indent bool) ([]byte, error) {
 		return json.MarshalIndent(value, "", "  ")
 	}
 	return json.Marshal(value)
+}
+
+// cloneRunForPersistence keeps redaction from mutating live controller state.
+// If redaction would change an optional assessment claim, omit that attachment
+// instead of silently persisting a different proposition or target.
+func cloneRunForPersistence(run *AgentRun) *AgentRun {
+	if run == nil {
+		return nil
+	}
+	persisted := *run
+	persisted.Criteria = append([]Criterion(nil), run.Criteria...)
+	for i := range persisted.Criteria {
+		assessment := persisted.Criteria[i].Assessment
+		if assessment == nil {
+			continue
+		}
+		if redact.Secrets(assessment.Proposition) != assessment.Proposition ||
+			redact.Secrets(assessment.Target) != assessment.Target {
+			persisted.Criteria[i].Assessment = nil
+			continue
+		}
+		copy := *assessment
+		persisted.Criteria[i].Assessment = &copy
+	}
+	return &persisted
 }
 
 func redactJSONStrings(value any) {
