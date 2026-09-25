@@ -512,6 +512,88 @@ func TestExactReadCriterionUsesObservedReadOnly(t *testing.T) {
 	}
 }
 
+func TestExactReadCriterionTarget(t *testing.T) {
+	cases := []struct {
+		text       string
+		wantTarget string
+		wantOK     bool
+	}{
+		{"Read the file named report.md.", "report.md", true},
+		{"Read report.md", "report.md", true},
+		{"READ THE FILE report.md", "report.md", true},
+		{"Read report.md and report its heading", "report.md and report its heading", true},
+		{"Inspect wrapper.c", "", false},
+		{"Compare implementation behavior", "", false},
+		{"Read ", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.text, func(t *testing.T) {
+			target, ok := ExactReadCriterionTarget(tc.text)
+			if ok != tc.wantOK || target != tc.wantTarget {
+				t.Fatalf("ExactReadCriterionTarget(%q) = (%q, %v), want (%q, %v)", tc.text, target, ok, tc.wantTarget, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestPendingExactReadObligationsSkipsAlreadyProven proves the whole point
+// of previewing with evaluateCriterion instead of just checking
+// run.Criteria[i].Status: ApplyDeterministicCriteria has not run yet this
+// cycle (it only runs at verification commit today), so Status is still
+// CriterionPending even after a successful matching read_file call. Without
+// consulting execution directly, a naive "Status == Pending" obligation
+// check would keep reporting this criterion outstanding forever — exactly
+// the false no-progress loop the harness plan's freshness prerequisite
+// exists to prevent.
+func TestPendingExactReadObligationsSkipsAlreadyProven(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want pending before any execution", run.Criteria[0])
+	}
+
+	execution := ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "read_file", Detail: "report.md", Succeeded: true}}}
+	if got := run.PendingExactReadObligations(execution); len(got) != 0 {
+		t.Fatalf("obligations = %+v, want none: the read already succeeded this cycle", got)
+	}
+	// Status itself is still untouched — PendingExactReadObligations must
+	// never mutate criterion state, only preview it.
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want Status left untouched by a preview call", run.Criteria[0])
+	}
+}
+
+// TestPendingExactReadObligationsReportsUnprovenTarget is the positive case:
+// no matching successful read has happened yet, so the criterion is a real
+// outstanding obligation and its target is exposed for the yield adapter.
+func TestPendingExactReadObligationsReportsUnprovenTarget(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file named zscaler_wrapper.c", "Compare implementation behavior"})
+
+	got := run.PendingExactReadObligations(ExecutionResult{})
+	if len(got) != 1 {
+		t.Fatalf("obligations = %+v, want exactly the one exact-read criterion (not the semantic comparison one)", got)
+	}
+	if got[0].CriterionID != run.Criteria[0].ID || got[0].Target != "zscaler_wrapper.c" {
+		t.Fatalf("obligation = %+v, want {%s, zscaler_wrapper.c}", got[0], run.Criteria[0].ID)
+	}
+}
+
+// TestPendingExactReadObligationsIgnoresNonSemanticCriteria proves Phase 2's
+// narrow grammar only ever applies to CriterionSemantic (or legacy-untyped)
+// criteria — a typed command_exit/test_result/file_state/user_input
+// criterion is never reinterpreted as a read obligation just because its
+// text happens to start with "read".
+func TestPendingExactReadObligationsIgnoresNonSemanticCriteria(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{Text: "read access.log", Kind: CriterionFileState, Target: "access.log"}})
+
+	if got := run.PendingExactReadObligations(ExecutionResult{}); len(got) != 0 {
+		t.Fatalf("obligations = %+v, want none: a typed file_state criterion is not a yield-eligible read obligation", got)
+	}
+}
+
 func TestInferMechanicalCriteriaRejectsMultipartRequests(t *testing.T) {
 	execution := ExecutionResult{TestsRun: []TestResult{{Name: "go test ./...", Passed: true}}}
 	if got := InferMechanicalCriteria("run the tests", execution); len(got) != 1 || got[0].Kind != CriterionTestResult {
