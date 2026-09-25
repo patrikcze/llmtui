@@ -31,7 +31,12 @@ session summary as complete units, while the newest complete tool group stays
 verbatim. If that irreducible continuation still cannot fit, llmtui replaces
 an oversized text-only user message with a bounded continuation anchor and
 preserves the original request in the summary; image turns fail explicitly
-instead of silently dropping their visual input.
+instead of silently dropping their visual input. This same graceful
+degradation applies to a same-episode yield continuation (see [Same-episode
+yield continuation](agent-loop.md#same-episode-yield-continuation-opt-in)) —
+its trailing message is the executor's own no-tool text answer rather than a
+tool result, but it is still a continuation, not a fresh user turn, and gets
+identical anchor/compaction protection.
 
 Captured user images have a separate ephemeral reference path. After a
 successful bounded visual observation capture, the live user message keeps its

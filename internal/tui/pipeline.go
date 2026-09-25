@@ -1010,8 +1010,22 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		keep = m.cfg.Context.KeepLastMessages
 	}
 	older, recent := contextmgr.Split(historyMessages, keep)
-	toolContinuation := omitRaw && len(recent) > 0 && recent[len(recent)-1].Role == provider.RoleTool
-	if toolContinuation {
+	// continuation is true for every non-fresh request this function ever
+	// receives (continueChat's two callers: an ordinary native/fenced
+	// tool-result round, whose trailing message is RoleTool, and a
+	// controller yield continuation — agent_yield.go's continueAgentEpisode
+	// — whose trailing message is the executor's own no-tool text answer;
+	// see docs/architecture/decisions/0013-agent-execution-yield-policy.md's
+	// Phase 6 update). It used to additionally require the trailing message
+	// to be RoleTool, which left a yield continuation with none of the
+	// safe-boundary/anchor/compaction-fallback protection below: a request
+	// that genuinely needed compaction to fit budget failed the whole run
+	// outright instead of degrading gracefully the way a tool round already
+	// does. omitRaw is already the correct, narrower signal — it is true
+	// only for continueChat's own prepareRequest call and one dry-run probe
+	// in tool_search.go — so the trailing-role check added nothing but a gap.
+	continuation := omitRaw && len(recent) > 0
+	if continuation {
 		recent = withCompactedContinuationAnchor(recent)
 	}
 	summary := existingSummary
@@ -1023,7 +1037,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 	est := estimatePrepared(out, specs, window, reserve, len(older), len(recent))
 	budget := window - reserve
 	for est.Total > budget && len(recent) > 0 && decision.Strategy != contextmgr.StrategyNone {
-		dropped, next, ok := dropOldestGroup(recent, toolContinuation)
+		dropped, next, ok := dropOldestGroup(recent, continuation)
 		if !ok {
 			break
 		}
@@ -1054,7 +1068,7 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 	// oversized text user message with a bounded anchor. The original request
 	// moves into the summary; image turns fail explicitly instead of silently
 	// dropping visual input.
-	if est.Total > budget && toolContinuation && decision.Strategy != contextmgr.StrategyNone {
+	if est.Total > budget && continuation && decision.Strategy != contextmgr.StrategyNone {
 		original, compacted, ok := compactLatestUserMessage(recent)
 		if ok {
 			recent = compacted
@@ -1081,12 +1095,12 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 			"estimated request is %d tokens but only %d are available after the response reserve; enable context truncation/summarization or reduce prompt/tool overhead",
 			est.Total, budget)
 	}
-	if toolContinuation && !hasUserMessage(out.Messages) {
+	if continuation && !hasUserMessage(out.Messages) {
 		return preparedRequest{
 				composed: out, decision: decision, summary: summary, agentScoped: agentScoped, tools: specs,
 				ragResults: base.ragResults, memoryHits: base.memoryHits, memoryDiag: base.memoryDiag, estimate: est,
 			},
-			errors.New("tool continuation has no user anchor after context selection")
+			errors.New("continuation has no user anchor after context selection")
 	}
 	for _, section := range out.Sections {
 		if section.Title == "Session Summary" {
