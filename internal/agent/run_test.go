@@ -60,6 +60,43 @@ func TestOneCycleSuccessfulCompletion(t *testing.T) {
 	}
 }
 
+func TestCompleteContractWithAssessmentsPinsOnlyValidatedOptionalMetadata(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginContract(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteContractWithAssessments(
+		[]string{"read report.md", "summarize the heading"},
+		map[int]CriterionAssessmentSpec{
+			0: {Version: 1, Proposition: "the report read supports the first criterion", EvidenceKind: CriterionAssessmentLocalRead, Target: "report.md"},
+		},
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Criteria) != 2 || run.Criteria[0].Assessment == nil || run.Criteria[1].Assessment != nil {
+		t.Fatalf("criteria = %+v", run.Criteria)
+	}
+	if run.Stage != StageTrigger {
+		t.Fatalf("stage = %q, want trigger", run.Stage)
+	}
+
+	rejected, now := newTestRun(t, DefaultLimits())
+	if err := rejected.BeginContract(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejected.CompleteContractWithAssessments(
+		[]string{"read report.md"},
+		map[int]CriterionAssessmentSpec{1: {Version: 1, Proposition: "orphan", EvidenceKind: CriterionAssessmentReceipts}},
+		now,
+	); err == nil {
+		t.Fatal("out-of-range assessment unexpectedly accepted")
+	}
+	if len(rejected.Criteria) != 0 || rejected.Stage != StageContract {
+		t.Fatalf("rejected contract mutated run: stage=%q criteria=%+v", rejected.Stage, rejected.Criteria)
+	}
+}
+
 func TestVerifierFailureRequiresChangedRetryObjective(t *testing.T) {
 	run, now := newTestRun(t, DefaultLimits())
 	stop := completeCycle(t, run, now, "run parser test and fix it", VerificationResult{

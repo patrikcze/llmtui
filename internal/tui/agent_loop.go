@@ -751,7 +751,10 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, m.persistAgentRun()
 	}
-	if err := run.CompleteContract(contract.Criteria, time.Now()); err != nil {
+	// Assessment metadata is optional and inert in the controller. Passing it
+	// through here keeps the existing contract owner authoritative while
+	// allowing evaluation-only callers to persist a validated attachment.
+	if err := run.CompleteContractWithAssessments(contract.Criteria, contract.Assessments, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		m.endAgentRun()
 		return m, m.persistAgentRun()

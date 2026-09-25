@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/agentverify"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
 	providermock "github.com/patrikcze/llmtui/internal/provider/mock"
@@ -251,6 +252,31 @@ func TestVerifiedAgentPinsTaskContractBeforeExecutor(t *testing.T) {
 	}
 	if m.agentLoop.run.Request != "complete the requested task" {
 		t.Fatalf("request = %q, want unchanged original request", m.agentLoop.run.Request)
+	}
+}
+
+func TestVerifiedAgentPassesOptionalContractAssessmentToPinnedCriterion(t *testing.T) {
+	m, _ := configureAgentTestModel(t, agentScriptStep{text: "must not run"})
+	run, err := agent.NewRun("assessment-run", "read report.md", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginContract(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.contractGen = 1
+	_, _ = m.handleAgentContract(agentContractMsg{
+		runID: run.ID, gen: 1,
+		out: agentverify.ContractOutput{Contract: agentverify.Contract{
+			Criteria: []string{"read report.md"},
+			Assessments: map[int]agent.CriterionAssessmentSpec{
+				0: {Version: 1, Proposition: "the report read supports the criterion", EvidenceKind: agent.CriterionAssessmentLocalRead, Target: "report.md"},
+			},
+		}},
+	})
+	if len(run.Criteria) != 1 || run.Criteria[0].Assessment == nil || run.Criteria[0].Assessment.Target != "report.md" {
+		t.Fatalf("criteria = %+v, want assessment passed through TUI contract handling", run.Criteria)
 	}
 }
 

@@ -522,6 +522,33 @@ profile, probability, threshold, whether it escalated, and a bounded
 reason code (`escalated`, `below_threshold`, `unavailable`, `timeout`,
 `cancelled`, `malformed_result`).
 
+### Pinned criterion assessment metadata (Phase 2)
+
+Contract callers may explicitly request assessment metadata version 1 for
+evaluation fixtures through `ContractInput.AssessmentVersion`. Ordinary
+contracting leaves this field zero, so its response schema and prompt remain
+unchanged. The optional extension attaches at most one bounded neutral
+proposition to each existing criterion by its response index. It accepts only
+`receipts` or `local_read` evidence, and a `local_read` target must be one
+literal workspace-relative path. Globs, selectors, URLs, URIs, shell text and
+read instructions are rejected.
+
+The metadata is pinned inside the existing `AgentRun.Criteria` records, with
+the existing criterion ID and text, in one atomic contract transition. It is
+not a second criteria registry, question store, evidence ledger or Laya result
+cache. Invalid optional metadata is discarded as a whole while valid core
+criteria remain usable; clarification contracts and ask-user delegation never
+retain provisional assessments. The existing TUI contract path only passes
+validated attachments to the existing owner.
+
+Phase 2 is evaluation-only. The metadata does not affect deterministic
+criteria, verifier input, tool selection, approval, completion, or normal chat
+behavior. Persistence keeps only validated claims; if shared secret redaction
+would change a proposition or target, the attachment is omitted rather than
+persisted in altered form. Resume validates the optional field again and strips
+invalid historical attachments while keeping the schema-v1 run loadable. No
+Laya inference or new runtime mode is introduced by this phase.
+
 ## Measured bridge validation (2026-09-23)
 
 Real Metal integration passed on this development machine with Python 3.14.3

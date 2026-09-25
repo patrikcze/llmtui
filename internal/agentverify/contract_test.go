@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/provider"
 )
 
@@ -66,5 +67,116 @@ func TestContractUsesSelectedModelCapabilitiesNotProviderWide(t *testing.T) {
 	}
 	if constraint := client.requests[0].ResponseConstraint; constraint != nil {
 		t.Fatalf("weak-model constraint = %+v, want none", constraint)
+	}
+}
+
+func TestParseContractOptionalAssessmentsIsAllOrNothing(t *testing.T) {
+	valid := `{"criteria":["read report.md","report the heading"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"the read receipt supports the criterion","evidence_kind":"local_read","target":"report.md"},{"criterion_index":1,"version":1,"proposition":"the receipt supports the report","evidence_kind":"receipts"}]}`
+	contract, err := ParseContract(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contract.Assessments) != 2 || contract.Assessments[0].Target != "report.md" {
+		t.Fatalf("assessments = %+v", contract.Assessments)
+	}
+
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "duplicate index",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"one","evidence_kind":"receipts"},{"criterion_index":0,"version":1,"proposition":"two","evidence_kind":"receipts"}]}`,
+		},
+		{
+			name: "out of range",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":1,"version":1,"proposition":"one","evidence_kind":"receipts"}]}`,
+		},
+		{
+			name: "unsupported version",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":2,"proposition":"one","evidence_kind":"receipts"}]}`,
+		},
+		{
+			name: "missing required field",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"proposition":"one","evidence_kind":"receipts"}]}`,
+		},
+		{
+			name: "unsafe target",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"one","evidence_kind":"local_read","target":"../secret"}]}`,
+		},
+		{
+			name: "overlong proposition",
+			raw:  `{"criteria":["first"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"` + strings.Repeat("x", 257) + `","evidence_kind":"receipts"}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract, err := ParseContract(tt.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(contract.Criteria) != 1 || len(contract.Assessments) != 0 || contract.AssessmentDiscardReason == "" {
+				t.Fatalf("contract = %+v, want valid core and discarded extension", contract)
+			}
+		})
+	}
+
+	clarification, err := ParseContract(`{"criteria":["provisional"],"needs_user_input":true,"question":"Which file?","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"guess","evidence_kind":"receipts"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clarification.Assessments != nil || clarification.AssessmentDiscardReason != "clarification_contract" {
+		t.Fatalf("clarification assessments = %+v reason=%q", clarification.Assessments, clarification.AssessmentDiscardReason)
+	}
+}
+
+func TestEstablishContractAssessmentExtensionIsOptIn(t *testing.T) {
+	reply := `{"criteria":["read report.md"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":0,"version":1,"proposition":"the read supports the criterion","evidence_kind":"local_read","target":"report.md"}]}`
+	client := &recordingClient{
+		reply: reply,
+		caps:  provider.Capabilities{StructuredOutput: provider.CapabilitySupported},
+	}
+	out, err := EstablishContract(context.Background(), client, Config{Model: "local", Timeout: time.Second}, ContractInput{
+		Task: "read report.md", AssessmentVersion: agent.CriterionAssessmentVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Contract.Assessments) != 1 {
+		t.Fatalf("assessment contract = %+v", out.Contract)
+	}
+	request := client.requests[0]
+	if request.ResponseConstraint == nil || !strings.Contains(string(request.ResponseConstraint.JSONSchema), `"assessments"`) {
+		t.Fatalf("assessment schema = %+v", request.ResponseConstraint)
+	}
+	if !strings.Contains(request.Messages[0].Content, "For evaluation only") {
+		t.Fatal("assessment prompt extension missing")
+	}
+
+	legacyClient := &recordingClient{
+		reply: reply,
+		caps:  provider.Capabilities{StructuredOutput: provider.CapabilitySupported},
+	}
+	legacy, err := EstablishContract(context.Background(), legacyClient, Config{Model: "local", Timeout: time.Second}, ContractInput{Task: "read report.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Contract.Assessments) != 0 || strings.Contains(string(legacyClient.requests[0].ResponseConstraint.JSONSchema), `"assessments"`) {
+		t.Fatalf("legacy contract unexpectedly enabled assessments: %+v", legacy)
+	}
+}
+
+func TestEstablishContractInvalidOptionalAssessmentDoesNotRepairCoreContract(t *testing.T) {
+	client := &recordingClient{
+		reply: `{"criteria":["read report.md"],"needs_user_input":false,"question":"","user_options":[],"assessments":[{"criterion_index":3,"version":1,"proposition":"orphan","evidence_kind":"receipts"}]}`,
+	}
+	out, err := EstablishContract(context.Background(), client, Config{Model: "local", Timeout: time.Second}, ContractInput{
+		Task: "read report.md", AssessmentVersion: agent.CriterionAssessmentVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 || len(out.Contract.Criteria) != 1 || out.Contract.AssessmentDiscardReason == "" {
+		t.Fatalf("requests=%d contract=%+v, want one request and valid core", len(client.requests), out.Contract)
 	}
 }

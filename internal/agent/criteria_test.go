@@ -32,6 +32,91 @@ func TestPinCriteriaOnceBoundedAndStableIDs(t *testing.T) {
 	}
 }
 
+func TestValidateCriterionAssessmentSpec(t *testing.T) {
+	tests := []struct {
+		name string
+		spec CriterionAssessmentSpec
+		want bool
+	}{
+		{
+			name: "receipts with exact command detail",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "the test receipt supports the criterion", EvidenceKind: CriterionAssessmentReceipts, Target: "go test ./..."},
+			want: true,
+		},
+		{
+			name: "local read workspace path",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "the file observation supports the criterion", EvidenceKind: CriterionAssessmentLocalRead, Target: "docs/report.md"},
+			want: true,
+		},
+		{
+			name: "unsupported version",
+			spec: CriterionAssessmentSpec{Version: 2, Proposition: "claim", EvidenceKind: CriterionAssessmentReceipts},
+		},
+		{
+			name: "empty proposition",
+			spec: CriterionAssessmentSpec{Version: 1, EvidenceKind: CriterionAssessmentReceipts},
+		},
+		{
+			name: "local read requires target",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead},
+		},
+		{
+			name: "absolute target",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead, Target: "/etc/passwd"},
+		},
+		{
+			name: "parent target",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead, Target: "../report.md"},
+		},
+		{
+			name: "glob target",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead, Target: "docs/*.md"},
+		},
+		{
+			name: "url target",
+			spec: CriterionAssessmentSpec{Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentReceipts, Target: "https://example.test"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ValidateCriterionAssessmentSpec(tt.spec) == nil; got != tt.want {
+				t.Fatalf("valid = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPinTypedCriteriaWithAssessmentsIsAtomicAndCopiesMetadata(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	assessment := CriterionAssessmentSpec{
+		Version: 1, Proposition: "the receipt supports the criterion", EvidenceKind: CriterionAssessmentReceipts,
+	}
+	specs := []CriterionSpec{{Text: "produce the report", Kind: CriterionSemantic, Assessment: &assessment}}
+	if err := run.PinTypedCriteriaWithAssessments(specs); err != nil {
+		t.Fatal(err)
+	}
+	assessment.Proposition = "rewritten after pinning"
+	if got := run.Criteria[0].Assessment.Proposition; got != "the receipt supports the criterion" {
+		t.Fatalf("pinned proposition = %q, want immutable copy", got)
+	}
+	view := run.UnresolvedCriteria()
+	view[0].Assessment.Proposition = "rewritten through a criterion snapshot"
+	if got := run.Criteria[0].Assessment.Proposition; got != "the receipt supports the criterion" {
+		t.Fatalf("snapshot mutation changed pinned proposition to %q", got)
+	}
+
+	bad, _ := newTestRun(t, DefaultLimits())
+	badSpecs := []CriterionSpec{{Text: "produce the report", Kind: CriterionSemantic, Assessment: &CriterionAssessmentSpec{
+		Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead,
+	}}}
+	if err := bad.PinTypedCriteriaWithAssessments(badSpecs); err == nil {
+		t.Fatal("invalid assessment unexpectedly pinned")
+	}
+	if len(bad.Criteria) != 0 {
+		t.Fatalf("criteria after rejected assessment = %+v, want empty", bad.Criteria)
+	}
+}
+
 func TestApplyCriteriaUpdatesIgnoresUnknownAndInvalid(t *testing.T) {
 	run, _ := newTestRun(t, DefaultLimits())
 	run.PinCriteria([]string{"first", "second"})
