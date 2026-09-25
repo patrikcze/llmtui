@@ -639,6 +639,79 @@ func TestRecordAgentToolResultsCountTreatsPartialCoverageAsSuccess(t *testing.T)
 	}
 }
 
+// TestRecordAgentToolResultsCountAppendsReadObservation is the Phase 4
+// translation-boundary test: a successful read_file result with a windowed
+// Meta.Window must become a bounded agent.ReadObservation on the execution,
+// not just an ordinary ToolCallRecord — see readObservationFromResult.
+func TestRecordAgentToolResultsCountAppendsReadObservation(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("windowed-read", "read a big file", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("read a big file", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+
+	total := int64(500)
+	m.recordAgentToolResultsCount([]tools.Result{{
+		Call:   tools.Call{ID: "read-1", Tool: tools.ToolReadFile, Path: "big.log", Offset: 1, Limit: 100},
+		Output: "[read_file: big.log lines 1-100 of 500, next_offset=101]",
+		Meta: tools.ResultMeta{
+			Outcome:      tools.OutcomeOK,
+			SourceDigest: "digest-1",
+			Coverage:     tools.Coverage{SourceComplete: true, TotalLines: &total},
+			Window:       &tools.Window{StartLine: 1, EndLine: 100},
+		},
+	}}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if len(m.agentLoop.execution.ReadObservations) != 1 {
+		t.Fatalf("ReadObservations = %+v, want exactly one", m.agentLoop.execution.ReadObservations)
+	}
+	got := m.agentLoop.execution.ReadObservations[0]
+	if got.Target != "big.log" || got.StartLine != 1 || got.EndLine != 100 || got.SourceDigest != "digest-1" {
+		t.Fatalf("observation = %+v, want target big.log lines 1-100 digest digest-1", got)
+	}
+	if got.TotalLines == nil || *got.TotalLines != 500 {
+		t.Fatalf("observation.TotalLines = %v, want 500", got.TotalLines)
+	}
+}
+
+// TestRecordAgentToolResultsCountSkipsByteRangeRead proves a byte-range
+// read_file result (no line window at all — Window.StartLine stays 0) never
+// contributes a ReadObservation: byte coverage is not tracked by Phase 4a's
+// line-based union, and a zero-valued StartLine must not be mistaken for
+// "line 1 delivered".
+func TestRecordAgentToolResultsCountSkipsByteRangeRead(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("byte-read", "read a byte range", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("read a byte range", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+
+	byteOffset := int64(0)
+	m.recordAgentToolResultsCount([]tools.Result{{
+		Call:   tools.Call{ID: "read-1", Tool: tools.ToolReadFile, Path: "blob.bin", ByteOffset: &byteOffset},
+		Output: "[read_file: blob.bin bytes 0-4096, next_byte_offset=4096]",
+		Meta: tools.ResultMeta{
+			Outcome:  tools.OutcomeOK,
+			Coverage: tools.Coverage{SourceComplete: false},
+			Window:   &tools.Window{StartByte: 0, EndByte: 4096},
+		},
+	}}, false, uniformActionStatuses(1, agent.ActionExecuted))
+
+	if len(m.agentLoop.execution.ReadObservations) != 0 {
+		t.Fatalf("ReadObservations = %+v, want none for a byte-only window", m.agentLoop.execution.ReadObservations)
+	}
+}
+
 // TestProjectCompletedAgentHistoryRemovesRawToolOutput guards the raw
 // transcript-projection half of the fix Phase 3 completed: the projected
 // history itself must still never carry a completed cycle's raw tool
