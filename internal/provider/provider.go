@@ -25,6 +25,13 @@ const (
 
 var ErrResponseTooLarge = errors.New("provider response exceeds the 4 MiB limit")
 
+// ErrStreamInterrupted reports a streamed response whose transport ended
+// (clean scanner EOF, no read error) without ever observing an explicit
+// terminal signal: an OpenAI-compatible "[DONE]" sentinel or a chunk carrying
+// a non-nil finish_reason. A clean EOF is not proof the model finished; an
+// interrupted connection can look identical to it on the wire.
+var ErrStreamInterrupted = errors.New("provider stream ended without a terminal signal")
+
 // DecodeJSONLimited decodes a non-streaming provider response without ever
 // materializing more than MaxResponseBytes plus one detection byte.
 func DecodeJSONLimited(r io.Reader, dst any) error {
