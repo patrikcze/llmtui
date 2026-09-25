@@ -219,3 +219,44 @@ kind or extending `agentverify.Contract`'s JSON schema); and the full
 three-file (`zscaler-mock`) target scenario from §19 — the new
 `TestAgentYieldContinuationNamesPreciseOffsetForPartialCoverage` covers the
 same coverage-proof mechanism with a single large fixture file instead.
+
+## Update (Phase 4 gate: source-change end-to-end proof, 2026-09-25)
+
+Phase 4's own delivery gate (harness plan §23) names three things: "full
+target scenario, source-change/expiry cases, and no side-effect rerun for
+command truncation." The prior update's unit-level tests
+(`TestExactReadCriterionMixedSourceVersionsNeverCombine` and siblings in
+`internal/agent/criteria_test.go`) already proved `readCoverageState`'s
+digest-consistency check in isolation. `TestAgentYieldSourceChangedBetweenPartialReadsNeverFalselyCompletes`
+(`internal/tui/agent_yield_test.go`) now proves the same guarantee through
+the real pipeline: a fixture file is read (lines 1-100), genuinely modified
+on disk (different bytes, same line count — a different `SourceDigest`,
+which two same-line-number windows would otherwise gaplessly union), then
+read again (lines 101-200). The episode correctly never reports the
+criterion satisfied and instead exhausts its no-progress nudge budget,
+exactly as an unrecoverable coverage gap should. `agentScriptStep` gained a
+`before func()` hook (test-only) to inject the file mutation at a precise
+point in a scripted multi-turn sequence without a real time-based race —
+useful for any future test needing the same shape.
+
+The remaining gate item, "no side-effect rerun for command truncation," is
+about `run_command` recovery specifically (harness plan §12's producer
+table: "Never rerun a command to recover lost bytes"). It does not yet have
+a corresponding runtime behavior to test: this update's yield-continuation
+directive only ever names `read_file` calls (`buildAgentYieldDirective`
+only consults `agent.NextReadOffset`, which is read-coverage-specific), and
+no mechanical obligation type exists yet for `run_command` at all — so
+there is no path today by which the runtime could suggest rerunning a
+command. That guarantee becomes a real, testable claim only once a
+`run_command`-linked obligation exists, which requires the deferred
+`RecoveryHint`/read-coverage-contract work above. Recorded here rather than
+left silently unaddressed.
+
+**Full three-file target scenario:** still deliberately not attempted. It
+requires the deferred `read_coverage` contract-schema work (§10) — the
+narrow exact-read grammar this phase extends only recognizes a criterion
+shaped exactly like "Read the file `<path>`.", not the scenario's own
+"inspect wrapper" / "compare behavior" phrasing, which the plan itself
+says (§19, "Phase 2's narrow exact-read fixture proves the mechanism; it
+does not claim this richer contract/coverage scenario works before Phase
+4") requires that richer contract layer first.
