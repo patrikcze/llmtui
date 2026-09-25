@@ -434,6 +434,77 @@ agent:
 	}
 }
 
+func TestDecisionEngineModeDefaultsToShadow(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DecisionEngine.Mode != DecisionEngineModeShadow || cfg.DecisionEngine.ResolvedMode() != DecisionEngineModeShadow {
+		t.Fatalf("decision_engine mode default = %q resolved %q, want shadow", cfg.DecisionEngine.Mode, cfg.DecisionEngine.ResolvedMode())
+	}
+}
+
+func TestDecisionEngineModeResolution(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  DecisionEngineConfig
+		want string
+	}{
+		{"empty resolves shadow", DecisionEngineConfig{}, DecisionEngineModeShadow},
+		{"explicit shadow", DecisionEngineConfig{Mode: "shadow"}, DecisionEngineModeShadow},
+		{"explicit guarded_assist", DecisionEngineConfig{Mode: "guarded_assist"}, DecisionEngineModeGuardedAssist},
+		{"case-insensitive", DecisionEngineConfig{Mode: "Guarded_Assist"}, DecisionEngineModeGuardedAssist},
+		{"whitespace trimmed", DecisionEngineConfig{Mode: "  guarded_assist  "}, DecisionEngineModeGuardedAssist},
+		{"unknown falls back to shadow", DecisionEngineConfig{Mode: "active"}, DecisionEngineModeShadow},
+		{"guarded_assist wins over enabled=false", DecisionEngineConfig{Enabled: false, Mode: "guarded_assist"}, DecisionEngineModeGuardedAssist},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ResolvedMode(); got != tc.want {
+				t.Fatalf("ResolvedMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDecisionEngineModeYAMLAndEnvPrecedence covers the config precedence
+// convention (changed flags > env > YAML > defaults) for the new mode key:
+// YAML overrides the default, and env overrides YAML.
+func TestDecisionEngineModeYAMLAndEnvPrecedence(t *testing.T) {
+	path := writeConfig(t, `
+decision_engine:
+  mode: guarded_assist
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DecisionEngine.Mode != DecisionEngineModeGuardedAssist {
+		t.Fatalf("decision_engine.mode from YAML = %q, want guarded_assist", cfg.DecisionEngine.Mode)
+	}
+
+	t.Setenv("LLMTUI_DECISION_ENGINE_MODE", "shadow")
+	v, err = NewViper(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DecisionEngine.Mode != DecisionEngineModeShadow {
+		t.Fatalf("decision_engine.mode from env = %q, want shadow to override YAML's guarded_assist", cfg.DecisionEngine.Mode)
+	}
+}
+
 func TestVerifierModeResolution(t *testing.T) {
 	cases := []struct {
 		name    string
