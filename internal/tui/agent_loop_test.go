@@ -25,6 +25,11 @@ type agentScriptStep struct {
 	toolCallDiagnostics []provider.ToolCallDiagnostic
 	err                 error
 	truncated           bool
+	// before, when non-nil, runs synchronously right before this step's
+	// response events are built — lets a test inject an external state
+	// change (e.g. mutating a fixture file) at a precise point in a scripted
+	// multi-turn sequence, without a real time-based race.
+	before func()
 }
 
 type scriptedAgentProvider struct {
@@ -70,6 +75,9 @@ func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatReque
 	step := p.steps[0]
 	p.steps = p.steps[1:]
 	p.mu.Unlock()
+	if step.before != nil {
+		step.before()
+	}
 	if step.err != nil {
 		return nil, step.err
 	}

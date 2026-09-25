@@ -182,6 +182,69 @@ func TestAgentYieldContinuationNamesPreciseOffsetForPartialCoverage(t *testing.T
 	}
 }
 
+// TestAgentYieldSourceChangedBetweenPartialReadsNeverFalselyCompletes closes
+// the harness plan's Phase 4 gate item "source-change/expiry cases": a
+// model reads lines 1-100 of a 200-line file, the file is then modified
+// (different bytes, so a different SourceDigest) before the model reads the
+// remaining lines 101-200. The two windows would gaplessly union to
+// [1,200] by line numbers alone, but they observed two different file
+// versions — readCoverageState's digest-consistency check must refuse to
+// combine them, so the exact-read criterion is never falsely satisfied. The
+// episode instead runs out its (deliberately small, for this test)
+// no-progress nudge budget and stops as DecisionNoProgress, proving the
+// whole pipeline (not just the pure unit-level readCoverageState logic
+// already covered in internal/agent) never reports false completion here.
+func TestAgentYieldSourceChangedBetweenPartialReadsNeverFalselyCompletes(t *testing.T) {
+	root := t.TempDir()
+	path := root + "/big.log"
+	var versionA strings.Builder
+	for i := 1; i <= 200; i++ {
+		fmt.Fprintf(&versionA, "line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(versionA.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-a", Name: tools.ToolReadFile, Arguments: `{"path":"big.log","offset":1,"limit":100}`}}},
+		agentScriptStep{text: "big.log starts with line 1."},
+		agentScriptStep{
+			toolCalls: []provider.ToolCall{{ID: "read-b", Name: tools.ToolReadFile, Arguments: `{"path":"big.log","offset":101,"limit":100}`}},
+			before: func() {
+				var versionB strings.Builder
+				for i := 1; i <= 200; i++ {
+					fmt.Fprintf(&versionB, "LINE %d\n", i) // same line count, different bytes/digest
+				}
+				if err := os.WriteFile(path, []byte(versionB.String()), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		agentScriptStep{text: "still working on it"},
+		agentScriptStep{text: "still working on it"},
+	)
+	prov.contractReplies = []string{`{"criteria":["Read the file big.log"],"needs_user_input":false,"question":"","user_options":[]}`}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Yield.Enabled = true
+	m.cfg.Agent.Yield.MaxEpisodeRequests = 64
+	m.cfg.Agent.Yield.MaxNudgesWithoutProgress = 1
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read big.log and summarize it.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNoProgress {
+		t.Fatalf("run status = %q, want %q: a source change must never let the union falsely complete", run.Status, agent.DecisionNoProgress)
+	}
+	for _, c := range run.Criteria {
+		if c.Status == agent.CriterionSatisfied {
+			t.Fatalf("criterion %+v, want never satisfied: the two reads observed different file versions", c)
+		}
+	}
+}
+
 // TestAgentYieldDisabledPreservesExistingBehavior is Test Case O
 // (mode compatibility): with agent.yield.enabled left at its default
 // (false), a scenario that would otherwise trigger a same-cycle nudge must
