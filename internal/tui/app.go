@@ -1588,6 +1588,35 @@ func (m *Model) maybeRunTools() tea.Cmd {
 	return m.startToolBatch(tools.Parse(m.session.Messages[n-1].Content))
 }
 
+// hasParsedFencedToolCalls mirrors maybeRunTools' own guard and parse target,
+// without admitting anything. It lets a caller check, ahead of maybeRunTools,
+// whether the last assistant message contains a fenced call it would try to
+// run — used to block a truncated completion before that admission, exactly
+// like the native truncatedToolCall guard blocks native calls.
+func (m *Model) hasParsedFencedToolCalls() bool {
+	if !m.toolsOn || m.toolRunner == nil {
+		return false
+	}
+	n := len(m.session.Messages)
+	if n == 0 || m.session.Messages[n-1].Role != provider.RoleAssistant {
+		return false
+	}
+	return len(tools.Parse(m.session.Messages[n-1].Content)) > 0
+}
+
+// failTruncatedToolCall reports a tool call (native or fenced) cut off by
+// max_tokens before completing. Shared by both truncation guards so the
+// failure path — message, verified-run failure, run end, persistence — stays
+// in exact lockstep between them.
+func (m *Model) failTruncatedToolCall() tea.Cmd {
+	m.errText = "Model's tool call was cut off by max_tokens before completing; it was not executed. Raise chat.max_tokens (and agent.verifier.max_tokens if applicable) or shorten the request."
+	m.failVerifiedRun(errors.New(m.errText))
+	m.complete(turnOutcomeExecutionFailure)
+	m.endAgentRun()
+	m.refreshViewport()
+	return m.persistAgentRun()
+}
+
 // callNeedsApproval reports whether one call must be confirmed before it
 // runs. The explicit global auto setting remains available, while approval
 // menu grants are time-limited to one exact capability and target.
@@ -2654,12 +2683,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		m.clearEmptyContinuationRetry()
 		if truncatedToolCall {
-			m.errText = "Model's tool call was cut off by max_tokens before completing; it was not executed. Raise chat.max_tokens (and agent.verifier.max_tokens if applicable) or shorten the request."
-			m.failVerifiedRun(errors.New(m.errText))
-			m.complete(turnOutcomeExecutionFailure)
-			m.endAgentRun()
-			m.refreshViewport()
-			return m, m.persistAgentRun()
+			return m, m.failTruncatedToolCall()
 		}
 		// Tools only run on a clean finish, never on Esc/Ctrl+C partials.
 		// Native calls arrive structured on the Done event; otherwise fall
@@ -2669,6 +2693,16 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			return m, nil
+		}
+		// The guard above only sees native ToolCalls; a fenced call is parsed
+		// separately, out of the just-appended assistant message, by
+		// maybeRunTools. A truncated completion can still contain a properly
+		// *closed* fence (the truncation notice lands after the closing
+		// fence), so it must be blocked here too, before maybeRunTools ever
+		// parses and admits it — the same guarantee truncatedToolCall gives
+		// native calls above.
+		if msg.event.Truncated && m.hasParsedFencedToolCalls() {
+			return m, m.failTruncatedToolCall()
 		}
 		if cmd := m.maybeRunTools(); cmd != nil {
 			return m, cmd
