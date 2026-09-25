@@ -282,6 +282,61 @@ func TestResumeStartsFreshCycleWithoutReplayingWork(t *testing.T) {
 	}
 }
 
+// TestResumeMarksInterruptedEpisodeCheckpoint proves harness plan §16's
+// "records interrupted status": a cycle whose executor episode never
+// reached CompleteExecution (Execution is nil) has its checkpoint's
+// Interrupted flag set when the run is resumed to a fresh cycle, so the
+// persisted record distinguishes an abandoned mid-episode checkpoint from
+// an ordinary completed one. Resume itself never reconstructs or replays
+// it — the next BeginCycle still starts with a nil Episode.
+func TestResumeMarksInterruptedEpisodeCheckpoint(t *testing.T) {
+	now := time.Now()
+	run, err := NewRun("run-interrupted-episode", "long task", DefaultLimits(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("long task", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	run.LatestCycle().Episode = &EpisodeCheckpoint{PolicyVersion: 1, EnabledAtStart: true, ExecutorRequests: 3}
+	if err := run.WaitForUserInput("which target?", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Resume("use staging", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if !run.Cycles[0].Episode.Interrupted {
+		t.Fatalf("checkpoint = %+v, want Interrupted=true after resuming an unfinished episode", run.Cycles[0].Episode)
+	}
+	if err := run.BeginCycle("use staging", nil, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.LatestCycle().Episode != nil {
+		t.Fatal("a fresh cycle after resume must start with a nil Episode, not the interrupted one")
+	}
+}
+
+// TestResumeDoesNotMarkCompletedEpisodeInterrupted is the converse: a cycle
+// that already reached CompleteExecution before being parked (blocked at
+// verification, not mid-executor) is not mislabeled as an abandoned
+// episode merely because the run as a whole is being resumed.
+func TestResumeDoesNotMarkCompletedEpisodeInterrupted(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	stop := completeCycle(t, run, now, "inspect missing input", VerificationResult{
+		Verdict: VerificationBlocked, Summary: "required input is missing", Retryable: false,
+	})
+	run.Cycles[0].Episode = &EpisodeCheckpoint{PolicyVersion: 1}
+	if err := run.ApplyStop(stop, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Resume("use the newly supplied input", now.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if run.Cycles[0].Episode.Interrupted {
+		t.Fatalf("checkpoint = %+v, want Interrupted=false: the episode's execution had already completed", run.Cycles[0].Episode)
+	}
+}
+
 func TestLiveUserInputPauseResumesSameExecutorCycle(t *testing.T) {
 	now := time.Now()
 	run, err := NewRun("run-ask", "configure deployment", DefaultLimits(), now)
