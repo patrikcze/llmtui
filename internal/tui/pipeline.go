@@ -130,6 +130,21 @@ type debugInfo struct {
 	// correlation record finalizes (both the prediction and the actual
 	// outcome have arrived) — see finalizePreVerifierCorrelationIfReady.
 	DecisionShadowActualSemanticVerifierRan bool
+	// DecisionGuardedAssist* fields describe the most recent guarded-assist
+	// decision (Phase 1, agent_decision_policy.go). Unlike every
+	// DecisionShadow* field above, DecisionGuardedAssistEscalated genuinely
+	// can change what happened this cycle: true only when guarded_assist
+	// forced a semantic verifier an adaptive policy would otherwise have
+	// skipped. DecisionGuardedAssistEligible is false whenever no guarded
+	// decision was even attempted this cycle (mode/wiring/profile absent,
+	// or the cycle's route was never guard-eligible in the first place) —
+	// every other DecisionGuardedAssist* field stays zero in that case.
+	DecisionGuardedAssistEligible    bool
+	DecisionGuardedAssistProfile     string
+	DecisionGuardedAssistThreshold   float64
+	DecisionGuardedAssistProbability float64
+	DecisionGuardedAssistEscalated   bool
+	DecisionGuardedAssistReason      string
 	// PersonalAppsResult is the bounded, already-sanitized Output of the most
 	// recent personal_apps tool call — the exact JSON (outcomes, codes,
 	// detail messages) the model itself received. A live investigation found

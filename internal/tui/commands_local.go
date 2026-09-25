@@ -992,6 +992,11 @@ func (m *Model) debugOverlay() string {
 			d.DecisionShadowPreVerifierNeededProbability, d.DecisionShadowPreVerifierEvidenceSufficientProbability,
 			d.DecisionShadowActualSemanticVerifierRan))
 	}
+	if d.DecisionGuardedAssistEligible {
+		m.kv(&b, "laya guarded assist", fmt.Sprintf("profile=%s p=%.2f threshold=%.2f escalated=%v reason=%s",
+			d.DecisionGuardedAssistProfile, d.DecisionGuardedAssistProbability, d.DecisionGuardedAssistThreshold,
+			d.DecisionGuardedAssistEscalated, d.DecisionGuardedAssistReason))
+	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
 		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")
