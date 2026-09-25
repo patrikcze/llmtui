@@ -260,3 +260,46 @@ shaped exactly like "Read the file `<path>`.", not the scenario's own
 says (§19, "Phase 2's narrow exact-read fixture proves the mechanism; it
 does not claim this richer contract/coverage scenario works before Phase
 4") requires that richer contract layer first.
+
+## Update (Phase 6a: context pressure at the text-yield boundary, 2026-09-25)
+
+Harness plan §14 names this gap directly: `internal/tui/pipeline.go`'s
+`prepareRequest` detected "this request is a continuation, not a fresh user
+turn" by checking whether the trailing history message was `RoleTool` —
+correct for an ordinary native/fenced tool round, but a controller yield
+continuation's trailing message (`agent_yield.go`'s `continueAgentEpisode`,
+via `continueChat`) is the executor's own no-tool text answer. That one
+narrower check silently gated three real safety nets: inserting a
+`compactedContinuationAnchor` when the kept window has no user message,
+preserving the active turn while dropping the oldest group to fit budget,
+and — the concretely harmful one — falling back to compacting an oversized
+original request into a summary rather than failing outright when nothing
+else makes the request fit. A yield continuation that genuinely needed that
+last fallback instead hit `prepareRequest`'s hard error path and ended the
+whole run as a failure, while the *identical* pressure on an ordinary tool
+round degrades gracefully.
+
+The fix renames the local `toolContinuation` to `continuation` and drops
+the trailing-role requirement, keeping only `omitRaw` (already the correct,
+narrower signal: `continueChat`'s own call and one `tool_search.go`
+budget-trial probe are its only two call sites in the whole codebase) plus
+a non-empty kept window. This is deliberately not a new `ContinuationReason`
+enum — the plan's own §14 language ("initial user request, tool
+continuation, controller yield, protocol recovery") suggested one, but
+every one of `prepareRequest`'s three safety nets only ever needed the
+coarser "is this any kind of continuation" fact, not which specific reason
+produced it; introducing an unused enum distinction here would be exactly
+the speculative abstraction this project's conventions warn against.
+
+Two new tests (`internal/tui/pipeline_stability_test.go`) mirror the
+existing tool-continuation coverage with a yield-shaped (no-tool-call,
+text-tail) history instead, and were confirmed to fail against the
+pre-fix code before the fix was applied — proving the regression is real,
+not just plausible.
+
+Deliberately not touched by this update, left for a later Phase 6 pass:
+`decodeRun`'s checkpoint validation (reject malformed `EpisodeCheckpoint`
+counters/policy versions on load) and marking a persisted checkpoint
+`Interrupted: true` when `Resume` abandons its cycle — both still-open
+Phase 6 gate items from harness plan §16, orthogonal to this context-pressure
+fix.
