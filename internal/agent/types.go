@@ -130,6 +130,42 @@ type TestResult struct {
 	Summary string `json:"summary,omitempty"`
 }
 
+// ReadObservation is a bounded, criterion-neutral receipt of one delivered
+// read window for one target resource. It exists so criteria/yield coverage
+// logic can reason about *what was actually delivered*, not merely that some
+// call touching a path succeeded (agent-execution-harness plan §4 finding
+// #3: "read success loses coverage at the agent boundary"). It carries no
+// raw body — only identity, version, window, and total-source metadata
+// already present in tools.ResultMeta, translated by the TUI layer (this
+// package must never import internal/tools).
+type ReadObservation struct {
+	// Target is the criterion-neutral resource identity this observation is
+	// about — a workspace-relative path, lowercased/trimmed exactly like
+	// ExactReadCriterionTarget's own extraction, so the two compare directly.
+	Target string `json:"target"`
+	// SourceDigest is the producer's own SHA-256 of the complete raw source
+	// (tools.ResultMeta.SourceDigest), populated only when the read
+	// established it. Empty means unknown. Observations for the same Target
+	// with two different non-empty digests must never be combined into one
+	// coverage claim — that would mix two versions of the file.
+	SourceDigest string `json:"source_digest,omitempty"`
+	// StartLine/EndLine are the 1-based inclusive delivered line window; zero
+	// for a byte-only or non-line-addressable observation. Coverage union
+	// only considers observations with a valid line window this phase.
+	StartLine int64 `json:"start_line,omitempty"`
+	EndLine   int64 `json:"end_line,omitempty"`
+	// TotalLines is the producer's own total line count for the complete
+	// source, populated only when its scan reached end of file without a
+	// scan-limit truncation. Nil means unknown; an observation with a nil
+	// TotalLines can never by itself, or in union with others, prove
+	// whole-file coverage.
+	TotalLines *int64 `json:"total_lines,omitempty"`
+	// Sequence is this observation's position in this execution's ordered
+	// receipt list (assigned by AppendReadObservation) — monotonically
+	// increasing, never a timestamp.
+	Sequence int `json:"sequence,omitempty"`
+}
+
 // ExecutionResult is the bounded, observable outcome of one cycle objective.
 type ExecutionResult struct {
 	Objective      string           `json:"objective"`
@@ -142,6 +178,12 @@ type ExecutionResult struct {
 	NeedsUserInput bool             `json:"needs_user_input,omitempty"`
 	SuggestedNext  string           `json:"suggested_next,omitempty"`
 	NewEvidence    bool             `json:"new_evidence,omitempty"`
+	// ReadObservations is the bounded, ordered list of delivered read windows
+	// this cycle has observed so far — see ReadObservation and
+	// AppendReadObservation. Additive to schema v1: absent/empty on any
+	// record persisted before this field existed, which must be read as
+	// "unknown coverage", never as "fully covered".
+	ReadObservations []ReadObservation `json:"read_observations,omitempty"`
 }
 
 // VerificationResult is a structured evaluator result. Retry is permitted

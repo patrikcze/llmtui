@@ -11,6 +11,9 @@ const (
 	MaxCriteria = 12
 	// MaxEvidence bounds the run-level structured evidence ledger.
 	MaxEvidence = 64
+	// MaxReadObservations bounds one execution's ordered read-coverage
+	// receipt list, matching MaxEvidence's append-and-trim shape.
+	MaxReadObservations = 32
 )
 
 // CriterionStatus tracks one acceptance criterion across the whole run.
@@ -250,13 +253,15 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 	case CriterionSemantic:
 		// A contract model occasionally emits only "Read the file X" for a
 		// larger request. That exact, atomic criterion is mechanically proven
-		// by a successful read_file call; leaving it to a verifier that cannot
-		// inspect redacted contents causes the same read to be retried forever.
-		// Combined criteria remain semantic and still require verification.
-		for _, call := range execution.ToolCalls {
-			if call.Name == "read_file" && call.Succeeded && isExactReadCriterion(criterion.Text, call.Detail) {
-				return true, true, "observed read_file success"
-			}
+		// once the delivered read windows for that target, unioned within one
+		// consistent source version, cover the whole file — not merely that
+		// some read_file call touching it succeeded (a narrow windowed read of
+		// a large file previously satisfied this criterion without the model
+		// ever having seen most of the content; see harness plan §4 finding
+		// #3). Combined criteria remain semantic and still require
+		// verification.
+		if target, ok := ExactReadCriterionTarget(criterion.Text); ok && readCoverageComplete(target, execution.ReadObservations) {
+			return true, true, "observed full read coverage"
 		}
 	case CriterionCommandExit:
 		// Scan from the most recent call backward: a single cycle can already
@@ -292,21 +297,130 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 	return false, false, ""
 }
 
-func isExactReadCriterion(text, path string) bool {
-	target, ok := ExactReadCriterionTarget(text)
-	path = strings.ToLower(strings.TrimSpace(path))
-	return ok && path != "" && target == path
+// readInterval is a half-open-free, 1-based inclusive [start, end] delivered
+// line range used only by readCoverageComplete's local interval merge.
+type readInterval struct{ start, end int64 }
+
+// readCoverageComplete reports whether target's ReadObservations, unioned
+// within one consistent source version, span the whole known file — the
+// coverage-aware replacement for "some call touching this path succeeded"
+// (harness plan §4 finding #3, §10 "Ordered evidence freshness
+// prerequisite"). It is deliberately conservative: no observations, an
+// unknown total line count, a gap between delivered windows, or observations
+// split across more than one non-empty source digest for the same target all
+// return false — mixing two versions of a file, or trusting a partial view,
+// must never be reported as complete coverage.
+func readCoverageComplete(target string, observations []ReadObservation) bool {
+	covered, total, haveTotal, consistent := readCoverageState(target, observations)
+	if !consistent || !haveTotal {
+		return false // no stable version/total established: never a whole-file claim
+	}
+	if total == 0 {
+		return true // an empty file has nothing left to cover once its size is known
+	}
+	return covered >= total
+}
+
+// readCoverageState computes target's contiguous line coverage from line 1
+// (covered), its known total line count (total, haveTotal), and whether
+// every relevant observation agreed on source version and total (consistent
+// — false the instant two different non-empty digests, or two different
+// non-nil TotalLines, are seen for the same target; mixing versions must
+// never contribute to a coverage claim). It underlies both
+// readCoverageComplete and NextReadOffset so the two can never disagree
+// about what "covered so far" means.
+func readCoverageState(target string, observations []ReadObservation) (covered, total int64, haveTotal, consistent bool) {
+	target = strings.ToLower(strings.TrimSpace(target))
+	consistent = true
+	if target == "" {
+		return 0, 0, false, false
+	}
+	var digest string
+	var intervals []readInterval
+	for _, ob := range observations {
+		if strings.ToLower(strings.TrimSpace(ob.Target)) != target {
+			continue
+		}
+		if ob.SourceDigest != "" {
+			if digest == "" {
+				digest = ob.SourceDigest
+			} else if digest != ob.SourceDigest {
+				consistent = false
+			}
+		}
+		if ob.TotalLines != nil {
+			if haveTotal && *ob.TotalLines != total {
+				consistent = false
+			}
+			total, haveTotal = *ob.TotalLines, true
+		}
+		if ob.StartLine > 0 && ob.EndLine >= ob.StartLine {
+			intervals = append(intervals, readInterval{ob.StartLine, ob.EndLine})
+		}
+	}
+	if !consistent {
+		return 0, total, haveTotal, false
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i].start < intervals[j].start })
+	for _, iv := range intervals {
+		if iv.start > covered+1 {
+			break // gap: stop at the contiguous frontier from line 1
+		}
+		if iv.end > covered {
+			covered = iv.end
+		}
+	}
+	return covered, total, haveTotal, true
+}
+
+// NextReadOffset reports the next 1-based line to request for target, given
+// its currently observed coverage, so a controller-owned continuation
+// directive can name a precise read_file offset/limit (harness plan §9's
+// example, §12) instead of a vague "use the offered tool again". ok is false
+// when no useful hint can be derived — no observations yet, mixed source
+// versions/totals, or coverage is already complete — the caller falls back
+// to its own generic phrasing in that case. limit is the exact remaining
+// line count, so offset+limit-1 == the file's total line count.
+func NextReadOffset(target string, observations []ReadObservation) (offset, limit int64, ok bool) {
+	covered, total, haveTotal, consistent := readCoverageState(target, observations)
+	if !consistent || !haveTotal || total <= 0 || covered >= total {
+		return 0, 0, false
+	}
+	return covered + 1, total - covered, true
+}
+
+// AppendReadObservation appends one bounded read-coverage receipt to
+// execution, assigning the next monotonic Sequence and keeping only the most
+// recent MaxReadObservations entries — the same append-and-trim shape as
+// AppendEvidence, so one execution's coverage receipts stay deterministically
+// sized regardless of how many reads a long episode performs.
+func AppendReadObservation(execution *ExecutionResult, ob ReadObservation) {
+	if execution == nil {
+		return
+	}
+	next := 1
+	if n := len(execution.ReadObservations); n > 0 {
+		// Continue from the last stored Sequence, not len(): once the list is
+		// trimmed to MaxReadObservations, len() alone would stay pinned at the
+		// cap and future observations would silently reuse old numbers.
+		next = execution.ReadObservations[n-1].Sequence + 1
+	}
+	ob.Sequence = next
+	execution.ReadObservations = append(execution.ReadObservations, ob)
+	if len(execution.ReadObservations) > MaxReadObservations {
+		execution.ReadObservations = execution.ReadObservations[len(execution.ReadObservations)-MaxReadObservations:]
+	}
 }
 
 // ExactReadCriterionTarget extracts the target path from a criterion
-// recognized as an atomic "read this exact file" instruction — the same
-// narrow grammar isExactReadCriterion's deterministic proof requires ("Read
-// [the/file/named] <path>."), shared here so Phase 2's yield-eligibility
-// check (agent-execution-harness plan §10) can recognize a *pending*
-// exact-read obligation before any tool call has proven it, not only verify
-// one after the fact. ok is false for anything not exactly this shape:
-// multi-step or ambiguous prose ("inspect", "review", "compare"), a quoted
-// shell fragment, or a criterion naming no target at all remain semantic.
+// recognized as an atomic "read this exact file" instruction ("Read
+// [the/file/named] <path>."), shared so both evaluateCriterion's
+// deterministic proof and Phase 2's yield-eligibility check
+// (agent-execution-harness plan §10) recognize the identical narrow grammar
+// — one before any tool call has proven it, the other after. ok is false for
+// anything not exactly this shape: multi-step or ambiguous prose ("inspect",
+// "review", "compare"), a quoted shell fragment, or a criterion naming no
+// target at all remain semantic.
 func ExactReadCriterionTarget(text string) (target string, ok bool) {
 	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
 	if !strings.HasPrefix(text, "read ") {
