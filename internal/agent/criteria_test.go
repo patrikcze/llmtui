@@ -320,6 +320,54 @@ func TestTestCriterionReSatisfiedWhenLaterCycleAlsoReruns(t *testing.T) {
 	}
 }
 
+// TestTestCriterionUsesLatestSameCycleResultNotFirst characterizes a gap
+// staleAfterMutation cannot see: it only invalidates proof across strictly
+// later cycles, but a single cycle can already contain several tool/test
+// rounds (many consecutive turns inside one StageExecutor episode). Within
+// one cycle, evaluateCriterion scanned forward and returned on the *first*
+// matching test, so an early pass → edit → later failing rerun of the same
+// test was reported satisfied — the early pass wrongly stayed authoritative
+// over the later, more current failure.
+func TestTestCriterionUsesLatestSameCycleResultNotFirst(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "go test passes",
+		Kind:   CriterionTestResult,
+		Target: "go test ./...",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		TestsRun: []TestResult{
+			{Name: "go test ./...", Passed: true},
+			{Name: "go test ./...", Passed: false},
+		},
+	}, 1)
+
+	if run.Criteria[0].Status != CriterionFailed {
+		t.Fatalf("criterion = %+v, want the later same-cycle failure to be authoritative, not the earlier pass", run.Criteria[0])
+	}
+}
+
+// TestCommandExitCriterionUsesLatestSameCycleResultNotFirst is the
+// CriterionCommandExit half of the same gap.
+func TestCommandExitCriterionUsesLatestSameCycleResultNotFirst(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinTypedCriteria([]CriterionSpec{{
+		Text:   "the command exits cleanly",
+		Kind:   CriterionCommandExit,
+		Target: "*",
+	}})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ToolCalls: []ToolCallRecord{
+			{Name: "run_command", Detail: "go build ./...", Succeeded: true},
+			{Name: "run_command", Detail: "go build ./...", Succeeded: false},
+		},
+	}, 1)
+
+	if run.Criteria[0].Status != CriterionFailed {
+		t.Fatalf("criterion = %+v, want the later same-cycle failure to be authoritative, not the earlier success", run.Criteria[0])
+	}
+}
+
 // TestFileStateCriterionUnaffectedByStaleness proves the conservative
 // invalidation is scoped to test-result and command-exit criteria: a
 // file-state criterion is about the file's current content, so a later edit

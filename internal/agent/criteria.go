@@ -259,7 +259,13 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 			}
 		}
 	case CriterionCommandExit:
-		for _, call := range execution.ToolCalls {
+		// Scan from the most recent call backward: a single cycle can already
+		// contain several tool rounds (many consecutive turns inside one
+		// executor episode), so an earlier pass must not stay authoritative
+		// over a later rerun of the same command that failed. The latest
+		// matching observation is what the workspace looks like now.
+		for i := len(execution.ToolCalls) - 1; i >= 0; i-- {
+			call := execution.ToolCalls[i]
 			if call.Name == "run_command" && match(call.Detail) {
 				return true, call.Succeeded, "observed run_command exit"
 			}
@@ -271,7 +277,9 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 			}
 		}
 	case CriterionTestResult:
-		for _, test := range execution.TestsRun {
+		// Same latest-observation-wins rule as CriterionCommandExit above.
+		for i := len(execution.TestsRun) - 1; i >= 0; i-- {
+			test := execution.TestsRun[i]
 			if match(test.Name) {
 				return true, test.Passed, "observed test result: " + test.Name
 			}
