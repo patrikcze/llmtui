@@ -458,6 +458,7 @@ the 2026-07-19 full review (all prior findings remediated). Highlights:
 | [0001](decisions/0001-single-orchestration-kernel.md) | Retain the single orchestration kernel; no second execution path |
 | [0002](decisions/0002-live-progress-ledger-and-budget-enforcement.md) | Live progress ledger + live budget enforcement |
 | [0003](decisions/0003-contract-before-agent-execution.md) | Establish the task contract before agent execution |
+| [0013](decisions/0013-agent-execution-yield-policy.md) | Pure yield policy at the no-tool completion boundary (not yet wired into the executor) |
 | [`embedded-local-inference.md`](embedded-local-inference.md) | Embedded in-process inference via yzma/purego, no sidecar, no cgo — with dated addenda for verified runtime distribution, multimodal/tools, and each pinned-runtime bump |
 
 ### Supporting current-state references

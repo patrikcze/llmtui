@@ -221,6 +221,62 @@ type Cycle struct {
 	CompletedAt    time.Time           `json:"completed_at,omitempty"`
 	Execution      *ExecutionResult    `json:"execution,omitempty"`
 	Verification   *VerificationResult `json:"verification,omitempty"`
+	// Episode is bounded, additive checkpoint metadata for this cycle's
+	// executor episode (Phase 2 of the agent-execution-harness plan). It is
+	// nil for every cycle today and for any run persisted before this field
+	// existed; a nil Episode must never be read as "no obligations remain"
+	// or as any other decision — only as "not yet tracked".
+	Episode *EpisodeCheckpoint `json:"episode,omitempty"`
+}
+
+// EpisodeCheckpoint is bounded, additive metadata for one execution episode
+// — the executor portion of a Cycle, from BeginCycle to its single
+// CompleteExecution, including waits for approval/input and any number of
+// budgeted model/tool turns. Episode identity is implicitly (run.ID,
+// run.Cycle); this type adds no independent episode number that could drift
+// from cycle identity. It exists so a controller-owned yield continuation
+// (Phase 2) can track its own bounded counters and last decision without a
+// second execution-state store. It carries no raw transcript, tool body,
+// hidden reasoning, or secret — see docs/architecture/decisions/0013 §
+// "Persistence, restart and accounting".
+type EpisodeCheckpoint struct {
+	// PolicyVersion is the yield policy version active when this episode
+	// started. Persisted so a mid-run configuration change cannot silently
+	// reinterpret an in-flight checkpoint.
+	PolicyVersion int `json:"policy_version"`
+	// EnabledAtStart records whether yield continuation was enabled when
+	// this episode began, independent of the run's current live config.
+	EnabledAtStart bool `json:"enabled_at_start"`
+
+	// ExecutorRequests counts every provider attempt this episode's executor
+	// has made, including transport retries and native-tool fallback — not
+	// only successful replies. Bounded by a configured per-episode ceiling,
+	// independent of the existing tool-round budget.
+	ExecutorRequests int `json:"executor_requests,omitempty"`
+	// NoProgressNudges counts controller continuations admitted since the
+	// last observed relevant progress. See YieldInput.NoProgressNudges.
+	NoProgressNudges int `json:"no_progress_nudges,omitempty"`
+
+	// LastYieldReason records the most recent yield decision's reason, for
+	// diagnostics and debug overlays only — never authority for a later
+	// decision by itself.
+	LastYieldReason YieldReason `json:"last_yield_reason,omitempty"`
+	// LastProgressDigest is the most recent deterministic progress
+	// fingerprint this episode observed (see internal/tui/progress.go),
+	// opaque here — used only to detect whether a later yield changed
+	// anything relevant.
+	LastProgressDigest string `json:"last_progress_digest,omitempty"`
+	// UnresolvedCriterionIDs are the pinned criterion IDs this episode's
+	// last decision still considered outstanding, capped at MaxCriteria.
+	UnresolvedCriterionIDs []string `json:"unresolved_criterion_ids,omitempty"`
+
+	// Revision increments on every checkpoint write so a stale asynchronous
+	// save (see persistAgentRun) can never silently overwrite a newer one.
+	Revision int `json:"revision,omitempty"`
+	// Interrupted marks a checkpoint saved mid-episode (e.g. a process
+	// restart) whose pending counts were never consumed by a
+	// CompleteExecution. Resume must never infer completion from it.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // ContextTurn is a bounded, provider-neutral prior final turn captured when a
