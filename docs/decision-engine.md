@@ -636,6 +636,25 @@ MCP connection and adds no model call to catalog getters. Deterministic
 fixtures are valid evidence even when a later opt-in MLX run is skipped; a
 skipped live run is censored, not a success claim.
 
+### Optional yield shadow (Phase 7)
+
+`decision_engine.yield_shadow: true` is a second, explicit opt-in layered on
+`decision_engine.enabled`. It is intended only after deterministic/semantic
+routing has produced a measured ambiguous class. At the existing cycle
+verification boundary it records one versioned, bounded observation using the
+shared Laya service: objective, criterion IDs/statuses, progress category,
+closed tool outcome codes, delivered file-version references, deterministic
+route and proposed action. Raw bodies, hidden reasoning, arbitrary arguments,
+and approval-bearing descriptions are excluded.
+
+The prediction is paired with the already-applied authoritative action for
+diagnostics only. `/debug last` separates available, missing, censored, late,
+and duplicate outcomes. The answer never changes tool availability,
+verification, criteria, completion, budgets, approvals, persistence, or
+ordinary chat. Samples are session-local and bounded; they are not checkpoint
+or memory state. No calibrated profile or active yield policy is part of this
+phase. See ADR 0017.
+
 ## Measured bridge validation (2026-09-23)
 
 Real Metal integration passed on this development machine with Python 3.14.3

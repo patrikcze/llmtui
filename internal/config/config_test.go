@@ -446,6 +446,9 @@ func TestDecisionEngineModeDefaultsToShadow(t *testing.T) {
 	if cfg.DecisionEngine.Mode != DecisionEngineModeShadow || cfg.DecisionEngine.ResolvedMode() != DecisionEngineModeShadow {
 		t.Fatalf("decision_engine mode default = %q resolved %q, want shadow", cfg.DecisionEngine.Mode, cfg.DecisionEngine.ResolvedMode())
 	}
+	if cfg.DecisionEngine.YieldShadow {
+		t.Fatal("decision_engine.yield_shadow defaults to true; want the optional Phase 7 observation disabled")
+	}
 }
 
 func TestDecisionEngineModeResolution(t *testing.T) {

@@ -365,6 +365,13 @@ type Model struct {
 	// preVerifierCorrelations, used only for deterministic true-oldest
 	// bounded eviction — see evictOldestPreVerifierCorrelation.
 	preVerifierSequence int
+	// yieldShadowCorrelations/yieldShadowMetrics/yieldShadowSamples back the
+	// optional Phase 7 Laya observation. They are session-local, bounded, and
+	// never read by the agent controller.
+	yieldShadowCorrelations map[string]*agentYieldShadowCorrelation
+	yieldShadowMetrics      agentYieldShadowMetrics
+	yieldShadowSamples      []agentYieldShadowSample
+	yieldShadowLast         agentYieldShadowSample
 }
 
 // New builds the chat model.
@@ -1157,6 +1164,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDecisionPreVerifierShadowMsg:
 		return m.handleAgentDecisionPreVerifierShadow(msg)
+
+	case agentYieldShadowMsg:
+		return m.handleAgentYieldShadow(msg)
 
 	case agentCriterionAssessmentMsg:
 		return m.handleAgentCriterionAssessment(msg)

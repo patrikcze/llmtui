@@ -350,6 +350,10 @@ type AgentVerifierConfig struct {
 // It is disabled by default and never replaces the generative provider.
 type DecisionEngineConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// YieldShadow enables the opt-in, observational Phase 7 sample stream for
+	// clean agent yields. It never changes the existing verifier/stop policy
+	// and remains false until an ambiguous routing class has been measured.
+	YieldShadow bool `mapstructure:"yield_shadow" yaml:"yield_shadow"`
 	// Mode selects what the engine may do once Enabled is true: "shadow"
 	// (observe every cycle, never influence it — the default),
 	// "guarded_assist" (may force at most one additional semantic verification
@@ -879,7 +883,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
-		"decision_engine.enabled", "decision_engine.mode", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
+		"decision_engine.enabled", "decision_engine.yield_shadow", "decision_engine.mode", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -1054,6 +1058,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.enforce_budgets_live", true)
 
 	v.SetDefault("decision_engine.enabled", false)
+	v.SetDefault("decision_engine.yield_shadow", false)
 	v.SetDefault("decision_engine.mode", DecisionEngineModeShadow)
 	v.SetDefault("decision_engine.provider", "laya")
 	v.SetDefault("decision_engine.laya.default_model", "english")
@@ -1317,6 +1322,7 @@ agent:
 # provider and remains disabled until a verified decision runtime is installed.
 decision_engine:
   enabled: false
+  yield_shadow: false # opt-in Phase 7 observation; never changes agent policy
   # "shadow" only ever observes; "guarded_assist" may additionally force one
   # semantic verification an adaptive policy would otherwise skip;
   # "criterion_shadow" measures pinned criterion evidence; and
