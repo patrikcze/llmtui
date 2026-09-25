@@ -12,7 +12,9 @@ os.dup2(2, 1)
 sys.stdout = sys.stderr
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-PROTOCOL = 1
+# Protocol 2 adds the "strict" predict request field and the "input_usage"
+# result field (token-capacity diagnostics, see _measure_inputs below).
+PROTOCOL = 2
 MAX_LINE = 8 * 1024 * 1024
 
 
@@ -44,6 +46,7 @@ def main():
     try:
         from importlib.metadata import version
         import laya_mlx as laya
+        from laya_mlx.common import build_prefix, render_options, serialize_state
         import mlx.core as mx
         package_version = version("laya-mlx")
         if package_version != "0.2.0":
@@ -73,6 +76,58 @@ def main():
         send("error", code="load")
         return
     send("ready", load_ms=(time.perf_counter() - started) * 1000, **info)
+
+    def measure_inputs(state, questions):
+        """Per-question token-capacity diagnostics computed with the exact
+        pinned tokenizer (agent.tok) and the exact upstream sequence-
+        construction rules (laya_mlx.common.build_prefix/render_options/
+        serialize_state) that agent.predict() itself uses below — never a
+        second tokenizer, never a Go-side byte estimate. Tokenizer-only
+        (CPU); no GPU forward pass, so this runs before every predict
+        regardless of strict mode. build_prefix's own truncation decisions
+        are reused unmodified; the two head/option text expressions below
+        are duplicated only because build_prefix does not expose
+        pre-truncation lengths, and must keep matching its own first lines
+        exactly (asserted by this package's parity tests)."""
+        if not isinstance(questions, dict):
+            raise ValueError("questions must be a dictionary keyed by question id")
+        max_len = agent.cfg.get("max_len", 512)
+        head_max_len = agent.cfg.get("head_max_len", 192)
+        mask = agent.tok.mask_token
+        usage = {}
+        for qid, qdef in questions.items():
+            q = agent._to_internal(qdef)
+            prefix_ids, prefix_markers = build_prefix(agent.tok, q, head_max_len)
+            head_used = prefix_markers[0] - 2
+            option_used = (len(prefix_ids) - 1) - prefix_markers[0]
+            room = max(0, max_len - len(prefix_ids) - 1)
+
+            head_text = "%s question: %s" % (q["t"], str(q["ins"]).replace(mask, " "))
+            head_raw = len(agent.tok(head_text, add_special_tokens=False)["input_ids"])
+
+            opts = render_options(q)
+            option_raw = sum(
+                1 + len(agent.tok(" " + opt.replace(mask, " "), add_special_tokens=False)["input_ids"])
+                for opt in opts
+            )
+
+            state_raw = len(
+                agent.tok(serialize_state(state).replace(mask, " "), add_special_tokens=False)["input_ids"]
+            )
+            state_used = min(state_raw, room)
+
+            usage[qid] = dict(
+                head_tokens=head_used,
+                option_tokens=option_used,
+                state_tokens=state_used,
+                max_len=max_len,
+                state_budget=room,
+                head_truncated=head_raw > head_used,
+                options_truncated=option_raw > option_used,
+                state_truncated=state_raw > room,
+            )
+        return usage
+
     while True:
         try:
             request = receive()
@@ -83,7 +138,19 @@ def main():
             return
         started = time.perf_counter()
         try:
+            usage = measure_inputs(request["state"], request["questions"])
+            lossy = any(
+                u["head_truncated"] or u["options_truncated"] or u["state_truncated"]
+                for u in usage.values()
+            )
+            if request.get("strict") and lossy:
+                # Reject before the GPU forward pass — a strict caller must
+                # never receive an answer computed from silently truncated
+                # input.
+                send("error", request["id"], code="capacity")
+                continue
             result = agent.predict(request["state"], request["questions"])
+            result["input_usage"] = usage
             send("result", request["id"], result=result,
                  predict_ms=(time.perf_counter() - started) * 1000)
         except (ValueError, TypeError, KeyError):

@@ -32,6 +32,49 @@ type Question struct {
 // PredictOptions controls one prediction without changing engine state.
 type PredictOptions struct {
 	Model string
+	// RequireCompleteInput requests strict capacity admission: a backend
+	// that can measure exact token usage against its pinned tokenizer must
+	// reject the request, before running inference, if any question's head,
+	// options, or state would be silently truncated to fit the budget —
+	// rather than silently proceeding on incomplete input. Default false
+	// preserves existing best-effort behavior; existing callers and
+	// backends that cannot measure capacity are unaffected. A backend that
+	// cannot honor this (no tokenizer boundary to measure against) must
+	// leave Result.InputUsage empty rather than fabricate zero-loss usage.
+	RequireCompleteInput bool
+}
+
+// QuestionInputUsage reports exact token-budget accounting for one
+// question's prepared input, computed by a backend using its own pinned
+// tokenizer and upstream sequence-construction rules — never estimated
+// from Go byte counts, and never a second, independent tokenizer. No
+// question/option/state text is ever included, only counts and flags. A
+// missing entry for a question key means the backend could not measure
+// that question's usage — callers must treat that as unknown, never as a
+// confident zero-truncation result.
+type QuestionInputUsage struct {
+	// HeadTokens/OptionTokens/StateTokens are the token counts actually
+	// admitted into the model's input for that segment — i.e. after any
+	// truncation was applied, exactly what real inference saw.
+	HeadTokens   int `json:"head_tokens"`
+	OptionTokens int `json:"option_tokens"`
+	StateTokens  int `json:"state_tokens"`
+	// MaxLen is the total sequence token budget; StateBudget is the room
+	// left for state after the head/options prefix and framing tokens.
+	MaxLen      int `json:"max_len"`
+	StateBudget int `json:"state_budget"`
+	// HeadTruncated/OptionsTruncated/StateTruncated report whether that
+	// segment's raw (untruncated) content exceeded what was admitted —
+	// i.e. whether any of the caller's supplied content was silently lost.
+	HeadTruncated    bool `json:"head_truncated"`
+	OptionsTruncated bool `json:"options_truncated"`
+	StateTruncated   bool `json:"state_truncated"`
+}
+
+// Truncated reports whether any segment of this question's input lost
+// content to the tokenizer's budget.
+func (u QuestionInputUsage) Truncated() bool {
+	return u.HeadTruncated || u.OptionsTruncated || u.StateTruncated
 }
 
 // Answer is the normalized representation shared by future decision engines.
@@ -49,8 +92,15 @@ type Answer struct {
 // Routing describes how an engine selected its model. It is diagnostic data,
 // not a policy decision and must not be used to bypass an approval gate.
 type Routing struct {
-	Model        string `json:"model,omitempty"`
-	Repository   string `json:"repo,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Repository string `json:"repo,omitempty"`
+	// Revision is the exact installed manifest revision the Router actually
+	// loaded and is using for this prediction — bound once at load time,
+	// never re-derived from a later catalog/installation query, so it
+	// cannot silently drift if a newer installation appears while the
+	// loaded engine is still in use. Empty when the backend/store does not
+	// track installation revisions.
+	Revision     string `json:"revision,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 	DetectedLang string `json:"detected_language,omitempty"`
 }
@@ -59,6 +109,11 @@ type Routing struct {
 type Result struct {
 	Answers map[string]Answer `json:"answers"`
 	Routing Routing           `json:"routing,omitempty"`
+	// InputUsage carries per-question token-capacity diagnostics when the
+	// backend supports computing them (currently MLX only). Additive and
+	// empty-safe: a nil/empty map means the backend did not measure usage,
+	// not that no question was truncated.
+	InputUsage map[string]QuestionInputUsage `json:"input_usage,omitempty"`
 }
 
 // Engine is the deliberately small boundary between structured decisions and

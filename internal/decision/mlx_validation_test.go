@@ -151,3 +151,70 @@ func TestMLXLoaderRejectsONNX(t *testing.T) {
 		t.Fatalf("MLX accepted ONNX installation: %v", err)
 	}
 }
+
+func validUsage() map[string]QuestionInputUsage {
+	return map[string]QuestionInputUsage{
+		"q": {HeadTokens: 6, OptionTokens: 8, StateTokens: 20, MaxLen: 512, StateBudget: 494},
+	}
+}
+
+// TestValidateQuestionInputUsage covers Phase 0b's defense against a
+// corrupted or hand-crafted usage map from an untrusted worker response —
+// it must never be silently trusted for capacity accounting.
+func TestValidateQuestionInputUsage(t *testing.T) {
+	questions := map[string]Question{"q": {Type: QuestionNoul}}
+	cases := []struct {
+		name  string
+		usage map[string]QuestionInputUsage
+		want  bool // wantErr
+	}{
+		{"valid", validUsage(), false},
+		{"unknown question", map[string]QuestionInputUsage{"other": {MaxLen: 512}}, true},
+		{"non-positive max_len", map[string]QuestionInputUsage{"q": {MaxLen: 0}}, true},
+		{"negative head", map[string]QuestionInputUsage{"q": {HeadTokens: -1, MaxLen: 512}}, true},
+		{"negative option", map[string]QuestionInputUsage{"q": {OptionTokens: -1, MaxLen: 512}}, true},
+		{"negative state", map[string]QuestionInputUsage{"q": {StateTokens: -1, MaxLen: 512}}, true},
+		{"negative budget", map[string]QuestionInputUsage{"q": {StateBudget: -1, MaxLen: 512}}, true},
+		{"admits more than max_len", map[string]QuestionInputUsage{"q": {HeadTokens: 500, OptionTokens: 500, StateTokens: 500, MaxLen: 512, StateBudget: 500}}, true},
+		{"state exceeds its own budget", map[string]QuestionInputUsage{"q": {StateTokens: 100, StateBudget: 50, MaxLen: 512}}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateQuestionInputUsage(questions, c.usage)
+			if c.want && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+			if !c.want && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestConvertMLXAnswersAttachesUsage covers the round-trip: a valid usage
+// map is attached to the result unmodified, and an empty/nil one leaves
+// InputUsage empty rather than fabricating entries.
+func TestConvertMLXAnswersAttachesUsage(t *testing.T) {
+	questions := map[string]Question{"refund": {Type: QuestionNoul}}
+	answers := map[string]mlxAnswer{"refund": {Type: QuestionNoul, Noul: ptrFloat(0.8), Confidence: ptrFloat(0.8)}}
+
+	result, err := convertMLXAnswers(questions, answers, map[string]QuestionInputUsage{
+		"refund": {HeadTokens: 4, OptionTokens: 10, StateTokens: 20, MaxLen: 512, StateBudget: 490},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.InputUsage) != 1 || result.InputUsage["refund"].HeadTokens != 4 {
+		t.Fatalf("InputUsage = %+v, want the supplied usage attached", result.InputUsage)
+	}
+
+	empty, err := convertMLXAnswers(questions, answers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.InputUsage) != 0 {
+		t.Fatalf("InputUsage = %+v, want empty when the worker supplied none", empty.InputUsage)
+	}
+}
+
+func ptrFloat(v float64) *float64 { return &v }

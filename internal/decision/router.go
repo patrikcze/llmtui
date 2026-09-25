@@ -34,10 +34,14 @@ type Router struct {
 }
 
 type routerEntry struct {
-	engine  Engine
-	refs    int
-	usedAt  uint64
-	closing bool
+	engine Engine
+	// revision is the exact installed manifest revision selected when this
+	// entry was loaded, bound once and never re-derived — see acquire and
+	// Result.Routing.Revision's doc comment.
+	revision string
+	refs     int
+	usedAt   uint64
+	closing  bool
 }
 
 func NewRouter(options RouterOptions) (*Router, error) {
@@ -82,7 +86,7 @@ func (r *Router) Predict(ctx context.Context, state any, questions map[string]Qu
 	if err != nil {
 		return Result{}, err
 	}
-	engine, release, err := r.acquire(ctx, alias)
+	engine, revision, release, err := r.acquire(ctx, alias)
 	if err != nil {
 		return Result{}, err
 	}
@@ -103,6 +107,11 @@ func (r *Router) Predict(ctx context.Context, state any, questions map[string]Qu
 		return Result{}, err
 	}
 	result.Routing.Model = modelID(alias)
+	// Revision is bound at load time on the routerEntry (acquire), never
+	// re-derived from a later catalog/installation query here — a newer
+	// installation appearing while this engine is still loaded and in use
+	// must not silently relabel predictions it never actually produced.
+	result.Routing.Revision = revision
 	for _, descriptor := range r.store.Catalog() {
 		if descriptor.Alias == alias {
 			result.Routing.Repository = descriptor.Repository
@@ -112,40 +121,40 @@ func (r *Router) Predict(ctx context.Context, state any, questions map[string]Qu
 	return result, nil
 }
 
-func (r *Router) acquire(ctx context.Context, alias string) (Engine, func(), error) {
+func (r *Router) acquire(ctx context.Context, alias string) (Engine, string, func(), error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return nil, nil, errors.New("decision router is closed")
+		return nil, "", nil, errors.New("decision router is closed")
 	}
 	r.clock++
 	if entry := r.entries[alias]; entry != nil && entry.closing {
-		return nil, nil, fmt.Errorf("%w: decision worker is retiring", ErrUnavailable)
+		return nil, "", nil, fmt.Errorf("%w: decision worker is retiring", ErrUnavailable)
 	}
 	if entry := r.entries[alias]; entry != nil && !entry.closing {
 		entry.refs++
 		entry.usedAt = r.clock
-		return entry.engine, r.releaseFunc(alias, entry), nil
+		return entry.engine, entry.revision, r.releaseFunc(alias, entry), nil
 	}
 	installations, err := r.store.Inspect(modelID(alias))
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect decision model %s: %w", modelID(alias), err)
+		return nil, "", nil, fmt.Errorf("inspect decision model %s: %w", modelID(alias), err)
 	}
 	installation, ok := newestValidInstallation(installations)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: no valid installed runtime for %s", ErrRuntimeArtifactUnavailable, modelID(alias))
+		return nil, "", nil, fmt.Errorf("%w: no valid installed runtime for %s", ErrRuntimeArtifactUnavailable, modelID(alias))
 	}
 	engine, err := LoadRuntime(ctx, installation, r.loader)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
-	entry := &routerEntry{engine: engine, refs: 1, usedAt: r.clock}
+	entry := &routerEntry{engine: engine, revision: installation.Manifest.Source.Revision, refs: 1, usedAt: r.clock}
 	r.entries[alias] = entry
 	r.evictLocked(alias)
-	return engine, r.releaseFunc(alias, entry), nil
+	return engine, entry.revision, r.releaseFunc(alias, entry), nil
 }
 
 func (r *Router) releaseFunc(alias string, entry *routerEntry) func() {

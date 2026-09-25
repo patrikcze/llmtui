@@ -10,7 +10,7 @@ import (
 )
 
 // MLX already calibrates and rounds answers. Never call DecodeLogits here.
-func convertMLXAnswers(questions map[string]Question, answers map[string]mlxAnswer) (Result, error) {
+func convertMLXAnswers(questions map[string]Question, answers map[string]mlxAnswer, usage map[string]QuestionInputUsage) (Result, error) {
 	result := Result{Answers: make(map[string]Answer, len(answers))}
 	for id, raw := range answers {
 		if raw.Confidence == nil {
@@ -60,7 +60,47 @@ func convertMLXAnswers(questions map[string]Question, answers map[string]mlxAnsw
 		}
 		result.Answers[id] = answer
 	}
+	if len(usage) > 0 {
+		if err := validateQuestionInputUsage(questions, usage); err != nil {
+			return Result{}, err
+		}
+		result.InputUsage = usage
+	}
 	return result, ValidateResult(questions, result)
+}
+
+// validateQuestionInputUsage rejects a malformed or fabricated usage map
+// before it can be trusted as capacity diagnostics: every key must be a
+// real question from this request (never more, since that would mean the
+// worker measured something the caller never asked about), and every count/
+// budget must be non-negative and internally consistent with MaxLen. A
+// worker reporting more admitted tokens than the sequence budget allows, or
+// a negative count, indicates a corrupted or hand-crafted response — never
+// silently trusted for capacity accounting.
+func validateQuestionInputUsage(questions map[string]Question, usage map[string]QuestionInputUsage) error {
+	for id, u := range usage {
+		if _, ok := questions[id]; !ok {
+			return fmt.Errorf("%w: input usage for unknown question %q", ErrInvalid, id)
+		}
+		if u.MaxLen <= 0 {
+			return fmt.Errorf("%w: input usage for %q has non-positive max_len", ErrInvalid, id)
+		}
+		for name, value := range map[string]int{
+			"head_tokens": u.HeadTokens, "option_tokens": u.OptionTokens, "state_tokens": u.StateTokens,
+			"state_budget": u.StateBudget,
+		} {
+			if value < 0 {
+				return fmt.Errorf("%w: input usage for %q has negative %s", ErrInvalid, id, name)
+			}
+		}
+		if u.HeadTokens+u.OptionTokens+u.StateTokens > u.MaxLen {
+			return fmt.Errorf("%w: input usage for %q admits more tokens than max_len", ErrInvalid, id)
+		}
+		if u.StateTokens > u.StateBudget {
+			return fmt.Errorf("%w: input usage for %q admits more state tokens than its own budget", ErrInvalid, id)
+		}
+	}
+	return nil
 }
 
 func verifyMLXInstallation(ctx context.Context, installation Installation) error {
