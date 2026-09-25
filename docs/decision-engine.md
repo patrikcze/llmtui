@@ -3,8 +3,16 @@
 `internal/decision` provides optional typed local decisions separately from
 text-generating providers. Laya returns `choice`, ordinal `score`, and boolean
 `noul` probabilities. The existing agent loop, verifier, and tool approval
-policy remain authoritative; this runtime does not yet use decisions to alter
-them. A prediction is a signal, never authorization to execute a tool.
+policy remain authoritative. A prediction is a signal, never authorization
+to execute a tool. Every observation this package makes is shadow-only
+(recorded, never acted on) with one narrow, structurally bounded exception:
+`decision_engine.mode: guarded_assist` may force one additional semantic
+verification an adaptive policy would otherwise have skipped — see "Guarded
+verifier escalation (Phase 1)" below. That mode ships with zero behavioral
+effect in this codebase (no approved calibration profile exists yet), and
+Laya can never skip, delay, or replace a verifier, satisfy a criterion, or
+otherwise author a status this package doesn't already compute
+deterministically.
 
 ## Execute on Apple Silicon
 
@@ -441,14 +449,18 @@ prediction is currently observed only, never applied; and `agent.Decide()`
 together with the existing verifier/criteria machinery is the safety shield
 that never moves.
 
-### Future phase (doc-only, not implemented here): `guarded_assist`
+### Guarded verifier escalation (Phase 1) — shipped inert
 
-A possible next phase, not built in this PR, would give Laya exactly one
-active capability: a **one-way escalation** to semantic verification, using
-the pre-verifier shadow's `semantic_verifier_needed` signal specifically
-(not the post-cycle `cycle_action` choice).
+Laya's one active capability — the first and, so far, only exception to
+this package's shadow-only rule above — is a **one-way escalation** to
+semantic verification, using the pre-verifier shadow's
+`semantic_verifier_needed` signal specifically (not the post-cycle
+`cycle_action` choice). See
+`docs/architecture/decisions/0012-laya-guarded-verifier-escalation.md` for
+the full authority decision and `internal/tui/agent_decision_policy.go` for
+the implementation.
 
-**Allowed, as the only initial active behavior:**
+**Allowed, as the only active behavior:**
 
 ```text
 adaptive policy WOULD SKIP the semantic verifier
@@ -458,7 +470,7 @@ Laya semantic_verifier_needed >= a calibrated threshold
 RUN the semantic verifier anyway
 ```
 
-**Forbidden, permanently, never the initial active mode:**
+**Forbidden, permanently, never any active mode:**
 
 ```text
 adaptive policy WOULD RUN the semantic verifier
@@ -471,11 +483,44 @@ SKIP the verifier
 Laya must never be allowed to skip a verifier that would otherwise run,
 mark a run done, authorize a tool, bypass an approval, override a
 deterministic failure, or satisfy a criterion directly, in this or any
-future phase — escalation-only, one direction, is the constraint any
-implementation of `guarded_assist` must preserve. No confidence threshold
-exists yet; selecting one requires calibration evidence from both shadow
-observations above, with the pre-verifier shadow's false-negative rate as
-the metric that would actually justify (or rule out) a specific threshold.
+future phase — escalation-only, one direction, is the constraint this
+implementation preserves structurally: `dispatchGuardedAssist` is only ever
+called from the one branch of `startAgentVerification` where
+`planAgentVerification` marked the cycle's route `GuardEligible`, and that
+flag is never set for a route that was already going to dispatch a real
+verifier (see `TestPlanAgentVerificationBranches` and
+`TestGuardedAssistNeverDispatchedForSemanticRoute`).
+
+**`decision_engine.mode: guarded_assist` ships with zero behavioral effect
+in this codebase.** Activating it additionally requires a resolved
+`decisionCalibrationProfile` for the loaded model — a versioned Go value in
+`decisionCalibrationProfiles`, never user-editable config, never a public
+threshold knob, never defaulted — and that map is **empty**. No confidence
+threshold has been calibrated; ADR 0012 was accepted without a completed G1
+report (an explicit, informed exception — see the ADR's own Context
+section), so until a future, separately reviewed change adds an approved
+profile backed by real evidence, setting `mode: guarded_assist` is
+observationally identical to `shadow`. `TestGuardedAssistWithNoProfileNeverDispatches`
+and `TestGuardedAssistDisabledEngineNeverDispatches` prove this directly.
+
+When a profile does exist for the loaded model, eligible cycles get exactly
+one Laya call — the guarded predict result also feeds the ordinary
+pre-verifier correlation bookkeeping, so a guard-eligible cycle is never
+double-dispatched (shadow plus assist) for the same stage
+(`TestGuardedAssistFeedsPreVerifierCorrelationExactlyOnce`). The call is
+**strict** (`PredictOptions.RequireCompleteInput`, Phase 0b): a truncated
+input can never produce a successful guarded answer, only an "unavailable"
+fallback to the original synthetic result — never a confident decision
+made from incomplete evidence. Its context derives from the run's own
+(unlike every shadow call, which is deliberately independent so it can
+still record a late-arriving actual outcome after the run ends), and its
+deadline is `min(profile.MaxWait, run's own remaining elapsed budget)` — a
+guarded wait can never itself cause a run to exceed
+`agent.Limits.MaxElapsed`. `/debug last`'s `laya guarded assist` line and
+`eval.AgentTrial`'s `LayaGuardedAssist*` fields report the eligible
+profile, probability, threshold, whether it escalated, and a bounded
+reason code (`escalated`, `below_threshold`, `unavailable`, `timeout`,
+`cancelled`, `malformed_result`).
 
 ## Measured bridge validation (2026-09-23)
 
