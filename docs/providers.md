@@ -65,6 +65,12 @@ sampling or context fields into remote requests.
   `network.retry.max_attempts` with `network.retry.backoff` — HTTP errors
   (wrong model, bad request) and user cancellations are never retried.
 - Partial streamed output is preserved when a stream dies or is stopped.
+- A stream whose connection ends cleanly (no read error) but never carries an
+  explicit terminal signal — OpenAI-compatible's `[DONE]` sentinel or a chunk
+  with a non-nil `finish_reason`, or Ollama's own chunk with `"done":true` —
+  is treated as interrupted, never as an ordinary completion: a dropped
+  connection looks identical to a real finish on the wire, so a clean EOF
+  alone is not proof the model actually finished.
 
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
