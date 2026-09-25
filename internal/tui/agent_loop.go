@@ -1480,6 +1480,40 @@ func toolCallDetail(call tools.Call) string {
 	}
 }
 
+// readObservationFromResult translates one successful read_file tools.Result
+// into a bounded agent.ReadObservation, so the coverage-union logic in
+// internal/agent (which must never import internal/tools — see CLAUDE.md's
+// dependency-direction rule) can reason about which lines were actually
+// delivered, not only that a call touching this path succeeded. ok is false
+// for a byte-range read (no line window at all), a resource_id-only read (no
+// workspace path — the exact-read grammar's target is always path text), or
+// a byte-truncated whole-file read; the call is still recorded as an
+// ordinary ToolCallRecord regardless.
+func readObservationFromResult(result tools.Result) (agent.ReadObservation, bool) {
+	target := strings.ToLower(strings.TrimSpace(result.Call.Path))
+	if target == "" {
+		return agent.ReadObservation{}, false
+	}
+	if w := result.Meta.Window; w != nil && w.StartLine > 0 {
+		return agent.ReadObservation{
+			Target: target, SourceDigest: result.Meta.SourceDigest,
+			StartLine: w.StartLine, EndLine: w.EndLine, TotalLines: result.Meta.Coverage.TotalLines,
+		}, true
+	}
+	// readFileMetaContextByte's legacy whole-file path (no offset/limit given
+	// and no configured default line window) never populates Meta.Window at
+	// all — see internal/tools/tools.go. It only sets Coverage.TotalLines
+	// when the read was not byte-truncated, i.e. the whole file was
+	// genuinely delivered, so that alone is a safe [1, TotalLines] window.
+	if total := result.Meta.Coverage.TotalLines; result.Meta.Window == nil && total != nil {
+		return agent.ReadObservation{
+			Target: target, SourceDigest: result.Meta.SourceDigest,
+			StartLine: 1, EndLine: *total, TotalLines: total,
+		}, true
+	}
+	return agent.ReadObservation{}, false
+}
+
 // countToolOutcomes tallies how many results succeeded vs failed, for the
 // TUI-only exit-summary counters (Model.toolOK/toolErr). It is a distinct
 // concern from recordAgentToolResultsCount's evidence ledger below — that
@@ -1581,6 +1615,11 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			_, evictedView, evicted := m.agentLoop.observations.Put(result.Call.Tool, detail, cycle, result.Output, true)
 			if evicted {
 				m.recordEvictedObservation(evictedView.ResourceLabel())
+			}
+		}
+		if status == agent.ActionExecuted && result.Err == nil && result.Call.Tool == tools.ToolReadFile {
+			if ob, ok := readObservationFromResult(result); ok {
+				agent.AppendReadObservation(&m.agentLoop.execution, ob)
 			}
 		}
 	}

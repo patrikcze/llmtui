@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+func int64Ptr(v int64) *int64 { return &v }
+
 func TestPinCriteriaOnceBoundedAndStableIDs(t *testing.T) {
 	run, _ := newTestRun(t, DefaultLimits())
 	texts := make([]string, MaxCriteria+3)
@@ -501,14 +503,126 @@ func TestTypedCriteriaUseOnlyRuntimeObservations(t *testing.T) {
 func TestExactReadCriterionUsesObservedReadOnly(t *testing.T) {
 	run, _ := newTestRun(t, DefaultLimits())
 	run.PinCriteria([]string{"Read the file report.md", "Read report.md and report its heading"})
-	run.ApplyDeterministicCriteria(ExecutionResult{ToolCalls: []ToolCallRecord{{
-		Name: "read_file", Detail: "report.md", Succeeded: true,
-	}}}, 1)
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ToolCalls: []ToolCallRecord{{Name: "read_file", Detail: "report.md", Succeeded: true}},
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 3, TotalLines: int64Ptr(3)},
+		},
+	}, 1)
 	if run.Criteria[0].Status != CriterionSatisfied {
 		t.Fatalf("exact read criterion = %+v, want satisfied", run.Criteria[0])
 	}
 	if run.Criteria[1].Status != CriterionPending {
 		t.Fatalf("combined criterion = %+v, want pending for semantic verification", run.Criteria[1])
+	}
+}
+
+// TestExactReadCriterionRequiresFullCoverage is the Phase 4 fix for harness
+// plan §4 finding #3: a read_file call that succeeded but only delivered a
+// narrow window of a larger file must not mechanically satisfy an exact-read
+// criterion — the model never saw the rest of the content.
+func TestExactReadCriterionRequiresFullCoverage(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ToolCalls: []ToolCallRecord{{Name: "read_file", Detail: "report.md", Succeeded: true}},
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 10, TotalLines: int64Ptr(200)},
+		},
+	}, 1)
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want still pending: only 10 of 200 lines were delivered", run.Criteria[0])
+	}
+}
+
+// TestExactReadCriterionUnionOfPartialReadsSatisfies proves coverage can be
+// established across more than one call in the same cycle, as long as the
+// unioned windows are gapless and agree on both the source version and total
+// line count.
+func TestExactReadCriterionUnionOfPartialReadsSatisfies(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 100, TotalLines: int64Ptr(200)},
+			{Target: "report.md", SourceDigest: "d1", StartLine: 101, EndLine: 200, TotalLines: int64Ptr(200)},
+		},
+	}, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("criterion = %+v, want satisfied: the two windows together cover the whole file", run.Criteria[0])
+	}
+}
+
+// TestExactReadCriterionGapBetweenPartialReadsDoesNotSatisfy proves a gap
+// between two delivered windows (e.g. lines 1-50 and 151-200 of a 200-line
+// file) never mechanically satisfies coverage, even though both reads
+// succeeded and share the same source version.
+func TestExactReadCriterionGapBetweenPartialReadsDoesNotSatisfy(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 50, TotalLines: int64Ptr(200)},
+			{Target: "report.md", SourceDigest: "d1", StartLine: 151, EndLine: 200, TotalLines: int64Ptr(200)},
+		},
+	}, 1)
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want pending: lines 51-150 were never delivered", run.Criteria[0])
+	}
+}
+
+// TestExactReadCriterionMixedSourceVersionsNeverCombine proves that if the
+// file changed between two reads (different SourceDigest), their windows are
+// never unioned into one coverage claim even if the ranges would otherwise
+// be gapless — each read only proves what it saw of *its own* version.
+func TestExactReadCriterionMixedSourceVersionsNeverCombine(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+	run.ApplyDeterministicCriteria(ExecutionResult{
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 100, TotalLines: int64Ptr(200)},
+			{Target: "report.md", SourceDigest: "d2", StartLine: 101, EndLine: 200, TotalLines: int64Ptr(200)},
+		},
+	}, 1)
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want pending: the two reads saw different file versions", run.Criteria[0])
+	}
+}
+
+func TestReadCoverageCompleteTable(t *testing.T) {
+	ptr := int64Ptr
+	cases := []struct {
+		name string
+		obs  []ReadObservation
+		want bool
+	}{
+		{"no observations", nil, false},
+		{"unknown total", []ReadObservation{{Target: "a.txt", StartLine: 1, EndLine: 5}}, false},
+		{"empty file known", []ReadObservation{{Target: "a.txt", TotalLines: ptr(0)}}, true},
+		{"single full read", []ReadObservation{{Target: "a.txt", StartLine: 1, EndLine: 5, TotalLines: ptr(5)}}, true},
+		{"byte-only observation never covers", []ReadObservation{{Target: "a.txt", TotalLines: ptr(5)}}, false},
+		{"case-insensitive target match", []ReadObservation{{Target: "A.TXT", StartLine: 1, EndLine: 5, TotalLines: ptr(5)}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := readCoverageComplete("a.txt", tc.obs); got != tc.want {
+				t.Fatalf("readCoverageComplete = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAppendReadObservationBoundedAndSequenced(t *testing.T) {
+	var execution ExecutionResult
+	for i := 0; i < MaxReadObservations+5; i++ {
+		AppendReadObservation(&execution, ReadObservation{Target: "a.txt", StartLine: 1, EndLine: 1})
+	}
+	if len(execution.ReadObservations) != MaxReadObservations {
+		t.Fatalf("len = %d, want bounded at %d", len(execution.ReadObservations), MaxReadObservations)
+	}
+	last := execution.ReadObservations[len(execution.ReadObservations)-1]
+	if last.Sequence != MaxReadObservations+5 {
+		t.Fatalf("last sequence = %d, want %d: trimming must not renumber survivors", last.Sequence, MaxReadObservations+5)
 	}
 }
 
@@ -553,14 +667,39 @@ func TestPendingExactReadObligationsSkipsAlreadyProven(t *testing.T) {
 		t.Fatalf("criterion = %+v, want pending before any execution", run.Criteria[0])
 	}
 
-	execution := ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "read_file", Detail: "report.md", Succeeded: true}}}
+	execution := ExecutionResult{
+		ToolCalls: []ToolCallRecord{{Name: "read_file", Detail: "report.md", Succeeded: true}},
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 3, TotalLines: int64Ptr(3)},
+		},
+	}
 	if got := run.PendingExactReadObligations(execution); len(got) != 0 {
-		t.Fatalf("obligations = %+v, want none: the read already succeeded this cycle", got)
+		t.Fatalf("obligations = %+v, want none: the read already delivered full coverage this cycle", got)
 	}
 	// Status itself is still untouched — PendingExactReadObligations must
 	// never mutate criterion state, only preview it.
 	if run.Criteria[0].Status != CriterionPending {
 		t.Fatalf("criterion = %+v, want Status left untouched by a preview call", run.Criteria[0])
+	}
+}
+
+// TestPendingExactReadObligationsStillPendingForPartialCoverage proves a
+// read_file call that succeeded but only delivered part of a larger file
+// still leaves the obligation outstanding — the coverage-aware Phase 4
+// counterpart to TestExactReadCriterionRequiresFullCoverage, exercised
+// through the yield-eligibility preview rather than ApplyDeterministicCriteria.
+func TestPendingExactReadObligationsStillPendingForPartialCoverage(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the file report.md"})
+
+	execution := ExecutionResult{
+		ReadObservations: []ReadObservation{
+			{Target: "report.md", SourceDigest: "d1", StartLine: 1, EndLine: 10, TotalLines: int64Ptr(200)},
+		},
+	}
+	got := run.PendingExactReadObligations(execution)
+	if len(got) != 1 || got[0].Target != "report.md" {
+		t.Fatalf("obligations = %+v, want the still-outstanding report.md obligation: only 10 of 200 lines were delivered", got)
 	}
 }
 
