@@ -101,6 +101,7 @@ func (m *Model) configureDecisionShadow() {
 		if old != nil {
 			_ = old.Close()
 			m.censorPendingPreVerifierCorrelations("")
+			m.censorPendingAgentYieldShadows()
 		}
 		return
 	}
@@ -110,6 +111,7 @@ func (m *Model) configureDecisionShadow() {
 		if old != nil {
 			_ = old.Close()
 			m.censorPendingPreVerifierCorrelations("")
+			m.censorPendingAgentYieldShadows()
 		}
 		return
 	}
@@ -124,6 +126,7 @@ func (m *Model) configureDecisionShadow() {
 		// alias/runtime this reload just replaced. See
 		// censorPendingPreVerifierCorrelations's own doc comment.
 		m.censorPendingPreVerifierCorrelations("")
+		m.censorPendingAgentYieldShadows()
 	}
 }
 
