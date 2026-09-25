@@ -316,7 +316,29 @@ type AgentConfig struct {
 	// completes (see docs/architecture/v1-audit.md §4.2). Defaults on; set
 	// false to fall back to the pre-v1 cycle-boundary-only check if this
 	// causes an unexpected early stop.
-	EnforceBudgetsLive bool `mapstructure:"enforce_budgets_live" yaml:"enforce_budgets_live"`
+	EnforceBudgetsLive bool             `mapstructure:"enforce_budgets_live" yaml:"enforce_budgets_live"`
+	Yield              AgentYieldConfig `mapstructure:"yield" yaml:"yield"`
+}
+
+// AgentYieldConfig gates the Phase 2 same-episode yield continuation (see
+// docs/architecture/decisions/0013-agent-execution-yield-policy.md): a clean
+// no-tool completion with a still-actionable mechanical obligation (Phase
+// 2's narrow exact-read grammar only) continues in the same cycle instead of
+// going straight to verification. Disabled by default; when disabled the
+// executor's no-tool completion behaves exactly as before this feature
+// existed. Requires EnforceBudgetsLive — see EvaluateYield's budget checks.
+type AgentYieldConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// MaxEpisodeRequests bounds every provider attempt this episode's
+	// executor makes (including transport retry and native fallback),
+	// independent of the tool-round budget — a text-only yield loop is not
+	// otherwise bounded by tool calls.
+	MaxEpisodeRequests int `mapstructure:"max_episode_requests" yaml:"max_episode_requests"`
+	// MaxNudgesWithoutProgress bounds controller continuations admitted
+	// since the last observed relevant progress (a mechanical obligation
+	// becoming proven or dropping out). Exhausting it parks the episode as
+	// agent.DecisionNoProgress rather than nudging forever.
+	MaxNudgesWithoutProgress int `mapstructure:"max_nudges_without_progress" yaml:"max_nudges_without_progress"`
 }
 
 // AgentVerifierConfig bounds the independent evaluator request. Model is an
@@ -1009,6 +1031,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.timeout", "120s")
 	v.SetDefault("agent.verifier.max_attempts", 2)
 	v.SetDefault("agent.enforce_budgets_live", true)
+	v.SetDefault("agent.yield.enabled", false)
+	v.SetDefault("agent.yield.max_episode_requests", 64)
+	v.SetDefault("agent.yield.max_nudges_without_progress", 2)
 
 	v.SetDefault("decision_engine.enabled", false)
 	v.SetDefault("decision_engine.provider", "laya")
@@ -1268,6 +1293,14 @@ agent:
     model: "" # empty uses the active executor model in a fresh context
     max_tokens: 1024
     timeout: "120s"
+  # Same-episode continuation for a narrow, mechanically provable obligation
+  # (currently only an exact "read this file" criterion) instead of jumping
+  # straight to verification on a clean no-tool completion. Off by default;
+  # off behaves exactly as before this existed.
+  yield:
+    enabled: false
+    max_episode_requests: 64
+    max_nudges_without_progress: 2
 
 # Optional local structured decisions. This never replaces the generative
 # provider and remains disabled until a verified decision runtime is installed.

@@ -121,3 +121,42 @@ called out in its executive summary).
   terminal yield without re-deriving which existing `Decision` value a given
   `YieldReason` corresponds to, keeping that mapping in one tested place
   instead of duplicated at each call site.
+
+## Update (Phase 2 same-episode continuation, 2026-09-25)
+
+`internal/tui/agent_yield.go` (new) wires `EvaluateYield` into
+`handleStreamEvent`'s clean no-tool completion boundary and into every
+`afterVisionCapture` completion callback in `vision_observation.go`, gated
+by the new `agent.yield.enabled` config flag (default `false`, matching this
+ADR's original design). Phase 2's mechanical-obligation source is narrow, as
+planned: `AgentRun.PendingExactReadObligations` (new, `internal/agent/criteria.go`)
+previews — without mutating any criterion status — which pinned criteria
+`ExactReadCriterionTarget` (also new, factored out of the existing
+`isExactReadCriterion`) recognizes as an atomic "read this exact file"
+instruction not yet proven by the current cycle's `ExecutionResult`. Sharing
+`evaluateCriterion`'s own matching logic for that preview, rather than
+reading `run.Criteria[i].Status` directly, is load-bearing: `ApplyDeterministicCriteria`
+still only commits status at verification, so a read that already succeeded
+earlier in the same cycle would otherwise be reported outstanding forever —
+exactly the false no-progress loop this ADR's freshness prerequisite exists
+to prevent.
+
+Two Phase 2 simplifications, deliberately narrower than a full reading of
+§10, are recorded here rather than left silent: `MechanicalObligation.Actionable`
+checks tool-capability availability (`m.toolsOn && m.toolRunner != nil`)
+only, not workspace-rules/path validation, because the latter would mean
+duplicating `internal/tools`' own confined path resolver in the TUI layer —
+a Workspace Tool Safety Invariant this project treats as a real risk, not a
+style preference. An unreadable target still costs at most
+`max_nudges_without_progress` wasted continuations before the episode parks
+as `no_progress`, not an unbounded loop. And `ContextFeasible` is
+optimistically always `true`: `continueChat` already runs `prepareRequest`
+and fails safely through its own existing error path if preparation is not
+feasible, so Phase 2 does not duplicate that check ahead of time.
+
+`EpisodeCheckpoint` is populated for real now (`ExecutorRequests`,
+`NoProgressNudges`, `LastYieldReason`, `UnresolvedCriterionIDs`, `Revision`)
+but still only in memory — `persistAgentRun`'s snapshot does not yet
+special-case it beyond whatever plain JSON marshaling already does for an
+additive struct field, and restart-safety validation remains Phase 6 work as
+planned.

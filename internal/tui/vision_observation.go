@@ -265,7 +265,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 		}
 		if m.afterVisionCapture {
 			m.afterVisionCapture = false
-			return m.startAgentVerification()
+			return m.resumeAfterVisionCapture()
 		}
 		m.refreshViewport()
 		return nil
@@ -279,7 +279,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 			m.errText = boundedVisionError(err)
 			if m.afterVisionCapture {
 				m.afterVisionCapture = false
-				return m.startAgentVerification()
+				return m.resumeAfterVisionCapture()
 			}
 			m.refreshViewport()
 			return nil
@@ -316,7 +316,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 			m.errText = boundedVisionError(err)
 			if m.afterVisionCapture {
 				m.afterVisionCapture = false
-				return m.startAgentVerification()
+				return m.resumeAfterVisionCapture()
 			}
 			m.refreshViewport()
 			return nil
@@ -329,7 +329,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 	m.replaceCapturedImages(state.message, refs)
 	if m.afterVisionCapture {
 		m.afterVisionCapture = false
-		return m.startAgentVerification()
+		return m.resumeAfterVisionCapture()
 	}
 	m.refreshViewport()
 	return nil

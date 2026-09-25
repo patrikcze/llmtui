@@ -2667,10 +2667,11 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// executor turn; a genuinely incomplete cycle still fails there.
 			if m.agentRunActive() && m.agentCycleHasSuccessfulTool() {
 				m.clearEmptyContinuationRetry()
-				m.notice = "executor stopped without a summary after its tool calls — verifying the cycle"
 				m.complete(turnOutcomeFinalAnswer)
-				m.refreshViewport()
-				return m, m.startAgentVerification()
+				// handleAgentYield sets its own notice (continuing, verifying,
+				// or terminal) — this path's own value would go stale the
+				// moment yield continuation decides anything but "verify".
+				return m, m.handleAgentYield()
 			}
 			m.errText = fmt.Sprintf(
 				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t).",
@@ -2725,7 +2726,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 					m.afterVisionCapture = true
 					return m, captureCmd
 				}
-				return m, m.startAgentVerification()
+				return m, m.handleAgentYield()
 			}
 			m.endAgentRun()
 			return m, captureCmd
