@@ -58,8 +58,11 @@ closes the old `decisionShadowService` before replacing it. An un-Closed
 reading `decision.Router.Close`'s actual implementation, not just its doc
 prose — `Router.Close` never blocks on an in-flight prediction (a busy entry
 is marked `closing` and left for its releasing `Predict` call to close
-later), so the explicit close is safe to run synchronously on the `Update()`
-goroutine rather than needing a `go func()` escape hatch.
+later) **or on an in-flight cold model load** (Phase 0c, `docs/decision-engine.md`:
+`acquire` never holds the Router mutex across `LoadRuntime`, and `Close`
+cancels a pending load instead of waiting for it), so the explicit close is
+safe to run synchronously on the `Update()` goroutine rather than needing a
+`go func()` escape hatch.
 
 The shadow call's `context.Context` is independently bounded
 (`context.WithTimeout(context.Background(), 5*time.Second)`), never
