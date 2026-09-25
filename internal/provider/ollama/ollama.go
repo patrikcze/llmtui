@@ -345,6 +345,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		reasoning   strings.Builder
 		streamBytes int
 		truncated   bool
+		sawDone     bool
 		protocol    = provider.ResolveModelProtocol(req.Model, "")
 		guard       provider.HarmonyContentGuard
 	)
@@ -409,6 +410,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			}
 		}
 		if chunk.Done {
+			sawDone = true
 			truncated = chunk.DoneReason == "length"
 			if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {
 				usage = &provider.Usage{
@@ -423,6 +425,14 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)})
+		return
+	}
+	// A clean scanner EOF (no read error) is not, by itself, proof the model
+	// finished: an interrupted connection looks identical on the wire. Only
+	// an explicit chunk carrying "done":true counts as a terminal signal —
+	// mirrors the equivalent OpenAI streamResponse fix.
+	if !sawDone {
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: provider.ErrStreamInterrupted})
 		return
 	}
 	if protocol.HarmonyRequired {

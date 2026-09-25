@@ -159,6 +159,32 @@ func TestChatStreamingDoneReasonStopIsNotTruncated(t *testing.T) {
 	}
 }
 
+// TestChatStreamingInterruptedTransportIsNotClean guards against treating a
+// clean scanner EOF as a legitimate model yield — the Ollama counterpart to
+// the equivalent OpenAI streamResponse fix. The handler writes partial
+// content and returns without ever sending a chunk carrying "done":true,
+// indistinguishable, on the wire, from a connection dropped mid-turn. This
+// must surface as an error, never as a normal EventDone a caller could
+// mistake for task completion.
+func TestChatStreamingInterruptedTransportIsNotClean(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprintln(w, `{"message":{"content":"partial answer"},"done":false}`)
+		// No "done":true chunk: the handler just returns.
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL)
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, _, err = collect(t, events)
+	if !errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("stream error = %v, want ErrStreamInterrupted for EOF without a terminal \"done\":true chunk", err)
+	}
+}
+
 func TestChatStreamError(t *testing.T) {
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"error":"model not loaded"}`)
