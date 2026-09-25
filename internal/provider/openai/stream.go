@@ -95,14 +95,16 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 	defer body.Close()
 
 	var (
-		usage       *provider.Usage
-		completion  strings.Builder
-		reasoning   strings.Builder
-		toolCalls   toolCallAccumulator
-		streamBytes int
-		finishLen   bool
-		protocol    = provider.ResolveModelProtocol(req.Model, "")
-		guard       provider.HarmonyContentGuard
+		usage           *provider.Usage
+		completion      strings.Builder
+		reasoning       strings.Builder
+		toolCalls       toolCallAccumulator
+		streamBytes     int
+		finishLen       bool
+		sawDone         bool
+		sawFinishReason bool
+		protocol        = provider.ResolveModelProtocol(req.Model, "")
+		guard           provider.HarmonyContentGuard
 	)
 
 	scanner := bufio.NewScanner(body)
@@ -124,6 +126,7 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -136,8 +139,11 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 			usage = chunk.Usage.toUsage()
 		}
 		for _, choice := range chunk.Choices {
-			if choice.FinishReason != nil && *choice.FinishReason == "length" {
-				finishLen = true
+			if choice.FinishReason != nil {
+				sawFinishReason = true
+				if *choice.FinishReason == "length" {
+					finishLen = true
+				}
 			}
 			// Tool-call fragments carry no visible text; reassemble them and
 			// report them with the Done event.
@@ -185,6 +191,16 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, req p
 
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: fmt.Errorf("read stream: %w", err)})
+		return
+	}
+
+	// A clean scanner EOF (no read error) is not, by itself, proof the model
+	// finished: an interrupted connection looks identical on the wire. Only
+	// an explicit "[DONE]" sentinel or a chunk carrying finish_reason counts
+	// as a terminal signal; anything else must fail rather than be reported
+	// as an ordinary yield.
+	if !sawDone && !sawFinishReason {
+		provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventError, Err: provider.ErrStreamInterrupted})
 		return
 	}
 

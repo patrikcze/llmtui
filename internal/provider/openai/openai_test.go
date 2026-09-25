@@ -302,6 +302,55 @@ func TestChatMalformedStreamChunk(t *testing.T) {
 	}
 }
 
+// TestChatStreamingInterruptedTransportIsNotClean guards against treating a
+// clean scanner EOF as a legitimate model yield. The handler writes partial
+// content and returns without an explicit "[DONE]" sentinel or any
+// finish_reason — indistinguishable, on the wire, from a connection dropped
+// mid-turn. This must surface as an error, never as a normal EventDone that
+// callers could mistake for task completion.
+func TestChatStreamingInterruptedTransportIsNotClean(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n")
+		// No "[DONE]" and no finish_reason: the handler just returns.
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, _, err = collect(t, events)
+	if !errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("stream error = %v, want ErrStreamInterrupted for EOF without a terminal signal", err)
+	}
+}
+
+// TestChatStreamingFinishReasonWithoutDoneSentinelIsClean documents that a
+// finish_reason alone (without a trailing "[DONE]") is still an accepted
+// terminal signal: not every OpenAI-compatible server emits both.
+func TestChatStreamingFinishReasonWithoutDoneSentinelIsClean(t *testing.T) {
+	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer srv.Close()
+
+	p := New("test", srv.URL, "")
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: "m", Stream: true})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	text, _, err := collect(t, events)
+	if err != nil {
+		t.Fatalf("stream error = %v, want a clean finish via finish_reason alone", err)
+	}
+	if text != "done" {
+		t.Errorf("text = %q, want %q", text, "done")
+	}
+}
+
 func TestChatStreamingRejectsOversizedResponse(t *testing.T) {
 	chunk := strings.Repeat("x", 600*1024)
 	srv := testutil.NewHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

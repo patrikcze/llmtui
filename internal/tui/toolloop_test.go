@@ -549,6 +549,39 @@ func TestTruncatedNativeToolCallIsNotExecuted(t *testing.T) {
 	}
 }
 
+// TestTruncatedFencedToolCallIsNotExecuted guards the fenced-protocol half of
+// the truncation guard. TestTruncatedNativeToolCallIsNotExecuted above covers
+// native calls via msg.event.Truncated && len(ToolCalls) > 0, but a fenced
+// call is parsed later, out of session text, by maybeRunTools — which had no
+// truncation awareness at all. A properly *closed* fence followed by
+// max_tokens truncation (the trailing notice lands after the closing fence)
+// must be blocked exactly like a truncated native call, not executed.
+func TestTruncatedFencedToolCallIsNotExecuted(t *testing.T) {
+	m := newTestModel(t)
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.thinking = true
+	m.streamBuf.WriteString("Saving it now:\n```tool write_file out.txt\ntruncated content\n```")
+
+	done := provider.ChatEvent{Type: provider.EventDone, Truncated: true}
+	_, cmd := m.handleStreamEvent(streamEventMsg{event: done, ok: true})
+
+	if cmd != nil {
+		t.Fatal("a truncated fenced tool call must not start execution")
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.txt")); err == nil {
+		t.Fatal("truncated write_file call must not have executed")
+	}
+	if m.errText == "" || !strings.Contains(m.errText, "cut off") {
+		t.Errorf("errText = %q, want an explanation that the call was cut off", m.errText)
+	}
+	if m.toolOK != 0 {
+		t.Errorf("toolOK = %d, want 0: nothing should have run", m.toolOK)
+	}
+}
+
 func TestEmptyCompletionBeforeToolExecutionRemainsClean(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true
