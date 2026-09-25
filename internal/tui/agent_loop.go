@@ -14,7 +14,6 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/agentverify"
-	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -71,6 +70,19 @@ type agentLoopState struct {
 	// and must never be able to satisfy each other's staleness check. See
 	// agent_decision_shadow.go's "Pre-verifier counterfactual shadow" section.
 	preVerifierShadowGen int
+	// guardedAssistGen/guardedAssistCancel/pendingVerificationPlan back
+	// Phase 1's guarded-assist decision wait (agent_decision_policy.go) —
+	// unlike decisionShadowGen/preVerifierShadowGen, this one IS something
+	// the controller can cancel: dispatchGuardedAssist derives its context
+	// from the run's own (see that function's doc comment), and cancelling
+	// mid-wait must both stop waiting and never let a stale result resolve
+	// a cycle a cancellation already settled another way. pendingVerificationPlan
+	// holds the cycle's fallback synthetic result while the strict Predict
+	// call it may be superseded by is in flight; nil whenever no guarded
+	// decision is pending.
+	guardedAssistGen        int
+	guardedAssistCancel     context.CancelFunc
+	pendingVerificationPlan *agent.VerificationResult
 	// verifierModel and verifierStartedAt describe only a real semantic
 	// verifier request. Deterministic verification never sets them, so the UI
 	// cannot imply that a model is running when the controller decided locally.
@@ -1001,13 +1013,6 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
-	// Pre-verifier counterfactual shadow (Phase 2): dispatched here, right
-	// after deterministic criteria are applied and before any verifier-mode
-	// branching below, so it fires exactly once per cycle regardless of
-	// which downstream path (a synthetic shortcut or a real verifier
-	// dispatch) is taken next, and so run.Criteria at capture time is
-	// provably deterministic-only — see agent_decision_shadow.go.
-	preVerifierCmd := m.dispatchAgentDecisionPreVerifierShadow(run, execution)
 	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
@@ -1019,93 +1024,47 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// Verification policy: deterministic evidence always decides first. A
 	// semantic (LLM) verification runs only when the mode requires it and
 	// mechanical evidence cannot already settle the cycle — and its verdict
-	// is still clamped by ApplyDeterministicEvidence afterwards.
+	// is still clamped by ApplyDeterministicEvidence afterwards. The route
+	// itself is computed by the same pure function every cycle, in and out
+	// of any Laya involvement — see planAgentVerification's doc comment.
 	mode := m.cfg.Agent.Verifier.ResolvedMode()
+	plan := planAgentVerification(run, execution, mode)
+
 	syntheticResult := func(result agent.VerificationResult) tea.Cmd {
 		m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verified deterministically", shortRunID(runID), cycle, run.Limits.MaxCycles)
 		m.refreshViewport()
+		// Pre-verifier counterfactual shadow (Phase 2), dispatched here so
+		// it fires exactly once per cycle regardless of which downstream
+		// path is taken, and so run.Criteria at capture time is provably
+		// deterministic-only — see agent_decision_shadow.go.
 		return tea.Batch(func() tea.Msg {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
-		}, preVerifierCmd)
+		}, m.dispatchAgentDecisionPreVerifierShadow(run, execution))
 	}
-	// Criteria resolved from controller-observed evidence do not need a
-	// semantic verifier, regardless of verification mode. Sending a verifier
-	// that intentionally cannot see raw read_file output merely invites it to
-	// replay an already-proven atomic action. This shortcut is only safe when
-	// contract coverage is justified: a contract that pinned a single
-	// criterion for a request whose own text names an unaddressed mutating
-	// step (see agent.AgentRun.ContractCoverageJustified) may have omitted a
-	// deliverable, so that case still falls through to a real semantic pass.
-	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 && run.ContractCoverageJustified() {
-		return syntheticResult(agent.VerificationResult{
-			Verdict: agent.VerificationPassed, Summary: "all pinned acceptance criteria are satisfied",
-			Evidence: []string{"criteria ledger resolved"}, Confidence: 1,
-		})
-	}
-	switch mode {
-	case config.VerifierModeOff:
-		return syntheticResult(agent.VerificationResult{
-			Verdict: agent.VerificationPassed, Summary: "verification disabled; executor output was not verified",
-			Evidence: []string{"verification mode off"}, Confidence: 0,
-		})
-	case config.VerifierModeDeterministic:
-		return syntheticResult(agentverify.ApplyDeterministicEvidence(agent.VerificationResult{
-			Verdict: agent.VerificationPassed, Summary: "no deterministic failure was observed",
-			Evidence: []string{"deterministic-only verification configured"}, Confidence: 0.5,
-		}, execution))
-	case config.VerifierModeAdaptive:
-		// A conclusive mechanical failure/blockage would override any
-		// semantic verdict anyway — skip the inference entirely.
-		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
-			return syntheticResult(deterministic)
-		}
-		// If every criterion is resolved but ContractCoverageJustified was
-		// false, the earlier all-resolved shortcut deliberately fell through:
-		// a semantic verifier must inspect the request for an omitted
-		// deliverable. Only genuinely unresolved deterministic/user-owned
-		// criteria can return a synthetic adaptive result here.
-		if unresolved := run.UnresolvedCriteria(); run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 && len(unresolved) > 0 {
-			for _, criterion := range unresolved {
-				if criterion.Kind == agent.CriterionUserInput {
-					return syntheticResult(agent.VerificationResult{
-						Verdict: agent.VerificationInconclusive, Summary: criterion.Text,
-						NeedsUserInput: true, Retryable: false, Confidence: 1,
-					})
-				}
+
+	if plan.Route == agentVerificationPlanSynthetic {
+		// Phase 1: guarded_assist may intervene only for the two synthetic-
+		// PASS branches planAgentVerification marks GuardEligible, and only
+		// when actually active for this cycle (mode, wiring, and an
+		// approved calibration profile all present) — dispatchGuardedAssist
+		// itself returns nil whenever any of that is not true, in which
+		// case this falls through to the exact same syntheticResult call
+		// every other branch already used before Phase 1 existed.
+		if plan.GuardEligible {
+			if cmd := m.dispatchGuardedAssist(run, execution, plan.Result, runID, cycle, gen); cmd != nil {
+				return cmd
 			}
-			return syntheticResult(agent.VerificationResult{
-				Verdict: agent.VerificationFailed, Summary: "deterministic acceptance criterion remains unresolved",
-				Retryable: true, NewEvidence: execution.NewEvidence, Confidence: 1,
-			})
 		}
-		// Never skip semantic verification on a run's first cycle, even when
-		// execution looks mechanically complete: "every tool call I happened
-		// to make succeeded" is not the same claim as "I did everything the
-		// request asked for" — only a real verifier pass ever decomposes the
-		// request into checkable criteria at all. A run whose very first
-		// cycle takes this shortcut can reach "done" having never had its
-		// content checked against the request, silently dropping requirements
-		// a less careful executor didn't attempt (observed: a multi-part
-		// request whose file-write step never happened still exited via this
-		// path with the same confidence a fully complete run gets). Cycles
-		// after the first may still use the fast path once criteria exist.
-		if !run.HasCriteria() && run.Cycle != 1 && agent.MechanicallyComplete(execution) {
-			return syntheticResult(agent.VerificationResult{
-				Verdict: agent.VerificationPassed, Summary: "deterministic evidence is sufficient: all tool calls and tests succeeded",
-				Evidence: []string{"mechanically complete cycle"}, Confidence: 0.7,
-			})
-		}
-	case config.VerifierModeAlways:
-		// Semantic verification runs after every cycle; deterministic
-		// evidence still clamps its verdict via ApplyDeterministicEvidence.
+		return syntheticResult(plan.Result)
 	}
+
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verifying in fresh context", shortRunID(runID), cycle, run.Limits.MaxCycles)
 	m.refreshViewport()
 
 	// The pre-verifier shadow call runs concurrently with the real verifier
 	// dispatch, never gating it — semantic verification proceeds regardless
 	// of Laya's latency, timeout, or availability.
-	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), preVerifierCmd)
+	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), m.dispatchAgentDecisionPreVerifierShadow(run, execution))
 }
 
 // dispatchVerifierAttempt builds and sends one fresh-context, tool-free
@@ -1378,6 +1337,12 @@ func (m *Model) cancelVerifiedRun(reason string) {
 		m.agentLoop.verifyGen++
 		m.agentLoop.verifying = false
 	}
+	if m.agentLoop.guardedAssistCancel != nil {
+		m.agentLoop.guardedAssistCancel()
+		m.agentLoop.guardedAssistCancel = nil
+	}
+	m.agentLoop.guardedAssistGen++
+	m.agentLoop.pendingVerificationPlan = nil
 	m.clearVerifierActivity()
 	if m.agentRunActive() {
 		// A cancelled cycle's handleAgentVerification resolution path never

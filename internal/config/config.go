@@ -371,9 +371,44 @@ type AgentVerifierConfig struct {
 // DecisionEngineConfig controls the optional local structured-decision layer.
 // It is disabled by default and never replaces the generative provider.
 type DecisionEngineConfig struct {
-	Enabled  bool       `mapstructure:"enabled" yaml:"enabled"`
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Mode selects what the engine may do once Enabled is true: "shadow"
+	// (observe every cycle, never influence it — the default and the only
+	// behavior that existed before Phase 1) or "guarded_assist" (may force
+	// at most one additional semantic verification an adaptive policy
+	// would otherwise have skipped — see docs/decision-engine.md and
+	// docs/architecture/decisions/0012-laya-guarded-verifier-escalation.md).
+	// Empty/unknown falls back to shadow rather than blocking startup or
+	// silently becoming active. Enabled=false overrides every mode: a
+	// disabled engine is never constructed regardless of Mode's value.
+	// guarded_assist additionally requires a resolved calibration profile
+	// for the loaded model (internal/tui/agent_decision_policy.go); with no
+	// approved profile — the shipped default — guarded_assist behaves
+	// identically to shadow.
+	Mode     string     `mapstructure:"mode" yaml:"mode,omitempty"`
 	Provider string     `mapstructure:"provider" yaml:"provider"`
 	Laya     LayaConfig `mapstructure:"laya" yaml:"laya"`
+}
+
+// Decision-engine operating modes; see DecisionEngineConfig.Mode.
+const (
+	DecisionEngineModeShadow        = "shadow"
+	DecisionEngineModeGuardedAssist = "guarded_assist"
+)
+
+// ResolvedMode returns the effective decision-engine mode. An explicit valid
+// Mode wins; anything else — empty, whitespace, or unrecognized — falls back
+// to shadow, mirroring AgentVerifierConfig.ResolvedMode's degrade-safely
+// convention. This says nothing about Enabled: callers must check that
+// separately (Enabled=false means the engine is never constructed at all,
+// regardless of what ResolvedMode returns).
+func (c DecisionEngineConfig) ResolvedMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case DecisionEngineModeGuardedAssist:
+		return DecisionEngineModeGuardedAssist
+	default:
+		return DecisionEngineModeShadow
+	}
 }
 
 // LayaConfig names installed checkpoints and their lifecycle policy. Paths
@@ -858,7 +893,7 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 		"network.timeout", "network.connect_timeout",
 		"chat.max_tokens", "chat.temperature", "chat.top_p", "chat.system_prompt",
 		"agent.enabled", "agent.max_cycles", "agent.max_tool_calls", "agent.max_tokens", "agent.max_elapsed",
-		"decision_engine.enabled", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
+		"decision_engine.enabled", "decision_engine.mode", "decision_engine.provider", "decision_engine.laya.default_model", "decision_engine.laya.max_loaded", "decision_engine.laya.mlx_python", "decision_engine.laya.model_dir",
 		"tool_registry.enabled", "tool_registry.listen", "tool_registry.token_env", "tool_registry.shutdown_timeout",
 	} {
 		if err := v.BindEnv(key); err != nil {
@@ -1036,6 +1071,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.yield.max_nudges_without_progress", 2)
 
 	v.SetDefault("decision_engine.enabled", false)
+	v.SetDefault("decision_engine.mode", DecisionEngineModeShadow)
 	v.SetDefault("decision_engine.provider", "laya")
 	v.SetDefault("decision_engine.laya.default_model", "english")
 	v.SetDefault("decision_engine.laya.max_loaded", 1)
@@ -1306,6 +1342,11 @@ agent:
 # provider and remains disabled until a verified decision runtime is installed.
 decision_engine:
   enabled: false
+  # "shadow" only ever observes; "guarded_assist" may additionally force one
+  # semantic verification an adaptive policy would otherwise skip, and only
+  # takes effect once a calibrated profile for the loaded model exists —
+  # see docs/decision-engine.md. Unknown values fall back to shadow.
+  mode: shadow
   provider: laya
   laya:
     default_model: english

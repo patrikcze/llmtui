@@ -1154,6 +1154,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentDecisionPreVerifierShadowMsg:
 		return m.handleAgentDecisionPreVerifierShadow(msg)
 
+	case agentDecisionGuardedAssistMsg:
+		return m.handleAgentDecisionGuardedAssist(msg)
+
 	case agentPersistedMsg:
 		if msg.err != nil && m.agentLoop != nil && msg.runID == m.agentRunID() {
 			m.agentLoop.persistErr = msg.err

@@ -288,6 +288,36 @@ type AgentTrial struct {
 	// config reload before it could resolve — see
 	// censorPendingPreVerifierCorrelations.
 	LayaCensorReason string `json:"laya_censor_reason,omitempty"`
+
+	// The fields below are Phase 1's guarded-assist additions (see
+	// internal/tui/agent_decision_policy.go and ADR 0012). Additive and
+	// zero-value safe like every Laya* field above: nothing in this
+	// package populates them, and production ships with
+	// decisionCalibrationProfiles empty, so LayaGuardedAssistEligible is
+	// false in every real deployment until a future, separately reviewed
+	// change adds an approved profile. Only an opt-in calibration harness
+	// sets them, on its own local copy of a trial.
+	//
+	// LayaGuardedAssistEligible is true only when the trial's final cycle
+	// was both guard-eligible (an adaptive-mode synthetic-PASS candidate)
+	// and guarded_assist was actually active (mode, wiring, and a resolved
+	// profile all present) — never merely "guarded_assist was configured."
+	LayaGuardedAssistEligible bool `json:"laya_guarded_assist_eligible,omitempty"`
+	// LayaGuardedAssistProfile names the model alias the resolved
+	// calibration profile applied to; empty whenever Eligible is false.
+	LayaGuardedAssistProfile string `json:"laya_guarded_assist_profile,omitempty"`
+	// LayaGuardedAssistProbability/Threshold are the exact values the
+	// escalation decision compared — never rendered as a correctness
+	// claim, only a recorded comparison.
+	LayaGuardedAssistProbability float64 `json:"laya_guarded_assist_probability,omitempty"`
+	LayaGuardedAssistThreshold   float64 `json:"laya_guarded_assist_threshold,omitempty"`
+	// LayaGuardedAssistEscalated is true only when guarded_assist actually
+	// forced the semantic verifier this cycle would otherwise have
+	// skipped — the one behavioral effect Phase 1 permits.
+	LayaGuardedAssistEscalated bool `json:"laya_guarded_assist_escalated,omitempty"`
+	// LayaGuardedAssistReason is the bounded, closed-vocabulary outcome
+	// code — see guardedAssistReason in agent_decision_policy.go.
+	LayaGuardedAssistReason string `json:"laya_guarded_assist_reason,omitempty"`
 }
 
 // RunConformanceMatrix repeats the existing harmless provider probe. A

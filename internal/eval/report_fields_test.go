@@ -33,6 +33,10 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 	if trial.LayaPreVerifierAvailability != "" || trial.LayaIndependentNeed != nil || trial.LayaLabelSource != "" || trial.LayaCensorReason != "" {
 		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 0a fields", trial)
 	}
+	if trial.LayaGuardedAssistEligible || trial.LayaGuardedAssistProfile != "" || trial.LayaGuardedAssistProbability != 0 ||
+		trial.LayaGuardedAssistThreshold != 0 || trial.LayaGuardedAssistEscalated || trial.LayaGuardedAssistReason != "" {
+		t.Fatalf("AgentTrial zero value = %+v, want empty Phase 1 fields", trial)
+	}
 	trialJSON, err := json.Marshal(trial)
 	if err != nil {
 		t.Fatalf("marshal AgentTrial: %v", err)
@@ -40,6 +44,8 @@ func TestReportFieldsAreAdditiveAndZeroValueSafe(t *testing.T) {
 	for _, key := range []string{
 		"\"status\"", "network_calls",
 		"laya_pre_verifier_availability", "laya_independent_need", "laya_label_source", "laya_censor_reason",
+		"laya_guarded_assist_eligible", "laya_guarded_assist_profile", "laya_guarded_assist_probability",
+		"laya_guarded_assist_threshold", "laya_guarded_assist_escalated", "laya_guarded_assist_reason",
 	} {
 		if strings.Contains(string(trialJSON), key) {
 			t.Errorf("zero-value AgentTrial JSON unexpectedly carries %q: %s", key, trialJSON)
@@ -67,6 +73,10 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 			{Scenario: "s1", Trial: 3, ObservedAction: "read", FinalResult: "ok",
 				LayaPreVerifierAvailability: "late", LayaIndependentNeed: boolPtr(true),
 				LayaLabelSource: "fixture", LayaCensorReason: "config_reload"},
+			{Scenario: "s1", Trial: 4, ObservedAction: "read", FinalResult: "ok",
+				LayaGuardedAssistEligible: true, LayaGuardedAssistProfile: "english-mlx",
+				LayaGuardedAssistProbability: 0.82, LayaGuardedAssistThreshold: 0.5,
+				LayaGuardedAssistEscalated: true, LayaGuardedAssistReason: "escalated"},
 		},
 	}
 	var buf strings.Builder
@@ -79,6 +89,9 @@ func TestReportFieldsRoundTripWhenPopulated(t *testing.T) {
 		`"status":"completed"`, `"network_calls":2`, `"status":"provider_failed"`,
 		`"laya_pre_verifier_availability":"late"`, `"laya_independent_need":true`,
 		`"laya_label_source":"fixture"`, `"laya_censor_reason":"config_reload"`,
+		`"laya_guarded_assist_eligible":true`, `"laya_guarded_assist_profile":"english-mlx"`,
+		`"laya_guarded_assist_probability":0.82`, `"laya_guarded_assist_threshold":0.5`,
+		`"laya_guarded_assist_escalated":true`, `"laya_guarded_assist_reason":"escalated"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("WriteJSONL output missing %q:\n%s", want, out)
