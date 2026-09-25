@@ -549,6 +549,36 @@ persisted in altered form. Resume validates the optional field again and strips
 invalid historical attachments while keeping the schema-v1 run loadable. No
 Laya inference or new runtime mode is introduced by this phase.
 
+### Criterion assessment shadow (Phase 3)
+
+`decision_engine.mode: criterion_shadow` is an explicit evaluation mode. New
+task-contract requests in this mode opt into assessment metadata version 1;
+ordinary `shadow` and `guarded_assist` contracts keep the legacy schema. The
+metadata remains optional: a contract can be valid without any assessment
+attachment, and a clarification or ask-user delegation never carries one
+forward.
+
+After deterministic criteria have been applied and before verifier routing,
+the TUI builds at most one bounded batch from pinned semantic assessments. A
+`receipts` assessment uses exactly one successful, executed current-cycle
+receipt. A `local_read` assessment additionally requires exactly one matching
+`read_file`, one complete current-cycle observation-cache excerpt, and no later
+write/edit/command that could invalidate it. Missing, stale, truncated,
+evicted, or ambiguous evidence abstains before inference; the path never
+rereads the workspace or calls a tool. Each admitted state contains one
+framed/redacted proposition and at most one 512-byte excerpt, with a 2 KiB
+serialized-state ceiling and a five-second total batch budget.
+
+Each admitted criterion receives two fixed `noul` questions: direct support and
+direct contradiction. The result is recorded only as a content-free
+measurement bound to the criterion/spec/evidence fingerprints and model
+revision. Support, contradiction, and ambiguous probabilities are advisory
+signals; low support is not criterion failure, and no signal changes
+`Criterion.Status`, `Evidence`, verifier input/routing, tool approval, stop
+decisions, or persisted run authority. The mode is therefore safe to disable:
+removing the mode stops assessment requests while the existing agent loop and
+verifier behavior remain unchanged.
+
 ## Measured bridge validation (2026-09-23)
 
 Real Metal integration passed on this development machine with Python 3.14.3

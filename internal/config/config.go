@@ -351,11 +351,11 @@ type AgentVerifierConfig struct {
 type DecisionEngineConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 	// Mode selects what the engine may do once Enabled is true: "shadow"
-	// (observe every cycle, never influence it — the default and the only
-	// behavior that existed before Phase 1) or "guarded_assist" (may force
-	// at most one additional semantic verification an adaptive policy
-	// would otherwise have skipped — see docs/decision-engine.md and
-	// docs/architecture/decisions/0012-laya-guarded-verifier-escalation.md).
+	// (observe every cycle, never influence it — the default),
+	// "guarded_assist" (may force at most one additional semantic verification
+	// on a calibrated adaptive path), or "criterion_shadow" (evaluate
+	// opt-in, pinned criterion propositions over admitted evidence, still
+	// without any authoritative effect — see docs/decision-engine.md).
 	// Empty/unknown falls back to shadow rather than blocking startup or
 	// silently becoming active. Enabled=false overrides every mode: a
 	// disabled engine is never constructed regardless of Mode's value.
@@ -370,8 +370,9 @@ type DecisionEngineConfig struct {
 
 // Decision-engine operating modes; see DecisionEngineConfig.Mode.
 const (
-	DecisionEngineModeShadow        = "shadow"
-	DecisionEngineModeGuardedAssist = "guarded_assist"
+	DecisionEngineModeShadow          = "shadow"
+	DecisionEngineModeGuardedAssist   = "guarded_assist"
+	DecisionEngineModeCriterionShadow = "criterion_shadow"
 )
 
 // ResolvedMode returns the effective decision-engine mode. An explicit valid
@@ -384,6 +385,8 @@ func (c DecisionEngineConfig) ResolvedMode() string {
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
 	case DecisionEngineModeGuardedAssist:
 		return DecisionEngineModeGuardedAssist
+	case DecisionEngineModeCriterionShadow:
+		return DecisionEngineModeCriterionShadow
 	default:
 		return DecisionEngineModeShadow
 	}

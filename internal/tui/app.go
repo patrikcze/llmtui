@@ -348,6 +348,10 @@ type Model struct {
 	// path. See internal/tui/agent_decision_shadow.go.
 	decisionShadow        *decisionShadowService
 	decisionShadowMetrics agentDecisionShadowMetrics
+	// criterionAssessmentMetrics backs the Phase 3 evaluation-only criterion
+	// shadow. It is session-scoped and content-free; no measurement is read by
+	// the agent controller.
+	criterionAssessmentMetrics criterionAssessmentMetrics
 
 	// preVerifierCorrelations/preVerifierShadowMetrics/preVerifierShadowSamples
 	// back the pre-verifier counterfactual shadow (Phase 2) — see
@@ -1153,6 +1157,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDecisionPreVerifierShadowMsg:
 		return m.handleAgentDecisionPreVerifierShadow(msg)
+
+	case agentCriterionAssessmentMsg:
+		return m.handleAgentCriterionAssessment(msg)
 
 	case agentDecisionGuardedAssistMsg:
 		return m.handleAgentDecisionGuardedAssist(msg)

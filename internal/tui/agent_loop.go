@@ -14,6 +14,7 @@ import (
 
 	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/agentverify"
+	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/memoryindex"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -63,6 +64,11 @@ type agentLoopState struct {
 	// needed alongside it: the shadow call is fire-and-forget with its own
 	// bounded context, never something the controller blocks on or cancels.
 	decisionShadowGen int
+	// criterionAssessmentGen guards the Phase 3 criterion-assessment shadow
+	// batch. It is deliberately independent from the ordinary and pre-verifier
+	// shadow generations: criterion predictions have their own question/state
+	// contract and must never satisfy another shadow's stale-message check.
+	criterionAssessmentGen int
 	// preVerifierShadowGen guards the pre-verifier counterfactual shadow's
 	// async result the same way decisionShadowGen guards the post-cycle
 	// shadow's — deliberately a separate counter (never decisionShadowGen)
@@ -604,10 +610,14 @@ func (m *Model) startAgentContract() tea.Cmd {
 	m.syncAgentDebug()
 	m.refreshViewport()
 	capabilities := m.contractCapabilityCapsule()
+	assessmentVersion := 0
+	if m.cfg.DecisionEngine.Enabled && m.cfg.DecisionEngine.ResolvedMode() == config.DecisionEngineModeCriterionShadow {
+		assessmentVersion = agent.CriterionAssessmentVersion
+	}
 	return func() tea.Msg {
 		out, err := agentverify.EstablishContract(ctx, m.prov, agentverify.Config{
 			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
-		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput, Capabilities: capabilities})
+		}, agentverify.ContractInput{Task: run.Request, UserInput: run.ContractInput, AssessmentVersion: assessmentVersion, Capabilities: capabilities})
 		return agentContractMsg{runID: runID, gen: gen, out: out, err: err}
 	}
 }
@@ -1006,6 +1016,10 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
+	// Phase 3 criterion assessment is an independent shadow batch. Capture its
+	// immutable request before any verifier result can arrive; the returned
+	// message only records bounded diagnostics and never affects this route.
+	criterionAssessmentCmd := m.dispatchCriterionAssessment(run, execution)
 	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
@@ -1032,7 +1046,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// deterministic-only — see agent_decision_shadow.go.
 		return tea.Batch(func() tea.Msg {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
-		}, m.dispatchAgentDecisionPreVerifierShadow(run, execution))
+		}, m.dispatchAgentDecisionPreVerifierShadow(run, execution), criterionAssessmentCmd)
 	}
 
 	if plan.Route == agentVerificationPlanSynthetic {
@@ -1045,7 +1059,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// every other branch already used before Phase 1 existed.
 		if plan.GuardEligible {
 			if cmd := m.dispatchGuardedAssist(run, execution, plan.Result, runID, cycle, gen); cmd != nil {
-				return cmd
+				return tea.Batch(cmd, criterionAssessmentCmd)
 			}
 		}
 		return syntheticResult(plan.Result)
@@ -1057,7 +1071,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// The pre-verifier shadow call runs concurrently with the real verifier
 	// dispatch, never gating it — semantic verification proceeds regardless
 	// of Laya's latency, timeout, or availability.
-	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), m.dispatchAgentDecisionPreVerifierShadow(run, execution))
+	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), m.dispatchAgentDecisionPreVerifierShadow(run, execution), criterionAssessmentCmd)
 }
 
 // dispatchVerifierAttempt builds and sends one fresh-context, tool-free

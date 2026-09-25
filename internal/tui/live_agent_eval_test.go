@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/eval"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/provider/ollama"
@@ -430,6 +431,23 @@ func liveAgentTrial(fixture liveAgentCase, trial int, m *Model, requests int, el
 		return row
 	}
 	run := m.agentLoop.run
+	if m.cfg.DecisionEngine.ResolvedMode() == config.DecisionEngineModeCriterionShadow {
+		metrics := m.criterionAssessmentMetrics
+		row.LayaCriterionAssessmentMode = config.DecisionEngineModeCriterionShadow
+		row.LayaCriterionAssessmentModel = m.lastDebug.DecisionCriterionAssessmentModel
+		row.LayaCriterionAssessmentTotal = metrics.Total
+		row.LayaCriterionAssessmentAvailable = metrics.Available
+		row.LayaCriterionAssessmentAbstained = metrics.Abstained
+		row.LayaCriterionAssessmentErrors = metrics.Errors
+		row.LayaCriterionAssessmentLate = metrics.Late
+		row.LayaCriterionAssessmentAvailability = m.lastDebug.DecisionCriterionAssessmentAvailability
+		row.LayaCriterionAssessmentSignal = m.lastDebug.DecisionCriterionAssessmentSignal
+		row.LayaCriterionAssessmentSpecFingerprint = m.lastDebug.DecisionCriterionAssessmentSpecFingerprint
+		row.LayaCriterionAssessmentEvidenceFingerprint = m.lastDebug.DecisionCriterionAssessmentEvidenceFingerprint
+		row.LayaCriterionAssessmentModelRevision = m.lastDebug.DecisionCriterionAssessmentModelRevision
+		row.LayaCriterionAssessmentSupportProbability = m.lastDebug.DecisionCriterionAssessmentSupportProbability
+		row.LayaCriterionAssessmentContradictionProbability = m.lastDebug.DecisionCriterionAssessmentContradictionProbability
+	}
 	row.FinalResult = string(run.Status)
 	row.PromptTokens = run.PromptTokens
 	row.CompletionTokens = run.CompletionTokens

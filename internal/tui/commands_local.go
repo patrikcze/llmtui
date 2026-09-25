@@ -997,6 +997,14 @@ func (m *Model) debugOverlay() string {
 			d.DecisionGuardedAssistProfile, d.DecisionGuardedAssistProbability, d.DecisionGuardedAssistThreshold,
 			d.DecisionGuardedAssistEscalated, d.DecisionGuardedAssistReason))
 	}
+	if d.DecisionCriterionAssessmentAvailability != "" {
+		m.kv(&b, "laya criterion shadow", fmt.Sprintf("criterion=%s availability=%s signal=%s support=%.2f contradiction=%.2f model=%s revision=%s spec=%s evidence=%s latency=%s",
+			d.DecisionCriterionAssessmentCriterion, d.DecisionCriterionAssessmentAvailability,
+			d.DecisionCriterionAssessmentSignal, d.DecisionCriterionAssessmentSupportProbability,
+			d.DecisionCriterionAssessmentContradictionProbability, d.DecisionCriterionAssessmentModel,
+			d.DecisionCriterionAssessmentModelRevision, d.DecisionCriterionAssessmentSpecFingerprint,
+			d.DecisionCriterionAssessmentEvidenceFingerprint, d.DecisionCriterionAssessmentLatency.Round(time.Millisecond)))
+	}
 	if d.PersonalAppsResult != "" {
 		b.WriteString("\n" + m.theme.UserLabel.Render("personal_apps result") + "\n")
 		b.WriteString(m.theme.StatusValue.Render("  "+formatPersonalAppsDebugResult(d.PersonalAppsResult)) + "\n")

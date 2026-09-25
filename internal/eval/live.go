@@ -262,6 +262,24 @@ type AgentTrial struct {
 	LayaPreVerifierNeededProbability float64 `json:"laya_pre_verifier_needed_probability,omitempty"`
 	LayaPostCycleAction              string  `json:"laya_post_cycle_action,omitempty"`
 	LayaPostCycleActionProbability   float64 `json:"laya_post_cycle_action_probability,omitempty"`
+	// LayaCriterionAssessment* are bounded, content-free Phase 3 shadow
+	// diagnostics. Counts describe the batch; the last fingerprints/probability
+	// fields bind the most recently recorded measurement without exporting its
+	// proposition or observation text.
+	LayaCriterionAssessmentMode                     string  `json:"laya_criterion_assessment_mode,omitempty"`
+	LayaCriterionAssessmentModel                    string  `json:"laya_criterion_assessment_model,omitempty"`
+	LayaCriterionAssessmentTotal                    int     `json:"laya_criterion_assessment_total,omitempty"`
+	LayaCriterionAssessmentAvailable                int     `json:"laya_criterion_assessment_available,omitempty"`
+	LayaCriterionAssessmentAbstained                int     `json:"laya_criterion_assessment_abstained,omitempty"`
+	LayaCriterionAssessmentErrors                   int     `json:"laya_criterion_assessment_errors,omitempty"`
+	LayaCriterionAssessmentLate                     int     `json:"laya_criterion_assessment_late,omitempty"`
+	LayaCriterionAssessmentAvailability             string  `json:"laya_criterion_assessment_availability,omitempty"`
+	LayaCriterionAssessmentSignal                   string  `json:"laya_criterion_assessment_signal,omitempty"`
+	LayaCriterionAssessmentSpecFingerprint          string  `json:"laya_criterion_assessment_spec_fingerprint,omitempty"`
+	LayaCriterionAssessmentEvidenceFingerprint      string  `json:"laya_criterion_assessment_evidence_fingerprint,omitempty"`
+	LayaCriterionAssessmentModelRevision            string  `json:"laya_criterion_assessment_model_revision,omitempty"`
+	LayaCriterionAssessmentSupportProbability       float64 `json:"laya_criterion_assessment_support_probability,omitempty"`
+	LayaCriterionAssessmentContradictionProbability float64 `json:"laya_criterion_assessment_contradiction_probability,omitempty"`
 
 	// The fields below are Phase 0a's measurement-integrity additions
 	// (see internal/tui/agent_decision_shadow.go's preVerifierSample and
