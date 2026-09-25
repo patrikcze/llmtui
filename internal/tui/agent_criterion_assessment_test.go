@@ -216,7 +216,7 @@ func TestCriterionEvidenceViewsUseStableCriterionOrderAndExactBounds(t *testing.
 }
 
 func TestCriterionEvidenceViewsOmitOversizedAndResumedObservations(t *testing.T) {
-	t.Run("oversized projection skips without truncating", func(t *testing.T) {
+	t.Run("truncated cache entries are omitted without affecting later proof", func(t *testing.T) {
 		m := newTestModel(t)
 		m.agentLoop.observations = agent.NewObservationCache()
 		first := assessmentCriterion(agent.CriterionAssessmentLocalRead, "first.md")
@@ -230,8 +230,8 @@ func TestCriterionEvidenceViewsOmitOversizedAndResumedObservations(t *testing.T)
 			{Name: tools.ToolReadFile, Detail: "first.md", Succeeded: true, Status: agent.ActionExecuted},
 			{Name: tools.ToolReadFile, Detail: "second.md", Succeeded: true, Status: agent.ActionExecuted},
 		}})
-		if len(views) != 1 || views[0].Detail != "first.md" || len(views[0].Excerpt) != 2040 {
-			t.Fatalf("views = %+v, want only the complete first view", views)
+		if len(views) != 1 || views[0].Detail != "second.md" || len(views[0].Excerpt) != 16 {
+			t.Fatalf("views = %+v, want only the later complete view", views)
 		}
 	})
 

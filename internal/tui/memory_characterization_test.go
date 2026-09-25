@@ -269,6 +269,9 @@ func TestCharacterization_AgentVerifierReceivesNoGenericMemoryOrRAG(t *testing.T
 		"RunID": true, "Cycle": true, "Task": true, "Objective": true,
 		"AcceptanceCriteria": true, "Criteria": true, "Evidence": true,
 		"PriorCycles": true, "CausalFacts": true, "EstablishCriteria": true, "Execution": true, "Tools": true,
+		// Observations are a bounded controller-owned projection of the current
+		// cycle, not generic memory or RAG content.
+		"Observations": true,
 	}
 
 	typ := reflect.TypeOf(agentverify.Input{})
