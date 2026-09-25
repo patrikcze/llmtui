@@ -549,6 +549,26 @@ persisted in altered form. Resume validates the optional field again and strips
 invalid historical attachments while keeping the schema-v1 run loadable. No
 Laya inference or new runtime mode is introduced by this phase.
 
+### Bounded verifier observation views (Phase 4a)
+
+The existing semantic verifier now receives an optional controller-owned
+`Observations` projection for content-bearing proof. The TUI selects at most
+four complete, successful, current-cycle local-read views in unresolved
+criterion order, using the same exact-read, freshness, privacy, and
+post-mutation rules as Phase 3. The aggregate excerpt cap is 2048 bytes. It
+never rereads the workspace, and a missing, stale, truncated, ambiguous,
+evicted, or resumed observation is omitted; the unresolved semantic
+`Criteria` list remains unchanged so omitted proof is still unknown.
+
+Every excerpt is redacted and framed as untrusted data in the user evidence
+message, never in the verifier system instruction. The prompt explicitly
+states that the bounded list is not exhaustive. Existing request admission
+counts the actual framed content. If the content-bearing request cannot fit,
+the controller retries the same authoritative verifier with the optional
+views removed. This is a verifier-context improvement only: Laya remains
+optional and does not participate in selection, authorization, criteria
+updates, routing, or completion. See ADR 0015.
+
 ### Criterion assessment shadow (Phase 3)
 
 `decision_engine.mode: criterion_shadow` is an explicit evaluation mode. New

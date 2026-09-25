@@ -177,3 +177,76 @@ func TestCriterionAssessmentDisabledModeDoesNotDispatch(t *testing.T) {
 		t.Fatalf("engine states = %d, want zero", len(engine.states))
 	}
 }
+
+func TestCriterionEvidenceViewsUseStableCriterionOrderAndExactBounds(t *testing.T) {
+	m := newTestModel(t)
+	criteria := make([]agent.Criterion, 0, 5)
+	calls := make([]agent.ToolCallRecord, 0, 5)
+	m.agentLoop.observations = agent.NewObservationCache()
+	for i := 0; i < 5; i++ {
+		target := "report-" + string(rune('a'+i)) + ".md"
+		criterion := assessmentCriterion(agent.CriterionAssessmentLocalRead, target)
+		criterion.ID = "c" + string(rune('1'+i))
+		criteria = append(criteria, criterion)
+		calls = append(calls, agent.ToolCallRecord{Name: tools.ToolReadFile, Detail: target, Succeeded: true, Status: agent.ActionExecuted})
+		m.agentLoop.observations.Put(tools.ToolReadFile, target, 3, strings.Repeat(string(rune('a'+i)), 512), true)
+	}
+	run := &agent.AgentRun{ID: "bounded-run", Cycle: 3, Status: agent.DecisionRunning, Criteria: criteria}
+	m.agentLoop.run = run
+	views := m.criterionEvidenceViews(run, agent.ExecutionResult{ToolCalls: calls})
+	if len(views) != verifierObservationMaxViews {
+		t.Fatalf("views = %d, want %d", len(views), verifierObservationMaxViews)
+	}
+	for i, view := range views {
+		want := "report-" + string(rune('a'+i)) + ".md"
+		if view.Detail != want {
+			t.Fatalf("view %d detail = %q, want stable criterion-order detail %q", i, view.Detail, want)
+		}
+	}
+	bytes := 0
+	for _, view := range views {
+		bytes += len(view.Excerpt)
+	}
+	if bytes != verifierObservationMaxBytes {
+		t.Fatalf("excerpt bytes = %d, want exact cap %d", bytes, verifierObservationMaxBytes)
+	}
+	if len(run.UnresolvedSemanticCriteria()) != 5 {
+		t.Fatal("selecting proof views changed the authoritative unresolved criterion set")
+	}
+}
+
+func TestCriterionEvidenceViewsOmitOversizedAndResumedObservations(t *testing.T) {
+	t.Run("oversized projection skips without truncating", func(t *testing.T) {
+		m := newTestModel(t)
+		m.agentLoop.observations = agent.NewObservationCache()
+		first := assessmentCriterion(agent.CriterionAssessmentLocalRead, "first.md")
+		second := assessmentCriterion(agent.CriterionAssessmentLocalRead, "second.md")
+		first.ID, second.ID = "c1", "c2"
+		run := &agent.AgentRun{ID: "bounded-run", Cycle: 1, Status: agent.DecisionRunning, Criteria: []agent.Criterion{first, second}}
+		m.agentLoop.run = run
+		m.agentLoop.observations.Put(tools.ToolReadFile, "first.md", 1, strings.Repeat("f", 2040), true)
+		m.agentLoop.observations.Put(tools.ToolReadFile, "second.md", 1, strings.Repeat("s", 16), true)
+		views := m.criterionEvidenceViews(run, agent.ExecutionResult{ToolCalls: []agent.ToolCallRecord{
+			{Name: tools.ToolReadFile, Detail: "first.md", Succeeded: true, Status: agent.ActionExecuted},
+			{Name: tools.ToolReadFile, Detail: "second.md", Succeeded: true, Status: agent.ActionExecuted},
+		}})
+		if len(views) != 1 || views[0].Detail != "first.md" || len(views[0].Excerpt) != 2040 {
+			t.Fatalf("views = %+v, want only the complete first view", views)
+		}
+	})
+
+	t.Run("resumed run starts without proof views", func(t *testing.T) {
+		m := newTestModel(t)
+		m.agentLoop.observations = agent.NewObservationCache()
+		criterion := assessmentCriterion(agent.CriterionAssessmentLocalRead, "report.md")
+		run := &agent.AgentRun{ID: "resumed-run", Cycle: 2, Status: agent.DecisionRunning, Criteria: []agent.Criterion{criterion}}
+		m.agentLoop.run = run
+		m.agentLoop.observations.Put(tools.ToolReadFile, "report.md", 1, "old cycle", true)
+		views := m.criterionEvidenceViews(run, agent.ExecutionResult{ToolCalls: []agent.ToolCallRecord{{
+			Name: tools.ToolReadFile, Detail: "report.md", Succeeded: true, Status: agent.ActionExecuted,
+		}}})
+		if len(views) != 0 {
+			t.Fatalf("views = %+v, want no stale proof after resume", views)
+		}
+	})
+}

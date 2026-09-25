@@ -27,6 +27,8 @@ const (
 	criterionAssessmentMaxStateBytes   = 2 << 10
 	criterionAssessmentMaxCriteria     = agent.MaxCriteria
 	criterionAssessmentTimeout         = 5 * time.Second
+	verifierObservationMaxViews        = 4
+	verifierObservationMaxBytes        = 2048
 )
 
 var criterionAssessmentBatchTimeout = criterionAssessmentTimeout
@@ -278,6 +280,48 @@ func (m *Model) criterionAssessmentStateFor(execution agent.ExecutionResult, cri
 		ExcerptHash string
 	}{view.ID, view.ResourceKey, view.Cycle, view.TotalBytes, view.Truncated, shortTextFingerprint(view.Excerpt)})
 	return state, criterionAssessmentAvailable
+}
+
+// criterionEvidenceViews selects the same narrowly admissible local-read
+// observations used by Phase 3, in pinned criterion order. It never rereads
+// the workspace and never substitutes a truncated, stale, ambiguous, or
+// missing view. A criterion without an eligible view remains in Criteria so
+// the semantic verifier can report it as unknown rather than silently
+// treating the bounded projection as complete evidence.
+func (m *Model) criterionEvidenceViews(run *agent.AgentRun, execution agent.ExecutionResult) []agent.ObservationView {
+	if m == nil || run == nil || m.agentLoop.observations == nil {
+		return nil
+	}
+	views := make([]agent.ObservationView, 0, verifierObservationMaxViews)
+	seen := make(map[string]struct{}, verifierObservationMaxViews)
+	usedBytes := 0
+	for _, criterion := range run.UnresolvedSemanticCriteria() {
+		if len(views) >= verifierObservationMaxViews {
+			break
+		}
+		if criterion.Assessment == nil || criterion.Assessment.EvidenceKind != agent.CriterionAssessmentLocalRead {
+			continue
+		}
+		_, availability := m.criterionAssessmentStateFor(execution, criterion)
+		if availability != criterionAssessmentAvailable {
+			continue
+		}
+		key := tools.ToolReadFile + "\x1f" + criterion.Assessment.Target
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		view, ok := m.agentLoop.observations.Latest(key)
+		if !ok || view.Cycle != run.Cycle || !view.Success || view.Truncated {
+			continue
+		}
+		if usedBytes+len(view.Excerpt) > verifierObservationMaxBytes {
+			continue
+		}
+		seen[key] = struct{}{}
+		views = append(views, view)
+		usedBytes += len(view.Excerpt)
+	}
+	return views
 }
 
 func criterionAssessmentSignal(support, contradiction float64) string {

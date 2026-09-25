@@ -1088,6 +1088,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request},
 		Criteria:           run.UnresolvedSemanticCriteria(), Evidence: run.Evidence, PriorCycles: run.Memory,
+		Observations: m.criterionEvidenceViews(run, execution),
 		// Criteria are now pinned by the pre-execution task contract. Keep the
 		// field for parser compatibility with older persisted verifier replies,
 		// but never ask a post-execution verifier to establish goalposts.
@@ -1106,6 +1107,15 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		out, err := agentverify.Verify(ctx, prov, agentverify.Config{
 			Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
 		}, input)
+		if err != nil && len(input.Observations) > 0 && errors.Is(err, agent.ErrBudgetExhausted) {
+			// Content-bearing evidence is optional context, never a reason to
+			// drop the authoritative verifier. Retry with the summary-only
+			// projection before surfacing the existing budget failure.
+			input.Observations = nil
+			out, err = agentverify.Verify(ctx, prov, agentverify.Config{
+				Model: model, MaxTokens: maxTokens, Timeout: timeout, AdmitRequest: admit,
+			}, input)
+		}
 		return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: out, err: err}
 	}
 }
