@@ -1,5 +1,8 @@
 # llmtui
 
+[![CI](https://github.com/patrikcze/llmtui/actions/workflows/ci.yml/badge.svg)](https://github.com/patrikcze/llmtui/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/patrikcze/llmtui)](https://github.com/patrikcze/llmtui/releases/latest)
+
 A fast, keyboard-first terminal UI for chatting with **local LLMs** — Ollama,
 LM Studio, vLLM, llama.cpp, Unsloth, or any OpenAI-compatible server.
 
