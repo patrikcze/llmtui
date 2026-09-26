@@ -660,6 +660,41 @@ func TestExactReadCriterionShorthandGrammarIsCoverageAware(t *testing.T) {
 	}
 }
 
+// TestExactReadCriterionFillerWordsGrammarIsCoverageAware is the "entire
+// content of" counterpart to the shorthand test above, using the literal
+// phrasing observed from a real contract-establishing run against
+// gemma-4-e4b: "Read the entire content of readings_a.txt." Before this fix,
+// the garbled target ("entire content of readings_a.txt") could never match
+// a real Call.Path, so this criterion stayed permanently unresolved even
+// after the file was genuinely read in full across several chunked reads —
+// the model kept getting told coverage was still missing long after it
+// wasn't.
+func TestExactReadCriterionFillerWordsGrammarIsCoverageAware(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"Read the entire content of readings_a.txt."})
+
+	if got := run.PendingExactReadObligations(ExecutionResult{}); len(got) != 1 || got[0].Target != "readings_a.txt" {
+		t.Fatalf("obligations = %+v, want the outstanding readings_a.txt obligation before any read", got)
+	}
+
+	// Five chunked reads, exactly mirroring the real run: 1-200, 201-700,
+	// 701-1200, 1201-1400, 1401-1500 — a gapless union of all 1500 lines.
+	full := ExecutionResult{ReadObservations: []ReadObservation{
+		{Target: "readings_a.txt", SourceDigest: "d1", StartLine: 1, EndLine: 200, TotalLines: int64Ptr(1500)},
+		{Target: "readings_a.txt", SourceDigest: "d1", StartLine: 201, EndLine: 700, TotalLines: int64Ptr(1500)},
+		{Target: "readings_a.txt", SourceDigest: "d1", StartLine: 701, EndLine: 1200, TotalLines: int64Ptr(1500)},
+		{Target: "readings_a.txt", SourceDigest: "d1", StartLine: 1201, EndLine: 1400, TotalLines: int64Ptr(1500)},
+		{Target: "readings_a.txt", SourceDigest: "d1", StartLine: 1401, EndLine: 1500, TotalLines: int64Ptr(1500)},
+	}}
+	run.ApplyDeterministicCriteria(full, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("criterion = %+v, want satisfied: five chunked reads gaplessly cover all 1500 lines", run.Criteria[0])
+	}
+	if got := run.PendingExactReadObligations(full); len(got) != 0 {
+		t.Fatalf("obligations = %+v, want none: the file was genuinely read in full", got)
+	}
+}
+
 // TestExactReadCriterionUnionOfPartialReadsSatisfies proves coverage can be
 // established across more than one call in the same cycle, as long as the
 // unioned windows are gapless and agree on both the source version and total
@@ -774,6 +809,14 @@ func TestExactReadCriterionTarget(t *testing.T) {
 		{"read_file:report.md", "report.md", true},
 		{"read_files:", "", false},
 		{"read_files:  ", "", false},
+		// "Read the entire content of X." — observed verbatim from a real
+		// contract-establishing run: "the " alone left "entire content of
+		// readings_a.txt" as the target, which could never match a real
+		// Call.Path, so the file's genuinely-complete coverage was never
+		// recognized. Fixpoint stripping now reduces this fully.
+		{"Read the entire content of readings_a.txt.", "readings_a.txt", true},
+		{"Read the contents of readings_b.txt.", "readings_b.txt", true},
+		{"Read the entire content of the file named report.md.", "report.md", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.text, func(t *testing.T) {
