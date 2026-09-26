@@ -555,16 +555,36 @@ func AppendReadObservation(execution *ExecutionResult, ob ReadObservation) {
 }
 
 // ExactReadCriterionTarget extracts the target path from a criterion
-// recognized as an atomic "read this exact file" instruction ("Read
-// [the/file/named] <path>."), shared so both evaluateCriterion's
-// deterministic proof and Phase 2's yield-eligibility check
-// (agent-execution-harness plan §10) recognize the identical narrow grammar
-// — one before any tool call has proven it, the other after. ok is false for
-// anything not exactly this shape: multi-step or ambiguous prose ("inspect",
-// "review", "compare"), a quoted shell fragment, or a criterion naming no
-// target at all remain semantic.
+// recognized as an atomic "read this exact file" instruction, shared so both
+// evaluateCriterion's deterministic proof and Phase 2's yield-eligibility
+// check (agent-execution-harness plan §10) recognize the identical narrow
+// grammar — one before any tool call has proven it, the other after. ok is
+// false for anything not exactly this shape: multi-step or ambiguous prose
+// ("inspect", "review", "compare"), a quoted shell fragment, or a criterion
+// naming no target at all remain semantic.
+//
+// Two surface forms are recognized:
+//   - Natural language: "Read [the/file/named] <path>."
+//   - Compact shorthand: "read_files:<path>" or "read_file:<path>", observed
+//     in the wild from a contract-establishing model (gemma-4-e4b via
+//     LM Studio) that consistently produces this machine-readable style
+//     instead of a sentence for otherwise-identical requests — see
+//     docs/architecture/decisions/0013-agent-execution-yield-policy.md's
+//     Phase 4d update. Only one target per criterion is recognized; a
+//     shorthand value naming more than one path (a comma, say) simply never
+//     matches a real Call.Path later and the criterion stays semantic,
+//     exactly like any other unrecognized shape — never a false positive.
 func ExactReadCriterionTarget(text string) (target string, ok bool) {
 	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
+	for _, prefix := range []string{"read_files:", "read_file:"} {
+		if rest, matched := strings.CutPrefix(text, prefix); matched {
+			rest = strings.TrimSpace(rest)
+			if rest == "" {
+				return "", false
+			}
+			return rest, true
+		}
+	}
 	if !strings.HasPrefix(text, "read ") {
 		return "", false
 	}
