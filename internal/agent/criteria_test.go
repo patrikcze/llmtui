@@ -620,6 +620,46 @@ func TestExactReadCriterionRequiresFullCoverage(t *testing.T) {
 	}
 }
 
+// TestExactReadCriterionShorthandGrammarIsCoverageAware proves the
+// "read_files:<path>" shorthand a real contract-establishing model produces
+// (see ExactReadCriterionTarget) is fully wired into the same coverage-aware
+// proof as the natural-language grammar, not just recognized in isolation:
+// partial coverage stays pending, full coverage (via PinTypedCriteria's
+// CriterionSemantic path, matching how the contract step actually pins it)
+// satisfies it, and PendingExactReadObligations reports it as an actionable
+// obligation while incomplete.
+func TestExactReadCriterionShorthandGrammarIsCoverageAware(t *testing.T) {
+	run, _ := newTestRun(t, DefaultLimits())
+	run.PinCriteria([]string{"read_files:bignotes.txt"})
+
+	if got := run.PendingExactReadObligations(ExecutionResult{}); len(got) != 1 || got[0].Target != "bignotes.txt" {
+		t.Fatalf("obligations = %+v, want the outstanding bignotes.txt obligation before any read", got)
+	}
+
+	partial := ExecutionResult{ReadObservations: []ReadObservation{
+		{Target: "bignotes.txt", SourceDigest: "d1", StartLine: 1, EndLine: 500, TotalLines: int64Ptr(1200)},
+	}}
+	run.ApplyDeterministicCriteria(partial, 1)
+	if run.Criteria[0].Status != CriterionPending {
+		t.Fatalf("criterion = %+v, want pending: only 500 of 1200 lines were delivered", run.Criteria[0])
+	}
+	if got := run.PendingExactReadObligations(partial); len(got) != 1 {
+		t.Fatalf("obligations = %+v, want the obligation to remain outstanding after partial coverage", got)
+	}
+
+	full := ExecutionResult{ReadObservations: []ReadObservation{
+		{Target: "bignotes.txt", SourceDigest: "d1", StartLine: 1, EndLine: 500, TotalLines: int64Ptr(1200)},
+		{Target: "bignotes.txt", SourceDigest: "d1", StartLine: 501, EndLine: 1200, TotalLines: int64Ptr(1200)},
+	}}
+	run.ApplyDeterministicCriteria(full, 1)
+	if run.Criteria[0].Status != CriterionSatisfied {
+		t.Fatalf("criterion = %+v, want satisfied: the union now covers all 1200 lines", run.Criteria[0])
+	}
+	if got := run.PendingExactReadObligations(full); len(got) != 0 {
+		t.Fatalf("obligations = %+v, want none: the read already achieved full coverage", got)
+	}
+}
+
 // TestExactReadCriterionUnionOfPartialReadsSatisfies proves coverage can be
 // established across more than one call in the same cycle, as long as the
 // unioned windows are gapless and agree on both the source version and total
@@ -725,6 +765,15 @@ func TestExactReadCriterionTarget(t *testing.T) {
 		{"Compare implementation behavior", "", false},
 		{"Read ", "", false},
 		{"", "", false},
+		// Compact shorthand a contract-establishing model produces in the
+		// wild (observed repeatedly from gemma-4-e4b via LM Studio) instead
+		// of a natural-language sentence for an otherwise identical request.
+		{"read_files:bignotes.txt", "bignotes.txt", true},
+		{"read_files:2026-09-25-weather-brno.md", "2026-09-25-weather-brno.md", true},
+		{"READ_FILES:Report.MD", "report.md", true},
+		{"read_file:report.md", "report.md", true},
+		{"read_files:", "", false},
+		{"read_files:  ", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.text, func(t *testing.T) {

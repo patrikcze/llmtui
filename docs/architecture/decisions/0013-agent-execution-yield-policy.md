@@ -344,3 +344,45 @@ deliberately simpler (Phase 2) design. Building a "pending snapshot
 commit" mechanism for a hazard the actual code does not have would be
 exactly the speculative complexity this project's conventions warn
 against.
+
+## Update (Phase 4d: compact "read_files:" shorthand grammar, 2026-09-26)
+
+Live field evidence (not a hypothetical): with `agent.yield.enabled: true`,
+a real contract-establishing run against `gemma-4-e4b` (LM Studio)
+consistently pinned an exact-read criterion as `"read_files:bignotes.txt"`
+— compact, colon-separated shorthand — instead of the natural-language
+`"Read the file bignotes.txt."` sentence `ExactReadCriterionTarget` was
+originally written to expect. Checked five more of the same user's
+persisted runs (`~/.local/share/llmtui/agent-runs/*.json`): the pattern was
+completely consistent (`read_files:2026-09-25-weather-brno.md`,
+`read_files:weather_report_15_9_2026.md`, and a `web_access:...(...)`
+sibling for a non-file criterion), confirming this is this model's default
+style for this contract shape, not a one-off. Because the grammar never
+matched, `PendingExactReadObligations` never recognized the criterion at
+all — `EvaluateYield` reported `quiescent` on the very first yield check
+regardless of actual read coverage, and a run with a confirmed real gap
+(lines 501-1199 of a 1200-line file never read) still went straight to
+verification, "passing" only because the separately-configured semantic
+verifier judged it sufficient on its own holistic reading, not because the
+harness's coverage check ever ran.
+
+`ExactReadCriterionTarget` (`internal/agent/criteria.go`) now recognizes a
+second surface form ahead of the natural-language check: `"read_files:<path>"`
+and `"read_file:<path>"`, case-insensitively, matching the observed pattern
+family exactly (singular/plural is the only variation seen). This is
+evidence-driven, not speculative broadening: only the two colon-prefixed
+forms actually observed are added; a shorthand naming more than one path
+(a comma-separated list, say) simply never matches a real `Call.Path` later
+and the criterion stays semantic exactly as before — never a false
+positive, per the same "no match, still pending" conservatism the original
+grammar already had. `evaluateCriterion`, `readCoverageComplete`, and
+`PendingExactReadObligations` needed no changes — they already operate on
+whatever `ExactReadCriterionTarget` returns, not on the input text shape.
+
+This does not change the fundamental scope limit recorded in earlier
+updates: the mechanism still only ever recognizes an atomic, single-file
+read obligation. A criterion for any other tool (grep, web_fetch,
+run_command, MCP) — the deferred §12 `RecoveryHint`/producer-table and §10
+`read_coverage` contract-schema work — remains out of scope here, now with
+concrete field motivation (not just the plan's own hypothetical scenario)
+to prioritize it next.
