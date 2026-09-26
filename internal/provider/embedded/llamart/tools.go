@@ -115,14 +115,16 @@ func prepareToolMessages(messages []provider.Message, tools []provider.ToolSpec,
 
 	prepared := append([]provider.Message(nil), messages...)
 	if format == embedded.ToolFormatGemma {
-		for index := len(prepared) - 1; index >= 0; index-- {
+		// Keep formatting of earlier user turns identical when a newer runtime
+		// context/user turn arrives. Adding this only to the latest turn would
+		// remove it from the previous turn and invalidate the cached history.
+		for index := range prepared {
 			if prepared[index].Role != provider.RoleUser {
 				continue
 			}
 			if !strings.Contains(prepared[index].Content, gemmaToolFollowupInstruction) {
 				prepared[index].Content = strings.TrimSpace(prepared[index].Content) + "\n\n" + gemmaToolFollowupInstruction
 			}
-			break
 		}
 	}
 	if len(prepared) > 0 && prepared[0].Role == provider.RoleSystem {

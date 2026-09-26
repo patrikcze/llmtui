@@ -80,6 +80,9 @@ Five things that are easy to get wrong:
 5. **The raw user message is never rewritten.** Memory, RAG, skills, summaries
    and model hints are separate labeled sections in `internal/prompt/compose.go`;
    the user's text goes in last, verbatim. See `docs/prompt-composition.md`.
+   Embedded native-tool continuations keep changing controller/reference sections in a
+   request-local context message after history so the system prefix stays
+   reusable. This context is not a user submission and is never persisted.
 6. **Personal apps are explicit macOS capabilities.** Mail and Calendar stay
    off until separately configured and connected by the person at the
    keyboard. Calendar needs an absolute, explicitly installed EventKit helper
