@@ -622,7 +622,9 @@ func AppendReadObservation(execution *ExecutionResult, ob ReadObservation) {
 // naming no target at all remain semantic.
 //
 // Two surface forms are recognized:
-//   - Natural language: "Read [the/file/named] <path>."
+//   - Natural language: "Read [the/file/named/entire/content of/contents of]
+//     <path>.", with the bracketed filler words stripped in any order/
+//     repetition — see the "entire content of" case below.
 //   - Compact shorthand: "read_files:<path>" or "read_file:<path>", observed
 //     in the wild from a contract-establishing model (gemma-4-e4b via
 //     LM Studio) that consistently produces this machine-readable style
@@ -647,9 +649,21 @@ func ExactReadCriterionTarget(text string) (target string, ok bool) {
 		return "", false
 	}
 	text = strings.TrimSpace(strings.TrimPrefix(text, "read "))
-	for _, prefix := range []string{"the ", "file ", "named "} {
-		if strings.HasPrefix(text, prefix) {
-			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+	// Strip filler words to a fixpoint, not just one pass: a real contract
+	// model produced "Read the entire content of readings_a.txt." (observed
+	// in the wild), where "the " alone left "entire content of
+	// readings_a.txt" as a garbled target that could never match a real
+	// Call.Path — so the coverage-aware proof stayed permanently unreachable
+	// even after the file was genuinely read in full. Repeating the strip
+	// handles any order/combination of this closed, evidence-driven filler
+	// vocabulary without needing a fixed phrase order.
+	for changed := true; changed; {
+		changed = false
+		for _, prefix := range []string{"the ", "file ", "named ", "entire ", "content of ", "contents of "} {
+			if strings.HasPrefix(text, prefix) {
+				text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+				changed = true
+			}
 		}
 	}
 	for _, suffix := range []string{" in full", " completely", " fully"} {

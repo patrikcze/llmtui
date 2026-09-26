@@ -386,3 +386,40 @@ run_command, MCP) — the deferred §12 `RecoveryHint`/producer-table and §10
 `read_coverage` contract-schema work — remains out of scope here, now with
 concrete field motivation (not just the plan's own hypothetical scenario)
 to prioritize it next.
+
+## Update (Phase 4e: filler-word fixpoint stripping, 2026-09-26)
+
+More live field evidence, a worse variant of the same class of bug the
+Phase 4d update fixed. A real contract-establishing run against
+`gemma-4-e4b` pinned a criterion phrased as `"Read the entire content of
+readings_a.txt."` The single-pass filler-word strip (`"the "`, `"file "`,
+`"named "`) only removed `"the "`, leaving `target = "entire content of
+readings_a.txt"` — a string that can never match a real `Call.Path`. The
+observable consequence was worse than Phase 4d's: the model actually read
+the file completely and correctly, across five chunked reads (`1-200`,
+`201-700`, `701-1200`, `1201-1400`, `1401-1500`, all 1500 lines, confirmed
+gapless), wrote a correct summary, and gave a correct final answer — and
+the harness kept re-injecting "criterion c1 still lacks the requested file
+coverage for 'entire content of readings_a.txt'" anyway, four more times,
+because the mismatched target meant `readCoverageComplete` could never
+resolve regardless of actual coverage. The user's own transcript captured
+the model explicitly noting this contradiction ("I have already executed
+multiple `read_file` calls covering the entire 1500 lines... The agent
+cycle seems to be reiterating the need for coverage even if it was covered
+in prior, successful tool calls") before eventually stalling out on the
+no-progress budget anyway.
+
+The fix: `ExactReadCriterionTarget`'s filler-word strip now repeats to a
+fixpoint (a small `for changed := true; changed; { ... }` loop) instead of
+a single pass, and the filler vocabulary gains `"entire "`, `"content of "`,
+and `"contents of "` — the exact words needed to reduce "the entire content
+of readings_a.txt" to "readings_a.txt", in any order or repetition, still
+within the same closed, evidence-driven set (no wildcard, no regex). A
+garbled target from an unrecognized filler combination still just never
+matches a real path and stays semantic — the existing "no match, still
+pending" fail-safe is unchanged.
+
+Tests use the literal observed phrasing and, for the coverage-integration
+test, the exact five-chunk read sequence from the real run (1-200 through
+1401-1500 of 1500 lines) to prove the fix resolves that specific case, not
+just the grammar function in isolation.
