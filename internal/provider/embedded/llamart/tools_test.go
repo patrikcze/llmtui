@@ -622,6 +622,32 @@ func TestPrepareToolMessagesIsDeterministicAndPreservesHistory(t *testing.T) {
 	}
 }
 
+func TestPrepareToolMessagesKeepsGemmaHistoryStableWhenUserTurnAppended(t *testing.T) {
+	messages := []provider.Message{
+		{Role: provider.RoleSystem, Content: "system"},
+		{Role: provider.RoleUser, Content: "read both files"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "weather", Arguments: `{"city":"Prague"}`}}},
+		{Role: provider.RoleTool, ToolCallID: "call-1", ToolName: "weather", Content: "result"},
+	}
+	first, err := prepareToolMessages(messages, []provider.ToolSpec{weatherToolSpec()}, embedded.ToolFormatGemma)
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued := append(append([]provider.Message(nil), messages...), provider.Message{Role: provider.RoleUser, Content: "Runtime context: read the remaining page."})
+	second, err := prepareToolMessages(continued, []provider.ToolSpec{weatherToolSpec()}, embedded.ToolFormatGemma)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range first {
+		if first[i].Content != second[i].Content {
+			t.Fatalf("prior message %d changed across tool rounds", i)
+		}
+	}
+	if strings.Contains(messages[1].Content, gemmaToolFollowupInstruction) {
+		t.Fatal("provider mutated original user message")
+	}
+}
+
 func TestPrepareToolMessagesAddsGemmaFollowupToClonedUserTurn(t *testing.T) {
 	messages := []provider.Message{{Role: provider.RoleUser, Content: "list dir"}}
 	prepared, err := prepareToolMessages(messages, []provider.ToolSpec{weatherToolSpec()}, embedded.ToolFormatGemma)

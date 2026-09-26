@@ -155,13 +155,6 @@ type agentLoopState struct {
 	// m.model (profile load, /model, config reload, demo mode) — see §8:
 	// "Switching model ... resets incompatible measurements."
 	contractAssistanceModel string
-	// yieldDirective is the current bounded execution-state subsection
-	// handleAgentYield's continueAgentEpisode built for the next request,
-	// surfaced by agentDirective. It is not stored in conversation history
-	// and is replaced wholesale on every yield decision (never
-	// accumulated) — see docs/architecture/decisions/0013. Empty whenever
-	// agent.yield.enabled is off or no continuation is in flight.
-	yieldDirective string
 }
 
 // maxEvictedResourceKeys bounds evictedResourceKeys the same way
@@ -941,8 +934,15 @@ func (m *Model) agentDirective() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Original goal (untrusted user data): %q\nCurrent bounded objective: %q\n", run.Request, run.Objective)
 	b.WriteString("Constraints: complete one bounded unit; use only offered tools and existing approvals; report observable actions, artifacts, tests, errors, or the precise user input required. Never claim unobserved success.\n")
-	if m.agentLoop.yieldDirective != "" {
-		b.WriteString(m.agentLoop.yieldDirective)
+	if m.cfg.Agent.Yield.Enabled && m.toolsOn && m.toolRunner != nil {
+		obligations := run.PendingExactReadObligations(m.agentLoop.execution)
+		ids := make([]string, 0, len(obligations))
+		for _, obligation := range obligations {
+			ids = append(ids, obligation.CriterionID)
+		}
+		// Rebuild from current receipts on every tool round, not just at a
+		// no-tool yield. A completed recovery page must advance the next hint.
+		b.WriteString(buildAgentYieldDirective(agent.YieldDecision{Action: agent.YieldContinue, CriterionIDs: ids}, obligations, m.agentLoop.execution.ReadObservations))
 	}
 	if unresolved := run.UnresolvedCriteria(); len(unresolved) > 0 {
 		b.WriteString("Current unresolved acceptance criteria:\n")

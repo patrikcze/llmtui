@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/patrikcze/llmtui/internal/agent"
+	"github.com/patrikcze/llmtui/internal/tools"
 )
 
 // This file wires internal/agent's pure EvaluateYield policy
@@ -58,16 +59,20 @@ func (m *Model) handleAgentYield() tea.Cmd {
 
 	obligations := run.PendingExactReadObligations(m.agentLoop.execution)
 	in, ids := m.buildAgentYieldInput(checkpoint, obligations)
-	decision := agent.EvaluateYield(in)
-
 	progressed := !equalStringSlices(checkpoint.UnresolvedCriterionIDs, ids)
+	digest := agent.ReadCoverageProgressDigest(run.Criteria, m.agentLoop.execution.ReadObservations)
+	if digest != "" && digest != checkpoint.LastProgressDigest {
+		progressed = true
+		checkpoint.LastProgressDigest = digest
+	}
 	if progressed {
 		checkpoint.NoProgressNudges = 0
+		in.NoProgressNudges = 0
 	}
+	decision := agent.EvaluateYield(in)
 	checkpoint.UnresolvedCriterionIDs = ids
 	checkpoint.LastYieldReason = decision.Reason
 	checkpoint.Revision++
-	m.agentLoop.yieldDirective = ""
 
 	switch decision.Action {
 	case agent.YieldContinue:
@@ -75,7 +80,6 @@ func (m *Model) handleAgentYield() tea.Cmd {
 			checkpoint.NoProgressNudges++
 		}
 		checkpoint.ExecutorRequests++
-		m.agentLoop.yieldDirective = buildAgentYieldDirective(decision, obligations, m.agentLoop.execution.ReadObservations)
 		return m.continueAgentEpisode(decision)
 	case agent.YieldVerify:
 		return m.startAgentVerification()
@@ -132,8 +136,8 @@ func (m *Model) buildAgentYieldInput(checkpoint *agent.EpisodeCheckpoint, obliga
 // BeginCycle, startNextAgentCycle, resetTurn, resetCycle, renewToolBudget,
 // or CompleteExecution — the current objective, evidence, execution
 // receipts, run deadline, approvals, and progress ledger all survive
-// unchanged; only m.agentLoop.yieldDirective (already set by the caller) is
-// new.
+// unchanged. agentDirective derives fresh coverage hints from those receipts
+// on each request, so a tool round cannot replay an obsolete read window.
 func (m *Model) continueAgentEpisode(decision agent.YieldDecision) tea.Cmd {
 	run := m.agentLoop.run
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · continuing — %s",
@@ -207,13 +211,14 @@ func buildAgentYieldDirective(decision agent.YieldDecision, obligations []agent.
 		ids = ids[:maxAgentYieldObligations]
 	}
 	var b []byte
-	b = append(b, "Runtime execution state: yielded with missing required evidence.\n"...)
+	b = append(b, "Runtime execution state: required file coverage is incomplete.\n"...)
 	for _, id := range ids {
 		target, ok := targets[id]
 		if !ok {
 			continue
 		}
 		if offset, limit, ok := agent.NextReadOffset(target, observations); ok {
+			limit = min(limit, int64(tools.MaxReadLimit))
 			b = fmt.Appendf(b, "Criterion %s still lacks the requested file coverage for %q. Call read_file({\"path\":%q,\"offset\":%d,\"limit\":%d}) to obtain the remaining lines.\n", id, target, target, offset, limit)
 			continue
 		}

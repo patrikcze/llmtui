@@ -304,7 +304,7 @@ type EpisodeCheckpoint struct {
 	// decision by itself.
 	LastYieldReason YieldReason `json:"last_yield_reason,omitempty"`
 	// LastProgressDigest is the most recent deterministic progress
-	// fingerprint this episode observed (see internal/tui/progress.go),
+	// coverage fingerprint this episode observed (ReadCoverageProgressDigest),
 	// opaque here — used only to detect whether a later yield changed
 	// anything relevant.
 	LastProgressDigest string `json:"last_progress_digest,omitempty"`

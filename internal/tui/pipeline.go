@@ -526,7 +526,11 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
-	if m.toolRecoveryFeedback != "" {
+	// Restrict the extra context turn to native-tool continuations. Fresh
+	// chat keeps its original layout, including templates requiring strict
+	// user/assistant alternation and the verbatim trailing user message.
+	deferRuntimeContext := m.isEmbeddedProvider() && omitRaw && m.useNativeTools()
+	if m.toolRecoveryFeedback != "" && !deferRuntimeContext {
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + m.toolRecoveryFeedback)
 	}
 	templatePrompt := ""
@@ -553,26 +557,28 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 
 	return compositionBase{
 		input: prompt.Input{
-			RawMessage:           raw,
-			Images:               images,
-			SystemPrompt:         systemPrompt,
-			AgentDirective:       m.agentDirective(),
-			TemplateName:         m.template,
-			TemplatePrompt:       templatePrompt,
-			Mode:                 m.effectivePromptMode(),
-			HelperText:           m.cfg.Prompt.HelperText,
-			ModelHints:           prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
-			MemorySnippets:       memSnippets,
-			ProjectMemory:        projectMemory,
-			EpisodeMemory:        episodeMemory,
-			ActiveContext:        activeContext,
-			UseActiveContext:     m.cfg.Memory.Retrieval.Enabled,
-			Entities:             m.entityPromptRecords(),
-			EntityToolsAvailable: m.entityToolsAvailable(),
-			EntityMaxTokens:      m.entityContextTokenBudget(),
-			RetrievedContext:     retrieved,
-			Skills:               m.promptSkills(),
-			SkillCatalog:         m.promptSkillCatalog(),
+			RawMessage:                 raw,
+			Images:                     images,
+			SystemPrompt:               systemPrompt,
+			RuntimeContextAfterHistory: deferRuntimeContext,
+			RuntimeFeedback:            m.toolRecoveryFeedback,
+			AgentDirective:             m.agentDirective(),
+			TemplateName:               m.template,
+			TemplatePrompt:             templatePrompt,
+			Mode:                       m.effectivePromptMode(),
+			HelperText:                 m.cfg.Prompt.HelperText,
+			ModelHints:                 prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
+			MemorySnippets:             memSnippets,
+			ProjectMemory:              projectMemory,
+			EpisodeMemory:              episodeMemory,
+			ActiveContext:              activeContext,
+			UseActiveContext:           m.cfg.Memory.Retrieval.Enabled,
+			Entities:                   m.entityPromptRecords(),
+			EntityToolsAvailable:       m.entityToolsAvailable(),
+			EntityMaxTokens:            m.entityContextTokenBudget(),
+			RetrievedContext:           retrieved,
+			Skills:                     m.promptSkills(),
+			SkillCatalog:               m.promptSkillCatalog(),
 			Include: prompt.Include{
 				SessionSummary:  m.cfg.Prompt.IncludeSessionSummary,
 				LocalMemory:     m.cfg.Prompt.IncludeLocalMemory,
@@ -886,10 +892,29 @@ func (m *Model) requestHistory() (messages []provider.Message, summary string, a
 			}
 			summary = m.agentLoop.run.StartSummary
 		}
-		current := append([]provider.Message(nil), messages[start:]...)
+		current := m.projectAgentExecutorHistory(messages[start:])
 		return append(prior, current...), summary, true
 	}
-	return projectPriorCyclesInRun(messages, start, m.agentLoop.cycleBoundaries), "", true
+	projected := projectPriorCyclesInRun(messages, start, m.agentLoop.cycleBoundaries)
+	return m.projectAgentExecutorHistory(projected), "", true
+}
+
+// Rejected no-tool completions stay visible in the transcript but do not
+// reinforce their own unobserved success claims on the next executor request.
+// Native and fenced call/result exchanges remain intact, and verification
+// still reads the original final reply directly from the session.
+func (m *Model) projectAgentExecutorHistory(messages []provider.Message) []provider.Message {
+	if !m.cfg.Agent.Yield.Enabled || !m.agentRunActive() || m.agentVerifying() || m.agentContracting() {
+		return append([]provider.Message(nil), messages...)
+	}
+	projected := make([]provider.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant && len(message.ToolCalls) == 0 && len(tools.Parse(message.Content)) == 0 {
+			continue
+		}
+		projected = append(projected, message)
+	}
+	return projected
 }
 
 // projectPriorCyclesInRun returns a multi-cycle run's messages from runStart

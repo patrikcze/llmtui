@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -521,14 +522,71 @@ func readCoverageState(target string, observations []ReadObservation) (covered, 
 // example, §12) instead of a vague "use the offered tool again". ok is false
 // when no useful hint can be derived — no observations yet, mixed source
 // versions/totals, or coverage is already complete — the caller falls back
-// to its own generic phrasing in that case. limit is the exact remaining
-// line count, so offset+limit-1 == the file's total line count.
+// to its own generic phrasing in that case. limit spans only the first gap,
+// stopping before an already observed window. The adapter must additionally
+// cap it at its read tool's maximum page size.
 func NextReadOffset(target string, observations []ReadObservation) (offset, limit int64, ok bool) {
 	covered, total, haveTotal, consistent := readCoverageState(target, observations)
 	if !consistent || !haveTotal || total <= 0 || covered >= total {
 		return 0, 0, false
 	}
-	return covered + 1, total - covered, true
+	offset, limit = covered+1, total-covered
+	for _, ob := range observations {
+		if strings.EqualFold(strings.TrimSpace(ob.Target), strings.TrimSpace(target)) && ob.StartLine > offset && ob.EndLine >= ob.StartLine {
+			limit = min(limit, ob.StartLine-offset)
+		}
+	}
+	return offset, limit, true
+}
+
+// ReadCoverageProgressDigest fingerprints delivered coverage of exact-read
+// criteria. Duplicate windows, reordered receipts, and sequence numbers do
+// not change it. Unknown totals and mixed source versions cannot count as
+// progress. The checkpoint owns the previous digest; no second ledger is used.
+func ReadCoverageProgressDigest(criteria []Criterion, observations []ReadObservation) string {
+	h := sha256.New()
+	haveCoverage := false
+	for _, criterion := range criteria {
+		target, ok := ExactReadCriterionTarget(criterion.Text)
+		if !ok || (criterion.Kind != "" && criterion.Kind != CriterionSemantic) {
+			continue
+		}
+		_, total, known, consistent := readCoverageState(target, observations)
+		if !consistent {
+			return ""
+		}
+		if !known {
+			continue
+		}
+		var intervals []readInterval
+		for _, ob := range observations {
+			if strings.EqualFold(strings.TrimSpace(ob.Target), target) && ob.StartLine > 0 && ob.EndLine >= ob.StartLine {
+				intervals = append(intervals, readInterval{ob.StartLine, min(ob.EndLine, total)})
+			}
+		}
+		sort.Slice(intervals, func(i, j int) bool { return intervals[i].start < intervals[j].start })
+		fmt.Fprintf(h, "%q:%d:", criterion.ID, total)
+		var start, end int64
+		for _, iv := range intervals {
+			if iv.start > iv.end {
+				continue
+			}
+			if start == 0 {
+				start, end = iv.start, iv.end
+			} else if iv.start <= end+1 {
+				end = max(end, iv.end)
+			} else {
+				fmt.Fprintf(h, "%d-%d;", start, end)
+				start, end = iv.start, iv.end
+			}
+		}
+		fmt.Fprintf(h, "%d-%d;", start, end)
+		haveCoverage = haveCoverage || end > 0 || total == 0
+	}
+	if !haveCoverage {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // AppendReadObservation appends one bounded read-coverage receipt to
@@ -593,6 +651,12 @@ func ExactReadCriterionTarget(text string) (target string, ok bool) {
 		if strings.HasPrefix(text, prefix) {
 			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
 		}
+	}
+	for _, suffix := range []string{" in full", " completely", " fully"} {
+		text = strings.TrimSpace(strings.TrimSuffix(text, suffix))
+	}
+	if len(text) >= 2 && ((text[0] == '`' && text[len(text)-1] == '`') || (text[0] == '"' && text[len(text)-1] == '"')) {
+		text = text[1 : len(text)-1]
 	}
 	if text == "" {
 		return "", false

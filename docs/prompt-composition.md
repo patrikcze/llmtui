@@ -29,6 +29,37 @@ are separate sections you can always inspect with `/prompt preview`.
 11. **Recent Messages** — recent conversation, verbatim
 12. **Raw User Message** — your text, untouched
 
+For embedded native-tool continuations, invariant system/tool instructions and active skills
+stay before history. Changing Agent Cycle, Session Summary, memory/retrieval,
+Entity Context, and tool-recovery sections are grouped into a clearly labeled,
+request-local user-role context message after history and before the raw user
+message. On tool/yield continuations the raw message is omitted, but this
+runtime context remains. It is never saved as a user turn or used to grant
+permissions. Existing untrusted-content framing remains intact. Fresh chat,
+fenced-tool requests, and remote providers retain the layout above, including
+templates that require strict user/assistant alternation. Transitioning from
+the initial layout may invalidate its prefix once; successive native-tool
+continuations preserve the stable system and delivered history.
+
+This placement preserves the system/history token prefix for embedded KV
+reuse; it does not freeze references or omit fresh evidence. Gemma's provider
+followup reminder is applied consistently to cloned user-role messages so
+adding a context turn does not rewrite an earlier prompt turn. Compaction,
+tool changes, and skill activation can still legitimately change the prefix.
+
+During agent yield recovery, premature no-tool replies remain in the visible
+transcript but are excluded from subsequent executor requests. Read recovery
+targets the first missing interval, capped at the tool's 500-line maximum.
+Coverage hints are rebuilt after every tool round, including reads that follow
+a recovery nudge, so the next request never repeats an obsolete page hint.
+New delivered coverage resets the no-progress nudge budget; duplicate reads,
+unknown totals, and mixed file versions do not. The final reply and full
+tool receipts remain available to verification.
+
+The Recent Messages section in `/prompt composed` is a shortened preview.
+`/debug last` labels it as such; the request estimate counts the full rendered
+messages and tool schemas, and remains an estimate rather than tokenizer usage.
+
 ## Modes
 
 | Mode | Behavior |

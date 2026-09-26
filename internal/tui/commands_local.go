@@ -1147,9 +1147,13 @@ func (m *Model) debugOverlay() string {
 	if len(d.Sections) > 0 {
 		b.WriteString("\n" + m.theme.UserLabel.Render("composed sections") + "\n")
 		for _, s := range d.Sections {
+			tokenText := fmt.Sprintf("≈ %s tokens", components.FormatTokens(provider.EstimateTokens(s.Content)))
+			if s.Title == "Recent Messages" {
+				tokenText = "preview only; full history counted in request estimate"
+			}
 			fmt.Fprintf(&b, "  %s %s\n",
 				m.theme.StatusValue.Render(fmt.Sprintf("%-22s", s.Title)),
-				m.theme.StatusBar.Render(fmt.Sprintf("≈ %s tokens", components.FormatTokens(provider.EstimateTokens(s.Content)))))
+				m.theme.StatusBar.Render(tokenText))
 		}
 	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("full section text: /prompt composed"))
