@@ -387,14 +387,13 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			out = append(out, c)
 			continue
 		}
-		var args nativeArgs
-		if strings.TrimSpace(tc.Arguments) != "" {
-			if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
-				c.InputErr = err.Error()
-				out = append(out, c)
-				continue
-			}
+		args, notes, err := decodeNativeArgs(tc.Name, tc.Arguments)
+		if err != nil {
+			c.InputErr = err.Error()
+			out = append(out, c)
+			continue
 		}
+		c.ArgumentNotes = strings.Join(notes, ",")
 		c.Path = strings.TrimSpace(args.Path)
 		switch tc.Name {
 		case ToolListDir:
