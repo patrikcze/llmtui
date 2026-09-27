@@ -350,6 +350,11 @@ type preparedRequest struct {
 	memoryHits  []memoryindex.Hit
 	memoryDiag  memoryRetrievalDiagnostics
 	estimate    requestTokenEstimate
+	// compacted and compactedToolResults count the older history messages
+	// (and, of those, tool results) that compression moved out of the
+	// verbatim window for this request — truncated or summarized.
+	compacted            int
+	compactedToolResults int
 }
 
 const compactedContinuationAnchor = "[Compacted continuation] Continue the original request " +
@@ -1169,17 +1174,40 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 			break
 		}
 	}
+	compactedToolResults := 0
+	for _, message := range older {
+		if message.Role == provider.RoleTool {
+			compactedToolResults++
+		}
+	}
 	return preparedRequest{
-		composed:    out,
-		decision:    decision,
-		summary:     summary,
-		agentScoped: agentScoped,
-		tools:       specs,
-		ragResults:  base.ragResults,
-		memoryHits:  base.memoryHits,
-		memoryDiag:  base.memoryDiag,
-		estimate:    est,
+		composed:             out,
+		decision:             decision,
+		summary:              summary,
+		agentScoped:          agentScoped,
+		tools:                specs,
+		ragResults:           base.ragResults,
+		memoryHits:           base.memoryHits,
+		memoryDiag:           base.memoryDiag,
+		estimate:             est,
+		compacted:            len(older),
+		compactedToolResults: compactedToolResults,
 	}, nil
+}
+
+// noteAgentCompaction records a compacting request in the active run and
+// remembers how many of the current cycle's tool results were compacted
+// away, so agentDirective can tell the executor they are gone. Called for
+// every executor request — the first of a cycle and every tool-round or
+// yield continuation.
+func (m *Model) noteAgentCompaction(prepared preparedRequest) {
+	if !m.agentRunActive() {
+		return
+	}
+	m.agentLoop.compactedToolResults = prepared.compactedToolResults
+	if prepared.decision.Compress && prepared.compacted > 0 {
+		m.agentLoop.run.RecordContextCompression(prepared.decision.Strategy, prepared.compacted, prepared.decision.Used, prepared.decision.Budget, time.Now())
+	}
 }
 
 func (m *Model) commitPrepared(prepared preparedRequest) {
@@ -1360,9 +1388,7 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 		m.refreshViewport()
 		return m.persistAgentRun()
 	}
-	if m.agentRunActive() && prepared.decision.Compress {
-		m.agentLoop.run.RecordContextCompression(prepared.decision.Strategy, prepared.decision.Used, prepared.decision.Budget, time.Now())
-	}
+	m.noteAgentCompaction(prepared)
 
 	key := m.cacheKeyFromPrepared(raw, prepared)
 	var cacheErr error
@@ -1637,6 +1663,7 @@ func (m *Model) continueChat() tea.Cmd {
 		return m.terminateAgentModelRequestBudget(reason)
 	}
 	m.commitPrepared(prepared)
+	m.noteAgentCompaction(prepared)
 	m.thinking = true
 	m.streamBuf.Reset()
 	m.reasoningLen = 0

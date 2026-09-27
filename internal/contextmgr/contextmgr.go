@@ -218,24 +218,93 @@ func stripLeakedReasoning(s string) string {
 }
 
 // Summarize keeps first sentences plus technically important lines and
-// fenced code, within the token budget.
+// fenced code, within the token budget. Under budget pressure it keeps the
+// *most recent* compacted messages — the ones closest to the work still in
+// progress — and states how many earlier ones it omitted, instead of
+// filling the budget from the oldest message forward and silently dropping
+// the newest (audit P2-8). Messages are selected newest-first as whole
+// groups (an assistant tool-call message together with its tool results,
+// so a call and its outcome are kept or dropped together) and emitted in
+// chronological order. Output is deterministic for the same input.
 func (HeuristicSummarizer) Summarize(_ context.Context, in SummaryInput) (SummaryOutput, error) {
-	var b strings.Builder
 	budget := in.MaxTokens
 	if budget <= 0 {
 		budget = 1200
 	}
-	for _, m := range in.Messages {
-		lines := condenseMessage(m)
-		for _, line := range lines {
+	groups := summaryGroups(in.Messages)
+	// Reserve room for the omission marker so selection never has to evict
+	// a group to make it fit.
+	const markerReserve = 16
+	used, first := 0, len(groups)
+	for i := len(groups) - 1; i >= 0; i-- {
+		cost := provider.EstimateTokens(strings.Join(groups[i].lines, "\n") + "\n")
+		reserve := 0
+		if i > 0 {
+			reserve = markerReserve
+		}
+		if used+cost+reserve > budget {
+			break
+		}
+		used += cost
+		first = i
+	}
+	var b strings.Builder
+	if first == len(groups) && len(groups) > 0 {
+		// Even the newest group alone exceeds the budget: keep as much of
+		// it as fits, line by line, as the previous behavior did.
+		newest := groups[len(groups)-1]
+		if omitted := len(in.Messages) - newest.messages; omitted > 0 {
+			fmt.Fprintf(&b, "- (%d earlier messages omitted from this summary)\n", omitted)
+		}
+		for _, line := range newest.lines {
 			if provider.EstimateTokens(b.String()) >= budget {
-				return SummaryOutput{Summary: strings.TrimSpace(b.String())}, nil
+				break
 			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		return SummaryOutput{Summary: strings.TrimSpace(b.String())}, nil
+	}
+	omitted := 0
+	for _, group := range groups[:first] {
+		omitted += group.messages
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "- (%d earlier messages omitted from this summary)\n", omitted)
+	}
+	for _, group := range groups[first:] {
+		for _, line := range group.lines {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
 	}
 	return SummaryOutput{Summary: strings.TrimSpace(b.String())}, nil
+}
+
+// summaryGroup is the condensed form of one or more messages that must be
+// kept or dropped together.
+type summaryGroup struct {
+	lines    []string
+	messages int
+}
+
+// summaryGroups condenses messages into selection units: each message is
+// its own unit, except that tool results are attached to the assistant
+// tool-call message that precedes them. Messages that condense to nothing
+// still count toward the omission total of the unit they belong to.
+func summaryGroups(messages []provider.Message) []summaryGroup {
+	var groups []summaryGroup
+	for _, m := range messages {
+		lines := condenseMessage(m)
+		if m.Role == provider.RoleTool && len(groups) > 0 {
+			last := &groups[len(groups)-1]
+			last.lines = append(last.lines, lines...)
+			last.messages++
+			continue
+		}
+		groups = append(groups, summaryGroup{lines: lines, messages: 1})
+	}
+	return groups
 }
 
 // condenseMessage reduces one message to its lead sentence plus lines that
