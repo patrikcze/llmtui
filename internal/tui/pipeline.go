@@ -1796,6 +1796,14 @@ func toolsRejectedError(err error) bool {
 	if !strings.Contains(s, "tool") {
 		return false
 	}
+	// A server rejecting a tool call's arguments in the history (Ollama
+	// /v1 "invalid tool call arguments", llama.cpp "failed to parse tool
+	// call arguments") is a request-content error, not proof that native
+	// tools are unsupported; dropping the tool specs cannot fix it and must
+	// not downgrade the session to the fenced protocol (audit P3-8).
+	if strings.Contains(s, "tool call argument") {
+		return false
+	}
 	return strings.Contains(s, "does not support") || strings.Contains(s, "not supported") ||
 		strings.Contains(s, "status 400") || strings.Contains(s, "status 422") ||
 		strings.Contains(s, "invalid")
