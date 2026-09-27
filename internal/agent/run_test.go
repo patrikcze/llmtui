@@ -661,7 +661,7 @@ func TestRecordContextCompressionAppendsDiagnosticEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(run.Events)
-	run.RecordContextCompression("summarize", 30000, 28672, now.Add(time.Second))
+	run.RecordContextCompression("summarize", 6, 30000, 28672, now.Add(time.Second))
 	if len(run.Events) != before+1 {
 		t.Fatalf("Events = %d, want %d", len(run.Events), before+1)
 	}
@@ -681,5 +681,37 @@ func TestRecordContextCompressionAppendsDiagnosticEvent(t *testing.T) {
 // activity flags cannot panic if invoked at the wrong time.
 func TestRecordContextCompressionOnNilRunIsSafe(t *testing.T) {
 	var run *AgentRun
-	run.RecordContextCompression("truncate", 100, 50, time.Now())
+	run.RecordContextCompression("truncate", 2, 100, 50, time.Now())
+}
+
+// TestRecordContextCompressionDeduplicatesWithinCycle keeps the bounded
+// event log readable now that every continuation request reports
+// compaction: an identical compaction in the same cycle is recorded once,
+// while a change in compacted count, or a new cycle, is recorded again.
+func TestRecordContextCompressionDeduplicatesWithinCycle(t *testing.T) {
+	run, now := newTestRun(t, DefaultLimits())
+	if err := run.BeginCycle("long episode", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		n := 0
+		for _, event := range run.Events {
+			if event.Kind == "context_compressed" {
+				n++
+			}
+		}
+		return n
+	}
+	run.RecordContextCompression("truncate", 4, 9000, 8000, now)
+	run.RecordContextCompression("truncate", 4, 9100, 8000, now)
+	if got := count(); got != 1 {
+		t.Fatalf("identical compaction recorded %d times, want 1", got)
+	}
+	run.RecordContextCompression("truncate", 6, 9500, 8000, now)
+	if got := count(); got != 2 {
+		t.Fatalf("changed compaction recorded %d times total, want 2", got)
+	}
+	if detail := run.Events[len(run.Events)-1].Detail; !strings.Contains(detail, "compacted=6") {
+		t.Fatalf("detail = %q, want the compacted count", detail)
+	}
 }

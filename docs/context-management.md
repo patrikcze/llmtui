@@ -88,6 +88,13 @@ current older-message partition and replace the previous automatic summary;
 retries and tool-loop continuations therefore cannot append the same history
 again and grow the prompt repeatedly.
 
+When the compacted messages do not all fit `context.summary_max_tokens`, the
+summary keeps the **most recent** ones — the history closest to the work in
+progress — and opens with `(N earlier messages omitted from this summary)`.
+Messages are selected newest-first as whole units (an assistant tool call
+together with its results, so a call is never kept without its outcome) and
+written in chronological order.
+
 ### Volatile tool output is not durable
 
 `local_context` results are runtime observations, not facts. The summarizer
