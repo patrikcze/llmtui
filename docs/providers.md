@@ -71,6 +71,14 @@ sampling or context fields into remote requests.
   is treated as interrupted, never as an ordinary completion: a dropped
   connection looks identical to a real finish on the wire, so a clean EOF
   alone is not proof the model actually finished.
+- Streamed tool calls are reassembled per call. The standard shape (LM Studio,
+  verified with `google/gemma-4-e4b`) gives each parallel call its own
+  `index`, with its `id` and name on the first fragment. Some
+  OpenAI-compatible servers instead reuse or omit `index` for every call in a
+  parallel batch; a fragment carrying a different `id` or function name than
+  the call already open at that index therefore starts a new call, rather
+  than concatenating two calls' arguments into one invalid call. Resending the
+  same `id`/name on every fragment never splits a call.
 - Inside an `/agent` run, a stream interrupted *after* it started (dropped
   connection, missing terminal signal, or an inactivity stall) is replayed
   once per model round: the partial text is discarded, never added to

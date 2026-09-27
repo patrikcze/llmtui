@@ -38,27 +38,44 @@ type streamToolCall struct {
 	} `json:"function"`
 }
 
-// toolCallAccumulator reassembles streamed tool-call fragments by index.
+// toolCallAccumulator reassembles streamed tool-call fragments. The
+// OpenAI streaming contract keys fragments by "index", with the call's id
+// and name on its first fragment and argument text in later ones — the
+// shape LM Studio emits (testdata/lmstudio_gemma4_parallel_tool_calls.sse).
+// Some OpenAI-compatible servers instead reuse one index (or omit it, which
+// decodes as 0) for every call in a parallel batch. Keying by index alone
+// then concatenated two calls' arguments into one invalid call (audit
+// P3-7). So each wire index maps to its current call, and a fragment that
+// names a *different* non-empty id, or a different non-empty function name,
+// than that call already has starts a new call instead. A server that
+// repeats the same id or name on every fragment never splits.
 type toolCallAccumulator struct {
 	order         []int
 	calls         map[int]*provider.ToolCall
+	current       map[int]int // wire index → key in calls
 	argumentBytes int
 }
 
 func (a *toolCallAccumulator) add(fragments []streamToolCall) error {
 	if a.calls == nil {
 		a.calls = make(map[int]*provider.ToolCall)
+		a.current = make(map[int]int)
 	}
 	for _, f := range fragments {
-		tc, ok := a.calls[f.Index]
+		key, ok := a.current[f.Index]
+		if ok && startsNewToolCall(a.calls[key], f) {
+			ok = false
+		}
 		if !ok {
 			if len(a.calls) >= provider.MaxToolCalls {
 				return fmt.Errorf("provider returned too many tool calls (maximum %d)", provider.MaxToolCalls)
 			}
-			tc = &provider.ToolCall{}
-			a.calls[f.Index] = tc
-			a.order = append(a.order, f.Index)
+			key = len(a.order)
+			a.calls[key] = &provider.ToolCall{}
+			a.current[f.Index] = key
+			a.order = append(a.order, key)
 		}
+		tc := a.calls[key]
 		if f.ID != "" {
 			tc.ID = f.ID
 		}
@@ -72,6 +89,14 @@ func (a *toolCallAccumulator) add(fragments []streamToolCall) error {
 		tc.Arguments += f.Function.Arguments
 	}
 	return nil
+}
+
+// startsNewToolCall reports whether fragment f begins a different call than
+// tc, the call currently open at f's wire index: it carries an id or a
+// function name that conflicts with one tc already has.
+func startsNewToolCall(tc *provider.ToolCall, f streamToolCall) bool {
+	return (f.ID != "" && tc.ID != "" && f.ID != tc.ID) ||
+		(f.Function.Name != "" && tc.Name != "" && f.Function.Name != tc.Name)
 }
 
 func (a *toolCallAccumulator) result() ([]provider.ToolCall, error) {
