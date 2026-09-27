@@ -1435,6 +1435,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("executor", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
 	}
+	if cmd, ok := m.admitAgentEpisodeRequest(); !ok {
+		return cmd
+	}
 
 	m.commitPrepared(prepared)
 	m.addUserMessage(raw, images...)
@@ -1661,6 +1664,9 @@ func (m *Model) continueChat() tea.Cmd {
 	req := m.buildRequestWithTools(prepared.composed.Messages, prepared.tools)
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("continuation", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
+	}
+	if cmd, ok := m.admitAgentEpisodeRequest(); !ok {
+		return cmd
 	}
 	m.commitPrepared(prepared)
 	m.noteAgentCompaction(prepared)

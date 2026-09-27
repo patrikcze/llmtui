@@ -423,3 +423,22 @@ Tests use the literal observed phrasing and, for the coverage-integration
 test, the exact five-chunk read sequence from the real run (1-200 through
 1401-1500 of 1500 lines) to prove the fix resolves that specific case, not
 just the grammar function in isolation.
+
+## Update (episode request ceiling covers every executor request, 2026-09-27)
+
+Audit P3-2: `EpisodeCheckpoint.ExecutorRequests` was incremented only when
+`handleAgentYield` admitted a yield continuation, so
+`agent.yield.max_episode_requests` never bounded tool-result rounds or
+interrupted-stream replays, contrary to its own documentation. A model that
+kept issuing tool calls never reached the yield boundary at all.
+
+The counter is now charged at admission by `admitAgentEpisodeRequest`, which
+both executor dispatch paths call (`dispatch` for the cycle's first request
+and `continueChat` for tool rounds, yield continuations and stream replays),
+immediately after the token-budget admission check. Transport retries and the
+native-tool fallback resend inside `startRequest` are added when the first
+stream message arrives. Reaching the ceiling terminates the run as
+`budget_exhausted`, like the token-budget admission. With
+`agent.yield.enabled` off nothing is counted and no checkpoint is created,
+so flag-off runs are unchanged. The counter still never feeds into
+`run.ToolCalls` or token usage.

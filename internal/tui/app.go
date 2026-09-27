@@ -1137,6 +1137,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.lastDebug.Retries = msg.retries
+		m.noteAgentEpisodeRetries(msg.retries, msg.toolsFellBack)
 		if msg.toolsFellBack && m.toolsNative {
 			// The backend rejected native tool calling; use the fenced-block
 			// prompt protocol for this provider/model from the next request on.

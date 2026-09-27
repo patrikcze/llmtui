@@ -289,3 +289,57 @@ func TestAgentYieldDisabledPreservesExistingBehavior(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentYieldEpisodeRequestCeilingBoundsToolRounds is the P3-2
+// regression: agent.yield.max_episode_requests promises to bound every
+// executor provider request in the episode, not only yield continuations.
+// A model that keeps issuing tool calls never reaches a no-tool yield
+// boundary, so before the fix this loop was bounded only by the tool-call
+// budget.
+func TestAgentYieldEpisodeRequestCeilingBoundsToolRounds(t *testing.T) {
+	read := agentScriptStep{toolCalls: []provider.ToolCall{{ID: "read-a", Name: tools.ToolReadFile, Arguments: `{"path":"a.txt"}`}}}
+	m, prov := configureAgentTestModel(t, read, read, read, read, read, read)
+	prov.contractReplies = []string{`{"criteria":["Read the file a.txt"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/a.txt", []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Yield.Enabled = true
+	m.cfg.Agent.Yield.MaxEpisodeRequests = 3
+	m.cfg.Agent.Yield.MaxNudgesWithoutProgress = 2
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read a.txt and report its contents.", nil))
+
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionBudgetExhausted {
+		t.Fatalf("run status = %q, want %q", run.Status, agent.DecisionBudgetExhausted)
+	}
+	if !strings.Contains(run.StopReason, "episode request budget exhausted (maximum 3)") {
+		t.Fatalf("stop reason = %q, want the episode request ceiling", run.StopReason)
+	}
+	// contract + exactly three executor requests; the fourth is refused.
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests = %d, want 4 (contract + 3 executor requests)", len(prov.requests))
+	}
+	if ep := run.LatestCycle().Episode; ep == nil || ep.ExecutorRequests != 3 {
+		t.Fatalf("episode checkpoint = %+v, want ExecutorRequests=3", ep)
+	}
+}
+
+// TestAgentEpisodeRequestsIgnoredWhenYieldDisabled keeps flag-off runs
+// byte-for-byte unchanged: no checkpoint is created and no ceiling applies.
+func TestAgentEpisodeRequestsIgnoredWhenYieldDisabled(t *testing.T) {
+	m, _ := configureAgentTestModel(t, agentScriptStep{text: "done"})
+	m.cfg.Agent.Yield.Enabled = false
+	m.cfg.Agent.Yield.MaxEpisodeRequests = 1
+	if cp := m.agentEpisodeCheckpoint(); cp != nil {
+		t.Fatalf("checkpoint = %+v, want nil without an active yield-enabled run", cp)
+	}
+	if _, ok := m.admitAgentEpisodeRequest(); !ok {
+		t.Fatal("admission refused with yield disabled")
+	}
+}
