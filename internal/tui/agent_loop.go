@@ -961,9 +961,16 @@ func (m *Model) agentDirective() string {
 		b.WriteString(buildAgentYieldDirective(agent.YieldDecision{Action: agent.YieldContinue, CriterionIDs: ids}, obligations, m.agentLoop.execution.ReadObservations))
 	}
 	if unresolved := run.UnresolvedCriteria(); len(unresolved) > 0 {
+		facts := make(map[string]string)
+		for _, fact := range run.CriterionReadFacts(m.agentLoop.execution) {
+			facts[fact.CriterionID] = fact.Fact
+		}
 		b.WriteString("Current unresolved acceptance criteria:\n")
 		for _, criterion := range unresolved {
 			fmt.Fprintf(&b, "- %s\n", criterion.Text)
+			if fact, ok := facts[criterion.ID]; ok {
+				fmt.Fprintf(&b, "  observed so far: %s\n", fact)
+			}
 		}
 	}
 	if len(run.Evidence) > 0 {
@@ -1049,9 +1056,6 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	if err := run.CompleteExecution(execution, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m.persistAgentRun()
-	}
-	if !run.HasCriteria() {
-		run.PinTypedCriteria(agent.InferMechanicalCriteria(run.Request, execution))
 	}
 	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
@@ -1145,6 +1149,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		EstablishCriteria: false,
 		Execution:         execution,
 		CausalFacts:       agent.UserAnswerCausalFacts(execution),
+		CriterionFacts:    formatCriterionFacts(run.CriterionReadFacts(execution)),
 		Tools:             activeToolNames(m.activeToolSpecs()),
 	}
 	model := m.effectiveVerifierModel()
@@ -1168,6 +1173,18 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		}
 		return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: out, err: err}
 	}
+}
+
+// formatCriterionFacts renders controller criterion facts as "ID: fact".
+func formatCriterionFacts(facts []agent.CriterionFact) []string {
+	if len(facts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		out = append(out, fact.CriterionID+": "+fact.Fact)
+	}
+	return out
 }
 
 // verifierRequestAdmission snapshots accounted usage and reserves each
@@ -1292,7 +1309,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		m.refreshViewport()
 		return m, persist
 	}
-	result = satisfyLegacyPassedCriteria(run, result)
+	result = satisfyLegacyPassedCriteria(run, result, decisionShadowVerifierPath == "semantic")
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m, m.persistAgentRun()
@@ -1352,19 +1369,34 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	return m, tea.Batch(persist, shadowCmd)
 }
 
-// satisfyLegacyPassedCriteria keeps older verifier configurations compatible
-// with a contract-first run. New verifier prompts must send per-ID updates;
-// an older valid envelope that says only "passed" is interpreted by the TUI
-// adapter as passing every unresolved semantic criterion it was given. Typed
-// criteria remain exclusively controlled by deterministic runtime evidence.
-func satisfyLegacyPassedCriteria(run *agent.AgentRun, result agent.VerificationResult) agent.VerificationResult {
+// satisfyLegacyPassedCriteria interprets a "passed" verdict that carries no
+// per-ID criteria updates.
+//
+// From the semantic (model) verifier it is used only where it is
+// unambiguous — exactly one unresolved criterion was given for judgment.
+// Over several criteria a bare pass says nothing about which ones the
+// evidence supports (the verifier is first asked to repair it in
+// agentverify.Verify), so nothing is satisfied implicitly and the
+// unresolved criteria drive the next cycle (audit P2-6).
+//
+// A controller-synthesized pass (deterministic or off verifier mode, where
+// the user chose not to run a semantic verifier) keeps its configured
+// meaning and resolves every unresolved criterion, as before.
+func satisfyLegacyPassedCriteria(run *agent.AgentRun, result agent.VerificationResult, fromSemanticVerifier bool) agent.VerificationResult {
 	if run == nil || result.Verdict != agent.VerificationPassed || len(result.CriteriaUpdates) != 0 {
 		return result
 	}
-	for _, criterion := range run.UnresolvedSemanticCriteria() {
+	unresolved := run.UnresolvedSemanticCriteria()
+	note := "controller verification passed the pinned contract"
+	if fromSemanticVerifier {
+		if len(unresolved) != 1 {
+			return result
+		}
+		note = "semantic verifier passed the pinned contract"
+	}
+	for _, criterion := range unresolved {
 		result.CriteriaUpdates = append(result.CriteriaUpdates, agent.CriterionUpdate{
-			ID: criterion.ID, Status: agent.CriterionSatisfied,
-			Note: "semantic verifier passed the pinned contract",
+			ID: criterion.ID, Status: agent.CriterionSatisfied, Note: note,
 		})
 	}
 	return result
