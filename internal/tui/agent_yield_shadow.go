@@ -276,6 +276,8 @@ func yieldShadowToolOutcome(call agent.ToolCallRecord) string {
 		return "blocked"
 	case agent.ActionUnknown:
 		return "unknown"
+	case agent.ActionRejected:
+		return "rejected"
 	case agent.ActionExecuted:
 		if call.Succeeded {
 			return "executed_success"

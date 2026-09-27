@@ -175,7 +175,7 @@ func (r *AgentRun) CompleteExecution(result ExecutionResult, now time.Time) erro
 	}
 	boundExecution(&result)
 	cycle.Execution = &result
-	r.ToolCalls += len(result.ToolCalls)
+	r.ToolCalls += ExecutedToolCalls(result.ToolCalls)
 	r.AppendEvidence(CollectEvidence(cycle.Number, result))
 	r.Stage = StageVerifier
 	r.UpdatedAt = now.UTC()
