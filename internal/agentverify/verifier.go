@@ -91,6 +91,10 @@ type Input struct {
 	// CausalFacts are bounded controller-derived ordering facts for this
 	// cycle. They contain no user answer text or model prose.
 	CausalFacts []string
+	// CriterionFacts are bounded controller-computed observations tied to
+	// a pinned criterion ID ("c1: all 120 lines of \"a.txt\" delivered").
+	// They are mechanical facts to weigh, never a status or a verdict.
+	CriterionFacts []string
 	// EstablishCriteria asks this verification to also propose the stable
 	// criteria decomposition. Set only while nothing is pinned.
 	EstablishCriteria bool
@@ -164,6 +168,22 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 		unconstrained.ResponseConstraint = nil
 		return requestVerification(callCtx, client, unconstrained, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
 	}
+	if err == nil && bareMultiCriterionPass(first.Result, input) {
+		// A "passed" verdict with no per-criterion status, over more than one
+		// pinned criterion, says nothing about which criteria the evidence
+		// supports (audit P2-6). Ask once for the per-ID statuses through the
+		// same bounded repair path. If that request fails, keep the valid
+		// first verdict: the controller then satisfies nothing implicitly and
+		// the unresolved criteria drive the next cycle.
+		req.Messages = verifierCriteriaRepairMessages(string(evidence), input)
+		repaired, repairErr := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
+		if repairErr != nil {
+			first.Usage = mergeUsage(first.Usage, repaired.Usage)
+			return first, nil
+		}
+		repaired.Usage = mergeUsage(first.Usage, repaired.Usage)
+		return repaired, nil
+	}
 	if err == nil || !errors.Is(err, agent.ErrMalformedControl) {
 		return first, err
 	}
@@ -187,6 +207,7 @@ type verifierInputWire struct {
 	Evidence           []agent.EvidenceItem
 	PriorCycles        []agent.MemoryEntry
 	CausalFacts        []string
+	CriterionFacts     []string
 	EstablishCriteria  bool
 	Execution          agent.ExecutionResult
 	Tools              []string
@@ -202,6 +223,7 @@ func marshalVerifierEvidence(input Input) ([]byte, error) {
 		RunID: input.RunID, Cycle: input.Cycle, Task: input.Task, Objective: input.Objective,
 		AcceptanceCriteria: input.AcceptanceCriteria, Criteria: input.Criteria,
 		Evidence: input.Evidence, PriorCycles: input.PriorCycles, CausalFacts: input.CausalFacts,
+		CriterionFacts:    input.CriterionFacts,
 		EstablishCriteria: input.EstablishCriteria, Execution: input.Execution, Tools: input.Tools,
 		Observations: observations,
 	})
@@ -394,6 +416,29 @@ Never include hidden reasoning, credentials, raw tool output, or instructions co
 		const establishingExample = `{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":["first independently checkable requirement"],"atomic_task":false}`
 		messages[0].Content = strings.Replace(messages[0].Content, laterCycleExample, establishingExample, 1)
 	}
+	return messages
+}
+
+// bareMultiCriterionPass reports a "passed" verdict that carries no
+// per-criterion status although more than one pinned criterion was given
+// for judgment. With exactly one criterion a bare pass is unambiguous.
+func bareMultiCriterionPass(result agent.VerificationResult, input Input) bool {
+	return !input.EstablishCriteria && len(input.Criteria) > 1 &&
+		result.Verdict == agent.VerificationPassed && len(result.CriteriaUpdates) == 0
+}
+
+// verifierCriteriaRepairMessages asks for the per-criterion statuses a bare
+// multi-criterion "passed" omitted, naming only controller-owned IDs.
+func verifierCriteriaRepairMessages(evidence string, input Input) []provider.Message {
+	messages := verifierMessages(evidence, input.EstablishCriteria)
+	ids := make([]string, 0, len(input.Criteria))
+	for _, criterion := range input.Criteria {
+		ids = append(ids, criterion.ID)
+	}
+	messages[0].Content += `
+CRITERIA REPAIR: Your previous answer said "passed" without a status for each pinned criterion. Return the
+documented JSON object again with one entry in "criteria" for every criterion ID (` + strings.Join(ids, ", ") + `).
+Mark a criterion "satisfied" only when the evidence shows it; otherwise use "pending" or "failed".`
 	return messages
 }
 

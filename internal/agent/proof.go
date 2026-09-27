@@ -37,21 +37,11 @@ func (r *AgentRun) ContractCoverageJustified() bool {
 
 // requestNamesUnaddressedMutation reports whether request names a
 // mutation-shaped action that the sole pinned criterion is not positioned to
-// prove. It only ever flags a gap when that criterion is semantic (Kind
-// CriterionSemantic, or "" for pre-typed-criteria records): a typed
-// mechanical criterion (CriterionFileState, CriterionCommandExit,
-// CriterionTestResult, ...) can only exist here because
-// InferMechanicalCriteria inferred it, and that inference already refuses
-// any request whose text looks multi-part — see its own doc comment — so a
-// single typed criterion is proof the request was single-action to begin
-// with. A semantic criterion carries no such guarantee: it came from a
-// contract's own free-form decomposition of a request that may have had
-// more than one part.
+// prove. A single criterion came from the contract's own free-form
+// decomposition of a request that may have had more than one part, so a
+// mutation verb in the request means the verifier must still look.
 func requestNamesUnaddressedMutation(request string, criteria []Criterion) bool {
 	if len(criteria) != 1 {
-		return false
-	}
-	if kind := criteria[0].Kind; kind != CriterionSemantic && kind != "" {
 		return false
 	}
 	normalized := strings.ToLower(request)

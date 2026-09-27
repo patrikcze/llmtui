@@ -12,10 +12,9 @@ import (
 	"github.com/patrikcze/llmtui/internal/decision"
 )
 
-// mechanicallyCompleteExecution builds an ExecutionResult that satisfies
-// agent.MechanicallyComplete: at least one succeeded tool call, no errors,
-// no failed tests, a non-empty summary, no pending user input.
-func mechanicallyCompleteExecution() agent.ExecutionResult {
+// cleanExecution builds a clean cycle: at least one succeeded tool call,
+// no errors, no failed tests, a non-empty summary, no pending user input.
+func cleanExecution() agent.ExecutionResult {
 	return agent.ExecutionResult{
 		Summary:   "wrote the file",
 		ToolCalls: []agent.ToolCallRecord{{Name: "write_file", Succeeded: true}},
@@ -68,14 +67,13 @@ func TestPlanAgentVerificationBranches(t *testing.T) {
 			wantRoute: agentVerificationPlanSemantic, wantEligible: false,
 		},
 		{
-			name: "adaptive, no criteria, cycle==1, mechanically complete: still falls to semantic",
-			run:  &agent.AgentRun{Cycle: 1}, execution: mechanicallyCompleteExecution(), mode: config.VerifierModeAdaptive,
+			// The mechanically-complete shortcut required a run without
+			// criteria, which the contract-first flow never produces; it was
+			// removed with the typed criteria (audit P2-6). A clean cycle now
+			// always reaches the semantic verifier.
+			name: "adaptive, clean execution: falls to semantic (no mechanical shortcut)",
+			run:  &agent.AgentRun{Cycle: 2}, execution: cleanExecution(), mode: config.VerifierModeAdaptive,
 			wantRoute: agentVerificationPlanSemantic, wantEligible: false,
-		},
-		{
-			name: "adaptive, no criteria, cycle!=1, mechanically complete: synthetic pass, eligible",
-			run:  &agent.AgentRun{Cycle: 2}, execution: mechanicallyCompleteExecution(), mode: config.VerifierModeAdaptive,
-			wantRoute: agentVerificationPlanSynthetic, wantEligible: true, wantVerdict: agent.VerificationPassed,
 		},
 		{
 			name: "adaptive, conclusive deterministic failure: synthetic, never eligible",
@@ -86,22 +84,8 @@ func TestPlanAgentVerificationBranches(t *testing.T) {
 			mode: config.VerifierModeAdaptive, wantRoute: agentVerificationPlanSynthetic, wantEligible: false, wantVerdict: agent.VerificationFailed,
 		},
 		{
-			name: "adaptive, unresolved user-input criterion: synthetic inconclusive, never eligible",
-			run: &agent.AgentRun{Cycle: 2, Criteria: []agent.Criterion{
-				{ID: "c1", Kind: agent.CriterionUserInput, Status: agent.CriterionPending, Text: "need a path"},
-			}},
-			mode: config.VerifierModeAdaptive, wantRoute: agentVerificationPlanSynthetic, wantEligible: false, wantVerdict: agent.VerificationInconclusive,
-		},
-		{
-			name: "adaptive, unresolved deterministic criterion: synthetic failed, never eligible",
-			run: &agent.AgentRun{Cycle: 2, Criteria: []agent.Criterion{
-				{ID: "c1", Kind: agent.CriterionFileState, Status: agent.CriterionPending},
-			}},
-			mode: config.VerifierModeAdaptive, wantRoute: agentVerificationPlanSynthetic, wantEligible: false, wantVerdict: agent.VerificationFailed,
-		},
-		{
 			name: "always mode: falls to semantic (no synthetic shortcut of its own)",
-			run:  &agent.AgentRun{Cycle: 2}, execution: mechanicallyCompleteExecution(), mode: config.VerifierModeAlways,
+			run:  &agent.AgentRun{Cycle: 2}, execution: cleanExecution(), mode: config.VerifierModeAlways,
 			wantRoute: agentVerificationPlanSemantic, wantEligible: false,
 		},
 		{
@@ -242,11 +226,11 @@ func TestGuardedAssistWithNoProfileNeverDispatches(t *testing.T) {
 	// Deliberately NOT calling withTestCalibrationProfile: decisionCalibrationProfiles
 	// stays at its real, shipped, empty value for this test.
 	m, _ := configureGuardedAssistTestModel(t, &fakeDecisionEngine{})
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
-	run.Cycle = 2 // MechanicallyComplete eligibility excludes cycle 1.
+	run := newGuardedAssistReadyRun(t, cleanExecution())
+	run.Cycle = 2
 	m.agentLoop.run = run
 
-	cmd := m.dispatchGuardedAssist(run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
+	cmd := m.dispatchGuardedAssist(run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
 	if cmd != nil {
 		t.Fatal("dispatchGuardedAssist returned a command with no calibration profile resolved")
 	}
@@ -266,9 +250,9 @@ func TestGuardedAssistDisabledEngineNeverDispatches(t *testing.T) {
 		t.Fatalf("decisionShadow = %+v, want nil when decision_engine.enabled is false", m.decisionShadow)
 	}
 
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	m.agentLoop.run = run
-	cmd := m.dispatchGuardedAssist(run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
+	cmd := m.dispatchGuardedAssist(run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
 	if cmd != nil {
 		t.Fatal("dispatchGuardedAssist returned a command with the decision engine disabled")
 	}
@@ -284,9 +268,9 @@ func TestGuardedAssistShadowModeNeverDispatches(t *testing.T) {
 	m.cfg.DecisionEngine.Enabled = true
 	m.cfg.DecisionEngine.Mode = config.DecisionEngineModeShadow
 	fake := wireFakeDecisionShadow(m, &fakeDecisionEngine{})
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	m.agentLoop.run = run
-	cmd := m.dispatchGuardedAssist(run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
+	cmd := m.dispatchGuardedAssist(run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
 	if cmd != nil {
 		t.Fatal("dispatchGuardedAssist returned a command while mode=shadow")
 	}
@@ -313,7 +297,7 @@ func TestGuardedAssistNoRemainingBudgetNeverDispatches(t *testing.T) {
 		CreatedAt: time.Now().Add(-time.Hour),
 	}
 	m.agentLoop.run = run
-	cmd := m.dispatchGuardedAssist(run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
+	cmd := m.dispatchGuardedAssist(run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
 	if cmd != nil {
 		t.Fatal("dispatchGuardedAssist returned a command with no remaining run budget")
 	}
@@ -330,8 +314,8 @@ func TestGuardedAssistEscalatesAboveThreshold(t *testing.T) {
 		&fakeDecisionEngine{preVerifierResult: &preVerifier},
 		agentScriptStep{text: verifierJSON("passed", "escalated verifier passed it", "", false, false)},
 	)
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
-	cmd := dispatchGuardedAssistForTest(t, m, run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "fallback, should not be used"})
+	run := newGuardedAssistReadyRun(t, cleanExecution())
+	cmd := dispatchGuardedAssistForTest(t, m, run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "fallback, should not be used"})
 	driveAgentCommands(t, m, cmd)
 
 	if run.Status != agent.DecisionDone {
@@ -355,9 +339,9 @@ func TestGuardedAssistDoesNotEscalateBelowThreshold(t *testing.T) {
 	withTestCalibrationProfile(t, "english-mlx", decisionCalibrationProfile{Threshold: 0.9, MaxWait: 2 * time.Second})
 	preVerifier := fakePreVerifierResult(0.1, 0.9)
 	m, prov := configureGuardedAssistTestModel(t, &fakeDecisionEngine{preVerifierResult: &preVerifier})
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "original synthetic result"}
-	cmd := dispatchGuardedAssistForTest(t, m, run, mechanicallyCompleteExecution(), fallback)
+	cmd := dispatchGuardedAssistForTest(t, m, run, cleanExecution(), fallback)
 	driveAgentCommands(t, m, cmd)
 
 	if run.Status != agent.DecisionDone {
@@ -381,9 +365,9 @@ func TestGuardedAssistDoesNotEscalateBelowThreshold(t *testing.T) {
 func TestGuardedAssistUnavailableFallsBackToSynthetic(t *testing.T) {
 	withTestCalibrationProfile(t, "english-mlx", decisionCalibrationProfile{Threshold: 0.1, MaxWait: 2 * time.Second})
 	m, prov := configureGuardedAssistTestModel(t, &fakeDecisionEngine{err: errors.New("worker crashed")})
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed}
-	cmd := dispatchGuardedAssistForTest(t, m, run, mechanicallyCompleteExecution(), fallback)
+	cmd := dispatchGuardedAssistForTest(t, m, run, cleanExecution(), fallback)
 	driveAgentCommands(t, m, cmd)
 
 	if run.Status != agent.DecisionDone {
@@ -406,9 +390,9 @@ func TestGuardedAssistUnavailableFallsBackToSynthetic(t *testing.T) {
 func TestGuardedAssistTimeoutFallsBackToSynthetic(t *testing.T) {
 	withTestCalibrationProfile(t, "english-mlx", decisionCalibrationProfile{Threshold: 0.1, MaxWait: 20 * time.Millisecond})
 	m, prov := configureGuardedAssistTestModel(t, &fakeDecisionEngine{delay: time.Second})
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed}
-	cmd := dispatchGuardedAssistForTest(t, m, run, mechanicallyCompleteExecution(), fallback)
+	cmd := dispatchGuardedAssistForTest(t, m, run, cleanExecution(), fallback)
 
 	done := make(chan struct{})
 	go func() {
@@ -449,9 +433,9 @@ func TestGuardedAssistFeedsPreVerifierCorrelationExactlyOnce(t *testing.T) {
 	preVerifier := fakePreVerifierResult(0.2, 0.9)
 	fake := &fakeDecisionEngine{preVerifierResult: &preVerifier}
 	m, _ := configureGuardedAssistTestModel(t, fake)
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed}
-	cmd := dispatchGuardedAssistForTest(t, m, run, mechanicallyCompleteExecution(), fallback)
+	cmd := dispatchGuardedAssistForTest(t, m, run, cleanExecution(), fallback)
 	driveAgentCommands(t, m, cmd)
 
 	if fake.predicts.Load() != 2 {
@@ -474,9 +458,9 @@ func TestGuardedAssistCancellationNeverResolvesStaleCycle(t *testing.T) {
 	m.cfg.DecisionEngine.Mode = config.DecisionEngineModeGuardedAssist
 	wireFakeDecisionShadow(m, &fakeDecisionEngine{})
 
-	run := newGuardedAssistReadyRun(t, mechanicallyCompleteExecution())
+	run := newGuardedAssistReadyRun(t, cleanExecution())
 	m.agentLoop.run = run
-	cmd := m.dispatchGuardedAssist(run, mechanicallyCompleteExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
+	cmd := m.dispatchGuardedAssist(run, cleanExecution(), agent.VerificationResult{Verdict: agent.VerificationPassed}, run.ID, run.Cycle, 1)
 	if cmd == nil {
 		t.Fatal("dispatchGuardedAssist returned nil with a valid profile/engine/budget")
 	}

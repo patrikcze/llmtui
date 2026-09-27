@@ -262,6 +262,12 @@ func decodeRun(data []byte) (*AgentRun, error) {
 		}
 	}
 	for i := range run.Criteria {
+		// Legacy typed kinds (command_exit, file_state, test_result,
+		// user_input) no longer exist; a pending one must stay resolvable,
+		// so it becomes semantic and goes to the verifier like any other.
+		if kind := run.Criteria[i].Kind; kind != "" && kind != CriterionSemantic {
+			run.Criteria[i].Kind = CriterionSemantic
+		}
 		if run.Criteria[i].Assessment == nil {
 			continue
 		}
