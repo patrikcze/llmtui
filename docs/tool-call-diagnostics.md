@@ -78,6 +78,16 @@ the privacy posture without making it executable.
 - `unknown_tool` and `invalid_arguments` remain normal model-correctable tool
   results. Approval policy and all destructive-operation protections stay
   authoritative.
+- Built-in native tools decode arguments against the same schema the model
+  was offered. A key the tool does not declare (for example `start_line` or
+  `file_path` on `read_file`) is rejected with `invalid_arguments` naming the
+  keys the tool accepts — it is never silently dropped. Only unambiguous
+  scalar spellings are coerced: a base-10 integer string or an integral
+  number such as `200.0` for an integer property, and `"true"`/`"false"` for a
+  boolean property. Each coercion is recorded as `arguments_coerced`, whose
+  detail names only the property and target type (`limit=integer`), never a
+  value. Other type mismatches produce messages such as
+  `"limit" must be an integer, got string`.
 
 The conformance probe reports `required selection: not_supported` because the
 shared `provider.ChatRequest` contract deliberately has no `tool_choice:

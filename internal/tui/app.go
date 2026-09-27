@@ -1690,11 +1690,15 @@ func (m *Model) startToolBatch(calls []tools.Call) tea.Cmd {
 		}
 		classification := provider.ToolCallNativeReceived
 		stage := provider.ToolCallStageToolResolved
+		detail := ""
 		if call.InputErr != "" {
 			classification = provider.ToolCallInvalidArguments
 			stage = provider.ToolCallStageArgumentsInvalid
+		} else if call.ArgumentNotes != "" {
+			classification = provider.ToolCallArgumentsCoerced
+			detail = call.ArgumentNotes
 		}
-		m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: stage, Classification: classification, ToolCallID: call.ID, ToolName: call.Tool})
+		m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: stage, Classification: classification, ToolCallID: call.ID, ToolName: call.Tool, Detail: detail})
 	}
 	if cmd, handled := m.handleAskUserBatch(calls); handled {
 		return cmd
