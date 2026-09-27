@@ -324,9 +324,10 @@ type AgentConfig struct {
 // docs/architecture/decisions/0013-agent-execution-yield-policy.md): a clean
 // no-tool completion with a still-actionable mechanical obligation (Phase
 // 2's narrow exact-read grammar only) continues in the same cycle instead of
-// going straight to verification. Disabled by default; when disabled the
-// executor's no-tool completion behaves exactly as before this feature
-// existed. Requires EnforceBudgetsLive — see EvaluateYield's budget checks.
+// going straight to verification. Enabled by default; when disabled the
+// executor's no-tool completion goes straight to verification, exactly as
+// before this feature existed. Requires EnforceBudgetsLive — see
+// EvaluateYield's budget checks.
 type AgentYieldConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 	// MaxEpisodeRequests bounds every provider attempt this episode's
@@ -1078,7 +1079,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.verifier.timeout", "120s")
 	v.SetDefault("agent.verifier.max_attempts", 2)
 	v.SetDefault("agent.enforce_budgets_live", true)
-	v.SetDefault("agent.yield.enabled", false)
+	v.SetDefault("agent.yield.enabled", true)
 	v.SetDefault("agent.yield.max_episode_requests", 64)
 	v.SetDefault("agent.yield.max_nudges_without_progress", 2)
 
@@ -1344,10 +1345,10 @@ agent:
     timeout: "120s"
   # Same-episode continuation for a narrow, mechanically provable obligation
   # (currently only an exact "read this file" criterion) instead of jumping
-  # straight to verification on a clean no-tool completion. Off by default;
-  # off behaves exactly as before this existed.
+  # straight to verification on a clean no-tool completion. On by default;
+  # set enabled: false to go straight to verification as before.
   yield:
-    enabled: false
+    enabled: true
     max_episode_requests: 64
     max_nudges_without_progress: 2
 

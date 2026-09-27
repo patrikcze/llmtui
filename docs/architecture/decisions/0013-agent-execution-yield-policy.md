@@ -442,3 +442,15 @@ stream message arrives. Reaching the ceiling terminates the run as
 `agent.yield.enabled` off nothing is counted and no checkpoint is created,
 so flag-off runs are unchanged. The counter still never feeds into
 `run.ToolCalls` or token usage.
+
+## Update (enabled by default, 2026-09-27)
+
+`agent.yield.enabled` now defaults to `true`. The prerequisites for turning
+it on are in place: every executor request is charged to
+`max_episode_requests` (see the update above), trailing tool results and new
+evidence are accounted for (#139, #143), and read-coverage identity is
+stable (#144). Both ceilings (`max_episode_requests: 64`,
+`max_nudges_without_progress: 2`) and `enforce_budgets_live: true` stay at
+their defaults. Setting `agent.yield.enabled: false` restores the previous
+straight-to-verification behavior exactly. Agent mode itself stays off by
+default, so ordinary chat is unaffected.

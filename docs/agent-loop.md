@@ -306,18 +306,19 @@ or raise `tools.no_progress.threshold` (default `3`) if it blocks a
 legitimate pattern this fingerprinting doesn't yet recognize as
 progressing.
 
-## Same-episode yield continuation (opt-in)
+## Same-episode yield continuation
 
 A "yield" is a clean, no-tool assistant completion — it is not task
-completion. By default (`agent.yield.enabled: false`) a yield goes straight
-to verification below, exactly as it always has. Set `agent.yield.enabled:
-true` to let a narrow, mechanically provable class of missing evidence
-continue in the *same* executor episode first: currently only an exact
+completion. By default (`agent.yield.enabled: true`) a narrow, mechanically
+provable class of missing evidence continues in the *same* executor episode
+before verification: currently only an exact
 "Read the file `<path>`." acceptance criterion the executor has not yet
 proven. This is not a general "keep retrying" mode — a criterion requiring
 model judgment (comparison, review, open-ended inspection) is never treated
 as an obligation here and always falls through to verification unchanged,
 per [ADR 0013](architecture/decisions/0013-agent-execution-yield-policy.md).
+Set `agent.yield.enabled: false` to send every yield straight to verification,
+as before this feature existed.
 
 Proof is coverage-aware, not just "a `read_file` call touching this path
 succeeded": a successful read that only delivered part of a larger file
@@ -527,7 +528,7 @@ Default hard limits are:
 | Elapsed time | `30m` | Active run duration; time waiting for your answer (`needs_user_input`) is excluded |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
 | Verifier attempts | `2` | `agent.verifier.max_attempts` per cycle, see [Verification](#verification) |
-| Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation-opt-in) |
+| Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation) |
 | Yield episode requests | `64` | `agent.yield.max_episode_requests`, only when `agent.yield.enabled` |
 
 Passing all observable criteria ends as `done`. Verified progress with

@@ -246,8 +246,8 @@ func TestAgentYieldSourceChangedBetweenPartialReadsNeverFalselyCompletes(t *test
 }
 
 // TestAgentYieldDisabledPreservesExistingBehavior is Test Case O
-// (mode compatibility): with agent.yield.enabled left at its default
-// (false), a scenario that would otherwise trigger a same-cycle nudge must
+// (mode compatibility): with agent.yield.enabled set to false (the test
+// harness's zero value; the shipped default is true), a scenario that would otherwise trigger a same-cycle nudge must
 // behave exactly like the pre-Phase-2 code path — straight to verification,
 // using the existing verifier to notice the unresolved criterion, never a
 // same-cycle continuation.
