@@ -1,6 +1,9 @@
 package agent
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // This file is the Phase 2 completion-integrity layer: it stops the
 // controller from treating "every pinned criterion is resolved" as
@@ -44,11 +47,30 @@ func requestNamesUnaddressedMutation(request string, criteria []Criterion) bool 
 	if len(criteria) != 1 {
 		return false
 	}
-	normalized := strings.ToLower(request)
-	for _, verb := range mutationVerbs {
-		if strings.Contains(normalized, verb) {
-			return true
+	words := strings.FieldsFunc(strings.ToLower(request), func(r rune) bool { return !unicode.IsLetter(r) })
+	for _, word := range words {
+		for _, verb := range mutationVerbs {
+			if wordNamesVerb(word, verb) {
+				return true
+			}
 		}
+	}
+	return false
+}
+
+// wordNamesVerb reports whether word is a form of verb. Matching is per
+// word rather than per substring so "return" or "prune" no longer read as
+// "run" (audit P3-5), while staying deliberately loose in the safe
+// direction: inflections ("writes", "created", "running"), the e-dropping
+// "-ing" form ("writing", "saving"), and prefixed forms ("overwrite",
+// "rerun", "resend") all still count. A false positive only costs one
+// semantic verification pass.
+func wordNamesVerb(word, verb string) bool {
+	if strings.HasPrefix(word, verb) || strings.HasSuffix(word, verb) {
+		return true
+	}
+	if stem, ok := strings.CutSuffix(verb, "e"); ok && strings.HasPrefix(word, stem+"ing") {
+		return true
 	}
 	return false
 }
