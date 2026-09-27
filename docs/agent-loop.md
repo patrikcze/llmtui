@@ -611,6 +611,10 @@ run's live tool-call budget continues from its persisted tool-call total.
 When a live run stops as `needs_user_input`, the next normal user message
 resumes that same run in a fresh cycle and is included as the new input; it does
 not silently grant a previously denied permission.
+A run saved while its task contract was waiting on a clarifying question is
+the exception: `/agent resume` restores that pause and shows the stored
+question again, without a model request, and your next message becomes the
+contract's clarification (`contract_input`).
 
 An explicit `ask_user` tool call takes a narrower live path: the executor cycle
 pauses before verification, and the selected or typed answer returns as the

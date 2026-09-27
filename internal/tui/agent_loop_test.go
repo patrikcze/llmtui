@@ -902,6 +902,52 @@ func TestAgentResumeWithoutCriteriaEstablishesContractBeforeFreshCycle(t *testin
 	}
 }
 
+// TestAgentResumeAtContractQuestionWaitsForAnswer covers a run persisted
+// while its task contract waited on a clarifying question. /agent resume
+// must restore that pause and surface the stored question instead of
+// re-running the contract without the answer; the next message is then the
+// contract input.
+func TestAgentResumeAtContractQuestionWaitsForAnswer(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "notes.md was read."},
+		agentScriptStep{text: verifierJSON("passed", "criteria satisfied", "", false, false)},
+	)
+	prov.contractReplies = []string{`{"criteria":["Report which file was meant"],"needs_user_input":false,"question":"","user_options":[]}`}
+	run, err := agent.NewRun("resume-contract-question", "Read the file I mentioned.", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginContract(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.WaitForContractInput("Which file did you mean?", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cmd := m.handleAgentResume(agentResumeMsg{run: run})
+	driveAgentCommands(t, m, cmd)
+
+	if len(prov.requests) != 0 {
+		t.Fatalf("requests = %d, want 0: resume must not re-run the contract before the answer", len(prov.requests))
+	}
+	if got := m.agentContractInputQuestion(); got != "Which file did you mean?" {
+		t.Fatalf("contract input question = %q, want the stored question", got)
+	}
+	if !m.agentOn || !m.agentNeedsUserInput() {
+		t.Fatalf("agentOn=%v needsInput=%v, want the paused run adopted", m.agentOn, m.agentNeedsUserInput())
+	}
+
+	driveAgentCommands(t, m, m.resumeVerifiedRunWithInput("notes.md", nil))
+
+	got := m.agentLoop.run
+	if got.ID != "resume-contract-question" || got.ContractInput != "notes.md" || got.Status != agent.DecisionDone {
+		t.Fatalf("run = %+v, want the same run completed with the answer as contract input", got)
+	}
+	if len(prov.requests) == 0 || !requestContains(prov.requests[0], "notes.md") {
+		t.Fatalf("first request after the answer did not carry it into the contract: %+v", prov.requests)
+	}
+}
+
 func TestVerifiedAgentMemoryOffSuppressesPromotion(t *testing.T) {
 	m, _ := configureAgentTestModel(t,
 		agentScriptStep{text: "Implemented the bounded change."},

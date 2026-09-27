@@ -2040,14 +2040,23 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	}
+	// A run saved while the task contract waited on a clarifying question
+	// is restored to that same pause rather than resumed: re-running the
+	// contract without the answer only makes the model ask again. The stored
+	// question is shown above the composer, and the next message goes through
+	// resumeVerifiedRunWithInput, which records it as ContractInput.
+	awaitingContractInput := msg.run.Status == agent.DecisionNeedsUserInput &&
+		msg.run.Stage == agent.StageContract && !msg.run.HasCriteria()
 	next := msg.run.Objective
 	if n := len(msg.run.Memory); n > 0 && strings.TrimSpace(msg.run.Memory[n-1].RecommendedNext) != "" {
 		next = msg.run.Memory[n-1].RecommendedNext
 	}
-	if err := msg.run.Resume(next, time.Now()); err != nil {
-		m.errText = "resume agent run: " + err.Error()
-		m.refreshViewport()
-		return m, nil
+	if !awaitingContractInput {
+		if err := msg.run.Resume(next, time.Now()); err != nil {
+			m.errText = "resume agent run: " + err.Error()
+			m.refreshViewport()
+			return m, nil
+		}
 	}
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
@@ -2069,6 +2078,11 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.observations = agent.NewObservationCache()
 	m.agentLoop.evictedResourceKeys = nil
 	m.agentOn = true
+	if awaitingContractInput {
+		m.notice = fmt.Sprintf("agent %s · resumed — answer the task-contract question to continue", shortRunID(msg.run.ID))
+		m.refreshViewport()
+		return m, nil
+	}
 	if !msg.run.HasCriteria() {
 		return m, tea.Batch(m.persistAgentRun(), m.startAgentContract())
 	}
