@@ -321,7 +321,18 @@ itself. The delivered line windows from every `read_file` call on the same
 target this cycle are unioned — gaplessly, and only within one consistent
 source version — and the criterion resolves once that union covers the
 whole file. Windows from two different file versions (a changed
-`SourceDigest`) are never combined into one coverage claim.
+`SourceDigest`) are never combined into one coverage claim; a read of the
+newer version supersedes the older version's windows.
+
+Targets are compared in one canonical spelling on both sides — lowercased,
+cleaned, with a leading `./` dropped — so a read of `./src/main.go` proves a
+criterion naming `src/main.go`. Overlapping or adjacent windows for the same
+target merge into one, so rereads and paging never use up the bounded
+receipt list (32 windows per cycle); when it is full, the target read least
+recently is dropped as a whole, never a single window of a file still being
+read. For the no-progress nudge budget, progress on an obligation is a
+strict increase in its contiguous covered lines over the episode's best so
+far, so coverage that is lost and read again never counts as progress.
 
 When an obligation is still outstanding and the required tool capability is
 offered, the executor receives one more bounded request in the same cycle —

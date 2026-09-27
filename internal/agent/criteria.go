@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -444,6 +445,42 @@ func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched,
 // line range used only by readCoverageComplete's local interval merge.
 type readInterval struct{ start, end int64 }
 
+// CanonicalTarget is the single comparison form for a read target, shared
+// by exact-read criterion targets and delivered read observations so the
+// two always compare in one spelling (audit P2-5: "./src/x.go" never matched
+// a criterion naming "src/x.go"). It lowercases (the historical rule on both
+// sides), converts backslashes to slashes, cleans the path, and drops a
+// leading "./". It is purely lexical — no filesystem access; making an
+// absolute in-workspace path relative is the caller's job. A target that
+// is empty or escapes upward ("..") returns "" and never matches anything.
+func CanonicalTarget(target string) string {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return ""
+	}
+	target = path.Clean(strings.ReplaceAll(target, "\\", "/"))
+	target = strings.TrimPrefix(target, "./")
+	if target == "." || target == ".." || strings.HasPrefix(target, "../") {
+		return ""
+	}
+	return target
+}
+
+// sameReadTarget reports whether two targets name the same resource in
+// CanonicalTarget form.
+func sameReadTarget(a, b string) bool {
+	ca := CanonicalTarget(a)
+	return ca != "" && ca == CanonicalTarget(b)
+}
+
+// ReadCoverage reports target's contiguous delivered line coverage from line
+// 1 and whether it rests on one consistent source version with a known
+// total. It is the monotonic progress measure for exact-read obligations.
+func ReadCoverage(target string, observations []ReadObservation) (covered int64, ok bool) {
+	covered, _, haveTotal, consistent := readCoverageState(target, observations)
+	return covered, consistent && haveTotal
+}
+
 // readCoverageComplete reports whether target's ReadObservations, unioned
 // within one consistent source version, span the whole known file — the
 // coverage-aware replacement for "some call touching this path succeeded"
@@ -473,15 +510,14 @@ func readCoverageComplete(target string, observations []ReadObservation) bool {
 // readCoverageComplete and NextReadOffset so the two can never disagree
 // about what "covered so far" means.
 func readCoverageState(target string, observations []ReadObservation) (covered, total int64, haveTotal, consistent bool) {
-	target = strings.ToLower(strings.TrimSpace(target))
 	consistent = true
-	if target == "" {
+	if CanonicalTarget(target) == "" {
 		return 0, 0, false, false
 	}
 	var digest string
 	var intervals []readInterval
 	for _, ob := range observations {
-		if strings.ToLower(strings.TrimSpace(ob.Target)) != target {
+		if !sameReadTarget(ob.Target, target) {
 			continue
 		}
 		if ob.SourceDigest != "" {
@@ -532,7 +568,7 @@ func NextReadOffset(target string, observations []ReadObservation) (offset, limi
 	}
 	offset, limit = covered+1, total-covered
 	for _, ob := range observations {
-		if strings.EqualFold(strings.TrimSpace(ob.Target), strings.TrimSpace(target)) && ob.StartLine > offset && ob.EndLine >= ob.StartLine {
+		if sameReadTarget(ob.Target, target) && ob.StartLine > offset && ob.EndLine >= ob.StartLine {
 			limit = min(limit, ob.StartLine-offset)
 		}
 	}
@@ -560,7 +596,7 @@ func ReadCoverageProgressDigest(criteria []Criterion, observations []ReadObserva
 		}
 		var intervals []readInterval
 		for _, ob := range observations {
-			if strings.EqualFold(strings.TrimSpace(ob.Target), target) && ob.StartLine > 0 && ob.EndLine >= ob.StartLine {
+			if sameReadTarget(ob.Target, target) && ob.StartLine > 0 && ob.EndLine >= ob.StartLine {
 				intervals = append(intervals, readInterval{ob.StartLine, min(ob.EndLine, total)})
 			}
 		}
@@ -589,27 +625,99 @@ func ReadCoverageProgressDigest(criteria []Criterion, observations []ReadObserva
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// AppendReadObservation appends one bounded read-coverage receipt to
-// execution, assigning the next monotonic Sequence and keeping only the most
-// recent MaxReadObservations entries — the same append-and-trim shape as
-// AppendEvidence, so one execution's coverage receipts stay deterministically
-// sized regardless of how many reads a long episode performs.
+// AppendReadObservation records one delivered read window in execution's
+// bounded coverage receipts. Windows are kept per target, not as a plain
+// append log (audit P2-5): a window overlapping or adjacent to an existing
+// one for the same target and source version is merged into it, so rereads
+// and paging never consume retention; a window from a newer source version
+// (a different non-empty digest) supersedes that target's older-version
+// windows, whose coverage no longer describes the file. When more than
+// MaxReadObservations windows remain, the whole target least recently read
+// is dropped — never a single window out of a target still being read,
+// which previously re-opened gaps in files already fully covered. Only if
+// one target alone exceeds the bound is its oldest window dropped. Each
+// stored window's Sequence is the monotonic receipt order of its latest
+// contribution.
 func AppendReadObservation(execution *ExecutionResult, ob ReadObservation) {
 	if execution == nil {
 		return
 	}
+	if canonical := CanonicalTarget(ob.Target); canonical != "" {
+		ob.Target = canonical
+	}
 	next := 1
-	if n := len(execution.ReadObservations); n > 0 {
-		// Continue from the last stored Sequence, not len(): once the list is
-		// trimmed to MaxReadObservations, len() alone would stay pinned at the
-		// cap and future observations would silently reuse old numbers.
-		next = execution.ReadObservations[n-1].Sequence + 1
+	for _, existing := range execution.ReadObservations {
+		next = max(next, existing.Sequence+1)
+	}
+	kept := execution.ReadObservations[:0:0]
+	for _, existing := range execution.ReadObservations {
+		if !sameReadTarget(existing.Target, ob.Target) {
+			kept = append(kept, existing)
+			continue
+		}
+		if ob.SourceDigest != "" && existing.SourceDigest != "" && existing.SourceDigest != ob.SourceDigest {
+			continue // superseded by a newer version of the same source
+		}
+		if existing.SourceDigest == ob.SourceDigest && windowsTouch(existing, ob) {
+			ob.StartLine = min(ob.StartLine, existing.StartLine)
+			ob.EndLine = max(ob.EndLine, existing.EndLine)
+			if ob.TotalLines == nil {
+				ob.TotalLines = existing.TotalLines
+			}
+			continue // merged into ob
+		}
+		kept = append(kept, existing)
 	}
 	ob.Sequence = next
-	execution.ReadObservations = append(execution.ReadObservations, ob)
-	if len(execution.ReadObservations) > MaxReadObservations {
-		execution.ReadObservations = execution.ReadObservations[len(execution.ReadObservations)-MaxReadObservations:]
+	kept = append(kept, ob)
+	for len(kept) > MaxReadObservations {
+		kept = evictReadObservations(kept)
 	}
+	execution.ReadObservations = kept
+}
+
+// windowsTouch reports whether two line windows overlap or are adjacent.
+// A window without a valid line range never merges.
+func windowsTouch(a, b ReadObservation) bool {
+	if a.StartLine <= 0 || a.EndLine < a.StartLine || b.StartLine <= 0 || b.EndLine < b.StartLine {
+		return false
+	}
+	return a.StartLine <= b.EndLine+1 && b.StartLine <= a.EndLine+1
+}
+
+// evictReadObservations drops every window of the target whose most recent
+// read is oldest. If that would remove the target of the newest window (a
+// single target exceeds the bound on its own), it drops only the oldest
+// window instead.
+func evictReadObservations(obs []ReadObservation) []ReadObservation {
+	latest := map[string]int{}
+	for _, ob := range obs {
+		key := CanonicalTarget(ob.Target)
+		latest[key] = max(latest[key], ob.Sequence)
+	}
+	victim, oldest := "", 0
+	for key, seq := range latest {
+		if victim == "" && oldest == 0 || seq < oldest || (seq == oldest && key < victim) {
+			victim, oldest = key, seq
+		}
+	}
+	newest := CanonicalTarget(obs[len(obs)-1].Target)
+	out := obs[:0:0]
+	if victim == newest {
+		oldestIndex := 0
+		for i, ob := range obs {
+			if ob.Sequence < obs[oldestIndex].Sequence {
+				oldestIndex = i
+			}
+		}
+		return append(append(out, obs[:oldestIndex]...), obs[oldestIndex+1:]...)
+	}
+	for _, ob := range obs {
+		if CanonicalTarget(ob.Target) != victim {
+			out = append(out, ob)
+		}
+	}
+	return out
 }
 
 // ExactReadCriterionTarget extracts the target path from a criterion
@@ -638,8 +746,7 @@ func ExactReadCriterionTarget(text string) (target string, ok bool) {
 	text = strings.ToLower(strings.TrimSpace(strings.TrimRight(text, ".")))
 	for _, prefix := range []string{"read_files:", "read_file:"} {
 		if rest, matched := strings.CutPrefix(text, prefix); matched {
-			rest = strings.TrimSpace(rest)
-			if rest == "" {
+			if rest = CanonicalTarget(rest); rest == "" {
 				return "", false
 			}
 			return rest, true
@@ -672,7 +779,7 @@ func ExactReadCriterionTarget(text string) (target string, ok bool) {
 	if len(text) >= 2 && ((text[0] == '`' && text[len(text)-1] == '`') || (text[0] == '"' && text[len(text)-1] == '"')) {
 		text = text[1 : len(text)-1]
 	}
-	if text == "" {
+	if text = CanonicalTarget(text); text == "" {
 		return "", false
 	}
 	return text, true

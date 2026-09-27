@@ -145,6 +145,14 @@ func validateEpisodeCheckpoint(ep *EpisodeCheckpoint) error {
 	if len(ep.UnresolvedCriterionIDs) > MaxCriteria {
 		return fmt.Errorf("%w: checkpoint unresolved criterion IDs exceed maximum %d", ErrCorruptRun, MaxCriteria)
 	}
+	if len(ep.CoverageHighWater) > MaxCriteria {
+		return fmt.Errorf("%w: checkpoint coverage marks exceed maximum %d", ErrCorruptRun, MaxCriteria)
+	}
+	for _, covered := range ep.CoverageHighWater {
+		if covered < 0 {
+			return fmt.Errorf("%w: checkpoint coverage marks must not be negative", ErrCorruptRun)
+		}
+	}
 	if !validYieldReason(ep.LastYieldReason) {
 		return fmt.Errorf("%w: unknown checkpoint yield reason %q", ErrCorruptRun, ep.LastYieldReason)
 	}
