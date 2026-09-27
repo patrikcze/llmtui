@@ -56,49 +56,12 @@ type agentLoopState struct {
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
-	// decisionShadowGen guards the Laya shadow advisor's async Predict result
-	// the same way verifyGen/contractGen guard the verifier/contract results
-	// (see agentDecisionShadowMsg in agent_decision_shadow.go) — bumped once
-	// per dispatched shadow call, so a stale response from a superseded or
-	// cancelled cycle is discarded. No cancel/in-flight-flag fields are
-	// needed alongside it: the shadow call is fire-and-forget with its own
-	// bounded context, never something the controller blocks on or cancels.
-	decisionShadowGen int
-	// yieldShadowGen identifies one optional Phase 7 observation per cycle.
-	// It is diagnostic only and has a separate generation from every existing
-	// Laya shadow so a late yield result cannot satisfy another shadow.
-	yieldShadowGen int
-	// criterionAssessmentGen guards the Phase 3 criterion-assessment shadow
-	// batch. It is deliberately independent from the ordinary and pre-verifier
-	// shadow generations: criterion predictions have their own question/state
-	// contract and must never satisfy another shadow's stale-message check.
-	criterionAssessmentGen int
-	// preVerifierShadowGen guards the pre-verifier counterfactual shadow's
-	// async result the same way decisionShadowGen guards the post-cycle
-	// shadow's — deliberately a separate counter (never decisionShadowGen)
-	// since the two shadows have different question sets and arrival timing
-	// and must never be able to satisfy each other's staleness check. See
-	// agent_decision_shadow.go's "Pre-verifier counterfactual shadow" section.
-	preVerifierShadowGen int
-	// criterionAssistCancel/criterionAssistGen guard the optional Phase 4b
-	// criterion-assist wait. A live assist may only add the existing semantic
-	// verifier; cancellation or a later cycle invalidates its result.
-	criterionAssistGen     int
-	criterionAssistCancel  context.CancelFunc
-	criterionAssistPending bool
-	// guardedAssistGen/guardedAssistCancel/pendingVerificationPlan back
-	// Phase 1's guarded-assist decision wait (agent_decision_policy.go) —
-	// unlike decisionShadowGen/preVerifierShadowGen, this one IS something
-	// the controller can cancel: dispatchGuardedAssist derives its context
-	// from the run's own (see that function's doc comment), and cancelling
-	// mid-wait must both stop waiting and never let a stale result resolve
-	// a cycle a cancellation already settled another way. pendingVerificationPlan
-	// holds the cycle's fallback synthetic result while the strict Predict
-	// call it may be superseded by is in flight; nil whenever no guarded
-	// decision is pending.
-	guardedAssistGen        int
-	guardedAssistCancel     context.CancelFunc
-	pendingVerificationPlan *agent.VerificationResult
+	// shadow holds the generation counters of Laya's advisory, shadow-only
+	// observations, and assist the state of its two add-only assists. Both
+	// live beside, never inside, the authoritative cycle state above — see
+	// agent_observer.go.
+	shadow agentShadowState
+	assist agentAssistState
 	// verifierModel and verifierStartedAt describe only a real semantic
 	// verifier request. Deterministic verification never sets them, so the UI
 	// cannot imply that a model is running when the controller decided locally.
@@ -1059,10 +1022,6 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	}
 	run.ApplyDeterministicCriteria(execution, run.Cycle)
 	m.agentLoop.execution = execution
-	// Phase 3 criterion assessment is an independent shadow batch. Capture its
-	// immutable request before any verifier result can arrive; the returned
-	// message only records bounded diagnostics and never affects this route.
-	criterionAssessmentCmd := m.dispatchCriterionAssessment(run, execution)
 	m.agentLoop.verifierAttempts = 0
 	ctx, cancel := context.WithCancel(m.agentContext())
 	m.agentLoop.verifyCancel = cancel
@@ -1079,18 +1038,20 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// of any Laya involvement — see planAgentVerification's doc comment.
 	mode := m.cfg.Agent.Verifier.ResolvedMode()
 	plan := planAgentVerification(run, execution, mode)
-	yieldShadowCmd := m.dispatchAgentYieldShadow(run, execution, plan)
+	// Laya's advisory observations for this cycle, captured before any
+	// verifier result can arrive; none of them can affect the route below
+	// (see agent_observer.go).
+	shadows := m.observeAgentVerification(run, execution, plan)
 
 	syntheticResult := func(result agent.VerificationResult) tea.Cmd {
 		m.notice = fmt.Sprintf("agent %s · cycle %d/%d · verified deterministically", shortRunID(runID), cycle, run.Limits.MaxCycles)
 		m.refreshViewport()
-		// Pre-verifier counterfactual shadow (Phase 2), dispatched here so
-		// it fires exactly once per cycle regardless of which downstream
-		// path is taken, and so run.Criteria at capture time is provably
+		// The pre-verifier shadow is dispatched exactly once per cycle on
+		// whichever route is taken, while run.Criteria is still
 		// deterministic-only — see agent_decision_shadow.go.
 		return tea.Batch(func() tea.Msg {
 			return agentVerificationMsg{runID: runID, cycle: cycle, gen: gen, out: agentverify.Output{Result: result}}
-		}, m.dispatchAgentDecisionPreVerifierShadow(run, execution), criterionAssessmentCmd, yieldShadowCmd)
+		}, shadows.preVerifier(), shadows.criterion, shadows.yield)
 	}
 
 	if plan.Route == agentVerificationPlanSynthetic {
@@ -1101,7 +1062,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// semantic verifier but can never complete or mutate the run itself.
 		if plan.GuardEligible && mode == config.DecisionEngineModeCriterionAssist {
 			if cmd := m.dispatchCriterionAssessmentAssist(run, execution, plan.Result, gen); cmd != nil {
-				return tea.Batch(cmd, m.dispatchAgentDecisionPreVerifierShadow(run, execution), yieldShadowCmd)
+				return tea.Batch(cmd, shadows.preVerifier(), shadows.yield)
 			}
 		}
 		// Phase 1: guarded_assist may intervene only for the two synthetic-
@@ -1113,7 +1074,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 		// every other branch already used before Phase 1 existed.
 		if plan.GuardEligible {
 			if cmd := m.dispatchGuardedAssist(run, execution, plan.Result, runID, cycle, gen); cmd != nil {
-				return tea.Batch(cmd, criterionAssessmentCmd, yieldShadowCmd)
+				return tea.Batch(cmd, shadows.criterion, shadows.yield)
 			}
 		}
 		return syntheticResult(plan.Result)
@@ -1125,7 +1086,7 @@ func (m *Model) startAgentVerification() tea.Cmd {
 	// The pre-verifier shadow call runs concurrently with the real verifier
 	// dispatch, never gating it — semantic verification proceeds regardless
 	// of Laya's latency, timeout, or availability.
-	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), m.dispatchAgentDecisionPreVerifierShadow(run, execution), criterionAssessmentCmd, yieldShadowCmd)
+	return tea.Batch(m.dispatchVerifierAttempt(run, execution, ctx, gen), shadows.preVerifier(), shadows.criterion, shadows.yield)
 }
 
 // dispatchVerifierAttempt builds and sends one fresh-context, tool-free
@@ -1237,10 +1198,10 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	// Captured before clearVerifierActivity blanks verifierModel: it is only
 	// ever set for a real semantic verifier request (see its own doc
 	// comment), so its presence here is exactly "did this cycle actually run
-	// a semantic pass" — the shadow advisor's DecisionShadowActualVerifierPath.
-	decisionShadowVerifierPath := "deterministic"
+	// a semantic pass".
+	verifierPath := "deterministic"
 	if m.agentLoop.verifierModel != "" {
-		decisionShadowVerifierPath = "semantic"
+		verifierPath = "semantic"
 	}
 	m.clearVerifierActivity()
 	if m.agentLoop.verifyCancel != nil {
@@ -1276,7 +1237,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		if runErr.Kind == agent.ErrorBudget {
 			reason := runErr.Error()
 			_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
-			m.censorPendingAgentYieldShadows()
+			m.observeAgentVerificationAbandoned()
 			m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
 			m.endAgentRun()
 			m.refreshViewport()
@@ -1296,12 +1257,12 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		reason := fmt.Sprintf("verifier unavailable after %d attempt(s): %s (%s) — the executor's result was preserved but never verified",
 			maxAttempts, runErr.Message, runErr.Kind)
 		if err := run.Terminate(agent.DecisionVerificationUnavailable, reason, time.Now()); err != nil {
-			m.censorPendingAgentYieldShadows()
+			m.observeAgentVerificationAbandoned()
 			m.failVerifiedRun(err)
 			return m, m.persistAgentRun()
 		}
 		m.syncAgentDebug()
-		m.censorPendingAgentYieldShadows()
+		m.observeAgentVerificationAbandoned()
 		persist := m.persistAgentRun()
 		m.errText = "agent verification unavailable: " + reason
 		m.notice = fmt.Sprintf("agent %s · verification unavailable after %d attempt(s)", shortRunID(run.ID), maxAttempts)
@@ -1309,7 +1270,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		m.refreshViewport()
 		return m, persist
 	}
-	result = satisfyLegacyPassedCriteria(run, result, decisionShadowVerifierPath == "semantic")
+	result = satisfyLegacyPassedCriteria(run, result, verifierPath == "semantic")
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m, m.persistAgentRun()
@@ -1326,24 +1287,10 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	}
 	m.syncAgentDebug()
 	persist := m.persistAgentRun()
-	// SHADOW-ONLY: this call only ever records a diagnostic — see
-	// agent_decision_shadow.go's package doc comment. stop is already final
-	// and ApplyStop has already run; nothing below this line may change
-	// because of what shadowCmd eventually returns.
-	shadowCmd := m.dispatchAgentDecisionShadow(run, m.agentLoop.execution, decisionShadowVerifierPath, stop.Decision, result.Verdict)
-	// Records the actual-outcome half of the pre-verifier correlation
-	// (see agent_decision_shadow.go) — purely bookkeeping, same as the
-	// post-cycle shadow dispatch above; reads nothing it doesn't already
-	// have in scope and writes nothing that changes stop or run. Gated on
-	// decisionShadow being wired: when it isn't, no pre-verifier prediction
-	// was ever dispatched for this cycle, so recording an actual half here
-	// would only create a correlation entry that can never be finalized.
-	if m.decisionShadow != nil {
-		m.recordPreVerifierActual(run.ID, run.Cycle, decisionShadowVerifierPath == "semantic", result.Verdict, stop.Decision, decisionShadowVerifierPath)
-	}
-	// Phase 7 only records the authoritative action after it has already been
-	// applied. The yield shadow never participates in this decision.
-	m.recordAgentYieldShadowActual(run.ID, run.Cycle, normalizeAuthoritativeDecision(stop.Decision))
+	// stop is final and already applied; the advisory observers only record
+	// it for their correlations (agent_observer.go), and nothing below may
+	// change because of what shadowCmd eventually returns.
+	shadowCmd := m.observeAgentStopDecision(run, m.agentLoop.execution, verifierPath, stop, result.Verdict)
 	switch stop.Decision {
 	case agent.DecisionContinue, agent.DecisionRetry:
 		m.notice = fmt.Sprintf("agent %s · verification %s · %s", shortRunID(run.ID), result.Verdict, stop.Decision)
@@ -1446,27 +1393,9 @@ func (m *Model) cancelVerifiedRun(reason string) {
 		m.agentLoop.verifyGen++
 		m.agentLoop.verifying = false
 	}
-	if m.agentLoop.guardedAssistCancel != nil {
-		m.agentLoop.guardedAssistCancel()
-		m.agentLoop.guardedAssistCancel = nil
-	}
-	m.censorPendingAgentYieldShadows()
-	m.agentLoop.guardedAssistGen++
-	if m.agentLoop.criterionAssistCancel != nil {
-		m.agentLoop.criterionAssistCancel()
-		m.agentLoop.criterionAssistCancel = nil
-	}
-	m.agentLoop.criterionAssistGen++
-	m.agentLoop.criterionAssistPending = false
-	m.agentLoop.pendingVerificationPlan = nil
+	m.cancelAgentAdvisory()
 	m.clearVerifierActivity()
 	if m.agentRunActive() {
-		// A cancelled cycle's handleAgentVerification resolution path never
-		// runs, so recordPreVerifierActual will never supply this cycle's
-		// actual-outcome half — censor any still-pending pre-verifier
-		// correlation for this run now rather than leave it waiting for a
-		// half that can no longer arrive (see censorPendingPreVerifierCorrelations).
-		m.censorPendingPreVerifierCorrelations(m.agentLoop.run.ID)
 		m.agentLoop.run.Cancel(reason, time.Now())
 	}
 	if m.agentLoop.runCancel != nil {

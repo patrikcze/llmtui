@@ -214,7 +214,7 @@ func TestCriterionAssistShipsInertWithoutG2Profile(t *testing.T) {
 	if cmd := m.dispatchCriterionAssessmentAssist(m.agentLoop.run, agent.ExecutionResult{}, agent.VerificationResult{Verdict: agent.VerificationPassed}, 1); cmd != nil {
 		t.Fatal("criterion assist dispatched without an approved G2 profile")
 	}
-	if m.agentLoop.criterionAssistPending {
+	if m.agentLoop.assist.criterionPending {
 		t.Fatal("inert criterion assist left an active pending wait")
 	}
 }
@@ -243,7 +243,7 @@ func TestCriterionAssistUsesTheSharedBatchExactlyOnce(t *testing.T) {
 	if !ok || !msg.assist || msg.assistGen != 1 || len(msg.measurements) != 1 {
 		t.Fatalf("message = %#v, want one shared assist batch", msg)
 	}
-	if !m.agentLoop.criterionAssistPending {
+	if !m.agentLoop.assist.criterionPending {
 		t.Fatal("criterion-assist dispatch did not mark the guarded wait pending")
 	}
 }
@@ -252,8 +252,8 @@ func TestCriterionAssistContradictionOnlyDispatchesExistingVerifier(t *testing.T
 	m := newTestModel(t)
 	m.agentLoop.run = &agent.AgentRun{ID: "criterion-assist-run", Cycle: 1, Status: agent.DecisionRunning, Limits: agent.Limits{MaxElapsed: time.Minute}, Criteria: []agent.Criterion{assessmentCriterion(agent.CriterionAssessmentReceipts, "read")}}
 	m.agentLoop.verifyGen = 1
-	m.agentLoop.criterionAssessmentGen = 1
-	m.agentLoop.criterionAssistPending = true
+	m.agentLoop.shadow.criterionAssessmentGen = 1
+	m.agentLoop.assist.criterionPending = true
 	m.agentLoop.execution = agent.ExecutionResult{}
 	m.model = "test-model"
 	m.cfg.Agent.Verifier.Enabled = true
@@ -284,8 +284,8 @@ func TestCriterionAssistSupportReturnsSyntheticFallbackWithoutVerifier(t *testin
 	m := newTestModel(t)
 	m.agentLoop.run = &agent.AgentRun{ID: "criterion-assist-run", Cycle: 1, Status: agent.DecisionRunning}
 	m.agentLoop.verifyGen = 1
-	m.agentLoop.criterionAssessmentGen = 1
-	m.agentLoop.criterionAssistPending = true
+	m.agentLoop.shadow.criterionAssessmentGen = 1
+	m.agentLoop.assist.criterionPending = true
 	fallback := agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "synthetic fallback"}
 	msg := agentCriterionAssessmentMsg{
 		runID: m.agentLoop.run.ID, cycle: 1, gen: 1, verifyGen: 1, assist: true,

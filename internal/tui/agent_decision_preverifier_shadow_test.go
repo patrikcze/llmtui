@@ -121,7 +121,7 @@ func TestPreVerifierStaleResultIgnored(t *testing.T) {
 		ID: "run-stale-preverifier", Cycle: 2, Stage: agent.StageVerifier, Status: agent.DecisionRunning,
 		Limits: agent.Limits{MaxCycles: 8},
 	}
-	m.agentLoop.preVerifierShadowGen = 2
+	m.agentLoop.shadow.preVerifierGen = 2
 	beforeMetrics := m.preVerifierShadowMetrics
 	beforeCorrelations := len(m.preVerifierCorrelations)
 

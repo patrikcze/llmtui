@@ -464,16 +464,16 @@ func TestGuardedAssistCancellationNeverResolvesStaleCycle(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("dispatchGuardedAssist returned nil with a valid profile/engine/budget")
 	}
-	if m.agentLoop.pendingVerificationPlan == nil {
+	if m.agentLoop.assist.pendingVerificationPlan == nil {
 		t.Fatal("pendingVerificationPlan not set after dispatch")
 	}
-	guardGenAtDispatch := m.agentLoop.guardedAssistGen
+	guardGenAtDispatch := m.agentLoop.assist.guardedGen
 
 	m.cancelVerifiedRun("test cancellation")
-	if m.agentLoop.pendingVerificationPlan != nil {
+	if m.agentLoop.assist.pendingVerificationPlan != nil {
 		t.Fatal("pendingVerificationPlan survived cancelVerifiedRun")
 	}
-	if m.agentLoop.guardedAssistGen == guardGenAtDispatch {
+	if m.agentLoop.assist.guardedGen == guardGenAtDispatch {
 		t.Fatal("guardedAssistGen was not bumped by cancelVerifiedRun")
 	}
 
