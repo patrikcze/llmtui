@@ -245,7 +245,7 @@ cancellation, and local-model behavior.
 | `max_cycles` | `8` | Maximum executor/verifier cycles per run |
 | `max_tool_calls` | `32` | Hard total tool calls across all cycles |
 | `max_tokens` | `100000` | Task-contract, executor, and verifier token budget when usage is available |
-| `max_elapsed` | `30m` | Wall-clock run limit |
+| `max_elapsed` | `30m` | Active run time limit; time waiting for your answer is excluded |
 | `max_repeated_failures` | `3` | Identical verification failures before stopping |
 | `persist` | `true` | Atomically store bounded resumable run state; forced off by `privacy.store_prompts: false` |
 | `path` | `~/.local/share/llmtui/agent-runs` | Private versioned run-record directory |

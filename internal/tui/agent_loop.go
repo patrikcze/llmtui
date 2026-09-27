@@ -837,6 +837,7 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 		m.refreshViewport()
 		return nil
 	}
+	m.resetAgentContext()
 	boundary := len(m.session.Messages)
 	if err := run.BeginCycle(objective, append(m.agentContextSources(), "new_user_input"), time.Now()); err != nil {
 		m.failVerifiedRun(err)
@@ -889,7 +890,10 @@ func (m *Model) resetAgentContext() {
 	if m.agentLoop.runCancel != nil {
 		m.agentLoop.runCancel()
 	}
-	remaining := m.agentLoop.run.Limits.MaxElapsed - time.Since(m.agentLoop.run.CreatedAt)
+	// The deadline covers only the remaining active budget; time spent
+	// waiting for the human is excluded (agent.AgentRun.Elapsed), so a pause
+	// that ends must call this again to renew the deadline.
+	remaining := m.agentLoop.run.RemainingElapsed(time.Now())
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
 	m.agentLoop.ctx = ctx
 	m.agentLoop.runCancel = cancel

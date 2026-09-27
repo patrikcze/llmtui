@@ -394,7 +394,7 @@ func (m *Model) dispatchCriterionAssessmentAssist(run *agent.AgentRun, execution
 	if !ok {
 		return nil
 	}
-	remaining := time.Until(run.CreatedAt.Add(run.Limits.MaxElapsed))
+	remaining := run.RemainingElapsed(time.Now())
 	deadline := profile.MaxWait
 	if remaining < deadline {
 		deadline = remaining

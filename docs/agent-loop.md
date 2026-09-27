@@ -204,6 +204,11 @@ The persisted `AgentRun` is data only; it cannot safely serialize a Go
 `context.Context`. The TUI adapter owns a run-scoped deadline and derives each
 executor, tool, and verifier context from it. Resuming reconstructs that
 process-local context using only the elapsed budget that remains.
+`max_elapsed` measures active time: while the run waits for your answer
+(`needs_user_input`, from `ask_user` or a contract question) the clock is
+paused, and the deadline is renewed when you answer or resume. The run records
+the paused total as `paused_for`. A parked or interrupted run is not waiting
+for input, so its time still counts.
 
 ## Instruction precedence and trust
 
@@ -519,7 +524,7 @@ Default hard limits are:
 | Cycles | `8` | Maximum executor/verifier cycles |
 | Tool calls | `32` | Total calls across the run |
 | Tokens | `100000` | Executor plus verifier usage when reported/estimated |
-| Elapsed time | `30m` | Wall-clock run duration |
+| Elapsed time | `30m` | Active run duration; time waiting for your answer (`needs_user_input`) is excluded |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
 | Verifier attempts | `2` | `agent.verifier.max_attempts` per cycle, see [Verification](#verification) |
 | Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation-opt-in) |
