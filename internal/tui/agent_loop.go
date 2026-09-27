@@ -1823,11 +1823,45 @@ func classifyByMeta(meta tools.ResultMeta) (kind agent.ErrorKind, ok bool) {
 	}
 }
 
+// testCommandPrefixes are the command starts recorded as a test run.
+var testCommandPrefixes = []string{"go test", "go vet", "make test", "npm test", "pytest", "cargo test"}
+
+// looksLikeTestCommand reports whether any simple command in a shell line
+// runs tests, so "cd pkg && go test ./..." and "CGO_ENABLED=0 go test" count,
+// not only a line that starts with the test command (audit P3-4). It only
+// labels TestsRun evidence; it never classifies a command's safety.
 func looksLikeTestCommand(command string) bool {
-	command = strings.ToLower(strings.TrimSpace(command))
-	return strings.HasPrefix(command, "go test") || strings.HasPrefix(command, "go vet") ||
-		strings.HasPrefix(command, "make test") || strings.HasPrefix(command, "npm test") ||
-		strings.HasPrefix(command, "pytest") || strings.HasPrefix(command, "cargo test")
+	segments := strings.FieldsFunc(strings.ToLower(command), func(r rune) bool {
+		return r == '&' || r == '|' || r == ';' || r == '\n'
+	})
+	for _, segment := range segments {
+		fields := strings.Fields(strings.Trim(segment, "() \t"))
+		for len(fields) > 0 && isShellAssignment(fields[0]) {
+			fields = fields[1:]
+		}
+		simple := strings.Join(fields, " ")
+		for _, prefix := range testCommandPrefixes {
+			if simple == prefix || strings.HasPrefix(simple, prefix+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isShellAssignment reports whether field is a leading NAME=value
+// environment assignment.
+func isShellAssignment(field string) bool {
+	name, _, ok := strings.Cut(field, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r != '_' && (r < 'a' || r > 'z') && (i == 0 || r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // agentHardBudgetExceeded reports whether executing incoming more tool
