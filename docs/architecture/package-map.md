@@ -111,6 +111,7 @@ the size is (`app.go` ~3000 LOC, several siblings 1200–1800). See
 | `app.go` | The `Model` struct, `Update`/`View`, key routing, message dispatch. |
 | `pipeline.go` | Request assembly: cache key, prompt composition, RAG/memory injection, debug capture. |
 | `turn_runtime.go`, `agent_loop.go`, `toolloop_*` | The turn state machine (idle → streaming → approval → tools → results), shared by ordinary chat and `/agent`. |
+| `agent_observer.go` | The single seam between the authoritative agent orchestration and Laya: shadow-only observation state (`agentShadowState`) and the two add-only assists (`agentAssistState`), plus the only helpers the orchestrator calls into them. The shadow/assist implementations live in `agent_decision_shadow.go`, `agent_yield_shadow.go`, `agent_criterion_assessment.go`, `agent_decision_policy.go`. |
 | `commands.go`, `commands_local.go`, `commands_memory.go`, `commands_skills.go` | Slash-command handlers, grouped by domain. See `docs/slash-commands.md`. |
 | `skills.go`, `tool_search.go`, `tool_registry.go`, `mcp_tools.go` | Model-side wiring into the `skill` / `tools` / `toolapi` / `mcp` engines. |
 | `approval_policy.go` | Narrowly-scoped temporary approval grants (per tool / path / content-hash, 15-minute TTL). |

@@ -234,7 +234,7 @@ func TestDecisionShadowStaleResultIgnored(t *testing.T) {
 		ID: "run-stale-shadow", Cycle: 2, Stage: agent.StageStopCheck, Status: agent.DecisionRunning,
 		Limits: agent.Limits{MaxCycles: 8},
 	}
-	m.agentLoop.decisionShadowGen = 2
+	m.agentLoop.shadow.decisionGen = 2
 	before := m.decisionShadowMetrics
 
 	_, cmd := m.handleAgentDecisionShadow(agentDecisionShadowMsg{

@@ -63,3 +63,14 @@ func TestCriterionReadFacts(t *testing.T) {
 		t.Error("resolved criterion got a fact")
 	}
 }
+
+// TestCriterionReadFactsUseCanonicalTargets keeps facts consistent with the
+// coverage proof: a read recorded under another spelling still counts.
+func TestCriterionReadFactsUseCanonicalTargets(t *testing.T) {
+	run := &AgentRun{Criteria: []Criterion{{ID: "c1", Text: "Read the file src/a.txt", Status: CriterionPending, Kind: CriterionSemantic}}}
+	total := int64(10)
+	facts := run.CriterionReadFacts(ExecutionResult{ReadObservations: []ReadObservation{{Target: "./src/a.txt", StartLine: 1, EndLine: 4, TotalLines: &total}}})
+	if len(facts) != 1 || !strings.Contains(facts[0].Fact, "lines 1-4 of 10") {
+		t.Fatalf("facts = %+v, want the ./ spelling matched", facts)
+	}
+}

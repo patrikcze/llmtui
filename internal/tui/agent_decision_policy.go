@@ -234,15 +234,15 @@ func (m *Model) dispatchGuardedAssist(run *agent.AgentRun, execution agent.Execu
 	// the same stage" requirement: a guarded-eligible cycle gets exactly
 	// one Laya Predict call, and it counts toward the exact same
 	// calibration accounting a shadow-only cycle's call would have.
-	m.agentLoop.preVerifierShadowGen++
-	preVerifierGen := m.agentLoop.preVerifierShadowGen
+	m.agentLoop.shadow.preVerifierGen++
+	preVerifierGen := m.agentLoop.shadow.preVerifierGen
 	entry := m.preVerifierCorrelationEntry(runID, cycle)
 	entry.dispatched = true
 	entry.dispatchGen = preVerifierGen
 
-	m.agentLoop.guardedAssistGen++
-	guardGen := m.agentLoop.guardedAssistGen
-	m.agentLoop.pendingVerificationPlan = &fallback
+	m.agentLoop.assist.guardedGen++
+	guardGen := m.agentLoop.assist.guardedGen
+	m.agentLoop.assist.pendingVerificationPlan = &fallback
 
 	state := m.buildAgentDecisionShadowState(run, execution)
 	svc := m.decisionShadow.service
@@ -253,7 +253,7 @@ func (m *Model) dispatchGuardedAssist(run *agent.AgentRun, execution agent.Execu
 	// it, rather than letting it survive the run the way a purely
 	// diagnostic shadow call intentionally does.
 	ctx, cancel := context.WithTimeout(m.agentContext(), deadline)
-	m.agentLoop.guardedAssistCancel = cancel
+	m.agentLoop.assist.guardedCancel = cancel
 	return func() tea.Msg {
 		start := time.Now()
 		result, err := svc.Predict(ctx, state, preVerifierQuestions, decision.PredictOptions{Model: model, RequireCompleteInput: true})
@@ -294,13 +294,13 @@ func (m *Model) handleAgentDecisionGuardedAssist(msg agentDecisionGuardedAssistM
 
 	if m.agentLoop == nil || m.agentLoop.run == nil ||
 		msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
-		msg.verifyGen != m.agentLoop.verifyGen || msg.guardGen != m.agentLoop.guardedAssistGen {
+		msg.verifyGen != m.agentLoop.verifyGen || msg.guardGen != m.agentLoop.assist.guardedGen {
 		return m, nil
 	}
-	m.agentLoop.pendingVerificationPlan = nil
-	if m.agentLoop.guardedAssistCancel != nil {
-		m.agentLoop.guardedAssistCancel()
-		m.agentLoop.guardedAssistCancel = nil
+	m.agentLoop.assist.pendingVerificationPlan = nil
+	if m.agentLoop.assist.guardedCancel != nil {
+		m.agentLoop.assist.guardedCancel()
+		m.agentLoop.assist.guardedCancel = nil
 	}
 
 	run := m.agentLoop.run

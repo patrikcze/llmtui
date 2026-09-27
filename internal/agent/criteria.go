@@ -773,7 +773,7 @@ func (r *AgentRun) CriterionReadFacts(execution ExecutionResult) []CriterionFact
 		}
 		seen := false
 		for _, ob := range execution.ReadObservations {
-			if strings.EqualFold(strings.TrimSpace(ob.Target), target) {
+			if sameReadTarget(ob.Target, target) {
 				seen = true
 				break
 			}

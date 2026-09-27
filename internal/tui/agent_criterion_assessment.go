@@ -403,16 +403,16 @@ func (m *Model) dispatchCriterionAssessmentAssist(run *agent.AgentRun, execution
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(m.agentContext(), deadline)
-	m.agentLoop.criterionAssistCancel = cancel
-	m.agentLoop.criterionAssistPending = true
-	m.agentLoop.criterionAssistGen++
-	assistGen := m.agentLoop.criterionAssistGen
+	m.agentLoop.assist.criterionCancel = cancel
+	m.agentLoop.assist.criterionPending = true
+	m.agentLoop.assist.criterionGen++
+	assistGen := m.agentLoop.assist.criterionGen
 	return m.dispatchCriterionAssessmentBatch(run, execution, true, fallback, verifyGen, assistGen, deadline, ctx, profile)
 }
 
 func (m *Model) dispatchCriterionAssessmentBatch(run *agent.AgentRun, execution agent.ExecutionResult, assist bool, fallback agent.VerificationResult, verifyGen, assistGen int, timeout time.Duration, parentCtx context.Context, profile criterionAssistProfile) tea.Cmd {
-	m.agentLoop.criterionAssessmentGen++
-	gen := m.agentLoop.criterionAssessmentGen
+	m.agentLoop.shadow.criterionAssessmentGen++
+	gen := m.agentLoop.shadow.criterionAssessmentGen
 	requests := make([]criterionAssessmentRequest, 0, criterionAssessmentMaxCriteria)
 	measurements := make([]criterionAssessmentMeasurement, 0, criterionAssessmentMaxCriteria)
 	for i, criterion := range run.Criteria {
@@ -497,7 +497,7 @@ func (m *Model) recordCriterionAssessment(msg agentCriterionAssessmentMsg) {
 	}
 	for _, measurement := range msg.measurements {
 		m.criterionAssessmentMetrics.Total++
-		live := m.agentLoop != nil && m.agentLoop.run != nil && msg.runID == m.agentLoop.run.ID && msg.cycle == m.agentLoop.run.Cycle && msg.gen == m.agentLoop.criterionAssessmentGen
+		live := m.agentLoop != nil && m.agentLoop.run != nil && msg.runID == m.agentLoop.run.ID && msg.cycle == m.agentLoop.run.Cycle && msg.gen == m.agentLoop.shadow.criterionAssessmentGen
 		if !live {
 			m.criterionAssessmentMetrics.Late++
 			continue
@@ -541,14 +541,14 @@ func (m *Model) handleAgentCriterionAssessment(msg agentCriterionAssessmentMsg) 
 		return m, nil
 	}
 	if m.agentLoop.run == nil || msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
-		msg.gen != m.agentLoop.criterionAssessmentGen || msg.assistGen != m.agentLoop.criterionAssistGen || msg.verifyGen != m.agentLoop.verifyGen ||
-		!m.agentLoop.criterionAssistPending || m.agentLoop.run.Status != agent.DecisionRunning {
+		msg.gen != m.agentLoop.shadow.criterionAssessmentGen || msg.assistGen != m.agentLoop.assist.criterionGen || msg.verifyGen != m.agentLoop.verifyGen ||
+		!m.agentLoop.assist.criterionPending || m.agentLoop.run.Status != agent.DecisionRunning {
 		return m, nil
 	}
-	m.agentLoop.criterionAssistPending = false
-	if m.agentLoop.criterionAssistCancel != nil {
-		m.agentLoop.criterionAssistCancel()
-		m.agentLoop.criterionAssistCancel = nil
+	m.agentLoop.assist.criterionPending = false
+	if m.agentLoop.assist.criterionCancel != nil {
+		m.agentLoop.assist.criterionCancel()
+		m.agentLoop.assist.criterionCancel = nil
 	}
 	escalate, reason := criterionAssistRecommendation(msg.measurements, msg.profile)
 	m.lastDebug.DecisionCriterionAssistEligible = true

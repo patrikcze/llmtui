@@ -305,8 +305,8 @@ func (m *Model) dispatchAgentDecisionShadow(run *agent.AgentRun, execution agent
 	if m.decisionShadow == nil || m.decisionShadow.service == nil || m.agentLoop == nil {
 		return nil
 	}
-	m.agentLoop.decisionShadowGen++
-	gen := m.agentLoop.decisionShadowGen
+	m.agentLoop.shadow.decisionGen++
+	gen := m.agentLoop.shadow.decisionGen
 	runID, cycle := run.ID, run.Cycle
 	state := m.buildAgentDecisionShadowState(run, execution)
 	svc := m.decisionShadow.service
@@ -334,7 +334,7 @@ func (m *Model) dispatchAgentDecisionShadow(run *agent.AgentRun, execution agent
 func (m *Model) handleAgentDecisionShadow(msg agentDecisionShadowMsg) (tea.Model, tea.Cmd) {
 	if m.agentLoop == nil || m.agentLoop.run == nil ||
 		msg.runID != m.agentLoop.run.ID || msg.cycle != m.agentLoop.run.Cycle ||
-		msg.gen != m.agentLoop.decisionShadowGen {
+		msg.gen != m.agentLoop.shadow.decisionGen {
 		return m, nil
 	}
 	m.recordAgentDecisionShadowResult(msg)
@@ -513,8 +513,8 @@ func (m *Model) dispatchAgentDecisionPreVerifierShadow(run *agent.AgentRun, exec
 	if m.decisionShadow == nil || m.decisionShadow.service == nil || m.agentLoop == nil {
 		return nil
 	}
-	m.agentLoop.preVerifierShadowGen++
-	gen := m.agentLoop.preVerifierShadowGen
+	m.agentLoop.shadow.preVerifierGen++
+	gen := m.agentLoop.shadow.preVerifierGen
 	runID, cycle := run.ID, run.Cycle
 	// Register the correlation entry synchronously, before the async Predict
 	// call is even scheduled — see preVerifierCorrelation's dispatched/

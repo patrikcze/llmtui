@@ -139,8 +139,8 @@ func (m *Model) dispatchAgentYieldShadow(run *agent.AgentRun, execution agent.Ex
 		!m.cfg.DecisionEngine.Enabled || !m.cfg.DecisionEngine.YieldShadow {
 		return nil
 	}
-	m.agentLoop.yieldShadowGen++
-	sequence := m.agentLoop.yieldShadowGen
+	m.agentLoop.shadow.yieldGen++
+	sequence := m.agentLoop.shadow.yieldGen
 	state := m.buildAgentYieldShadowState(run, execution, plan, sequence)
 	key := agentYieldShadowKey(run.ID, run.Cycle)
 	if m.yieldShadowCorrelations == nil {
