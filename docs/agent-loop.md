@@ -231,6 +231,21 @@ least one of these is true:
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
 
+"New evidence" means new *information*, not activity: a successful result
+whose content digest this run has not seen, a changed file, a user answer or
+decision, or the first occurrence of an observational failure such as "that
+path does not exist". Rereading unchanged content, a failed call, a
+max_tokens truncation, or a call rejected for invalid arguments is not new
+evidence. "Strategy changed" is only what the verifier explicitly reports;
+it is no longer inferred from a non-empty `recommended_next`.
+
+The tool-call budget (`agent.max_tool_calls`) counts calls that actually ran,
+excluding `ask_user`, with one definition shared by the live check and the
+cycle-boundary stop policy. A call rejected for invalid arguments ran nothing
+and is recorded with status `rejected`, so it spends no tool budget. Invalid
+calls are still bounded by the tool-round limit, the token budget, and the
+repeat detector.
+
 The first cycle keeps prior human prompts and final answers, so follow-ups such
 as "write that to a file" keep their meaning. Completed tool-protocol messages,
 synthetic controller turns, and the old session summary remain visible in the

@@ -121,6 +121,13 @@ type agentLoopState struct {
 	// same run-level ceiling agent.Decide would eventually enforce at a
 	// cycle boundary — without waiting for that boundary to be reached.
 	liveToolCalls int
+	// evidenceKeys/evidenceOrder are the run-scoped, bounded set of
+	// observations already seen (see isNewAgentEvidence), so a cycle's
+	// NewEvidence means new information rather than activity. Process-local
+	// and reset per run; a resumed run starts empty, which can only
+	// over-report newness once — the same as the previous behavior.
+	evidenceKeys  map[string]struct{}
+	evidenceOrder []string
 	// observations is a bounded, process-local cache of what workspace-local
 	// read tools actually returned, so a later cycle can recall a fact
 	// projectCompletedAgentHistory already stripped from the raw transcript
@@ -565,6 +572,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.initialImages = append([]provider.Image(nil), images...)
 	m.resetAgentContext()
 	m.agentLoop.liveToolCalls = 0
+	m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder = nil, nil
 	m.agentLoop.observations = agent.NewObservationCache()
 	m.agentLoop.evictedResourceKeys = nil
 	// contractAssistance is deliberately NOT reset here: it is a
@@ -1447,9 +1455,10 @@ func (m *Model) recordAgentTruncation() {
 	if !m.agentRunActive() {
 		return
 	}
+	// Truncation is a transient failure (EvaluateDeterministic marks it so,
+	// which already admits the retry), never new evidence.
 	m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors,
 		agent.NewError(agent.ErrorTruncated, "executor", errors.New("response was cut off by max_tokens")))
-	m.agentLoop.execution.NewEvidence = true
 }
 
 // isObservableReadTool reports whether a tool's successful Output is safe to
@@ -1585,22 +1594,20 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 	if !m.agentRunActive() {
 		return
 	}
-	budgetCount, evidenceCount := 0, 0
+	budgetCount := 0
+	newEvidence := false
 	for i, result := range results {
 		status := agent.ActionUnknown
 		if i < len(statuses) {
 			status = statuses[i]
 		}
-		if status == agent.ActionExecuted {
-			evidenceCount++
-			// ask_user is a real, evidence-bearing action (it sets
-			// NewEvidence below) but is deliberately excluded from the live
-			// tool-call budget: asking the user is not a rate-limited
-			// workspace action the way reads/writes/commands are — see
-			// TestAskUserAgentPauseAndLiveResume.
-			if result.Call.Tool != tools.ToolAskUser {
-				budgetCount++
-			}
+		if status == agent.ActionExecuted && result.Call.Tool != tools.ToolAskUser {
+			// ask_user is evidence-bearing but deliberately excluded from
+			// the live tool-call budget: asking the user is not a
+			// rate-limited workspace action — see
+			// TestAskUserAgentPauseAndLiveResume and agent.ExecutedToolCalls,
+			// the same rule Decide applies at the cycle boundary.
+			budgetCount++
 		}
 		kind := agent.ErrorKind("")
 		if result.Err != nil {
@@ -1619,6 +1626,9 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			record.ErrorCode = result.Meta.Error.Code
 		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
+		if status == agent.ActionExecuted && m.isNewAgentEvidence(result, record) {
+			newEvidence = true
+		}
 		if result.Err != nil {
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))
 		}
@@ -1656,14 +1666,59 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 	if denied {
 		m.agentLoop.execution.NeedsUserInput = true
 	}
-	// A batch that was entirely blocked/rejected before anything ran (and
-	// was not itself a denial the user actively chose) produced no new
-	// observation: evidenceCount stays 0 and NewEvidence must not be set, or
-	// a synthetic no-progress block would count as the very progress it
-	// exists to detect the absence of.
-	if evidenceCount > 0 || denied {
+	// NewEvidence means new information, not activity: a batch that was
+	// blocked or rejected before anything ran, that only reread unchanged
+	// content, or that only failed adds none — otherwise a model failing a
+	// little differently every cycle would look like progress to the stop
+	// policy's retry gate. A user's denial is a decision the next cycle
+	// must act on, so it counts.
+	if newEvidence || denied {
 		m.agentLoop.execution.NewEvidence = true
 	}
+}
+
+// maxAgentEvidenceKeys bounds the run-scoped set isNewAgentEvidence uses.
+const maxAgentEvidenceKeys = 512
+
+// isNewAgentEvidence reports whether one executed call observed something
+// this run has not seen before, and remembers it. New information is: a
+// successful result whose (call fingerprint, result digest) pair is unseen
+// — the same identity the progress ledger uses, so a reread of unchanged
+// content is not new while a changed result is; a typed file change; a
+// user answer; or the first occurrence of an observational failure (e.g.
+// "that path does not exist"), which is itself a fact. Any other failure
+// is not evidence.
+func (m *Model) isNewAgentEvidence(result tools.Result, record agent.ToolCallRecord) bool {
+	switch {
+	case result.Err == nil && result.Call.Tool == tools.ToolAskUser:
+		return true
+	case result.Err == nil && result.Meta.Effect == tools.EffectChanged:
+		return true
+	case result.Err == nil:
+		return m.rememberAgentEvidence(progressFingerprintAtRoot(m.progressRoot(), result.Call) + "\x1f" + progressDigest(result))
+	case record.ObservationalFailure():
+		return m.rememberAgentEvidence("observed\x1f" + record.Name + "\x1f" + record.Detail + "\x1f" + record.ErrorCode)
+	default:
+		return false
+	}
+}
+
+// rememberAgentEvidence adds key to the run's bounded evidence set and
+// reports whether it was absent. The oldest key is forgotten first.
+func (m *Model) rememberAgentEvidence(key string) bool {
+	if m.agentLoop.evidenceKeys == nil {
+		m.agentLoop.evidenceKeys = make(map[string]struct{})
+	}
+	if _, seen := m.agentLoop.evidenceKeys[key]; seen {
+		return false
+	}
+	m.agentLoop.evidenceKeys[key] = struct{}{}
+	m.agentLoop.evidenceOrder = append(m.agentLoop.evidenceOrder, key)
+	if len(m.agentLoop.evidenceOrder) > maxAgentEvidenceKeys {
+		delete(m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder[0])
+		m.agentLoop.evidenceOrder = m.agentLoop.evidenceOrder[1:]
+	}
+	return true
 }
 
 // askUserEvidenceSummary keeps a narrowly useful fact for verification
@@ -1944,6 +1999,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.resetAgentContext()
+	m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder = nil, nil
 	// A resumed run's observation cache starts empty: retained excerpts are
 	// process-local and never persisted, so there is nothing to restore, and
 	// starting empty is always the safe default (see agent.ObservationCache's

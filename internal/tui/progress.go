@@ -99,7 +99,8 @@ func (p toolBatchPlan) runnableCalls() []tools.Call {
 // internal/agent.ActionStatus): a ledger block is ActionBlocked, an accepted
 // call with no correlated result is ActionUnknown — genuinely unknown
 // whether it ran, never assumed to have failed or succeeded — and everything
-// else is ActionExecuted.
+// else is ActionExecuted — except a call whose arguments were invalid,
+// which never reached a producer and is ActionRejected.
 func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed []tools.Result, statuses []agent.ActionStatus) {
 	merged = make([]tools.Result, 0, len(p.calls))
 	observed = make([]tools.Result, 0, len(executed))
@@ -142,7 +143,13 @@ func (p toolBatchPlan) mergeResults(executed []tools.Result) (merged, observed [
 		executedIndex++
 		result.Call = call
 		merged = append(merged, result)
+		// Rejected calls are still observed, so identical invalid calls
+		// repeat-block exactly as before.
 		observed = append(observed, result)
+		if call.InputErr != "" {
+			statuses = append(statuses, agent.ActionRejected)
+			continue
+		}
 		statuses = append(statuses, agent.ActionExecuted)
 	}
 	return merged, observed, statuses

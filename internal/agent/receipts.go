@@ -29,7 +29,33 @@ const (
 	// branch). Whether it ran is genuinely unknown; it must never be
 	// silently treated as either success or failure.
 	ActionUnknown ActionStatus = "unknown"
+	// ActionRejected means the call was refused before any producer ran
+	// because its arguments were invalid (a model competency error). It
+	// executed nothing, so it is neither evidence nor tool-budget usage.
+	ActionRejected ActionStatus = "rejected"
 )
+
+// askUserToolName duplicates tools.ToolAskUser (this package must never
+// import internal/tools); internal/tui asserts the two stay equal.
+const askUserToolName = "ask_user"
+
+// ExecutedToolCalls is the single definition of "tool calls used" for the
+// run's tool-call budget, shared by the live admission check and Decide:
+// calls that actually ran, excluding ask_user (asking the user is not a
+// rate-limited workspace action). A record persisted before Status existed
+// counts as executed, preserving the previous accounting for old runs.
+func ExecutedToolCalls(records []ToolCallRecord) int {
+	n := 0
+	for _, record := range records {
+		if (record.Status == ActionExecuted || record.Status == "") && record.Name != askUserToolName {
+			n++
+		}
+	}
+	return n
+}
+
+// AskUserToolName exposes askUserToolName for internal/tui's parity test.
+func AskUserToolName() string { return askUserToolName }
 
 // observationalReadTools are the workspace read-only tools whose typed
 // "resource state" failures (see observationalErrorCodes) describe what the
