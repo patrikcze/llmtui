@@ -59,9 +59,13 @@ func (m *Model) handleAgentYield() tea.Cmd {
 	obligations := run.PendingExactReadObligations(m.agentLoop.execution)
 	in, ids := m.buildAgentYieldInput(checkpoint, obligations)
 	progressed := !equalStringSlices(checkpoint.UnresolvedCriterionIDs, ids)
-	digest := agent.ReadCoverageProgressDigest(run.Criteria, m.agentLoop.execution.ReadObservations)
-	if digest != "" && digest != checkpoint.LastProgressDigest {
+	if advanceCoverageHighWater(checkpoint, obligations, m.agentLoop.execution.ReadObservations) {
 		progressed = true
+	}
+	// Diagnostic only: the digest changes whenever delivered coverage
+	// changes shape, including coverage lost and re-read, so it is not a
+	// progress signal by itself.
+	if digest := agent.ReadCoverageProgressDigest(run.Criteria, m.agentLoop.execution.ReadObservations); digest != "" {
 		checkpoint.LastProgressDigest = digest
 	}
 	if progressed {
@@ -85,6 +89,28 @@ func (m *Model) handleAgentYield() tea.Cmd {
 	default:
 		return m.terminateAgentYield(decision)
 	}
+}
+
+// advanceCoverageHighWater raises each pending exact-read obligation's
+// contiguous-coverage mark and reports whether any mark strictly increased —
+// the only coverage change that counts as relevant progress (audit P2-5).
+func advanceCoverageHighWater(checkpoint *agent.EpisodeCheckpoint, obligations []agent.ExactReadObligation, observations []agent.ReadObservation) bool {
+	advanced := false
+	for _, obligation := range obligations {
+		covered, ok := agent.ReadCoverage(obligation.Target, observations)
+		if !ok || covered <= checkpoint.CoverageHighWater[obligation.CriterionID] {
+			continue
+		}
+		if checkpoint.CoverageHighWater == nil {
+			checkpoint.CoverageHighWater = make(map[string]int64, len(obligations))
+		}
+		if _, tracked := checkpoint.CoverageHighWater[obligation.CriterionID]; !tracked && len(checkpoint.CoverageHighWater) >= agent.MaxCriteria {
+			continue
+		}
+		checkpoint.CoverageHighWater[obligation.CriterionID] = covered
+		advanced = true
+	}
+	return advanced
 }
 
 // buildAgentYieldInput assembles a YieldInput from current run/model state,

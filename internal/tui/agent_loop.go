@@ -1569,7 +1569,10 @@ func toolCallDetail(call tools.Call) string {
 // a byte-truncated whole-file read; the call is still recorded as an
 // ordinary ToolCallRecord regardless.
 func readObservationFromResult(result tools.Result) (agent.ReadObservation, bool) {
-	target := strings.ToLower(strings.TrimSpace(result.Call.Path))
+	// Successful reads only ever carry workspace-relative paths (the read
+	// tool rejects absolute ones), so lexical canonicalization is enough to
+	// compare them with criterion targets.
+	target := agent.CanonicalTarget(result.Call.Path)
 	if target == "" {
 		return agent.ReadObservation{}, false
 	}

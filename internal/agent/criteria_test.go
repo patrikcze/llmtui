@@ -774,8 +774,11 @@ func TestReadCoverageCompleteTable(t *testing.T) {
 
 func TestAppendReadObservationBoundedAndSequenced(t *testing.T) {
 	var execution ExecutionResult
+	// Disjoint windows (a gap between each) cannot merge, so a single target
+	// exceeding the bound keeps its newest windows and drops its oldest.
 	for i := 0; i < MaxReadObservations+5; i++ {
-		AppendReadObservation(&execution, ReadObservation{Target: "a.txt", StartLine: 1, EndLine: 1})
+		line := int64(3*i + 1)
+		AppendReadObservation(&execution, ReadObservation{Target: "a.txt", StartLine: line, EndLine: line})
 	}
 	if len(execution.ReadObservations) != MaxReadObservations {
 		t.Fatalf("len = %d, want bounded at %d", len(execution.ReadObservations), MaxReadObservations)

@@ -324,12 +324,19 @@ type EpisodeCheckpoint struct {
 	LastYieldReason YieldReason `json:"last_yield_reason,omitempty"`
 	// LastProgressDigest is the most recent deterministic progress
 	// coverage fingerprint this episode observed (ReadCoverageProgressDigest),
-	// opaque here — used only to detect whether a later yield changed
-	// anything relevant.
+	// opaque here and kept for diagnostics only; progress itself is decided
+	// by CoverageHighWater.
 	LastProgressDigest string `json:"last_progress_digest,omitempty"`
 	// UnresolvedCriterionIDs are the pinned criterion IDs this episode's
 	// last decision still considered outstanding, capped at MaxCriteria.
 	UnresolvedCriterionIDs []string `json:"unresolved_criterion_ids,omitempty"`
+	// CoverageHighWater records, per exact-read criterion ID, the most
+	// contiguous delivered lines this episode has seen (see ReadCoverage).
+	// Progress for the no-progress nudge budget is a strict increase over
+	// this mark, so coverage that is lost and re-read — which changes
+	// LastProgressDigest — can never masquerade as progress. Bounded by
+	// MaxCriteria; additive to schema v1.
+	CoverageHighWater map[string]int64 `json:"coverage_high_water,omitempty"`
 
 	// Revision increments on every checkpoint decision. It is diagnostic
 	// only; save ordering is enforced by the run-level AgentRun.Revision.
