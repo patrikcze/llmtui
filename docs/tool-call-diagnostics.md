@@ -79,9 +79,12 @@ the privacy posture without making it executable.
   results. Approval policy and all destructive-operation protections stay
   authoritative.
 - Built-in native tools decode arguments against the same schema the model
-  was offered. A key the tool does not declare (for example `start_line` or
-  `file_path` on `read_file`) is rejected with `invalid_arguments` naming the
-  keys the tool accepts — it is never silently dropped. Only unambiguous
+  was offered. A key the tool does not declare (for example `start_line` on
+  `read_file`) is rejected with `invalid_arguments` naming the keys the tool
+  accepts — it is never silently dropped. The one exception is `file_path`,
+  accepted as an alias for `path` on tools that declare `path`; the rename is
+  recorded as `arguments_coerced` (`file_path=path`), the path is confined
+  exactly like `path`, and a call sending both is rejected. Only unambiguous
   scalar spellings are coerced: a base-10 integer string or an integral
   number such as `200.0` for an integer property, and `"true"`/`"false"` for a
   boolean property. Each coercion is recorded as `arguments_coerced`, whose

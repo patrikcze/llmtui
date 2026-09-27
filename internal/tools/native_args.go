@@ -42,7 +42,7 @@ var nativePropertyTypes = sync.OnceValue(func() map[string]map[string]string {
 // json.Unmarshal into the shared nativeArgs union was strict where small
 // models most often slip — "limit":"200" rejected the whole call with a Go
 // decoder message — and silent where it matters most: an undeclared key
-// such as "start_line" or "file_path" was dropped, so the call could
+// such as "start_line" was dropped, so the call could
 // succeed with a different meaning than the model intended.
 //
 // It (1) rejects any key the tool does not declare, naming the keys it
@@ -50,7 +50,8 @@ var nativePropertyTypes = sync.OnceValue(func() map[string]map[string]string {
 // holding a base-10 integer, or an integral JSON number such as 200.0, for
 // an integer property, and "true"/"false" for a boolean property — and
 // reports each coercion in notes; and (3) turns remaining type mismatches
-// into schema-oriented messages. Nothing is renamed or guessed. Notes carry
+// into schema-oriented messages. Apart from the fixed argumentAliases
+// (file_path for path), nothing is renamed or guessed. Notes carry
 // only the declared property name and target type ("limit=integer"), never
 // an argument value, so they are safe for content-free diagnostics. A tool
 // with no declared schema here keeps the previous plain decode.
@@ -77,6 +78,11 @@ func decodeNativeArgs(tool, raw string) (args nativeArgs, notes []string, err er
 	if fields == nil {
 		return args, nil, fmt.Errorf("arguments must be a JSON object, got null")
 	}
+	aliasNotes, err := applyArgumentAliases(tool, props, fields)
+	if err != nil {
+		return args, nil, err
+	}
+	notes = append(notes, aliasNotes...)
 	var unknown []string
 	for key, value := range fields {
 		kind, ok := props[key]
@@ -121,6 +127,42 @@ func decodeNativeArgs(tool, raw string) (args nativeArgs, notes []string, err er
 		return args, nil, err
 	}
 	return args, notes, nil
+}
+
+// argumentAliases maps a commonly produced argument name to the declared
+// one it unambiguously means. Only names models actually emit belong here;
+// every other undeclared key is still rejected.
+var argumentAliases = map[string]string{
+	"file_path": "path",
+}
+
+// applyArgumentAliases renames alias keys in fields to their declared name,
+// for tools that declare the target and not the alias itself. The value is
+// untouched, so the renamed path goes through exactly the same confinement
+// as one sent as "path". A call that sends both spellings is rejected
+// rather than guessed. Each rename is noted as "alias=target" (names only,
+// never a value).
+func applyArgumentAliases(tool string, props map[string]string, fields map[string]json.RawMessage) ([]string, error) {
+	var notes []string
+	for alias, target := range argumentAliases {
+		value, present := fields[alias]
+		if !present {
+			continue
+		}
+		if _, declared := props[alias]; declared {
+			continue
+		}
+		if _, declared := props[target]; !declared {
+			continue
+		}
+		if _, both := fields[target]; both {
+			return nil, fmt.Errorf("both %q and %q given; %s accepts only %q", alias, target, tool, target)
+		}
+		fields[target] = value
+		delete(fields, alias)
+		notes = append(notes, alias+"="+target)
+	}
+	return notes, nil
 }
 
 // coerceScalar rewrites one argument value only when its intended scalar is
