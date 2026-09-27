@@ -48,8 +48,11 @@ func TestVerifiedAgentNoProgressPersistsPartialExecution(t *testing.T) {
 	if !slices.Contains(execution.ChangedFiles, "notes.txt") {
 		t.Errorf("persisted changed files = %v, want notes.txt", execution.ChangedFiles)
 	}
-	if len(execution.ToolCalls) < 2 || saved.ToolCalls != len(execution.ToolCalls) {
-		t.Errorf("persisted tool calls = %d (run total %d), want the cycle's receipts counted", len(execution.ToolCalls), saved.ToolCalls)
+	// Every receipt is kept, but only executed calls count toward the run's
+	// tool-call total — repeat-blocked calls ran nothing.
+	if len(execution.ToolCalls) < 2 || saved.ToolCalls == 0 || saved.ToolCalls != agent.ExecutedToolCalls(execution.ToolCalls) {
+		t.Errorf("persisted receipts = %d (run total %d, executed %d), want the executed receipts counted",
+			len(execution.ToolCalls), saved.ToolCalls, agent.ExecutedToolCalls(execution.ToolCalls))
 	}
 	if saved.Revision == 0 {
 		t.Error("persisted run has no persistence revision")

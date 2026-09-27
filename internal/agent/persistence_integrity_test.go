@@ -55,8 +55,10 @@ func TestAbandonCycleCommitsPartialExecution(t *testing.T) {
 	if execution.Objective != "update the report" {
 		t.Errorf("objective = %q, want the cycle objective", execution.Objective)
 	}
-	if run.ToolCalls != 2 {
-		t.Errorf("tool calls = %d, want 2", run.ToolCalls)
+	// Budget usage counts executed calls only (ExecutedToolCalls): the
+	// blocked list_dir is recorded but was never run.
+	if run.ToolCalls != 1 {
+		t.Errorf("tool calls = %d, want 1 executed", run.ToolCalls)
 	}
 	var sawFile bool
 	for _, item := range run.Evidence {

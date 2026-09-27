@@ -342,7 +342,7 @@ func (r *AgentRun) AbandonCycle(result ExecutionResult, decision Decision, reaso
 	result.Partial = true
 	cycle.Execution = &result
 	cycle.CompletedAt = now.UTC()
-	r.ToolCalls += len(result.ToolCalls)
+	r.ToolCalls += ExecutedToolCalls(result.ToolCalls)
 	r.AppendEvidence(CollectEvidence(cycle.Number, result))
 	r.addEvent(now, "execution_abandoned", fmt.Sprintf("partial execution recorded: %d tool call(s), %d changed file(s)", len(result.ToolCalls), len(result.ChangedFiles)))
 	return r.Terminate(decision, reason, now)
