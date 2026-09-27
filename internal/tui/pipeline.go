@@ -1748,7 +1748,7 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			case <-time.After(app.RetryBackoff(netCfg)):
 			}
 		}
-		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true, gen: gen}
+		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true, gen: gen, requestFailed: true}
 	}
 }
 

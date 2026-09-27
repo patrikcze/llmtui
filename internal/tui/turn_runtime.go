@@ -69,10 +69,15 @@ type turnRuntime struct {
 	emptyContinuationRetried bool
 	malformedToolCallRetried bool
 	hasHiddenToolRecovery    bool
-	pendingCalls             []tools.Call
-	pendingToolPlan          *toolBatchPlan
-	pendingBudget            bool
-	approvalIdx              int
+	// streamReplayed records that the current model round already used its
+	// single mid-stream interruption replay (see replayInterruptedAgentStream).
+	// It is independent of the tool-recovery budget: a transport drop says
+	// nothing about the model's tool-call behavior.
+	streamReplayed  bool
+	pendingCalls    []tools.Call
+	pendingToolPlan *toolBatchPlan
+	pendingBudget   bool
+	approvalIdx     int
 
 	mcpBatchCancel context.CancelFunc
 	mcpBatchGen    int
@@ -113,6 +118,7 @@ func (r *turnRuntime) resetCycle() {
 	r.emptyContinuationRetried = false
 	r.malformedToolCallRetried = false
 	r.hasHiddenToolRecovery = false
+	r.streamReplayed = false
 	if !r.busy() {
 		r.transition(turnIdle, turnOutcomeNone)
 	}
@@ -152,6 +158,20 @@ func (r *turnRuntime) claimEmptyContinuationRetry() bool {
 		r.emptyContinuationRetried = true
 	}
 	return decision.Allowed()
+}
+
+// claimStreamReplay grants at most one interruption replay per model round.
+func (r *turnRuntime) claimStreamReplay() bool {
+	if r.streamReplayed {
+		return false
+	}
+	r.streamReplayed = true
+	return true
+}
+
+// clearStreamReplay renews the replay allowance once a round completes.
+func (r *turnRuntime) clearStreamReplay() {
+	r.streamReplayed = false
 }
 
 func (r *turnRuntime) clearEmptyContinuationRetry() {
