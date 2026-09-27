@@ -1865,7 +1865,7 @@ func (m *Model) handleBlockedProgress(calls []tools.Call, reason string, termina
 	m.appendTerminalToolResults(results)
 	if m.agentRunActive() {
 		run := m.agentLoop.run
-		_ = run.Terminate(agent.DecisionNoProgress, reason, time.Now())
+		m.terminateAgentRun(agent.DecisionNoProgress, reason)
 		m.notice = fmt.Sprintf("agent %s · no_progress: %s", shortRunID(run.ID), reason)
 		m.endAgentRun()
 		m.refreshViewport()
@@ -2838,7 +2838,7 @@ func (m *Model) streamFailed(err error) {
 	stream, _ := m.turnRuntime.finishStream(turnOutcomeExecutionFailure)
 	drainProviderStream(stream)
 	if m.agentRunActive() && m.agentLoop.ctx != nil && errors.Is(m.agentLoop.ctx.Err(), context.DeadlineExceeded) {
-		_ = m.agentLoop.run.Terminate(agent.DecisionBudgetExhausted, "maximum elapsed time reached", time.Now())
+		m.terminateAgentRun(agent.DecisionBudgetExhausted, "maximum elapsed time reached")
 	} else {
 		m.failVerifiedRun(err)
 	}

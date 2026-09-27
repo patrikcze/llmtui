@@ -1357,6 +1357,10 @@ func (m *Model) persistAgentRun() tea.Cmd {
 	}
 	// Clone synchronously on the Update goroutine; the async writer then owns
 	// an immutable snapshot and cannot race the next lifecycle transition.
+	// Each snapshot gets the next persistence revision here, in dispatch
+	// order, so the store can refuse a delayed older snapshot even when the
+	// two share an UpdatedAt.
+	m.agentLoop.run.Revision++
 	data, err := json.Marshal(m.agentLoop.run)
 	if err != nil {
 		return func() tea.Msg { return agentPersistedMsg{runID: m.agentLoop.run.ID, err: err} }
@@ -1433,10 +1437,50 @@ func (m *Model) releaseAgentContext() {
 }
 
 func (m *Model) failVerifiedRun(err error) {
+	m.terminateAgentRun(agent.DecisionFailed, err.Error())
+}
+
+// terminateAgentRun ends the active run with a terminal decision. When the
+// run is stopped from inside an executor cycle — a no-progress block, a
+// budget ceiling, a provider or preparation failure, a terminal yield — the
+// cycle's observable execution so far (tool receipts, typed errors, changed
+// files, read coverage) is committed as a partial record first, so the
+// persisted run still says what that cycle did. Every other stage keeps the
+// plain Terminate transition.
+func (m *Model) terminateAgentRun(decision agent.Decision, reason string) {
 	if !m.agentRunActive() {
 		return
 	}
-	_ = m.agentLoop.run.Terminate(agent.DecisionFailed, err.Error(), time.Now())
+	run := m.agentLoop.run
+	now := time.Now()
+	if run.Stage == agent.StageExecutor {
+		if err := run.AbandonCycle(m.partialAgentExecution(), decision, reason, now); err == nil {
+			return
+		}
+	}
+	_ = run.Terminate(decision, reason, now)
+}
+
+// partialAgentExecution snapshots the current cycle's in-memory execution
+// for a partial record: its objective, the executor's latest visible reply
+// from this cycle (if any), and its receipts with recovered tool errors
+// pruned exactly as startAgentVerification prunes them.
+func (m *Model) partialAgentExecution() agent.ExecutionResult {
+	execution := m.agentLoop.execution
+	execution.Objective = m.agentLoop.run.Objective
+	start := m.agentLoop.historyStart
+	if n := len(m.agentLoop.cycleBoundaries); n > 0 {
+		start = m.agentLoop.cycleBoundaries[n-1]
+	}
+	for i := len(m.session.Messages) - 1; i >= start && i >= 0; i-- {
+		message := m.session.Messages[i]
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) != "" {
+			execution.Summary = message.Content
+			break
+		}
+	}
+	agent.PruneRecoveredToolErrors(&execution)
+	return execution
 }
 
 // recordAgentTruncation notes that the current cycle's executor turn was cut
@@ -1809,7 +1853,7 @@ func (m *Model) terminateAgentModelRequestBudget(reason string) tea.Cmd {
 		return nil
 	}
 	run := m.agentLoop.run
-	_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
+	m.terminateAgentRun(agent.DecisionBudgetExhausted, reason)
 	m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
 	m.endAgentRun()
 	m.refreshViewport()
@@ -1845,7 +1889,7 @@ func (m *Model) terminateAgentBudget(calls []tools.Call, reason string) tea.Cmd 
 	m.appendTerminalToolResults(results)
 	m.toolErr += len(results)
 	run := m.agentLoop.run
-	_ = run.Terminate(agent.DecisionBudgetExhausted, reason, time.Now())
+	m.terminateAgentRun(agent.DecisionBudgetExhausted, reason)
 	m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
 	m.endAgentRun()
 	m.refreshViewport()
@@ -1940,6 +1984,15 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	}
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
+	// Everything below is per-run state that must describe the resumed run,
+	// not whatever run this process executed before it. In particular the
+	// live tool-call budget continues from the persisted cumulative count,
+	// so it neither inherits another run's usage nor restarts at zero while
+	// Decide still counts the persisted total.
+	m.agentLoop.liveToolCalls = msg.run.ToolCalls
+	m.agentLoop.cycleBoundaries = nil
+	m.agentLoop.execution = agent.ExecutionResult{}
+	m.agentLoop.initialImages = nil
 	m.resetAgentContext()
 	// A resumed run's observation cache starts empty: retained excerpts are
 	// process-local and never persisted, so there is nothing to restore, and

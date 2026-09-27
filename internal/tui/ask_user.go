@@ -51,6 +51,10 @@ func (m *Model) pauseForAskUser(call tools.Call) tea.Cmd {
 	m.waitForUserInput()
 	m.notice = "assistant is waiting for your answer"
 	if m.agentRunActive() {
+		// Record what this cycle already did before pausing, so a process
+		// exit during the wait does not lose it; a live answer continues the
+		// same cycle and its CompleteExecution replaces this partial record.
+		_ = m.agentLoop.run.CheckpointExecution(m.partialAgentExecution(), time.Now())
 		if err := m.agentLoop.run.WaitForUserInput(call.Question, time.Now()); err != nil {
 			m.pendingAsk = nil
 			m.errText = "pause agent for user input: " + err.Error()
