@@ -351,6 +351,22 @@ explicit: a mechanically clean but semantically wrong single cycle can pass
 without a model check; use `always` when every cycle should get a semantic
 review regardless of cost.
 
+A cycle whose **last** tool call failed is judged by what that failure was:
+
+- An *observational* failure — a read-only tool (`read_file`, `list_dir`,
+  `glob`, `grep`) reporting the typed code `not_found` or `range_after_eof` —
+  is not a mechanical verdict. "The file does not exist" can be the answer,
+  so the cycle goes to the semantic verifier like any other.
+- Any other trailing failure is still a deterministic `failed` verdict, but it
+  carries a controller-authored recovery objective (built only from the tool
+  name, its recorded resource, and the typed error kind/code). That earns
+  exactly one recovery cycle; the same failure in that cycle yields the same
+  objective, and the stop policy then ends the run as `failed`.
+- Permission denial, safety blocks, timeouts, and truncation are unchanged.
+
+Typed tool error codes are persisted on each receipt as `error_code`
+(additive; older records have none and keep the previous behavior).
+
 When a semantic evaluation runs, the active provider is reused, which avoids
 loading a second local model, but the request has a fresh message slice, an
 evaluator-only system prompt, no tools, reasoning disabled, temperature zero,
