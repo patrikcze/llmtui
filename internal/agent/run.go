@@ -430,17 +430,34 @@ func (r *AgentRun) RecordUsage(prompt, completion int, now time.Time) {
 	r.UpdatedAt = now.UTC()
 }
 
-// RecordContextCompression appends a diagnostic event noting that this
-// cycle's request triggered context-budget compression, and which strategy
-// and estimated used/budget token counts drove it. Without this, whether
-// truncation or summarization ate evidence the executor needed for this
-// cycle can only be reconstructed after the fact from message sizes; this
-// makes it directly visible in the persisted run.
-func (r *AgentRun) RecordContextCompression(strategy string, used, budget int, now time.Time) {
+// RecordContextCompression appends a diagnostic event noting that a
+// request in this cycle triggered context-budget compression: the strategy,
+// how many older messages were compacted out of the verbatim window, and
+// the estimated used/budget token counts. Without this, whether truncation
+// or summarization ate evidence the executor needed can only be
+// reconstructed after the fact from message sizes. Every compacting request
+// — including tool-round continuations, where long episodes actually
+// compact — reports here, so consecutive identical compactions in one cycle
+// (same strategy and compacted count) are recorded once to keep the
+// bounded event log from filling with repeats.
+func (r *AgentRun) RecordContextCompression(strategy string, compacted, used, budget int, now time.Time) {
 	if r == nil {
 		return
 	}
-	r.addEvent(now, "context_compressed", fmt.Sprintf("strategy=%s used=%d budget=%d", strategy, used, budget))
+	key := fmt.Sprintf("strategy=%s compacted=%d", strategy, compacted)
+	for i := len(r.Events) - 1; i >= 0; i-- {
+		event := r.Events[i]
+		if event.Cycle != r.Cycle {
+			break
+		}
+		if event.Kind == "context_compressed" {
+			if strings.HasPrefix(event.Detail, key+" ") {
+				return
+			}
+			break
+		}
+	}
+	r.addEvent(now, "context_compressed", fmt.Sprintf("%s used=%d budget=%d", key, used, budget))
 }
 
 // LatestCycle returns the current cycle or nil before the first cycle.

@@ -121,6 +121,11 @@ type agentLoopState struct {
 	// same run-level ceiling agent.Decide would eventually enforce at a
 	// cycle boundary — without waiting for that boundary to be reached.
 	liveToolCalls int
+	// compactedToolResults is how many of the current cycle's tool results
+	// the latest request compacted out of its verbatim history window; when
+	// non-zero, agentDirective tells the executor so it does not assume it
+	// can still see them. Reset per cycle.
+	compactedToolResults int
 	// evidenceKeys/evidenceOrder are the run-scoped, bounded set of
 	// observations already seen (see isNewAgentEvidence), so a cycle's
 	// NewEvidence means new information rather than activity. Process-local
@@ -819,6 +824,7 @@ func (m *Model) startInitialAgentCycle(request string, images []provider.Image) 
 	}
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.initialImages = nil
+	m.agentLoop.compactedToolResults = 0
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(run.ID), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
@@ -878,6 +884,7 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.resetCycle()
+	m.agentLoop.compactedToolResults = 0
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · resumed with user input", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(input, images), m.persistAgentRun())
@@ -909,6 +916,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.resetCycle()
+	m.agentLoop.compactedToolResults = 0
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle %d/%d · executing", shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles)
 	return m.dispatch(agentContinueDirective, nil)
@@ -983,6 +991,9 @@ func (m *Model) agentDirective() string {
 	if len(m.agentLoop.evictedResourceKeys) > 0 {
 		fmt.Fprintf(&b, "Observations no longer retained (dropped from the bounded cache — reread if still needed): %s\n",
 			strings.Join(m.agentLoop.evictedResourceKeys, ", "))
+	}
+	if n := m.agentLoop.compactedToolResults; n > 0 {
+		fmt.Fprintf(&b, "Context note: %d earlier tool result(s) from this cycle were compacted out of the conversation to fit the context window. Retained observations are listed above; reread only content you still need verbatim.\n", n)
 	}
 	return truncateAgentText(b.String(), maxAgentDirectiveBytes)
 }
