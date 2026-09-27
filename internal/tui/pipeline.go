@@ -1435,6 +1435,9 @@ func (m *Model) dispatch(raw string, images []provider.Image) tea.Cmd {
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("executor", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
 	}
+	if cmd, ok := m.admitAgentEpisodeRequest(); !ok {
+		return cmd
+	}
 
 	m.commitPrepared(prepared)
 	m.addUserMessage(raw, images...)
@@ -1662,6 +1665,9 @@ func (m *Model) continueChat() tea.Cmd {
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("continuation", prepared.estimate.Total, req.MaxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
 	}
+	if cmd, ok := m.admitAgentEpisodeRequest(); !ok {
+		return cmd
+	}
 	m.commitPrepared(prepared)
 	m.noteAgentCompaction(prepared)
 	m.thinking = true
@@ -1788,6 +1794,14 @@ func toolsRejectedError(err error) bool {
 	}
 	s := strings.ToLower(err.Error())
 	if !strings.Contains(s, "tool") {
+		return false
+	}
+	// A server rejecting a tool call's arguments in the history (Ollama
+	// /v1 "invalid tool call arguments", llama.cpp "failed to parse tool
+	// call arguments") is a request-content error, not proof that native
+	// tools are unsupported; dropping the tool specs cannot fix it and must
+	// not downgrade the session to the fenced protocol (audit P3-8).
+	if strings.Contains(s, "tool call argument") {
 		return false
 	}
 	return strings.Contains(s, "does not support") || strings.Contains(s, "not supported") ||

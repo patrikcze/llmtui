@@ -372,6 +372,13 @@ type AgentRun struct {
 	ContractInput string `json:"contract_input,omitempty"`
 	Objective     string `json:"objective,omitempty"`
 	Limits        Limits `json:"limits"`
+	// PausedFor is the total time the run has spent waiting for the human
+	// (status needs_user_input) in completed pauses; PausedAt marks the
+	// start of the current one. Limits.MaxElapsed excludes both, so an
+	// unanswered question never exhausts the run's time budget (audit
+	// P3-9). See AgentRun.Elapsed.
+	PausedFor time.Duration `json:"paused_for,omitempty"`
+	PausedAt  time.Time     `json:"paused_at,omitempty"`
 	// ToolCalls counts executed tool calls across completed cycles, as
 	// defined by ExecutedToolCalls (rejected, blocked, denied, and ask_user
 	// calls are excluded).

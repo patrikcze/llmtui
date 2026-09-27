@@ -2,6 +2,8 @@ package tools
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,9 +68,34 @@ func TestCallsFromNativeArgumentRecovery(t *testing.T) {
 			wantErr: `unknown argument(s) "start_line"; read_file accepts only: byte_offset, limit, offset, path, resource_id`,
 		},
 		{
-			name: "misnamed path key is rejected with the accepted names",
+			name: "file_path is accepted as an alias for path",
 			tool: ToolWriteFile, args: `{"file_path":"a.txt","content":"x"}`,
-			wantErr: `unknown argument(s) "file_path"; write_file accepts only: content, expected_resource_id, path`,
+			wantNotes: "file_path=path",
+			check: func(t *testing.T, c Call) {
+				if c.Path != "a.txt" || c.Body != "x" {
+					t.Errorf("call = %+v", c)
+				}
+			},
+		},
+		{
+			name: "file_path alias still combines with coercion",
+			tool: ToolReadFile, args: `{"file_path":"a.go","limit":"20"}`,
+			wantNotes: "file_path=path,limit=integer",
+			check: func(t *testing.T, c Call) {
+				if c.Path != "a.go" {
+					t.Errorf("call = %+v", c)
+				}
+			},
+		},
+		{
+			name: "file_path and path together are rejected, not guessed",
+			tool: ToolReadFile, args: `{"file_path":"a.go","path":"b.go"}`,
+			wantErr: `both "file_path" and "path" given; read_file accepts only "path"`,
+		},
+		{
+			name: "other misnamed keys are still rejected",
+			tool: ToolWriteFile, args: `{"filename":"a.txt","content":"x"}`,
+			wantErr: `unknown argument(s) "filename"; write_file accepts only: content, expected_resource_id, path`,
 		},
 		{
 			name: "non-numeric string for an integer gets a schema message",
@@ -163,5 +190,42 @@ func TestArgumentNotesNeverContainValues(t *testing.T) {
 	joined, _ := json.Marshal(notes)
 	if strings.Contains(string(joined), "77") || strings.Contains(string(joined), "secret") {
 		t.Fatalf("notes %s leak argument values", joined)
+	}
+}
+
+// TestFilePathAliasKeepsWorkspaceConfinement pins that the file_path alias
+// only renames the key: an escaping path sent as file_path is refused by the
+// runner exactly as it is when sent as path (Workspace Tool Safety
+// Invariants).
+func TestFilePathAliasKeepsWorkspaceConfinement(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("do not read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(root, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(root, 64)
+	for _, target := range []string{secret, rel} {
+		for _, tool := range []string{ToolReadFile, ToolWriteFile} {
+			args, _ := json.Marshal(map[string]string{"file_path": target, "content": "x"})
+			if tool == ToolReadFile {
+				args, _ = json.Marshal(map[string]string{"file_path": target})
+			}
+			calls := CallsFromNative([]provider.ToolCall{{ID: "c1", Name: tool, Arguments: string(args)}})
+			if len(calls) != 1 || calls[0].InputErr != "" {
+				t.Fatalf("%s %q: decode = %+v", tool, target, calls)
+			}
+			res := r.Execute(calls[0])
+			if res.Err == nil {
+				t.Fatalf("%s via file_path=%q escaped the workspace: %q", tool, target, res.Output)
+			}
+		}
+	}
+	if data, _ := os.ReadFile(secret); string(data) != "do not read" {
+		t.Fatalf("file outside the workspace was modified: %q", data)
 	}
 }

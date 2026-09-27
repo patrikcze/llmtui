@@ -214,7 +214,7 @@ func (m *Model) dispatchGuardedAssist(run *agent.AgentRun, execution agent.Execu
 	// exceeds agent.Limits.MaxElapsed, and a run with no budget left has
 	// nothing for Laya to usefully wait for — the existing budget stop
 	// rules own that case, not this one.
-	remaining := time.Until(run.CreatedAt.Add(run.Limits.MaxElapsed))
+	remaining := run.RemainingElapsed(time.Now())
 	deadline := profile.MaxWait
 	if remaining < deadline {
 		deadline = remaining

@@ -45,16 +45,12 @@ func (m *Model) handleAgentYield() tea.Cmd {
 		return m.startAgentVerification()
 	}
 	run := m.agentLoop.run
-	cycle := run.LatestCycle()
-	if cycle == nil {
+	checkpoint := m.agentEpisodeCheckpoint()
+	if checkpoint == nil {
 		// Defensive: BeginCycle always appends a Cycle before executor work
 		// starts, so this should be unreachable while the run is active.
 		return m.startAgentVerification()
 	}
-	if cycle.Episode == nil {
-		cycle.Episode = &agent.EpisodeCheckpoint{PolicyVersion: 1, EnabledAtStart: true}
-	}
-	checkpoint := cycle.Episode
 
 	obligations := run.PendingExactReadObligations(m.agentLoop.execution)
 	in, ids := m.buildAgentYieldInput(checkpoint, obligations)
@@ -82,12 +78,63 @@ func (m *Model) handleAgentYield() tea.Cmd {
 		if !progressed {
 			checkpoint.NoProgressNudges++
 		}
-		checkpoint.ExecutorRequests++
+		// continueChat's admitAgentEpisodeRequest counts this request.
 		return m.continueAgentEpisode(decision)
 	case agent.YieldVerify:
 		return m.startAgentVerification()
 	default:
 		return m.terminateAgentYield(decision)
+	}
+}
+
+// agentEpisodeCheckpoint returns the current cycle's yield checkpoint,
+// creating it on first use. It is nil when no agent run is active, yield
+// continuation is disabled, or no cycle has begun.
+func (m *Model) agentEpisodeCheckpoint() *agent.EpisodeCheckpoint {
+	if !m.agentRunActive() || !m.cfg.Agent.Yield.Enabled {
+		return nil
+	}
+	cycle := m.agentLoop.run.LatestCycle()
+	if cycle == nil {
+		return nil
+	}
+	if cycle.Episode == nil {
+		cycle.Episode = &agent.EpisodeCheckpoint{PolicyVersion: 1, EnabledAtStart: true}
+	}
+	return cycle.Episode
+}
+
+// admitAgentEpisodeRequest charges one executor provider request against
+// agent.yield.max_episode_requests before it is dispatched. Every executor
+// request path calls it — the cycle's first request, tool-result
+// continuations, yield continuations, and interrupted-stream replays — so
+// the ceiling bounds the whole episode, not only yield continuations (audit
+// P3-2). When the ceiling is already reached it terminates the run as
+// budget_exhausted and returns ok=false with the persistence command.
+func (m *Model) admitAgentEpisodeRequest() (cmd tea.Cmd, ok bool) {
+	checkpoint := m.agentEpisodeCheckpoint()
+	if checkpoint == nil {
+		return nil, true
+	}
+	if limit := m.cfg.Agent.Yield.MaxEpisodeRequests; limit > 0 && checkpoint.ExecutorRequests >= limit {
+		return m.terminateAgentModelRequestBudget(fmt.Sprintf("agent episode request budget exhausted (maximum %d)", limit)), false
+	}
+	checkpoint.ExecutorRequests++
+	return nil, true
+}
+
+// noteAgentEpisodeRetries charges the extra provider attempts startRequest
+// made inside one admitted request — transport retries and the native-tool
+// fallback resend — so the episode counter reflects every attempt. An
+// overrun stops the episode at the next admission.
+func (m *Model) noteAgentEpisodeRetries(retries int, fellBack bool) {
+	checkpoint := m.agentEpisodeCheckpoint()
+	if checkpoint == nil {
+		return
+	}
+	checkpoint.ExecutorRequests += max(retries, 0)
+	if fellBack {
+		checkpoint.ExecutorRequests++
 	}
 }
 

@@ -837,6 +837,7 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 		m.refreshViewport()
 		return nil
 	}
+	m.resetAgentContext()
 	boundary := len(m.session.Messages)
 	if err := run.BeginCycle(objective, append(m.agentContextSources(), "new_user_input"), time.Now()); err != nil {
 		m.failVerifiedRun(err)
@@ -889,7 +890,10 @@ func (m *Model) resetAgentContext() {
 	if m.agentLoop.runCancel != nil {
 		m.agentLoop.runCancel()
 	}
-	remaining := m.agentLoop.run.Limits.MaxElapsed - time.Since(m.agentLoop.run.CreatedAt)
+	// The deadline covers only the remaining active budget; time spent
+	// waiting for the human is excluded (agent.AgentRun.Elapsed), so a pause
+	// that ends must call this again to renew the deadline.
+	remaining := m.agentLoop.run.RemainingElapsed(time.Now())
 	ctx, cancel := context.WithTimeout(context.Background(), remaining)
 	m.agentLoop.ctx = ctx
 	m.agentLoop.runCancel = cancel
@@ -1823,11 +1827,45 @@ func classifyByMeta(meta tools.ResultMeta) (kind agent.ErrorKind, ok bool) {
 	}
 }
 
+// testCommandPrefixes are the command starts recorded as a test run.
+var testCommandPrefixes = []string{"go test", "go vet", "make test", "npm test", "pytest", "cargo test"}
+
+// looksLikeTestCommand reports whether any simple command in a shell line
+// runs tests, so "cd pkg && go test ./..." and "CGO_ENABLED=0 go test" count,
+// not only a line that starts with the test command (audit P3-4). It only
+// labels TestsRun evidence; it never classifies a command's safety.
 func looksLikeTestCommand(command string) bool {
-	command = strings.ToLower(strings.TrimSpace(command))
-	return strings.HasPrefix(command, "go test") || strings.HasPrefix(command, "go vet") ||
-		strings.HasPrefix(command, "make test") || strings.HasPrefix(command, "npm test") ||
-		strings.HasPrefix(command, "pytest") || strings.HasPrefix(command, "cargo test")
+	segments := strings.FieldsFunc(strings.ToLower(command), func(r rune) bool {
+		return r == '&' || r == '|' || r == ';' || r == '\n'
+	})
+	for _, segment := range segments {
+		fields := strings.Fields(strings.Trim(segment, "() \t"))
+		for len(fields) > 0 && isShellAssignment(fields[0]) {
+			fields = fields[1:]
+		}
+		simple := strings.Join(fields, " ")
+		for _, prefix := range testCommandPrefixes {
+			if simple == prefix || strings.HasPrefix(simple, prefix+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isShellAssignment reports whether field is a leading NAME=value
+// environment assignment.
+func isShellAssignment(field string) bool {
+	name, _, ok := strings.Cut(field, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r != '_' && (r < 'a' || r > 'z') && (i == 0 || r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // agentHardBudgetExceeded reports whether executing incoming more tool
@@ -2006,14 +2044,23 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	}
+	// A run saved while the task contract waited on a clarifying question
+	// is restored to that same pause rather than resumed: re-running the
+	// contract without the answer only makes the model ask again. The stored
+	// question is shown above the composer, and the next message goes through
+	// resumeVerifiedRunWithInput, which records it as ContractInput.
+	awaitingContractInput := msg.run.Status == agent.DecisionNeedsUserInput &&
+		msg.run.Stage == agent.StageContract && !msg.run.HasCriteria()
 	next := msg.run.Objective
 	if n := len(msg.run.Memory); n > 0 && strings.TrimSpace(msg.run.Memory[n-1].RecommendedNext) != "" {
 		next = msg.run.Memory[n-1].RecommendedNext
 	}
-	if err := msg.run.Resume(next, time.Now()); err != nil {
-		m.errText = "resume agent run: " + err.Error()
-		m.refreshViewport()
-		return m, nil
+	if !awaitingContractInput {
+		if err := msg.run.Resume(next, time.Now()); err != nil {
+			m.errText = "resume agent run: " + err.Error()
+			m.refreshViewport()
+			return m, nil
+		}
 	}
 	m.agentLoop.run = msg.run
 	m.agentLoop.historyStart = len(m.session.Messages)
@@ -2035,6 +2082,11 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.observations = agent.NewObservationCache()
 	m.agentLoop.evictedResourceKeys = nil
 	m.agentOn = true
+	if awaitingContractInput {
+		m.notice = fmt.Sprintf("agent %s · resumed — answer the task-contract question to continue", shortRunID(msg.run.ID))
+		m.refreshViewport()
+		return m, nil
+	}
 	if !msg.run.HasCriteria() {
 		return m, tea.Batch(m.persistAgentRun(), m.startAgentContract())
 	}

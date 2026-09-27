@@ -423,3 +423,34 @@ Tests use the literal observed phrasing and, for the coverage-integration
 test, the exact five-chunk read sequence from the real run (1-200 through
 1401-1500 of 1500 lines) to prove the fix resolves that specific case, not
 just the grammar function in isolation.
+
+## Update (episode request ceiling covers every executor request, 2026-09-27)
+
+Audit P3-2: `EpisodeCheckpoint.ExecutorRequests` was incremented only when
+`handleAgentYield` admitted a yield continuation, so
+`agent.yield.max_episode_requests` never bounded tool-result rounds or
+interrupted-stream replays, contrary to its own documentation. A model that
+kept issuing tool calls never reached the yield boundary at all.
+
+The counter is now charged at admission by `admitAgentEpisodeRequest`, which
+both executor dispatch paths call (`dispatch` for the cycle's first request
+and `continueChat` for tool rounds, yield continuations and stream replays),
+immediately after the token-budget admission check. Transport retries and the
+native-tool fallback resend inside `startRequest` are added when the first
+stream message arrives. Reaching the ceiling terminates the run as
+`budget_exhausted`, like the token-budget admission. With
+`agent.yield.enabled` off nothing is counted and no checkpoint is created,
+so flag-off runs are unchanged. The counter still never feeds into
+`run.ToolCalls` or token usage.
+
+## Update (enabled by default, 2026-09-27)
+
+`agent.yield.enabled` now defaults to `true`. The prerequisites for turning
+it on are in place: every executor request is charged to
+`max_episode_requests` (see the update above), trailing tool results and new
+evidence are accounted for (#139, #143), and read-coverage identity is
+stable (#144). Both ceilings (`max_episode_requests: 64`,
+`max_nudges_without_progress: 2`) and `enforce_budgets_live: true` stay at
+their defaults. Setting `agent.yield.enabled: false` restores the previous
+straight-to-verification behavior exactly. Agent mode itself stays off by
+default, so ordinary chat is unaffected.

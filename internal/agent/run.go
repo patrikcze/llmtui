@@ -57,7 +57,7 @@ func (r *AgentRun) BeginContract(now time.Time) error {
 	if r == nil || r.Status != DecisionRunning || (r.Stage != StageTrigger && r.Stage != StageStopCheck) || r.HasCriteria() {
 		return r.transitionError(StageContract)
 	}
-	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+	if r.Elapsed(now) >= r.Limits.MaxElapsed {
 		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
 	r.Stage = StageContract
@@ -112,7 +112,7 @@ func (r *AgentRun) WaitForContractInput(reason string, now time.Time) error {
 	if r == nil || r.Status != DecisionRunning || r.Stage != StageContract {
 		return r.transitionError(StageContract)
 	}
-	r.Status = DecisionNeedsUserInput
+	r.setStatus(DecisionNeedsUserInput, now)
 	r.StopReason = truncate(strings.TrimSpace(reason), 1024)
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "run_needs_user_input", r.StopReason)
@@ -143,7 +143,7 @@ func (r *AgentRun) BeginCycle(objective string, sources []string, now time.Time)
 	if r.Cycle >= r.Limits.MaxCycles {
 		return fmt.Errorf("%w: maximum %d cycles reached", ErrBudgetExhausted, r.Limits.MaxCycles)
 	}
-	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+	if r.Elapsed(now) >= r.Limits.MaxElapsed {
 		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
 	r.Cycle++
@@ -273,7 +273,7 @@ func (r *AgentRun) ApplyStop(stop StopResult, now time.Time) error {
 		r.addEvent(now, string(stop.Decision), r.StopReason)
 		return nil
 	}
-	r.Status = stop.Decision
+	r.setStatus(stop.Decision, now)
 	r.addEvent(now, "run_"+string(stop.Decision), r.StopReason)
 	return nil
 }
@@ -283,7 +283,7 @@ func (r *AgentRun) Cancel(reason string, now time.Time) {
 	if r == nil || (r.Status != DecisionRunning && r.Status != DecisionNeedsUserInput) {
 		return
 	}
-	r.Status = DecisionCancelled
+	r.setStatus(DecisionCancelled, now)
 	r.StopReason = truncate(reason, 1024)
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "run_cancelled", r.StopReason)
@@ -296,7 +296,7 @@ func (r *AgentRun) WaitForUserInput(reason string, now time.Time) error {
 	if r == nil || r.Status != DecisionRunning || r.Stage != StageExecutor {
 		return r.transitionError(StageExecutor)
 	}
-	r.Status = DecisionNeedsUserInput
+	r.setStatus(DecisionNeedsUserInput, now)
 	r.StopReason = truncate(strings.TrimSpace(reason), 1024)
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "run_needs_user_input", r.StopReason)
@@ -310,7 +310,7 @@ func (r *AgentRun) ContinueExecutorWithUserInput(now time.Time) error {
 	if r == nil || r.Status != DecisionNeedsUserInput || r.Stage != StageExecutor {
 		return r.transitionError(StageExecutor)
 	}
-	r.Status = DecisionRunning
+	r.setStatus(DecisionRunning, now)
 	r.StopReason = ""
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "user_input_received", "live executor continuation resumed")
@@ -376,7 +376,7 @@ func (r *AgentRun) Terminate(decision Decision, reason string, now time.Time) er
 	if r == nil || r.Status != DecisionRunning || !isTerminal(decision) {
 		return fmt.Errorf("%w: cannot terminate as %s", ErrInvalidTransition, decision)
 	}
-	r.Status = decision
+	r.setStatus(decision, now)
 	r.StopReason = truncate(reason, 1024)
 	r.UpdatedAt = now.UTC()
 	r.addEvent(now, "run_"+string(decision), r.StopReason)
@@ -398,7 +398,7 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 	if r.Cycle >= r.Limits.MaxCycles {
 		return fmt.Errorf("%w: maximum %d cycles reached", ErrBudgetExhausted, r.Limits.MaxCycles)
 	}
-	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
+	if r.Elapsed(now) >= r.Limits.MaxElapsed {
 		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
 	if cycle := r.LatestCycle(); cycle != nil && cycle.Episode != nil && (cycle.Execution == nil || cycle.Execution.Partial) {
@@ -409,7 +409,7 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 		// reconstructs or replays it; a fresh cycle starts with Episode nil.
 		cycle.Episode.Interrupted = true
 	}
-	r.Status = DecisionRunning
+	r.setStatus(DecisionRunning, now)
 	r.Stage = StageStopCheck
 	r.StopReason = ""
 	if nextObjective = strings.TrimSpace(nextObjective); nextObjective != "" {
@@ -662,6 +662,44 @@ func hasErrorKind(errorsIn []RunError, kinds ...ErrorKind) bool {
 		}
 	}
 	return false
+}
+
+// setStatus is the only writer of Status. It keeps human-wait accounting:
+// entering needs_user_input opens a pause, and leaving it (answer, resume,
+// cancel) adds the pause to PausedFor.
+func (r *AgentRun) setStatus(status Decision, now time.Time) {
+	waiting := status == DecisionNeedsUserInput
+	switch {
+	case waiting && r.PausedAt.IsZero():
+		r.PausedAt = now.UTC()
+	case !waiting && !r.PausedAt.IsZero():
+		r.PausedFor += max(now.Sub(r.PausedAt), 0)
+		r.PausedAt = time.Time{}
+	}
+	r.Status = status
+}
+
+// Elapsed is the run's active time: wall-clock time since CreatedAt minus
+// time spent waiting for the human, including a pause still in progress.
+// Limits.MaxElapsed bounds this, not raw wall-clock time (audit P3-9).
+func (r *AgentRun) Elapsed(now time.Time) time.Duration {
+	if r == nil {
+		return 0
+	}
+	paused := r.PausedFor
+	if !r.PausedAt.IsZero() {
+		paused += max(now.Sub(r.PausedAt), 0)
+	}
+	return max(now.Sub(r.CreatedAt)-paused, 0)
+}
+
+// RemainingElapsed is how much of Limits.MaxElapsed is left at now; it is
+// zero or negative once the budget is spent.
+func (r *AgentRun) RemainingElapsed(now time.Time) time.Duration {
+	if r == nil {
+		return 0
+	}
+	return r.Limits.MaxElapsed - r.Elapsed(now)
 }
 
 func isTerminal(d Decision) bool {

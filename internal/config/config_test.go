@@ -451,6 +451,24 @@ func TestDecisionEngineModeDefaultsToShadow(t *testing.T) {
 	}
 }
 
+// TestAgentYieldEnabledByDefault pins the shipped default: same-episode
+// yield continuation is on, with its episode request and no-progress
+// ceilings in force.
+func TestAgentYieldEnabledByDefault(t *testing.T) {
+	v, err := NewViper(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := cfg.Agent.Yield
+	if !y.Enabled || y.MaxEpisodeRequests != 64 || y.MaxNudgesWithoutProgress != 2 || !cfg.Agent.EnforceBudgetsLive {
+		t.Fatalf("agent.yield = %+v enforce_budgets_live=%v, want enabled with ceilings 64/2 and live budgets", y, cfg.Agent.EnforceBudgetsLive)
+	}
+}
+
 func TestDecisionEngineModeResolution(t *testing.T) {
 	cases := []struct {
 		name string

@@ -245,14 +245,26 @@ func toWireTools(specs []provider.ToolSpec) []wireTool {
 	return out
 }
 
+// toWireToolCalls replays assistant tool calls from history. Arguments that
+// are not valid JSON (a truncated or malformed call, or the empty string a
+// no-argument call can carry) are sent as "{}", matching the Ollama
+// provider. OpenAI-compatible servers parse history arguments: Ollama's /v1
+// endpoint answers 400 "invalid tool call arguments" and llama.cpp's server
+// 500 "Failed to parse tool call arguments as JSON", so one bad call would
+// otherwise fail every later request in the session (audit P3-8). The
+// model still sees its mistake through the correlated tool result's error.
 func toWireToolCalls(calls []provider.ToolCall) []wireToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
 	out := make([]wireToolCall, 0, len(calls))
 	for _, c := range calls {
+		args := c.Arguments
+		if !json.Valid([]byte(args)) {
+			args = "{}"
+		}
 		out = append(out, wireToolCall{ID: c.ID, Type: "function",
-			Function: wireFunctionCall{Name: c.Name, Arguments: c.Arguments}})
+			Function: wireFunctionCall{Name: c.Name, Arguments: args}})
 	}
 	return out
 }

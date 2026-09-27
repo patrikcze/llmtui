@@ -57,7 +57,7 @@ func TestNativeUnknownArgumentIsRejectedThenCorrected(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, prov := configureAgentTestModel(t,
-		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"file_path":"notes.txt"}`}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"filename":"notes.txt"}`}}},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-2", Name: tools.ToolReadFile, Arguments: `{"path":"notes.txt"}`}}},
 		agentScriptStep{text: "notes.txt says hello."},
 		agentScriptStep{text: verifierJSON("passed", "read and reported", "", false, false)},
@@ -77,9 +77,46 @@ func TestNativeUnknownArgumentIsRejectedThenCorrected(t *testing.T) {
 			toolResult = message.Content
 		}
 	}
-	for _, want := range []string{`unknown argument(s) "file_path"`, "read_file accepts only:", "path"} {
+	for _, want := range []string{`unknown argument(s) "filename"`, "read_file accepts only:", "path"} {
 		if !strings.Contains(toolResult, want) {
 			t.Errorf("tool result %q is missing %q", toolResult, want)
 		}
+	}
+}
+
+// TestNativeFilePathAliasExecutesAndIsRecorded covers the TUI half of the
+// file_path alias: the call runs as a normal read, with no rejected round,
+// and leaves a content-free arguments_coerced diagnostic.
+func TestNativeFilePathAliasExecutesAndIsRecorded(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"file_path":"notes.txt"}`}}},
+		agentScriptStep{text: "notes.txt says hello."},
+		agentScriptStep{text: verifierJSON("passed", "read and reported", "", false, false)},
+	)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	driveAgentCommands(t, m, m.startVerifiedRun("what do the notes say?", nil))
+
+	run := m.agentLoop.run
+	calls := run.LatestCycle().Execution.ToolCalls
+	if run.Status != agent.DecisionDone || len(calls) != 1 || !calls[0].Succeeded {
+		t.Fatalf("status=%s calls=%+v, want one successful read", run.Status, calls)
+	}
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests = %d, want 4 (contract, read, answer, verifier) with no rejected round", len(prov.requests))
+	}
+	var detail string
+	for _, d := range m.toolCallDiagnostics {
+		if d.Classification == provider.ToolCallArgumentsCoerced {
+			detail = d.Detail
+		}
+	}
+	if detail != "file_path=path" {
+		t.Fatalf("arguments_coerced detail = %q, want file_path=path", detail)
 	}
 }

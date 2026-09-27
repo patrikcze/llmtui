@@ -101,6 +101,9 @@ func (m *Model) answerAskUser(answer string) tea.Cmd {
 		}
 		m.agentLoop.execution.NeedsUserInput = false
 		m.agentLoop.execution.NewEvidence = true
+		// The wait was excluded from the elapsed budget, so the run's
+		// deadline, which kept ticking during it, is renewed.
+		m.resetAgentContext()
 	}
 	m.pendingAsk = nil
 	m.closeOverlay()

@@ -204,6 +204,11 @@ The persisted `AgentRun` is data only; it cannot safely serialize a Go
 `context.Context`. The TUI adapter owns a run-scoped deadline and derives each
 executor, tool, and verifier context from it. Resuming reconstructs that
 process-local context using only the elapsed budget that remains.
+`max_elapsed` measures active time: while the run waits for your answer
+(`needs_user_input`, from `ask_user` or a contract question) the clock is
+paused, and the deadline is renewed when you answer or resume. The run records
+the paused total as `paused_for`. A parked or interrupted run is not waiting
+for input, so its time still counts.
 
 ## Instruction precedence and trust
 
@@ -301,18 +306,19 @@ or raise `tools.no_progress.threshold` (default `3`) if it blocks a
 legitimate pattern this fingerprinting doesn't yet recognize as
 progressing.
 
-## Same-episode yield continuation (opt-in)
+## Same-episode yield continuation
 
 A "yield" is a clean, no-tool assistant completion — it is not task
-completion. By default (`agent.yield.enabled: false`) a yield goes straight
-to verification below, exactly as it always has. Set `agent.yield.enabled:
-true` to let a narrow, mechanically provable class of missing evidence
-continue in the *same* executor episode first: currently only an exact
+completion. By default (`agent.yield.enabled: true`) a narrow, mechanically
+provable class of missing evidence continues in the *same* executor episode
+before verification: currently only an exact
 "Read the file `<path>`." acceptance criterion the executor has not yet
 proven. This is not a general "keep retrying" mode — a criterion requiring
 model judgment (comparison, review, open-ended inspection) is never treated
 as an obligation here and always falls through to verification unchanged,
 per [ADR 0013](architecture/decisions/0013-agent-execution-yield-policy.md).
+Set `agent.yield.enabled: false` to send every yield straight to verification,
+as before this feature existed.
 
 Proof is coverage-aware, not just "a `read_file` call touching this path
 succeeded": a successful read that only delivered part of a larger file
@@ -519,10 +525,10 @@ Default hard limits are:
 | Cycles | `8` | Maximum executor/verifier cycles |
 | Tool calls | `32` | Total calls across the run |
 | Tokens | `100000` | Executor plus verifier usage when reported/estimated |
-| Elapsed time | `30m` | Wall-clock run duration |
+| Elapsed time | `30m` | Active run duration; time waiting for your answer (`needs_user_input`) is excluded |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
 | Verifier attempts | `2` | `agent.verifier.max_attempts` per cycle, see [Verification](#verification) |
-| Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation-opt-in) |
+| Yield nudges without progress | `2` | `agent.yield.max_nudges_without_progress`, only when `agent.yield.enabled` — see [Same-episode yield continuation](#same-episode-yield-continuation) |
 | Yield episode requests | `64` | `agent.yield.max_episode_requests`, only when `agent.yield.enabled` |
 
 Passing all observable criteria ends as `done`. Verified progress with
@@ -611,6 +617,10 @@ run's live tool-call budget continues from its persisted tool-call total.
 When a live run stops as `needs_user_input`, the next normal user message
 resumes that same run in a fresh cycle and is included as the new input; it does
 not silently grant a previously denied permission.
+A run saved while its task contract was waiting on a clarifying question is
+the exception: `/agent resume` restores that pause and shows the stored
+question again, without a model request, and your next message becomes the
+contract's clarification (`contract_input`).
 
 An explicit `ask_user` tool call takes a narrower live path: the executor cycle
 pauses before verification, and the selected or typed answer returns as the

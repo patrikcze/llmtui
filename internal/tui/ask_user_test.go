@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -312,5 +313,52 @@ func TestToolsOverviewShowsAskUser(t *testing.T) {
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
 	if !strings.Contains(m.toolsOverlay(), tools.ToolAskUser) {
 		t.Fatal("/tools overview omits ask_user")
+	}
+}
+
+// TestAgentAskUserLongWaitDoesNotExhaustElapsedBudget is the audit P3-9
+// regression for the live path: an ask_user answered after longer than
+// agent.max_elapsed continues the run. The wait is simulated by moving the
+// run's clock back two hours and expiring the run context, which is what
+// the old CreatedAt-based deadline did during a real wait.
+func TestAgentAskUserLongWaitDoesNotExhaustElapsedBudget(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-file", Name: tools.ToolAskUser, Arguments: `{"question":"Which file did you mean?"}`}}},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
+		agentScriptStep{text: "report.md heading is Q3 report."},
+		agentScriptStep{text: verifierJSONSatisfying("heading reported", "c1", "c2")},
+	)
+	prov.contractReplies = []string{`{"criteria":["read report.md","report its heading"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/report.md", []byte("# Q3 report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+
+	driveAgentCommands(t, m, m.startVerifiedRun("Read the file I mentioned and give me its heading.", nil))
+	run := m.agentLoop.run
+	if run.Status != agent.DecisionNeedsUserInput || m.pendingAsk == nil || run.PausedAt.IsZero() {
+		t.Fatalf("run = {status:%s pausedAt:%v}, want an open ask_user pause", run.Status, run.PausedAt)
+	}
+
+	const wait = 2 * time.Hour
+	run.CreatedAt = run.CreatedAt.Add(-wait)
+	run.PausedAt = run.PausedAt.Add(-wait)
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	m.agentLoop.runCancel()
+	m.agentLoop.ctx, m.agentLoop.runCancel = expired, cancel
+
+	driveAgentCommands(t, m, m.answerAskUser("report.md"))
+
+	got := m.agentLoop.run
+	if got.Status != agent.DecisionDone {
+		t.Fatalf("status = %s (%s), want done: the %s wait must not count toward max_elapsed", got.Status, got.StopReason, wait)
+	}
+	if got.PausedFor < wait {
+		t.Fatalf("PausedFor = %s, want at least %s", got.PausedFor, wait)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/patrikcze/llmtui/internal/redact"
 )
@@ -255,6 +256,14 @@ func decodeRun(data []byte) (*AgentRun, error) {
 	}
 	if err := validateLimits(run.Limits); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorruptRun, err)
+	}
+	if run.PausedFor < 0 {
+		return nil, fmt.Errorf("%w: negative paused time", ErrCorruptRun)
+	}
+	if run.Status != DecisionNeedsUserInput {
+		// Only an input wait has an open pause; a stale marker must not
+		// silently discount later active time.
+		run.PausedAt = time.Time{}
 	}
 	for i := range run.Cycles {
 		if err := validateEpisodeCheckpoint(run.Cycles[i].Episode); err != nil {

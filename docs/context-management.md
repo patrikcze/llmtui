@@ -33,7 +33,7 @@ an oversized text-only user message with a bounded continuation anchor and
 preserves the original request in the summary; image turns fail explicitly
 instead of silently dropping their visual input. This same graceful
 degradation applies to a same-episode yield continuation (see [Same-episode
-yield continuation](agent-loop.md#same-episode-yield-continuation-opt-in)) —
+yield continuation](agent-loop.md#same-episode-yield-continuation)) —
 its trailing message is the executor's own no-tool text answer rather than a
 tool result, but it is still a continuation, not a fresh user turn, and gets
 identical anchor/compaction protection.

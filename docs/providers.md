@@ -79,6 +79,13 @@ sampling or context fields into remote requests.
   the call already open at that index therefore starts a new call, rather
   than concatenating two calls' arguments into one invalid call. Resending the
   same `id`/name on every fragment never splits a call.
+- A tool call from history whose arguments are not valid JSON (truncated,
+  malformed, or empty) is replayed with `{}` arguments, as the Ollama provider
+  already does; the tool result still carries the argument error. Ollama's
+  `/v1` endpoint rejects such history with 400 `invalid tool call arguments`
+  and llama.cpp's server with 500, so replaying it raw would fail every later
+  request in the session. That error is also never read as "native tools are
+  unsupported", so it cannot switch the session to the fenced protocol.
 - Inside an `/agent` run, a stream interrupted *after* it started (dropped
   connection, missing terminal signal, or an inactivity stall) is replayed
   once per model round: the partial text is discarded, never added to
