@@ -272,6 +272,10 @@ func TestCharacterization_AgentVerifierReceivesNoGenericMemoryOrRAG(t *testing.T
 		// Observations are a bounded controller-owned projection of the current
 		// cycle, not generic memory or RAG content.
 		"Observations": true,
+		// CriterionFacts are computed by agent.CriterionReadFacts solely from
+		// the current cycle's controller-recorded read receipts
+		// (ExecutionResult.ReadObservations) and pinned criterion text.
+		"CriterionFacts": true,
 	}
 
 	typ := reflect.TypeOf(agentverify.Input{})

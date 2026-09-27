@@ -109,28 +109,6 @@ func TestRecoveredToolErrorsWithoutResourceNeverRecovers(t *testing.T) {
 	}
 }
 
-func TestMechanicallyCompleteIgnoresRecoveredFailure(t *testing.T) {
-	recovered := ExecutionResult{
-		Summary: "asked and wrote",
-		ToolCalls: []ToolCallRecord{
-			{Name: "ask_user", Succeeded: false, ErrorKind: ErrorToolValidation},
-			{Name: "ask_user", Succeeded: true},
-			{Name: "write_file", Succeeded: true},
-		},
-	}
-	if !MechanicallyComplete(recovered) {
-		t.Fatal("a cycle whose only failures were recovered should be mechanically complete")
-	}
-
-	unrecovered := ExecutionResult{
-		Summary:   "tried and failed",
-		ToolCalls: []ToolCallRecord{{Name: "read_file", Succeeded: false, ErrorKind: ErrorToolExecution}},
-	}
-	if MechanicallyComplete(unrecovered) {
-		t.Fatal("a cycle whose tool never succeeded is not mechanically complete")
-	}
-}
-
 func TestCollectEvidenceNamesSuccessfulTools(t *testing.T) {
 	items := CollectEvidence(1, ExecutionResult{
 		ToolCalls: []ToolCallRecord{

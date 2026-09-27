@@ -120,6 +120,18 @@ func verifierJSON(verdict, summary, next string, retryable, changed bool) string
 		`"proposed_criteria":[],"atomic_task":true}`
 }
 
+// verifierJSONSatisfying is verifierJSON for a "passed" verdict that
+// reports each named pinned criterion satisfied — what a well-behaved
+// verifier returns. A bare multi-criterion pass no longer satisfies every
+// criterion implicitly (audit P2-6).
+func verifierJSONSatisfying(summary string, ids ...string) string {
+	updates := make([]string, 0, len(ids))
+	for _, id := range ids {
+		updates = append(updates, `{"id":"`+id+`","status":"satisfied"}`)
+	}
+	return strings.Replace(verifierJSON("passed", summary, "", false, false), `"criteria":[]`, `"criteria":[`+strings.Join(updates, ",")+`]`, 1)
+}
+
 func configureAgentTestModel(t *testing.T, steps ...agentScriptStep) (*Model, *scriptedAgentProvider) {
 	t.Helper()
 	m := newTestModel(t)
@@ -410,7 +422,7 @@ func TestVerifiedAgentContractClarificationDelegatesToAskUser(t *testing.T) {
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "ask-file", Name: tools.ToolAskUser, Arguments: `{"question":"Which file did you mean?"}`}}},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolReadFile, Arguments: `{"path":"report.md"}`}}},
 		agentScriptStep{text: "report.md heading is Q3 report."},
-		agentScriptStep{text: verifierJSON("passed", "heading reported", "", false, false)},
+		agentScriptStep{text: verifierJSONSatisfying("heading reported", "c1", "c2")},
 	)
 	prov.contractReplies = []string{
 		`{"criteria":["read the file the user meant","report its heading"],"needs_user_input":true,"question":"Which file did you mean?","user_options":["file_name_1","file_name_2","file_name_3"]}`,
@@ -596,7 +608,7 @@ func TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.PinTypedCriteria([]agent.CriterionSpec{{Text: "Read the file report.md", Kind: agent.CriterionSemantic}})
+	run.PinCriteria([]string{"Read the file report.md"})
 	if !run.ContractCoverageJustified() {
 		t.Fatal("ContractCoverageJustified = false, want a non-mutating single criterion to still shortcut")
 	}
@@ -2396,7 +2408,7 @@ func TestAgentCancelCommandFinalizesActiveStream(t *testing.T) {
 // same-turn establish-and-resolve path (see the "resolve criteria on the
 // establishing cycle" fix) is what keeps this a one-cycle UX for a genuinely
 // simple objective, not a shortcut around ever checking it.
-func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *testing.T) {
+func TestAdaptiveCleanFirstCycleStillVerifiesSemantically(t *testing.T) {
 	verifierPass := `{"verdict":"passed","summary":"workspace inspected as requested","evidence":[],` +
 		`"failed_criteria":[],"remaining_criteria":[],"recommended_next":"","retryable":false,"confidence":0.9,` +
 		`"new_evidence":false,"strategy_changed":false,"transient_failure":false,"needs_user_input":false,` +
@@ -2417,9 +2429,8 @@ func TestAdaptiveMechanicallyCompleteOnFirstCycleStillVerifiesSemantically(t *te
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 1 {
 		t.Fatalf("run = %+v", m.agentLoop.run)
 	}
-	// Tool call + tool continuation + semantic verifier: the first-cycle
-	// guard must force the verifier request even though execution alone
-	// was already mechanically complete.
+	// Tool call + tool continuation + semantic verifier: a clean execution
+	// is never proof of completion on its own.
 	if len(prov.requests) != 4 {
 		t.Fatalf("provider requests = %d, want contract+executor+continuation+verifier on cycle 1", len(prov.requests))
 	}
@@ -2441,7 +2452,9 @@ func newAgentVerificationTestRun(t *testing.T, m *Model, request string, criteri
 	if err := run.BeginCycle(request, nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	run.PinTypedCriteria(criteria)
+	if err := run.PinTypedCriteriaWithAssessments(criteria); err != nil {
+		t.Fatal(err)
+	}
 	m.agentLoop.run = run
 	m.agentLoop.execution = execution
 	m.agentOn = true
@@ -2449,60 +2462,6 @@ func newAgentVerificationTestRun(t *testing.T, m *Model, request string, criteri
 	m.resetAgentContext()
 	t.Cleanup(m.releaseAgentContext)
 	return run
-}
-
-func TestAdaptiveDeterministicTaskCompletesWithoutSemanticVerifier(t *testing.T) {
-	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not be requested"})
-	run := newAgentVerificationTestRun(t, m, "run tests", nil, agent.ExecutionResult{
-		TestsRun:    []agent.TestResult{{Name: "go test ./...", Passed: true}},
-		NewEvidence: true,
-	})
-	driveAgentCommands(t, m, m.startAgentVerification())
-	if run.Status != agent.DecisionDone {
-		t.Fatalf("status = %q, want done", run.Status)
-	}
-	if len(prov.requests) != 0 {
-		t.Fatalf("provider requests = %d, want no semantic verifier", len(prov.requests))
-	}
-}
-
-func TestAdaptiveMixedCriteriaVerifiesOnlySemanticRemainder(t *testing.T) {
-	minimalPass := `{"verdict":"passed","summary":"report is complete","recommended_next":"","retryable":false,` +
-		`"needs_user_input":false,"user_options":[],"criteria":[{"id":"c2","status":"satisfied","note":"observed"}],` +
-		`"proposed_criteria":[],"atomic_task":false}`
-	m, prov := configureAgentTestModel(t, agentScriptStep{text: minimalPass})
-	run := newAgentVerificationTestRun(t, m, "run tests and explain the result", []agent.CriterionSpec{
-		{Text: "tests pass", Kind: agent.CriterionTestResult, Target: "go test ./..."},
-		{Text: "result is explained", Kind: agent.CriterionSemantic},
-	}, agent.ExecutionResult{
-		TestsRun:    []agent.TestResult{{Name: "go test ./...", Passed: true}},
-		NewEvidence: true,
-	})
-	driveAgentCommands(t, m, m.startAgentVerification())
-	if run.Status != agent.DecisionDone {
-		t.Fatalf("status = %q, want done", run.Status)
-	}
-	if len(prov.requests) != 1 {
-		t.Fatalf("provider requests = %d, want one semantic verifier", len(prov.requests))
-	}
-	evidence := prov.requests[0].Messages[1].Content
-	if !strings.Contains(evidence, "result is explained") || strings.Contains(evidence, `\"Text\":\"tests pass\"`) {
-		t.Fatalf("verifier received more than the unresolved semantic criterion: %s", evidence)
-	}
-}
-
-func TestAdaptiveUserCriterionStopsWithoutSemanticVerifier(t *testing.T) {
-	m, prov := configureAgentTestModel(t, agentScriptStep{text: "must not be requested"})
-	run := newAgentVerificationTestRun(t, m, "ask which target to use", []agent.CriterionSpec{
-		{Text: "Choose a deployment target", Kind: agent.CriterionUserInput},
-	}, agent.ExecutionResult{Summary: "target is required"})
-	driveAgentCommands(t, m, m.startAgentVerification())
-	if run.Status != agent.DecisionNeedsUserInput {
-		t.Fatalf("status = %q, want needs_user_input", run.Status)
-	}
-	if len(prov.requests) != 0 {
-		t.Fatalf("provider requests = %d, want no semantic verifier", len(prov.requests))
-	}
 }
 
 func TestAgentDirectiveTokenSnapshots(t *testing.T) {
@@ -2517,9 +2476,9 @@ func TestAgentDirectiveTokenSnapshots(t *testing.T) {
 			populate: func(run *agent.AgentRun) {
 				criteria := make([]agent.CriterionSpec, agent.MaxCriteria)
 				for i := range criteria {
-					criteria[i] = agent.CriterionSpec{Text: fmt.Sprintf("criterion %02d %s", i, strings.Repeat("x", 180)), Kind: agent.CriterionSemantic}
+					criteria[i] = agent.CriterionSpec{Text: fmt.Sprintf("criterion %02d %s", i, strings.Repeat("x", 180))}
 				}
-				run.PinTypedCriteria(criteria)
+				_ = run.PinTypedCriteriaWithAssessments(criteria)
 				for i := 0; i < agent.MaxEvidence; i++ {
 					run.AppendEvidence([]agent.EvidenceItem{{Source: fmt.Sprintf("source-%02d", i), Summary: strings.Repeat("e", 220), Success: i%2 == 0}})
 				}
@@ -2561,13 +2520,11 @@ func TestAgentDirectiveTokenSnapshots(t *testing.T) {
 	}
 }
 
-// Adaptive mode: once a run's first cycle has genuinely had its chance at
-// semantic verification — even if that cycle took the deterministic-failure
-// shortcut, which never calls the verifier at all — a later mechanically
-// complete cycle may still skip semantic verification. The first-cycle
-// guard above protects only cycle 1 itself, not every cycle a run happens
-// to establish zero criteria in.
-func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifierAfterFirstCycle(t *testing.T) {
+// Adaptive mode: a cycle that took the deterministic-failure shortcut
+// (truncation — no verifier call at all) is followed by a clean cycle that
+// still gets its semantic verifier, because a contract-first run keeps a
+// pinned semantic criterion that only the verifier can resolve.
+func TestAdaptiveCleanCycleAfterDeterministicFailureStillVerifiesSemantically(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
 		agentScriptStep{text: "partial write attempt", truncated: true},
 		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
@@ -2581,7 +2538,7 @@ func TestAdaptiveMechanicallyCompleteSkipsSemanticVerifierAfterFirstCycle(t *tes
 	driveAgentCommands(t, m, m.startVerifiedRun("inspect the workspace", nil))
 
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
-		t.Fatalf("run = %+v, want a deterministic-failure cycle 1 then a mechanically complete cycle 2", m.agentLoop.run)
+		t.Fatalf("run = %+v, want a deterministic-failure cycle 1 then a clean cycle 2", m.agentLoop.run)
 	}
 	// Cycle 1: executor only (truncated, deterministic failure, no verifier).
 	// Contract-first runs retain a semantic criterion, so cycle 2 gets its

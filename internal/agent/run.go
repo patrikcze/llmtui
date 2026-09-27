@@ -87,7 +87,7 @@ func (r *AgentRun) CompleteContractWithAssessments(criteria []string, assessment
 	}
 	specs := make([]CriterionSpec, 0, len(criteria))
 	for index, text := range criteria {
-		spec := CriterionSpec{Text: text, Kind: CriterionSemantic}
+		spec := CriterionSpec{Text: text}
 		if assessment, ok := assessments[index]; ok {
 			assessmentCopy := assessment
 			spec.Assessment = &assessmentCopy

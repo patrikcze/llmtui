@@ -27,16 +27,17 @@ const (
 type CriterionStatus string
 
 // CriterionKind identifies who can authoritatively resolve a criterion.
-// Empty/semantic preserves persisted v1 behavior.
+// Every pinned criterion is semantic: the contract phase pins criteria as
+// semantic, the verifier resolves them, and the one mechanical proof is
+// exact-read coverage (evaluateCriterion). Empty means semantic for records
+// persisted before the field existed. Earlier builds also defined
+// command_exit, file_state, test_result, and user_input kinds, but nothing in
+// the contract-first flow could ever create them (audit P2-6); decodeRun
+// normalizes any such legacy kind to semantic so it stays resolvable.
 type CriterionKind string
 
-const (
-	CriterionSemantic    CriterionKind = "semantic"
-	CriterionCommandExit CriterionKind = "command_exit"
-	CriterionFileState   CriterionKind = "file_state"
-	CriterionTestResult  CriterionKind = "test_result"
-	CriterionUserInput   CriterionKind = "user_input"
-)
+// CriterionSemantic is the only criterion kind.
+const CriterionSemantic CriterionKind = "semantic"
 
 const (
 	CriterionPending       CriterionStatus = "pending"
@@ -83,15 +84,12 @@ type Criterion struct {
 	Note         string                   `json:"note,omitempty"`
 	UpdatedCycle int                      `json:"updated_cycle,omitempty"`
 	Kind         CriterionKind            `json:"kind,omitempty"`
-	Target       string                   `json:"target,omitempty"`
 	Assessment   *CriterionAssessmentSpec `json:"assessment,omitempty"`
 }
 
 // CriterionSpec defines a criterion before stable IDs are assigned.
 type CriterionSpec struct {
 	Text       string
-	Kind       CriterionKind
-	Target     string
 	Assessment *CriterionAssessmentSpec
 }
 
@@ -131,14 +129,8 @@ type EvidenceItem struct {
 func (r *AgentRun) PinCriteria(texts []string) {
 	specs := make([]CriterionSpec, 0, len(texts))
 	for _, text := range texts {
-		specs = append(specs, CriterionSpec{Text: text, Kind: CriterionSemantic})
+		specs = append(specs, CriterionSpec{Text: text})
 	}
-	r.PinTypedCriteria(specs)
-}
-
-// PinTypedCriteria establishes controller-owned deterministic or semantic
-// criteria exactly once.
-func (r *AgentRun) PinTypedCriteria(specs []CriterionSpec) {
 	_ = r.pinTypedCriteria(specs)
 }
 
@@ -168,16 +160,11 @@ func (r *AgentRun) pinTypedCriteria(specs []CriterionSpec) error {
 		if text == "" {
 			continue
 		}
-		kind := spec.Kind
-		if kind == "" {
-			kind = CriterionSemantic
-		}
 		criterion := Criterion{
 			ID:     fmt.Sprintf("c%d", len(r.Criteria)+1),
 			Text:   truncate(text, 256),
 			Status: CriterionPending,
-			Kind:   kind,
-			Target: truncate(strings.TrimSpace(spec.Target), 256),
+			Kind:   CriterionSemantic,
 		}
 		if spec.Assessment != nil {
 			assessment := canonicalCriterionAssessment(*spec.Assessment)
@@ -200,9 +187,6 @@ func validateCriterionSpecs(specs []CriterionSpec) error {
 	for _, spec := range specs {
 		if spec.Assessment == nil {
 			continue
-		}
-		if spec.Kind != "" && spec.Kind != CriterionSemantic {
-			return fmt.Errorf("%w: assessment requires a semantic criterion", ErrMalformedControl)
 		}
 		if len([]byte(strings.TrimSpace(spec.Text))) > CriterionAssessmentMaxBytes {
 			return fmt.Errorf("%w: assessment source criterion is too long", ErrMalformedControl)
@@ -331,8 +315,11 @@ func (r *AgentRun) UnresolvedSemanticCriteria() []Criterion {
 	return out
 }
 
-// ApplyDeterministicCriteria resolves typed criteria exclusively from runtime
-// observations. Executor prose is intentionally ignored.
+// ApplyDeterministicCriteria resolves criteria that runtime observations
+// alone can prove — today only an atomic exact-read criterion whose
+// delivered windows cover the whole file (see evaluateCriterion). It never
+// marks anything failed, never touches a criterion already resolved, and
+// ignores executor prose; every other criterion is left to the verifier.
 func (r *AgentRun) ApplyDeterministicCriteria(execution ExecutionResult, cycle int) {
 	if r == nil {
 		return
@@ -340,102 +327,31 @@ func (r *AgentRun) ApplyDeterministicCriteria(execution ExecutionResult, cycle i
 	for i := range r.Criteria {
 		criterion := &r.Criteria[i]
 		if criterion.Status == CriterionSatisfied || criterion.Status == CriterionNotApplicable {
-			if !staleAfterMutation(*criterion, execution, cycle) {
-				continue
-			}
-			// A relevant mutation in a later cycle invalidates this
-			// criterion's prior proof: a check supports only the workspace
-			// version it inspected. Fall through so this same cycle's own
-			// evidence, if any, can immediately re-satisfy it fresh — an
-			// edit-then-rerun sequence in one cycle is not stale.
-			criterion.Status = CriterionPending
-			criterion.Note = "stale: a file changed after this check last passed"
-		}
-		matched, passed, note := evaluateCriterion(*criterion, execution)
-		if !matched {
 			continue
 		}
-		criterion.Status = CriterionFailed
-		if passed {
+		if matched, passed, note := evaluateCriterion(*criterion, execution); matched && passed {
 			criterion.Status = CriterionSatisfied
+			criterion.Note = truncate(note, 256)
+			criterion.UpdatedCycle = cycle
 		}
-		criterion.Note = truncate(note, 256)
-		criterion.UpdatedCycle = cycle
 	}
 }
 
-// staleAfterMutation reports whether a previously satisfied or
-// not-applicable mechanical criterion must be treated as unproven again
-// because a later cycle changed a file. A check is evidence about the
-// workspace version it inspected, not a permanent fact — see
-// .claude/tasks/plans/llmtui-agent-evolution.md §11.3. This package has no
-// per-file test-coverage mapping, so invalidation is deliberately
-// conservative: any file change in a strictly later cycle invalidates any
-// test-result or command-exit criterion, regardless of which file changed.
-// File-state criteria are about the file's current content — a further edit
-// answers rather than invalidates them, and evaluateCriterion already
-// re-checks the latest ChangedFiles each cycle. User-input criteria are
-// unaffected: a later file edit does not un-supply an answer already given.
-func staleAfterMutation(criterion Criterion, execution ExecutionResult, cycle int) bool {
-	if cycle <= criterion.UpdatedCycle || len(execution.ChangedFiles) == 0 {
-		return false
-	}
-	switch criterion.Kind {
-	case CriterionTestResult, CriterionCommandExit:
-		return true
-	default:
-		return false
-	}
-}
-
+// evaluateCriterion reports whether runtime observations prove criterion.
+// A contract model occasionally emits only "Read the file X" for a larger
+// request. That exact, atomic criterion is mechanically proven once the
+// delivered read windows for that target, unioned within one consistent
+// source version, cover the whole file — not merely that some read_file call
+// touching it succeeded (a narrow windowed read of a large file previously
+// satisfied this criterion without the model ever having seen most of the
+// content; see harness plan §4 finding #3). Every other criterion needs the
+// verifier's judgment.
 func evaluateCriterion(criterion Criterion, execution ExecutionResult) (matched, passed bool, note string) {
-	match := func(value string) bool {
-		return criterion.Target == "" || criterion.Target == "*" || strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(criterion.Target))
+	if criterion.Kind != "" && criterion.Kind != CriterionSemantic {
+		return false, false, ""
 	}
-	switch criterion.Kind {
-	case CriterionSemantic:
-		// A contract model occasionally emits only "Read the file X" for a
-		// larger request. That exact, atomic criterion is mechanically proven
-		// once the delivered read windows for that target, unioned within one
-		// consistent source version, cover the whole file — not merely that
-		// some read_file call touching it succeeded (a narrow windowed read of
-		// a large file previously satisfied this criterion without the model
-		// ever having seen most of the content; see harness plan §4 finding
-		// #3). Combined criteria remain semantic and still require
-		// verification.
-		if target, ok := ExactReadCriterionTarget(criterion.Text); ok && readCoverageComplete(target, execution.ReadObservations) {
-			return true, true, "observed full read coverage"
-		}
-	case CriterionCommandExit:
-		// Scan from the most recent call backward: a single cycle can already
-		// contain several tool rounds (many consecutive turns inside one
-		// executor episode), so an earlier pass must not stay authoritative
-		// over a later rerun of the same command that failed. The latest
-		// matching observation is what the workspace looks like now.
-		for i := len(execution.ToolCalls) - 1; i >= 0; i-- {
-			call := execution.ToolCalls[i]
-			if call.Name == "run_command" && match(call.Detail) {
-				return true, call.Succeeded, "observed run_command exit"
-			}
-		}
-	case CriterionFileState:
-		for _, file := range execution.ChangedFiles {
-			if match(file) {
-				return true, true, "observed file state change"
-			}
-		}
-	case CriterionTestResult:
-		// Same latest-observation-wins rule as CriterionCommandExit above.
-		for i := len(execution.TestsRun) - 1; i >= 0; i-- {
-			test := execution.TestsRun[i]
-			if match(test.Name) {
-				return true, test.Passed, "observed test result: " + test.Name
-			}
-		}
-	case CriterionUserInput:
-		if execution.NeedsUserInput {
-			return true, false, "explicit user input required"
-		}
+	if target, ok := ExactReadCriterionTarget(criterion.Text); ok && readCoverageComplete(target, execution.ReadObservations) {
+		return true, true, "observed full read coverage"
 	}
 	return false, false, ""
 }
@@ -718,6 +634,60 @@ func (r *AgentRun) PendingExactReadObligations(execution ExecutionResult) []Exac
 		out = append(out, ExactReadObligation{CriterionID: criterion.ID, Target: target})
 	}
 	return out
+}
+
+// CriterionFact is one controller-computed, mechanical observation about a
+// pinned criterion — never model prose, and never a status. It exists so
+// the executor and the verifier can see, before verification, what the
+// runtime has already observed toward a criterion (audit P2-6, limitations
+// A/H), without the controller making any semantic judgment.
+type CriterionFact struct {
+	CriterionID string
+	Fact        string
+}
+
+// CriterionReadFacts reports delivered read coverage for each unresolved
+// atomic exact-read criterion. Only this narrow grammar gets facts: linking
+// arbitrary evidence to free-text criteria would require the semantic
+// judgment that belongs to the verifier. The target in each fact is the
+// criterion's own pinned, canonical target text.
+func (r *AgentRun) CriterionReadFacts(execution ExecutionResult) []CriterionFact {
+	if r == nil {
+		return nil
+	}
+	var facts []CriterionFact
+	for _, criterion := range r.UnresolvedCriteria() {
+		if criterion.Kind != "" && criterion.Kind != CriterionSemantic {
+			continue
+		}
+		target, ok := ExactReadCriterionTarget(criterion.Text)
+		if !ok {
+			continue
+		}
+		seen := false
+		for _, ob := range execution.ReadObservations {
+			if strings.EqualFold(strings.TrimSpace(ob.Target), target) {
+				seen = true
+				break
+			}
+		}
+		covered, total, haveTotal, consistent := readCoverageState(target, execution.ReadObservations)
+		var fact string
+		switch {
+		case !seen:
+			fact = fmt.Sprintf("no delivered read of %q yet this cycle", target)
+		case !consistent:
+			fact = fmt.Sprintf("delivered reads of %q span different file versions; coverage is not established", target)
+		case haveTotal && covered >= total:
+			fact = fmt.Sprintf("all %d lines of %q delivered", total, target)
+		case haveTotal:
+			fact = fmt.Sprintf("lines 1-%d of %d of %q delivered contiguously; the rest is not yet read", covered, total, target)
+		default:
+			fact = fmt.Sprintf("lines 1-%d of %q delivered; total line count not yet known", covered, target)
+		}
+		facts = append(facts, CriterionFact{CriterionID: criterion.ID, Fact: truncate(fact, 256)})
+	}
+	return facts
 }
 
 // unresolvedCriteriaKey is a phrasing-immune fingerprint of the unresolved

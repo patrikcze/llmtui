@@ -93,7 +93,7 @@ func TestPinTypedCriteriaWithAssessmentsIsAtomicAndCopiesMetadata(t *testing.T) 
 	assessment := CriterionAssessmentSpec{
 		Version: 1, Proposition: "the receipt supports the criterion", EvidenceKind: CriterionAssessmentReceipts,
 	}
-	specs := []CriterionSpec{{Text: "produce the report", Kind: CriterionSemantic, Assessment: &assessment}}
+	specs := []CriterionSpec{{Text: "produce the report", Assessment: &assessment}}
 	if err := run.PinTypedCriteriaWithAssessments(specs); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestPinTypedCriteriaWithAssessmentsIsAtomicAndCopiesMetadata(t *testing.T) 
 	}
 
 	bad, _ := newTestRun(t, DefaultLimits())
-	badSpecs := []CriterionSpec{{Text: "produce the report", Kind: CriterionSemantic, Assessment: &CriterionAssessmentSpec{
+	badSpecs := []CriterionSpec{{Text: "produce the report", Assessment: &CriterionAssessmentSpec{
 		Version: 1, Proposition: "claim", EvidenceKind: CriterionAssessmentLocalRead,
 	}}}
 	if err := bad.PinTypedCriteriaWithAssessments(badSpecs); err == nil {
@@ -323,162 +323,6 @@ func TestVerifierNewEvidenceClaimClampedToMechanicalRecord(t *testing.T) {
 	}
 }
 
-// TestTestCriterionSatisfiedByFreshSameCycleEvidence proves the Phase 2
-// freshness fix does not penalize the ordinary edit-then-verify sequence: a
-// test that passes in the same cycle as a file change is evidence about the
-// current workspace state, not stale evidence about an earlier one.
-func TestTestCriterionSatisfiedByFreshSameCycleEvidence(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "go test passes",
-		Kind:   CriterionTestResult,
-		Target: "go test ./...",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
-		ChangedFiles: []string{"main.go"},
-	}, 1)
-
-	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("criterion = %+v, want same-cycle test-result satisfaction", run.Criteria[0])
-	}
-	if run.Criteria[0].Target != "go test ./..." {
-		t.Fatalf("criterion target = %q", run.Criteria[0].Target)
-	}
-}
-
-// TestTestCriterionGoesStaleAfterLaterCycleChangesAFile is the Phase 2 fix
-// for a previously characterized gap (see git history for
-// TestTestCriterionHasNoFreshnessRelationToChangedFiles): a test criterion
-// satisfied in one cycle no longer stays satisfied forever once a later
-// cycle changes a file — the prior proof is about a workspace version that
-// no longer exists.
-func TestTestCriterionGoesStaleAfterLaterCycleChangesAFile(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "go test passes",
-		Kind:   CriterionTestResult,
-		Target: "go test ./...",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		TestsRun: []TestResult{{Name: "go test ./...", Passed: true}},
-	}, 1)
-	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("cycle 1 criterion = %+v, want satisfied", run.Criteria[0])
-	}
-
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		ChangedFiles: []string{"main.go"},
-	}, 2)
-
-	if run.Criteria[0].Status != CriterionPending {
-		t.Fatalf("cycle 2 criterion = %+v, want stale (pending) after the later edit", run.Criteria[0])
-	}
-	if run.Criteria[0].Note == "" {
-		t.Fatal("stale criterion note = \"\", want an explicit invalidation reason")
-	}
-}
-
-// TestTestCriterionReSatisfiedWhenLaterCycleAlsoReruns proves invalidation
-// and re-evaluation happen in the same pass: a later cycle that both changes
-// a file and reruns the test immediately re-satisfies the criterion with
-// fresh evidence rather than requiring an extra cycle.
-func TestTestCriterionReSatisfiedWhenLaterCycleAlsoReruns(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "go test passes",
-		Kind:   CriterionTestResult,
-		Target: "go test ./...",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		TestsRun: []TestResult{{Name: "go test ./...", Passed: true}},
-	}, 1)
-
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		ChangedFiles: []string{"main.go"},
-		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
-	}, 2)
-
-	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("cycle 2 criterion = %+v, want fresh rerun to re-satisfy immediately", run.Criteria[0])
-	}
-	if run.Criteria[0].UpdatedCycle != 2 {
-		t.Fatalf("updated cycle = %d, want 2", run.Criteria[0].UpdatedCycle)
-	}
-}
-
-// TestTestCriterionUsesLatestSameCycleResultNotFirst characterizes a gap
-// staleAfterMutation cannot see: it only invalidates proof across strictly
-// later cycles, but a single cycle can already contain several tool/test
-// rounds (many consecutive turns inside one StageExecutor episode). Within
-// one cycle, evaluateCriterion scanned forward and returned on the *first*
-// matching test, so an early pass → edit → later failing rerun of the same
-// test was reported satisfied — the early pass wrongly stayed authoritative
-// over the later, more current failure.
-func TestTestCriterionUsesLatestSameCycleResultNotFirst(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "go test passes",
-		Kind:   CriterionTestResult,
-		Target: "go test ./...",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		TestsRun: []TestResult{
-			{Name: "go test ./...", Passed: true},
-			{Name: "go test ./...", Passed: false},
-		},
-	}, 1)
-
-	if run.Criteria[0].Status != CriterionFailed {
-		t.Fatalf("criterion = %+v, want the later same-cycle failure to be authoritative, not the earlier pass", run.Criteria[0])
-	}
-}
-
-// TestCommandExitCriterionUsesLatestSameCycleResultNotFirst is the
-// CriterionCommandExit half of the same gap.
-func TestCommandExitCriterionUsesLatestSameCycleResultNotFirst(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "the command exits cleanly",
-		Kind:   CriterionCommandExit,
-		Target: "*",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		ToolCalls: []ToolCallRecord{
-			{Name: "run_command", Detail: "go build ./...", Succeeded: true},
-			{Name: "run_command", Detail: "go build ./...", Succeeded: false},
-		},
-	}, 1)
-
-	if run.Criteria[0].Status != CriterionFailed {
-		t.Fatalf("criterion = %+v, want the later same-cycle failure to be authoritative, not the earlier success", run.Criteria[0])
-	}
-}
-
-// TestFileStateCriterionUnaffectedByStaleness proves the conservative
-// invalidation is scoped to test-result and command-exit criteria: a
-// file-state criterion is about the file's current content, so a later edit
-// must still resolve it normally rather than being treated as invalidating
-// its own evidence.
-func TestFileStateCriterionUnaffectedByStaleness(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{
-		Text:   "result.txt is written",
-		Kind:   CriterionFileState,
-		Target: "result.txt",
-	}})
-	run.ApplyDeterministicCriteria(ExecutionResult{ChangedFiles: []string{"result.txt"}}, 1)
-	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("cycle 1 criterion = %+v, want satisfied", run.Criteria[0])
-	}
-
-	run.ApplyDeterministicCriteria(ExecutionResult{ChangedFiles: []string{"unrelated.go"}}, 2)
-
-	if run.Criteria[0].Status != CriterionSatisfied {
-		t.Fatalf("cycle 2 criterion = %+v, want file-state criteria unaffected by unrelated later edits", run.Criteria[0])
-	}
-}
-
 func TestEvaluateDeterministic(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -504,29 +348,6 @@ func TestEvaluateDeterministic(t *testing.T) {
 				t.Fatalf("result = %+v", result)
 			}
 		})
-	}
-}
-
-func TestMechanicallyComplete(t *testing.T) {
-	ok := ExecutionResult{
-		Summary:   "listed and reported",
-		ToolCalls: []ToolCallRecord{{Name: "list_dir", Succeeded: true}},
-		TestsRun:  []TestResult{{Name: "go test", Passed: true}},
-	}
-	if !MechanicallyComplete(ok) {
-		t.Fatal("clean tool cycle should be mechanically complete")
-	}
-	for name, exec := range map[string]ExecutionResult{
-		"no tools ran":     {Summary: "prose only"},
-		"a tool failed":    {Summary: "s", ToolCalls: []ToolCallRecord{{Succeeded: false}}},
-		"a test failed":    {Summary: "s", ToolCalls: []ToolCallRecord{{Succeeded: true}}, TestsRun: []TestResult{{Passed: false}}},
-		"errors present":   {Summary: "s", ToolCalls: []ToolCallRecord{{Succeeded: true}}, Errors: []RunError{{Kind: ErrorProvider}}},
-		"needs user input": {Summary: "s", ToolCalls: []ToolCallRecord{{Succeeded: true}}, NeedsUserInput: true},
-		"empty summary":    {ToolCalls: []ToolCallRecord{{Succeeded: true}}},
-	} {
-		if MechanicallyComplete(exec) {
-			t.Fatalf("%s: should not be mechanically complete", name)
-		}
 	}
 }
 
@@ -558,30 +379,6 @@ func TestVerificationStateSurvivesPersistenceRoundtrip(t *testing.T) {
 	unresolved := loaded.UnresolvedCriteria()
 	if len(unresolved) != 1 || unresolved[0].ID != "c2" {
 		t.Fatalf("unresolved after reload = %+v", unresolved)
-	}
-}
-
-func TestTypedCriteriaUseOnlyRuntimeObservations(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{
-		{Text: "tests pass", Kind: CriterionTestResult, Target: "go test ./..."},
-		{Text: "report exists", Kind: CriterionFileState, Target: "report.md"},
-		{Text: "meaning is correct", Kind: CriterionSemantic},
-	})
-	run.ApplyDeterministicCriteria(ExecutionResult{
-		Summary:      "model claims everything passed",
-		TestsRun:     []TestResult{{Name: "go test ./...", Passed: true}},
-		ChangedFiles: []string{"report.md"},
-	}, 1)
-	if run.Criteria[0].Status != CriterionSatisfied || run.Criteria[1].Status != CriterionSatisfied {
-		t.Fatalf("deterministic criteria = %+v", run.Criteria)
-	}
-	if run.Criteria[2].Status != CriterionPending {
-		t.Fatal("executor prose resolved a semantic criterion")
-	}
-	semantic := run.UnresolvedSemanticCriteria()
-	if len(semantic) != 1 || semantic[0].Text != "meaning is correct" {
-		t.Fatalf("semantic criteria = %+v", semantic)
 	}
 }
 
@@ -893,29 +690,5 @@ func TestPendingExactReadObligationsReportsUnprovenTarget(t *testing.T) {
 	}
 	if got[0].CriterionID != run.Criteria[0].ID || got[0].Target != "zscaler_wrapper.c" {
 		t.Fatalf("obligation = %+v, want {%s, zscaler_wrapper.c}", got[0], run.Criteria[0].ID)
-	}
-}
-
-// TestPendingExactReadObligationsIgnoresNonSemanticCriteria proves Phase 2's
-// narrow grammar only ever applies to CriterionSemantic (or legacy-untyped)
-// criteria — a typed command_exit/test_result/file_state/user_input
-// criterion is never reinterpreted as a read obligation just because its
-// text happens to start with "read".
-func TestPendingExactReadObligationsIgnoresNonSemanticCriteria(t *testing.T) {
-	run, _ := newTestRun(t, DefaultLimits())
-	run.PinTypedCriteria([]CriterionSpec{{Text: "read access.log", Kind: CriterionFileState, Target: "access.log"}})
-
-	if got := run.PendingExactReadObligations(ExecutionResult{}); len(got) != 0 {
-		t.Fatalf("obligations = %+v, want none: a typed file_state criterion is not a yield-eligible read obligation", got)
-	}
-}
-
-func TestInferMechanicalCriteriaRejectsMultipartRequests(t *testing.T) {
-	execution := ExecutionResult{TestsRun: []TestResult{{Name: "go test ./...", Passed: true}}}
-	if got := InferMechanicalCriteria("run the tests", execution); len(got) != 1 || got[0].Kind != CriterionTestResult {
-		t.Fatalf("single mechanical request = %+v", got)
-	}
-	if got := InferMechanicalCriteria("run the tests and write a report", execution); len(got) != 0 {
-		t.Fatalf("multipart request inferred unsafe criteria: %+v", got)
 	}
 }

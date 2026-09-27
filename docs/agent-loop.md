@@ -361,10 +361,28 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
-`true` → `adaptive`, `false` → `deterministic`. Adaptive's trade-off is
-explicit: a mechanically clean but semantically wrong single cycle can pass
-without a model check; use `always` when every cycle should get a semantic
-review regardless of cost.
+`true` → `adaptive`, `false` → `deterministic`. Adaptive skips the model
+check only when mechanical evidence is conclusive: an observed failure, or
+every pinned criterion already resolved (in practice, an exact-read criterion
+proven by delivered read coverage). A clean cycle with unresolved criteria
+always gets a semantic evaluation; use `always` to also review cycles whose
+criteria the ledger already resolved.
+
+Every pinned acceptance criterion is semantic: the task contract pins them,
+and only the verifier resolves them — except an atomic "Read the file X"
+criterion, which delivered read coverage proves mechanically. (Earlier
+builds also defined test/command/file/user-input criterion kinds, but nothing
+in the contract-first flow could create them; they were removed, and a run
+saved with one loads it as a semantic criterion.) A semantic verifier's
+`passed` must report a status per criterion ID: a bare `passed` over several
+criteria is sent back once for per-ID statuses, and if it still has none, no
+criterion is satisfied implicitly — the unresolved ones drive the next cycle.
+In `deterministic` and `off` modes, where no semantic verifier runs, the
+controller's own pass resolves the criteria as configured. Before
+verification, the executor directive and the verifier input show
+controller-computed read-coverage facts under each exact-read criterion
+(for example `lines 1-120 of 300 of "report.md" delivered contiguously`);
+they are observations only and never change a criterion's status.
 
 A cycle whose **last** tool call failed is judged by what that failure was:
 

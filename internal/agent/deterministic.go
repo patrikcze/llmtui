@@ -1,40 +1,6 @@
 package agent
 
-import (
-	"fmt"
-	"strings"
-)
-
-// InferMechanicalCriteria recognizes deliberately narrow, single-purpose
-// requests after observing their runtime operations. Multi-part or ambiguous
-// requests remain semantic so missing work cannot be blessed by inference.
-func InferMechanicalCriteria(request string, execution ExecutionResult) []CriterionSpec {
-	normalized := strings.ToLower(strings.TrimSpace(request))
-	if normalized == "" || strings.Contains(normalized, "\n") || strings.Contains(normalized, ";") ||
-		strings.Contains(normalized, " and ") || strings.Count(normalized, ",") > 0 {
-		return nil
-	}
-	startsWith := func(prefixes ...string) bool {
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(normalized, prefix) {
-				return true
-			}
-		}
-		return false
-	}
-	if startsWith("run ", "execute ") {
-		if len(execution.TestsRun) == 1 {
-			return []CriterionSpec{{Text: "requested test or check passes", Kind: CriterionTestResult, Target: execution.TestsRun[0].Name}}
-		}
-		if len(execution.ToolCalls) == 1 && execution.ToolCalls[0].Name == "run_command" {
-			return []CriterionSpec{{Text: "requested command exits successfully", Kind: CriterionCommandExit, Target: "*"}}
-		}
-	}
-	if startsWith("write ", "create ", "save ") && len(execution.ChangedFiles) == 1 {
-		return []CriterionSpec{{Text: "requested file state is written", Kind: CriterionFileState, Target: execution.ChangedFiles[0]}}
-	}
-	return nil
-}
+import "fmt"
 
 // EvaluateDeterministic derives a verdict from mechanical evidence alone.
 // It is conclusive (ok=true) only for observable failure or blockage — a
@@ -132,37 +98,4 @@ func deterministicVerdict(verdict VerificationVerdict, summary string, retryable
 		Confidence:       1,
 		TransientFailure: transient,
 	}
-}
-
-// MechanicallyComplete reports whether a cycle's execution is clean enough
-// that deterministic evidence alone may stand in for semantic verification
-// under the adaptive policy: at least one tool actually ran, everything that
-// ran succeeded, every test passed, nothing errored, no user input is
-// pending, and the executor produced a visible summary. A mechanically clean
-// but semantically wrong answer can pass this gate — that is the documented
-// adaptive trade-off; `agent.verifier.mode: always` restores full rigor.
-func MechanicallyComplete(execution ExecutionResult) bool {
-	if len(execution.ToolCalls) == 0 || execution.NeedsUserInput {
-		return false
-	}
-	last := lastResourceOutcome(execution)
-	for _, runErr := range execution.Errors {
-		if !recoveredToolError(runErr, last) {
-			return false
-		}
-	}
-	for _, tool := range execution.ToolCalls {
-		// A failed call whose resource's final call succeeded was recovered
-		// within the cycle — the same exemption EvaluateDeterministic makes
-		// for the trailing call.
-		if !tool.Succeeded && !last[tool.resourceKey()] {
-			return false
-		}
-	}
-	for _, test := range execution.TestsRun {
-		if !test.Passed {
-			return false
-		}
-	}
-	return strings.TrimSpace(execution.Summary) != ""
 }

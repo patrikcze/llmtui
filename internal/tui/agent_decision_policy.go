@@ -46,13 +46,15 @@ type agentVerificationPlan struct {
 	Route agentVerificationPlanRoute
 	// Result is meaningful only when Route == agentVerificationPlanSynthetic.
 	Result agent.VerificationResult
-	// GuardEligible is true only for the two adaptive-mode synthetic-PASS
-	// branches the plan's §7 permits guarded_assist to ever consider
-	// escalating: the early all-resolved-criteria shortcut (only when the
-	// resolved verifier mode is itself adaptive) and the mechanically-
-	// complete-cycle shortcut. A Semantic route, an off/deterministic/
-	// always route, and every synthetic FAILURE/needs-input/blocked
-	// outcome are never eligible — see planAgentVerification.
+	// GuardEligible is true only for the adaptive-mode synthetic-PASS
+	// branch the plan's §7 permits guarded_assist to ever consider
+	// escalating: the early all-resolved-criteria shortcut, only when the
+	// resolved verifier mode is itself adaptive. (A second eligible branch,
+	// the mechanically-complete-cycle shortcut, required a run without
+	// criteria and was unreachable under the contract-first flow; it was
+	// removed with the typed criteria — audit P2-6.) A Semantic route, an
+	// off/deterministic/always route, and every synthetic FAILURE outcome
+	// are never eligible — see planAgentVerification.
 	GuardEligible bool
 }
 
@@ -93,30 +95,10 @@ func planAgentVerification(run *agent.AgentRun, execution agent.ExecutionResult,
 		if deterministic, conclusive := agent.EvaluateDeterministic(execution); conclusive {
 			return agentVerificationPlan{Route: agentVerificationPlanSynthetic, Result: deterministic}
 		}
-		if unresolved := run.UnresolvedCriteria(); run.HasCriteria() && len(run.UnresolvedSemanticCriteria()) == 0 && len(unresolved) > 0 {
-			for _, criterion := range unresolved {
-				if criterion.Kind == agent.CriterionUserInput {
-					return agentVerificationPlan{Route: agentVerificationPlanSynthetic, Result: agent.VerificationResult{
-						Verdict: agent.VerificationInconclusive, Summary: criterion.Text,
-						NeedsUserInput: true, Retryable: false, Confidence: 1,
-					}}
-				}
-			}
-			return agentVerificationPlan{Route: agentVerificationPlanSynthetic, Result: agent.VerificationResult{
-				Verdict: agent.VerificationFailed, Summary: "deterministic acceptance criterion remains unresolved",
-				Retryable: true, NewEvidence: execution.NewEvidence, Confidence: 1,
-			}}
-		}
-		if !run.HasCriteria() && run.Cycle != 1 && agent.MechanicallyComplete(execution) {
-			return agentVerificationPlan{
-				Route: agentVerificationPlanSynthetic,
-				Result: agent.VerificationResult{
-					Verdict: agent.VerificationPassed, Summary: "deterministic evidence is sufficient: all tool calls and tests succeeded",
-					Evidence: []string{"mechanically complete cycle"}, Confidence: 0.7,
-				},
-				GuardEligible: true,
-			}
-		}
+		// Every pinned criterion is semantic (the typed deterministic
+		// criteria were unreachable and have been removed — audit P2-6), so
+		// with no conclusive mechanical failure and criteria still
+		// unresolved, only the semantic verifier can settle the cycle.
 	case config.VerifierModeAlways:
 		// Falls through to the semantic route below — always mode never
 		// takes a synthetic shortcut of its own (only the all-resolved
