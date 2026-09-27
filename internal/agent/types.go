@@ -195,6 +195,13 @@ type ExecutionResult struct {
 	// record persisted before this field existed, which must be read as
 	// "unknown coverage", never as "fully covered".
 	ReadObservations []ReadObservation `json:"read_observations,omitempty"`
+	// Partial marks an execution record committed before the cycle reached
+	// verification: by AbandonCycle when the run stopped inside the executor
+	// (no_progress, budget, provider failure, …), or by CheckpointExecution
+	// when it paused for user input. A partial record is observable history
+	// only — it was never verified, must never be read as a completed cycle,
+	// and a later CompleteExecution replaces it. Additive to schema v1.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // VerificationResult is a structured evaluator result. Retry is permitted
@@ -276,9 +283,10 @@ type Cycle struct {
 	Verification   *VerificationResult `json:"verification,omitempty"`
 	// Episode is bounded, additive checkpoint metadata for this cycle's
 	// executor episode (Phase 2 of the agent-execution-harness plan). It is
-	// nil for every cycle today and for any run persisted before this field
-	// existed; a nil Episode must never be read as "no obligations remain"
-	// or as any other decision — only as "not yet tracked".
+	// nil unless yield continuation tracked this cycle, and for any run
+	// persisted before this field existed; a nil Episode must never be read
+	// as "no obligations remain" or as any other decision — only as "not
+	// yet tracked".
 	Episode *EpisodeCheckpoint `json:"episode,omitempty"`
 }
 
@@ -323,8 +331,8 @@ type EpisodeCheckpoint struct {
 	// last decision still considered outstanding, capped at MaxCriteria.
 	UnresolvedCriterionIDs []string `json:"unresolved_criterion_ids,omitempty"`
 
-	// Revision increments on every checkpoint write so a stale asynchronous
-	// save (see persistAgentRun) can never silently overwrite a newer one.
+	// Revision increments on every checkpoint decision. It is diagnostic
+	// only; save ordering is enforced by the run-level AgentRun.Revision.
 	Revision int `json:"revision,omitempty"`
 	// Interrupted marks a checkpoint saved mid-episode (e.g. a process
 	// restart) whose pending counts were never consumed by a
@@ -380,6 +388,17 @@ type AgentRun struct {
 	StartContextCaptured bool          `json:"start_context_captured,omitempty"`
 	StartSummary         string        `json:"start_summary,omitempty"`
 	StartTurns           []ContextTurn `json:"start_turns,omitempty"`
+	// Revision is a monotonic persistence sequence number, advanced by the
+	// caller for every snapshot it hands to a Store. Stores refuse to
+	// replace a saved record with a lower revision, so a delayed
+	// asynchronous save can never overwrite a newer lifecycle transition.
+	// Zero (every record persisted before this field existed) falls back to
+	// UpdatedAt ordering. Additive to schema v1.
+	Revision int64 `json:"revision,omitempty"`
+	// Compacted reports that the stored copy dropped older detail to fit
+	// the store's size bound (see compactForPersistence). The live run is
+	// never compacted; only its persisted snapshot is.
+	Compacted bool `json:"compacted,omitempty"`
 }
 
 // StopResult is the explicit stop-check output.

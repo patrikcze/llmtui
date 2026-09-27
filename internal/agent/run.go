@@ -218,6 +218,12 @@ func (r *AgentRun) CompleteVerification(result VerificationResult, now time.Time
 	return nil
 }
 
+// maxMemorySummaryBytes bounds MemoryEntry.ExecutionSummary. The full
+// (4 KiB-bounded) summary already lives on the cycle's ExecutionResult;
+// the memory entry is a concise recap, and duplicating the full text there
+// doubled the largest per-cycle contribution to persisted record size.
+const maxMemorySummaryBytes = 1024
+
 // WriteMemory creates one concise cycle entry and enters the stop check.
 func (r *AgentRun) WriteMemory(now time.Time) error {
 	cycle, err := r.currentCycle(StageMemoryWrite)
@@ -230,7 +236,7 @@ func (r *AgentRun) WriteMemory(now time.Time) error {
 	r.Memory = append(r.Memory, MemoryEntry{
 		Cycle:             cycle.Number,
 		Objective:         cycle.Objective,
-		ExecutionSummary:  cycle.Execution.Summary,
+		ExecutionSummary:  truncate(cycle.Execution.Summary, maxMemorySummaryBytes),
 		Verdict:           cycle.Verification.Verdict,
 		Verification:      cycle.Verification.Summary,
 		ToolCalls:         boundedStrings(formatToolCalls(cycle.Execution.ToolCalls), 32, 256),
@@ -311,6 +317,59 @@ func (r *AgentRun) ContinueExecutorWithUserInput(now time.Time) error {
 	return nil
 }
 
+// AbandonCycle ends the run with a terminal decision from inside an executor
+// cycle, first committing the cycle's bounded observable execution as a
+// Partial record. Without this, a run stopped mid-cycle (no-progress block,
+// budget ceiling, provider failure) persisted only its status: the tool
+// receipts, typed errors, and changed files of that cycle were lost. The
+// partial record also contributes to ToolCalls and the evidence ledger,
+// exactly as a completed cycle's execution would. It never verifies,
+// decides, or writes memory.
+func (r *AgentRun) AbandonCycle(result ExecutionResult, decision Decision, reason string, now time.Time) error {
+	if !isTerminal(decision) {
+		return fmt.Errorf("%w: cannot abandon a cycle as %s", ErrInvalidTransition, decision)
+	}
+	cycle, err := r.currentCycle(StageExecutor)
+	if err != nil {
+		return err
+	}
+	result = cloneExecution(result)
+	result.Objective = truncate(strings.TrimSpace(result.Objective), 4096)
+	if result.Objective == "" {
+		result.Objective = r.Objective
+	}
+	boundExecution(&result)
+	result.Partial = true
+	cycle.Execution = &result
+	cycle.CompletedAt = now.UTC()
+	r.ToolCalls += ExecutedToolCalls(result.ToolCalls)
+	r.AppendEvidence(CollectEvidence(cycle.Number, result))
+	r.addEvent(now, "execution_abandoned", fmt.Sprintf("partial execution recorded: %d tool call(s), %d changed file(s)", len(result.ToolCalls), len(result.ChangedFiles)))
+	return r.Terminate(decision, reason, now)
+}
+
+// CheckpointExecution records the executor's bounded observable progress so
+// far as a Partial record without changing stage, status, or accounting —
+// used before a live pause so a process exit during the wait does not lose
+// what already ran. A later CompleteExecution replaces it and does the
+// accounting once; Resume marks it interrupted.
+func (r *AgentRun) CheckpointExecution(result ExecutionResult, now time.Time) error {
+	cycle, err := r.currentCycle(StageExecutor)
+	if err != nil {
+		return err
+	}
+	result = cloneExecution(result)
+	if result.Objective = strings.TrimSpace(result.Objective); result.Objective == "" {
+		result.Objective = r.Objective
+	}
+	result.Objective = truncate(result.Objective, 4096)
+	boundExecution(&result)
+	result.Partial = true
+	cycle.Execution = &result
+	r.UpdatedAt = now.UTC()
+	return nil
+}
+
 // Terminate records an exceptional terminal outcome from any active stage.
 // Normal cycle completion must still use Decide and ApplyStop.
 func (r *AgentRun) Terminate(decision Decision, reason string, now time.Time) error {
@@ -342,7 +401,7 @@ func (r *AgentRun) Resume(nextObjective string, now time.Time) error {
 	if now.Sub(r.CreatedAt) >= r.Limits.MaxElapsed {
 		return fmt.Errorf("%w: maximum elapsed time %s reached", ErrBudgetExhausted, r.Limits.MaxElapsed)
 	}
-	if cycle := r.LatestCycle(); cycle != nil && cycle.Episode != nil && cycle.Execution == nil {
+	if cycle := r.LatestCycle(); cycle != nil && cycle.Episode != nil && (cycle.Execution == nil || cycle.Execution.Partial) {
 		// This cycle's executor episode never reached CompleteExecution, so
 		// its live counters/progress describe abandoned, unfinished work —
 		// mark that explicitly rather than leaving the persisted record
@@ -464,6 +523,19 @@ func validVerdict(v VerificationVerdict) bool {
 		return true
 	}
 	return false
+}
+
+// cloneExecution copies every slice in an execution result, so bounding and
+// storing the copy can never alias the caller's live, still-growing record.
+func cloneExecution(in ExecutionResult) ExecutionResult {
+	out := in
+	out.ToolCalls = append([]ToolCallRecord(nil), in.ToolCalls...)
+	out.Artifacts = append([]string(nil), in.Artifacts...)
+	out.ChangedFiles = append([]string(nil), in.ChangedFiles...)
+	out.TestsRun = append([]TestResult(nil), in.TestsRun...)
+	out.Errors = append([]RunError(nil), in.Errors...)
+	out.ReadObservations = append([]ReadObservation(nil), in.ReadObservations...)
+	return out
 }
 
 func boundExecution(r *ExecutionResult) {

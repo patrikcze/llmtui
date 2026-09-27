@@ -517,8 +517,26 @@ Run records use versioned JSON and are written to
 `~/.local/share/llmtui/agent-runs` by default. Files and their directory are
 owner-only, each save uses a synced temporary file plus rename, corrupt records
 are skipped when loading the latest valid run, individual records are capped at
-64 KiB, and only the newest 32 are retained. Common token/password/API-key,
-Bearer-token, and private-key forms are redacted before persistence.
+64 KiB (`agent.max_memory_kb`), and only the newest 32 are retained. Common
+token/password/API-key, Bearer-token, and private-key forms are redacted before
+persistence.
+
+A record that would exceed the cap is compacted rather than rejected, so the
+newest lifecycle transition — including a terminal status — is always stored.
+Compaction shortens summaries of all but the two newest cycles, then trims
+diagnostic events, then drops older cycles' per-call receipts (their one-line
+form stays in cycle memory). Status, stop reason, criteria, evidence, and the
+newest cycles are never shortened; the stored copy is marked `compacted`. Each
+save carries a monotonic `revision`, and a store never replaces a record with
+a lower revision, so a delayed asynchronous save cannot overwrite a newer one.
+
+A run that stops inside an executor cycle — a no-progress block, a budget
+ceiling, a provider or request-preparation failure, or a terminal yield
+decision — first records that cycle's execution as a `partial` record: its
+tool receipts, typed errors, changed files, and read coverage, also counted in
+the run's tool total and evidence ledger. The same partial record is saved
+before an `ask_user` pause, and is replaced when the live cycle completes. A
+partial execution was never verified and is never treated as a completed cycle.
 
 Records contain the request (when prompt storage is allowed), stable metadata,
 limits, concise execution/verifier summaries, artifact paths, outcome classes,
@@ -554,7 +572,8 @@ or summaries.
 Set `agent.persist: false` to keep runs in memory only. `/agent resume` loads the
 latest valid resumable run; `/agent resume <run-id>` selects one. Resume starts
 a fresh cycle and never replays an incomplete tool call or executor request.
-Completed, failed, cancelled, or budget-exhausted runs cannot resume.
+Completed, failed, cancelled, or budget-exhausted runs cannot resume. A resumed
+run's live tool-call budget continues from its persisted tool-call total.
 When a live run stops as `needs_user_input`, the next normal user message
 resumes that same run in a fresh cycle and is included as the new input; it does
 not silently grant a previously denied permission.

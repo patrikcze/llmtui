@@ -64,12 +64,13 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 	if run == nil || !validRunID(run.ID) {
 		return NewError(ErrorMemoryWrite, "save run", fmt.Errorf("%w: invalid run ID", ErrCorruptRun))
 	}
-	data, err := encodePersistedRun(run, true)
+	data, err := encodeBoundedRun(run, true, s.maxBytes)
 	if err != nil {
+		var runErr RunError
+		if errors.As(err, &runErr) {
+			return err
+		}
 		return NewError(ErrorMemoryWrite, "encode run", err)
-	}
-	if len(data) > s.maxBytes {
-		return NewError(ErrorMemoryWrite, "save run", fmt.Errorf("%w: record is %d bytes, maximum is %d", ErrCorruptRun, len(data), s.maxBytes))
 	}
 
 	s.mu.Lock()
@@ -80,7 +81,7 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 	// Bubble Tea commands complete asynchronously. Never let a delayed older
 	// snapshot overwrite a newer lifecycle transition for the same run.
 	if existing, loadErr := readLimited(filepath.Join(s.dir, run.ID+".json"), s.maxBytes); loadErr == nil {
-		if saved, decodeErr := decodeRun(existing); decodeErr == nil && saved.UpdatedAt.After(run.UpdatedAt) {
+		if saved, decodeErr := decodeRun(existing); decodeErr == nil && savedIsNewer(saved, run) {
 			return nil
 		}
 	}
@@ -309,7 +310,7 @@ func (s *MemoryStore) Save(ctx context.Context, run *AgentRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.runs[run.ID]; ok {
-		if saved, decodeErr := decodeRun(existing); decodeErr == nil && saved.UpdatedAt.After(run.UpdatedAt) {
+		if saved, decodeErr := decodeRun(existing); decodeErr == nil && savedIsNewer(saved, run) {
 			return nil
 		}
 	}
@@ -351,6 +352,116 @@ func (s *MemoryStore) Latest(ctx context.Context) (*AgentRun, error) {
 
 var _ Store = (*FileStore)(nil)
 var _ Store = (*MemoryStore)(nil)
+
+// savedIsNewer reports whether an already-stored record must not be replaced
+// by run. Bubble Tea commands complete asynchronously, so a delayed older
+// snapshot must never overwrite a newer lifecycle transition. When both
+// records carry a persistence Revision it is authoritative (several state
+// changes do not advance UpdatedAt); records predating Revision fall back to
+// UpdatedAt ordering.
+func savedIsNewer(saved, run *AgentRun) bool {
+	if saved.Revision > 0 && run.Revision > 0 {
+		return saved.Revision > run.Revision
+	}
+	return saved.UpdatedAt.After(run.UpdatedAt)
+}
+
+// Persistence compaction bounds. The newest keepFullCycles cycles and memory
+// entries are never shortened; older ones keep only a bounded summary.
+const (
+	keepFullCycles           = 2
+	compactedSummaryBytes    = 512
+	compactedEventCount      = 32
+	compactedEventDetailSize = 128
+)
+
+// encodeBoundedRun encodes run for persistence within maxBytes. A record
+// that does not fit is compacted in deterministic passes — shortening older
+// cycles, then trimming diagnostic events — rather than rejected: rejecting
+// the save of the newest transition would leave an older snapshot on disk
+// (for example a still-"running" record for a run that already ended) that
+// /agent resume could then restart. Only the persisted copy is compacted;
+// status, stop reason, criteria, evidence, and the newest cycles are always
+// kept. The error is returned only when even the fully compacted record
+// does not fit.
+func encodeBoundedRun(run *AgentRun, indent bool, maxBytes int) ([]byte, error) {
+	data, err := encodePersistedRun(run, indent)
+	if err != nil || maxBytes <= 0 || len(data) <= maxBytes {
+		return data, err
+	}
+	compact, err := deepCopyRun(run)
+	if err != nil {
+		return nil, err
+	}
+	compact.Compacted = true
+	passes := []func(*AgentRun){compactOlderCycles, compactEvents, compactEventDetails, compactOlderToolCalls}
+	for _, pass := range passes {
+		pass(compact)
+		if data, err = encodePersistedRun(compact, indent); err != nil {
+			return nil, err
+		}
+		if len(data) <= maxBytes {
+			return data, nil
+		}
+	}
+	return nil, NewError(ErrorMemoryWrite, "save run", fmt.Errorf("%w: record is %d bytes after compaction, maximum is %d", ErrCorruptRun, len(data), maxBytes))
+}
+
+func deepCopyRun(run *AgentRun) (*AgentRun, error) {
+	data, err := json.Marshal(run)
+	if err != nil {
+		return nil, err
+	}
+	var out AgentRun
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func compactOlderCycles(run *AgentRun) {
+	for i := 0; i < len(run.Cycles)-keepFullCycles; i++ {
+		cycle := &run.Cycles[i]
+		if cycle.Execution != nil {
+			cycle.Execution.Summary = truncate(cycle.Execution.Summary, compactedSummaryBytes)
+			cycle.Execution.SuggestedNext = truncate(cycle.Execution.SuggestedNext, compactedSummaryBytes)
+			cycle.Execution.ReadObservations = nil
+		}
+		if cycle.Verification != nil {
+			cycle.Verification.Summary = truncate(cycle.Verification.Summary, compactedSummaryBytes)
+			cycle.Verification.RecommendedNext = truncate(cycle.Verification.RecommendedNext, compactedSummaryBytes)
+			cycle.Verification.Evidence = nil
+		}
+	}
+	for i := 0; i < len(run.Memory)-keepFullCycles; i++ {
+		run.Memory[i].ExecutionSummary = truncate(run.Memory[i].ExecutionSummary, compactedSummaryBytes)
+		run.Memory[i].Verification = truncate(run.Memory[i].Verification, compactedSummaryBytes)
+	}
+}
+
+func compactEvents(run *AgentRun) {
+	if len(run.Events) > compactedEventCount {
+		run.Events = append([]Event(nil), run.Events[len(run.Events)-compactedEventCount:]...)
+	}
+}
+
+func compactEventDetails(run *AgentRun) {
+	for i := range run.Events {
+		run.Events[i].Detail = truncate(run.Events[i].Detail, compactedEventDetailSize)
+	}
+}
+
+// compactOlderToolCalls drops per-call receipts of older cycles. Their
+// bounded one-line form survives in Memory[].ToolCalls and their counts in
+// AgentRun.ToolCalls.
+func compactOlderToolCalls(run *AgentRun) {
+	for i := 0; i < len(run.Cycles)-keepFullCycles; i++ {
+		if execution := run.Cycles[i].Execution; execution != nil {
+			execution.ToolCalls = nil
+			execution.Errors = nil
+		}
+	}
+}
 
 func encodePersistedRun(run *AgentRun, indent bool) ([]byte, error) {
 	persisted := cloneRunForPersistence(run)

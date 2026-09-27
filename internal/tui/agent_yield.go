@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -162,7 +161,7 @@ func (m *Model) terminateAgentYield(decision agent.YieldDecision) tea.Cmd {
 		outcome = agent.DecisionFailed
 	}
 	reason := yieldTerminationReason(decision)
-	_ = run.Terminate(outcome, reason, time.Now())
+	m.terminateAgentRun(outcome, reason)
 	m.notice = fmt.Sprintf("agent %s · %s", shortRunID(run.ID), reason)
 	m.endAgentRun()
 	m.refreshViewport()
