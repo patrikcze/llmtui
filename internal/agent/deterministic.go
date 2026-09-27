@@ -1,6 +1,9 @@
 package agent
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // InferMechanicalCriteria recognizes deliberately narrow, single-purpose
 // requests after observing their runtime operations. Multi-part or ambiguous
@@ -52,12 +55,24 @@ func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool)
 	// nothing ran after means the cycle actually stopped there. Permission
 	// denial is still checked below regardless of position because it
 	// aborts the executor rather than being something later calls run past.
+	//
+	// A trailing *observational* failure (a read-only tool reporting that a
+	// path does not exist, say) is not a stall either: it may be exactly the
+	// answer the task asked for, so it is left to the verifier to judge
+	// rather than concluded here. See ToolCallRecord.ObservationalFailure.
 	if n := len(execution.ToolCalls); n > 0 {
-		if last := execution.ToolCalls[n-1]; !last.Succeeded {
+		if last := execution.ToolCalls[n-1]; !last.Succeeded && !last.ObservationalFailure() {
 			if last.ErrorKind == ErrorPermissionDenied {
 				return deterministicVerdict(VerificationBlocked, "tool permission was denied", false, false), true
 			}
-			return deterministicVerdict(VerificationFailed, "deterministic tool failure: "+last.Name, true, false), true
+			verdict := deterministicVerdict(VerificationFailed, "deterministic tool failure: "+last.Name, true, false)
+			// A controller-authored recovery objective makes the first
+			// occurrence of this failure eligible for one bounded retry (the
+			// stop policy's "objective changed" rule). An identical failure in
+			// the retry cycle yields the same objective again, so the policy
+			// then rejects a further retry — it cannot loop.
+			verdict.RecommendedNext = RecoveryObjective(last)
+			return verdict, true
 		}
 	}
 	for _, runErr := range execution.Errors {
@@ -86,6 +101,26 @@ func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool)
 		}
 	}
 	return VerificationResult{}, false
+}
+
+// RecoveryObjective is the controller-authored next objective after a cycle
+// ended on a failed tool call. It is built only from bounded, controller-
+// recorded receipt fields — the tool name, its dedup-safe detail (see
+// ToolCallRecord.Detail), and its typed error kind/code — never from model
+// prose or tool output. The detail is quoted so it reads as data.
+func RecoveryObjective(call ToolCallRecord) string {
+	target := call.Name
+	if call.Detail != "" {
+		target = fmt.Sprintf("%s(%q)", call.Name, call.Detail)
+	}
+	cause := string(call.ErrorKind)
+	if call.ErrorCode != "" {
+		cause += "/" + call.ErrorCode
+	}
+	if cause == "" {
+		cause = "error"
+	}
+	return truncate(fmt.Sprintf("Recover from the failed %s call (%s), then complete the current objective.", target, cause), 512)
 }
 
 func deterministicVerdict(verdict VerificationVerdict, summary string, retryable, transient bool) VerificationResult {

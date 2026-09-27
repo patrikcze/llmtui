@@ -112,7 +112,13 @@ type ToolCallRecord struct {
 	Detail    string    `json:"detail,omitempty"`
 	Succeeded bool      `json:"succeeded"`
 	ErrorKind ErrorKind `json:"error_kind,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
+	// ErrorCode is the producer's own typed failure code (tools.ErrorInfo.Code,
+	// e.g. "not_found"), additive to schema v1 and empty on records persisted
+	// before this field existed or when the producer attached none. It is a
+	// controller-owned, closed-vocabulary identifier — never model text — and
+	// is bounded by boundExecution. See ToolCallRecord.ObservationalFailure.
+	ErrorCode string `json:"error_code,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 	// Status classifies what actually happened to the call attempt, additive
 	// to schema v1 (empty on records persisted before this field existed —
 	// treat that as unknown, never infer it was executed). Distinct from

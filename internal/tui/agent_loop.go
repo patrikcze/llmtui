@@ -1615,6 +1615,9 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: detail, Succeeded: result.Err == nil,
 			ErrorKind: kind, Summary: summary, Status: status,
 		}
+		if result.Err != nil && result.Meta.Error != nil && agent.ValidToolErrorCode(result.Meta.Error.Code) {
+			record.ErrorCode = result.Meta.Error.Code
+		}
 		m.agentLoop.execution.ToolCalls = append(m.agentLoop.execution.ToolCalls, record)
 		if result.Err != nil {
 			m.agentLoop.execution.Errors = append(m.agentLoop.execution.Errors, agent.NewToolError(kind, result.Call.Tool, detail, result.Err))

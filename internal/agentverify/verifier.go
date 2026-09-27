@@ -724,6 +724,9 @@ func ApplyDeterministicEvidence(result agent.VerificationResult, execution agent
 	result.Summary = deterministic.Summary
 	result.Retryable = deterministic.Retryable
 	result.TransientFailure = deterministic.TransientFailure
+	if strings.TrimSpace(result.RecommendedNext) == "" {
+		result.RecommendedNext = deterministic.RecommendedNext
+	}
 	result.Evidence = append(result.Evidence, deterministic.Evidence...)
 	// A criterion cannot be newly satisfied by a cycle whose mechanical
 	// outcome is failure or blockage.
