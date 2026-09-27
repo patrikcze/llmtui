@@ -1281,3 +1281,26 @@ func TestParseFullEnvelopeRoundTrip(t *testing.T) {
 		t.Error("AtomicTask = true, want false")
 	}
 }
+
+// TestParseAbsentStrategyChangedStaysFalse is the regression for the
+// verifier half of audit P2-4: an absent strategy_changed used to default to
+// "recommended_next is non-empty", letting a verifier re-issue the unchanged
+// objective and still pass the stop policy's retry gate.
+func TestParseAbsentStrategyChangedStaysFalse(t *testing.T) {
+	raw := `{"verdict":"failed","summary":"not done","recommended_next":"do the same thing again",` +
+		`"retryable":true,"needs_user_input":false,"criteria":[],"proposed_criteria":[],"atomic_task":false}`
+	result, err := Parse(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StrategyChanged {
+		t.Fatal("StrategyChanged = true, want false when the field is absent")
+	}
+	explicit, err := Parse(strings.Replace(raw, `"retryable":true`, `"retryable":true,"strategy_changed":true`, 1), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !explicit.StrategyChanged {
+		t.Fatal("explicit strategy_changed=true was not kept")
+	}
+}

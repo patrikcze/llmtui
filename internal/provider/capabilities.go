@@ -178,3 +178,22 @@ func RetryableError(err error) bool {
 	}
 	return false
 }
+
+// RetryableStreamError reports whether an error that ended a stream *after*
+// it started is a transport-class interruption that a caller may replay
+// once: the stream ended without a terminal signal, or the connection
+// dropped. A replay is only safe because a provider emits tool calls solely
+// on its terminal EventDone, so an interrupted stream never executed
+// anything. Cancellation, deadlines, oversized responses, and protocol
+// violations are never retryable here — a deadline in particular may be the
+// caller's own run budget, which a replay must not extend.
+func RetryableStreamError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrResponseTooLarge) || errors.Is(err, ErrHarmonyProtocol) {
+		return false
+	}
+	if errors.Is(err, ErrStreamInterrupted) {
+		return true
+	}
+	return RetryableError(err)
+}

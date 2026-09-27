@@ -112,7 +112,13 @@ type ToolCallRecord struct {
 	Detail    string    `json:"detail,omitempty"`
 	Succeeded bool      `json:"succeeded"`
 	ErrorKind ErrorKind `json:"error_kind,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
+	// ErrorCode is the producer's own typed failure code (tools.ErrorInfo.Code,
+	// e.g. "not_found"), additive to schema v1 and empty on records persisted
+	// before this field existed or when the producer attached none. It is a
+	// controller-owned, closed-vocabulary identifier — never model text — and
+	// is bounded by boundExecution. See ToolCallRecord.ObservationalFailure.
+	ErrorCode string `json:"error_code,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 	// Status classifies what actually happened to the call attempt, additive
 	// to schema v1 (empty on records persisted before this field existed —
 	// treat that as unknown, never infer it was executed). Distinct from
@@ -177,7 +183,12 @@ type ExecutionResult struct {
 	Errors         []RunError       `json:"errors,omitempty"`
 	NeedsUserInput bool             `json:"needs_user_input,omitempty"`
 	SuggestedNext  string           `json:"suggested_next,omitempty"`
-	NewEvidence    bool             `json:"new_evidence,omitempty"`
+	// NewEvidence reports that this cycle observed something not seen
+	// earlier in the run: a successful result whose content digest is new,
+	// a changed file, a user answer or decision, or a first observational
+	// failure. Activity alone — a repeated read of unchanged content, a
+	// failed or rejected call — is not new evidence.
+	NewEvidence bool `json:"new_evidence,omitempty"`
 	// ReadObservations is the bounded, ordered list of delivered read windows
 	// this cycle has observed so far — see ReadObservation and
 	// AppendReadObservation. Additive to schema v1: absent/empty on any
@@ -351,9 +362,12 @@ type AgentRun struct {
 	// ContractInput is user-supplied clarification retained only when a
 	// pre-execution contract needed it. Request remains the immutable original
 	// goal; this field is supplemental input, never a rewritten request.
-	ContractInput    string        `json:"contract_input,omitempty"`
-	Objective        string        `json:"objective,omitempty"`
-	Limits           Limits        `json:"limits"`
+	ContractInput string `json:"contract_input,omitempty"`
+	Objective     string `json:"objective,omitempty"`
+	Limits        Limits `json:"limits"`
+	// ToolCalls counts executed tool calls across completed cycles, as
+	// defined by ExecutedToolCalls (rejected, blocked, denied, and ask_user
+	// calls are excluded).
 	ToolCalls        int           `json:"tool_calls"`
 	PromptTokens     int           `json:"prompt_tokens"`
 	CompletionTokens int           `json:"completion_tokens"`

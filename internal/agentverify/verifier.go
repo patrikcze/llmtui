@@ -571,9 +571,10 @@ func Parse(raw string, establishing bool) (agent.VerificationResult, error) {
 	if _, ok := fields["new_evidence"]; !ok {
 		result.NewEvidence = len(result.CriteriaUpdates) > 0 || len(result.ProposedCriteria) > 0
 	}
-	if _, ok := fields["strategy_changed"]; !ok {
-		result.StrategyChanged = strings.TrimSpace(result.RecommendedNext) != ""
-	}
+	// An absent strategy_changed stays false. Inferring it from a non-empty
+	// recommended_next let a verifier re-issue the unchanged objective and
+	// still pass the stop policy's retry gate; a changed objective is
+	// already detected mechanically there.
 
 	switch result.Verdict {
 	case agent.VerificationPassed, agent.VerificationFailed, agent.VerificationInconclusive, agent.VerificationBlocked:
@@ -724,6 +725,9 @@ func ApplyDeterministicEvidence(result agent.VerificationResult, execution agent
 	result.Summary = deterministic.Summary
 	result.Retryable = deterministic.Retryable
 	result.TransientFailure = deterministic.TransientFailure
+	if strings.TrimSpace(result.RecommendedNext) == "" {
+		result.RecommendedNext = deterministic.RecommendedNext
+	}
 	result.Evidence = append(result.Evidence, deterministic.Evidence...)
 	// A criterion cannot be newly satisfied by a cycle whose mechanical
 	// outcome is failure or blockage.

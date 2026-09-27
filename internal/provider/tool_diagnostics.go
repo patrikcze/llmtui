@@ -34,14 +34,19 @@ const (
 type ToolCallClassification string
 
 const (
-	ToolCallNoIntentObserved       ToolCallClassification = "no_tool_intent_observed"
-	ToolCallNativeReceived         ToolCallClassification = "native_tool_call_received"
-	ToolCallSuspectedCensored      ToolCallClassification = "suspected_censored_tool_call"
-	ToolCallIncompleteStream       ToolCallClassification = "incomplete_streamed_tool_call"
-	ToolCallProviderParseError     ToolCallClassification = "provider_parse_error"
-	ToolCallNormalizationError     ToolCallClassification = "normalization_error"
-	ToolCallUnknownTool            ToolCallClassification = "unknown_tool"
-	ToolCallInvalidArguments       ToolCallClassification = "invalid_arguments"
+	ToolCallNoIntentObserved   ToolCallClassification = "no_tool_intent_observed"
+	ToolCallNativeReceived     ToolCallClassification = "native_tool_call_received"
+	ToolCallSuspectedCensored  ToolCallClassification = "suspected_censored_tool_call"
+	ToolCallIncompleteStream   ToolCallClassification = "incomplete_streamed_tool_call"
+	ToolCallProviderParseError ToolCallClassification = "provider_parse_error"
+	ToolCallNormalizationError ToolCallClassification = "normalization_error"
+	ToolCallUnknownTool        ToolCallClassification = "unknown_tool"
+	ToolCallInvalidArguments   ToolCallClassification = "invalid_arguments"
+	// ToolCallArgumentsCoerced marks a call whose arguments were accepted
+	// after an unambiguous scalar coercion (a numeric or boolean string);
+	// Detail names the coerced properties and target types only, e.g.
+	// "limit=integer" — never an argument value.
+	ToolCallArgumentsCoerced       ToolCallClassification = "arguments_coerced"
 	ToolCallApprovalBlocked        ToolCallClassification = "approval_blocked"
 	ToolCallExecutionFailed        ToolCallClassification = "execution_failure"
 	ToolCallResultCorrelationError ToolCallClassification = "result_correlation_failure"

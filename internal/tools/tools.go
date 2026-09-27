@@ -202,6 +202,12 @@ type Call struct {
 	// the batch so the model receives a correlated tool error, but Execute
 	// must not run a zero-valued approximation of the requested operation.
 	InputErr string
+	// ArgumentNotes names the properties the native argument decoder
+	// coerced from an unambiguous scalar spelling (e.g. "limit=integer" for
+	// "limit":"200"), comma-joined, for content-free diagnostics only — it
+	// never holds an argument value. The call executes with the coerced
+	// values. A string, not a slice, keeps Call comparable.
+	ArgumentNotes string
 	// Max caps web_search results (native max_results argument).
 	Max int
 	// WebCacheMode and WebRefreshEpoch control web_fetch freshness admission.

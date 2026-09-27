@@ -71,6 +71,14 @@ sampling or context fields into remote requests.
   is treated as interrupted, never as an ordinary completion: a dropped
   connection looks identical to a real finish on the wire, so a clean EOF
   alone is not proof the model actually finished.
+- Inside an `/agent` run, a stream interrupted *after* it started (dropped
+  connection, missing terminal signal, or an inactivity stall) is replayed
+  once per model round: the partial text is discarded, never added to
+  history, and the same request is resent. This is side-effect free because
+  tool calls are only acted on after a clean terminal event. A second
+  interruption in the same round, a cancellation, the run's own deadline, or a
+  protocol/size error still fails the run. Ordinary chat keeps the partial
+  reply and leaves retrying to you.
 
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.

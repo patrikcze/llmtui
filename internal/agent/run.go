@@ -175,7 +175,7 @@ func (r *AgentRun) CompleteExecution(result ExecutionResult, now time.Time) erro
 	}
 	boundExecution(&result)
 	cycle.Execution = &result
-	r.ToolCalls += len(result.ToolCalls)
+	r.ToolCalls += ExecutedToolCalls(result.ToolCalls)
 	r.AppendEvidence(CollectEvidence(cycle.Number, result))
 	r.Stage = StageVerifier
 	r.UpdatedAt = now.UTC()
@@ -548,6 +548,9 @@ func boundExecution(r *ExecutionResult) {
 		r.ToolCalls[i].ID = truncate(r.ToolCalls[i].ID, 128)
 		r.ToolCalls[i].Name = truncate(r.ToolCalls[i].Name, 256)
 		r.ToolCalls[i].Summary = truncate(r.ToolCalls[i].Summary, 512)
+		if !ValidToolErrorCode(r.ToolCalls[i].ErrorCode) {
+			r.ToolCalls[i].ErrorCode = ""
+		}
 	}
 	r.Artifacts = boundedStrings(r.Artifacts, 64, 512)
 	r.ChangedFiles = boundedStrings(r.ChangedFiles, 64, 512)
@@ -598,6 +601,9 @@ func formatToolCalls(calls []ToolCallRecord) []string {
 			outcome = "failed"
 			if call.ErrorKind != "" {
 				outcome += ": " + string(call.ErrorKind)
+				if call.ErrorCode != "" {
+					outcome += "/" + call.ErrorCode
+				}
 			}
 		}
 		if call.Detail != "" {

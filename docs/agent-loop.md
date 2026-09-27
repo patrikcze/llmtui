@@ -231,6 +231,21 @@ least one of these is true:
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
 
+"New evidence" means new *information*, not activity: a successful result
+whose content digest this run has not seen, a changed file, a user answer or
+decision, or the first occurrence of an observational failure such as "that
+path does not exist". Rereading unchanged content, a failed call, a
+max_tokens truncation, or a call rejected for invalid arguments is not new
+evidence. "Strategy changed" is only what the verifier explicitly reports;
+it is no longer inferred from a non-empty `recommended_next`.
+
+The tool-call budget (`agent.max_tool_calls`) counts calls that actually ran,
+excluding `ask_user`, with one definition shared by the live check and the
+cycle-boundary stop policy. A call rejected for invalid arguments ran nothing
+and is recorded with status `rejected`, so it spends no tool budget. Invalid
+calls are still bounded by the tool-round limit, the token budget, and the
+repeat detector.
+
 The first cycle keeps prior human prompts and final answers, so follow-ups such
 as "write that to a file" keep their meaning. Completed tool-protocol messages,
 synthetic controller turns, and the old session summary remain visible in the
@@ -350,6 +365,22 @@ An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
 explicit: a mechanically clean but semantically wrong single cycle can pass
 without a model check; use `always` when every cycle should get a semantic
 review regardless of cost.
+
+A cycle whose **last** tool call failed is judged by what that failure was:
+
+- An *observational* failure — a read-only tool (`read_file`, `list_dir`,
+  `glob`, `grep`) reporting the typed code `not_found` or `range_after_eof` —
+  is not a mechanical verdict. "The file does not exist" can be the answer,
+  so the cycle goes to the semantic verifier like any other.
+- Any other trailing failure is still a deterministic `failed` verdict, but it
+  carries a controller-authored recovery objective (built only from the tool
+  name, its recorded resource, and the typed error kind/code). That earns
+  exactly one recovery cycle; the same failure in that cycle yields the same
+  objective, and the stop policy then ends the run as `failed`.
+- Permission denial, safety blocks, timeouts, and truncation are unchanged.
+
+Typed tool error codes are persisted on each receipt as `error_code`
+(additive; older records have none and keep the previous behavior).
 
 When a semantic evaluation runs, the active provider is reused, which avoids
 loading a second local model, but the request has a fresh message slice, an

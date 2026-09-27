@@ -29,7 +29,87 @@ const (
 	// branch). Whether it ran is genuinely unknown; it must never be
 	// silently treated as either success or failure.
 	ActionUnknown ActionStatus = "unknown"
+	// ActionRejected means the call was refused before any producer ran
+	// because its arguments were invalid (a model competency error). It
+	// executed nothing, so it is neither evidence nor tool-budget usage.
+	ActionRejected ActionStatus = "rejected"
 )
+
+// askUserToolName duplicates tools.ToolAskUser (this package must never
+// import internal/tools); internal/tui asserts the two stay equal.
+const askUserToolName = "ask_user"
+
+// ExecutedToolCalls is the single definition of "tool calls used" for the
+// run's tool-call budget, shared by the live admission check and Decide:
+// calls that actually ran, excluding ask_user (asking the user is not a
+// rate-limited workspace action). A record persisted before Status existed
+// counts as executed, preserving the previous accounting for old runs.
+func ExecutedToolCalls(records []ToolCallRecord) int {
+	n := 0
+	for _, record := range records {
+		if (record.Status == ActionExecuted || record.Status == "") && record.Name != askUserToolName {
+			n++
+		}
+	}
+	return n
+}
+
+// AskUserToolName exposes askUserToolName for internal/tui's parity test.
+func AskUserToolName() string { return askUserToolName }
+
+// observationalReadTools are the workspace read-only tools whose typed
+// "resource state" failures (see observationalErrorCodes) describe what the
+// workspace looks like rather than a broken cycle. The names duplicate
+// internal/tools' constants because this package must never import tools;
+// internal/tui asserts they stay equal.
+var observationalReadTools = map[string]bool{
+	"read_file": true, "list_dir": true, "glob": true, "grep": true,
+}
+
+// observationalErrorCodes are the typed tools.ErrorInfo codes that report an
+// observed resource state: the path does not exist, or the requested line
+// window starts after the end of the file.
+var observationalErrorCodes = map[string]bool{
+	"not_found": true, "range_after_eof": true,
+}
+
+// ObservationalFailure reports whether a failed call is a typed observation
+// of resource state by a workspace read-only tool — e.g. read_file on a path
+// that does not exist. Such an outcome can be the very answer the task asked
+// for ("does config.yaml exist?"), so it is evidence for the verifier to
+// judge, never by itself a deterministic verdict that the cycle failed.
+// Records without an ErrorCode (including every record persisted before the
+// field existed) are never observational.
+func (r ToolCallRecord) ObservationalFailure() bool {
+	return !r.Succeeded && r.ErrorKind == ErrorToolExecution &&
+		observationalReadTools[r.Name] && observationalErrorCodes[r.ErrorCode]
+}
+
+// ObservationalReadToolNames returns the tool names ObservationalFailure
+// recognizes, for internal/tui's constant-parity test.
+func ObservationalReadToolNames() []string {
+	names := make([]string, 0, len(observationalReadTools))
+	for name := range observationalReadTools {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ValidToolErrorCode reports whether code has the shape of a producer-owned
+// typed error code: 1-64 bytes of lowercase ASCII letters, digits, or
+// underscores. Anything else is dropped rather than persisted.
+func ValidToolErrorCode(code string) bool {
+	if code == "" || len(code) > 64 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
+}
 
 // resourceKeyFor combines a tool name and its dedup-relevant resource detail
 // (see ToolCallRecord's doc comment for exactly what "detail" is and is not

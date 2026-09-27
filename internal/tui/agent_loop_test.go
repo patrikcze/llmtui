@@ -25,7 +25,11 @@ type agentScriptStep struct {
 	toolCalls           []provider.ToolCall
 	toolCallDiagnostics []provider.ToolCallDiagnostic
 	err                 error
-	truncated           bool
+	// streamErr, when non-nil, ends this step's stream with an EventError
+	// after emitting text — a mid-stream interruption rather than a request
+	// that failed before streaming began (err).
+	streamErr error
+	truncated bool
 	// before, when non-nil, runs synchronously right before this step's
 	// response events are built — lets a test inject an external state
 	// change (e.g. mutating a fixture file) at a precise point in a scripted
@@ -85,6 +89,11 @@ func (p *scriptedAgentProvider) Chat(ctx context.Context, req provider.ChatReque
 	events := make(chan provider.ChatEvent, 2)
 	if step.text != "" {
 		events <- provider.ChatEvent{Type: provider.EventDelta, Delta: step.text}
+	}
+	if step.streamErr != nil {
+		events <- provider.ChatEvent{Type: provider.EventError, Err: step.streamErr}
+		close(events)
+		return events, nil
 	}
 	events <- provider.ChatEvent{Type: provider.EventDone, ToolCalls: step.toolCalls, ToolCallDiagnostics: step.toolCallDiagnostics, Truncated: step.truncated, Usage: &provider.Usage{
 		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
