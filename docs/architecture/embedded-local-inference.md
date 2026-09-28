@@ -2,6 +2,54 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-09-28 addendum: runtime pin → llama.cpp v0.5.0 / yzma v1.28.0
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
+every earlier pin value in this document, including the 2026-09-21 addendum's.
+
+- yzma `v1.27.0` → **`v1.28.0`** (`go.mod`, one line; `go.sum` gains only the
+  new yzma hashes). This is yzma's declared binding for llama.cpp `v0.5.0`.
+  Its `pkg/llama`/`pkg/mtmd` changes are additive (thread-pool helpers,
+  `ModelParams.SetCPUOnly`, two ggml symbols resolved at load:
+  `ggml_backend_reg_get_proc_address`, `ggml_threadpool_params_init`), plus
+  one **behavior change llmtui inherits**: `ContextDefaultParams()` and mtmd's
+  `ContextParamsDefault()` now set the thread count to `llama.Threads()` —
+  one thread per performance core — instead of llama.cpp's fixed 4. llmtui's
+  `threads: 0` keeps those defaults, so automatic selection now follows
+  yzma's performance-core count; an explicit `threads` value still wins. No
+  provider code change was required. The new experimental `exp/speculative`
+  NextN bindings are not used; `draft-mtp` remains an explicit error.
+- llama.cpp `b10964` / `v0.4.1` → **`b11146` / `v0.5.0`**, commit
+  `7fe450e19305b828c199d602c23a8337aaa1f03b`. The release's own
+  `nightly-tag.txt` names `b11146`, and yzma's manifest agrees. Note the
+  upstream *git* tag `v0.5.0` points three commits later, at `b11149`
+  (`d2e54583…`; OpenCL kernel, CI workflow, and test changes only). The pin
+  follows the build the release's binaries come from, and the CUDA build guide
+  now says to check out the `bNNNNN` tag rather than the semver tag.
+- yzma pins the `v0.5.0` digest manifest (`llama-cpp-builder` release
+  `v0.5.0.json`) at
+  `sha256:4c980eec03f12db33a8de414cbd9b2afecfe996c8c1daac63e16b074d2ffc5ab`;
+  the downloaded manifest hashes to exactly that. All eight archive SHA-256s in
+  `pin.json` (five platforms and three Vulkan packs) match that authenticated
+  manifest and GitHub's published asset digests. Archive sizes and every
+  allowlisted per-file hash were computed independently from the downloaded
+  archives.
+- `compatible_range` is the exact compatible build, `b11146`–`b11146`.
+  Library versions move from llama/mtmd `.0.4.1` to `.0.5.0` and ggml
+  `.0.24.0` to `.0.25.1`. The allowlist and alias families are unchanged.
+  `libllama-common` and the `*-impl` tool libraries remain excluded because
+  `libllama` and `libmtmd` still link only to `libggml*`. Vulkan packs'
+  shared base files are byte-identical to the CPU archives. The upstream
+  `LICENSE` is unchanged and matches the embedded fallback copy.
+
+Validation: `go test -count=1 ./...`, `go vet ./...`, and `golangci-lint` pass.
+`llmtui runtime install` downloads, size/SHA-256-verifies, extracts, and
+full-verifies the b11146 darwin-arm64 runtime. The native integration suite
+then passes against it with `gemma-4-E4B-it-Q4_K_M.gguf` on Metal (text, native
+tools, vision with its `mmproj`, wrong-projector rejection, large prompt, and
+the embedded provider factory), and the text and tool tests also pass CPU-only
+(`LLMTUI_TEST_CPU=1`). Linux and Windows are covered by CI's native lane.
+
 ## 2026-09-21 addendum: runtime pin → llama.cpp v0.4.1 / yzma v1.27.0
 
 Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
@@ -270,8 +318,8 @@ native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
 The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
-yzma `v1.27.0`, llama.cpp build `b10964` — the build behind upstream's
-`v0.4.1` tagged release; see the 2026-09-21 addendum). Packaged
+yzma `v1.28.0`, llama.cpp build `b11146` — the build behind upstream's
+`v0.5.0` tagged release; see the 2026-09-28 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
@@ -443,7 +491,7 @@ Two new optional persistent flags, `--context-size` and `--gpu-layers`,
 bind only when set (existing precedence rules). `ListModels` returns the
 configured model plus sibling `*.gguf` files for the model picker.
 
-The pinned Yzma v1.27.0 context ABI also supports independently configured
+The pinned Yzma v1.28.0 context ABI also supports independently configured
 `NThreadsBatch`, `NUbatch`, `TypeK`, `TypeV`, and `Offload_kqv`. llmtui maps
 these from opt-in embedded settings while retaining the old `kv_cache_type` as
 a shared K/V fallback and preserving native defaults for omitted micro-batch
