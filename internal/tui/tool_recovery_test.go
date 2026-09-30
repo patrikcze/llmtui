@@ -36,7 +36,14 @@ func TestVisiblePseudoCallRecoveryIsBoundedAndUsesStructuredRetry(t *testing.T) 
 			t.Fatalf("pseudo-call leaked into history: %+v", message)
 		}
 	}
-	if !strings.Contains(prov.requests[1].Messages[0].Content, "Tool-call recovery:") {
+	// The reissue is a native continuation, so the one-request feedback rides
+	// in the runtime context after history and the system message stays the
+	// turn's frozen one.
+	reissue := prov.requests[1].Messages
+	if strings.Contains(reissue[0].Content, "Tool-call recovery:") {
+		t.Fatal("schema feedback leaked into the frozen system message")
+	}
+	if last := reissue[len(reissue)-1]; !strings.Contains(last.Content, "Tool-call recovery:") {
 		t.Fatal("reissue did not receive bounded schema feedback")
 	}
 	if m.toolRecoveryFeedback != "" {

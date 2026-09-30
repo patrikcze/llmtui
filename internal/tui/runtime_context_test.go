@@ -8,7 +8,10 @@ import (
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
-func TestRuntimeContextPlacementIsLimitedToEmbeddedNativeContinuations(t *testing.T) {
+// TestRuntimeContextPlacementIsLimitedToNativeContinuations: runtime
+// sections move after history for native-tool continuations on every
+// provider (plan step 2), never for a fresh request or a fenced continuation.
+func TestRuntimeContextPlacementIsLimitedToNativeContinuations(t *testing.T) {
 	for _, tc := range []struct {
 		name, providerType             string
 		native, continuation, deferred bool
@@ -16,7 +19,8 @@ func TestRuntimeContextPlacementIsLimitedToEmbeddedNativeContinuations(t *testin
 		{name: "embedded continuation", providerType: "embedded", native: true, continuation: true, deferred: true},
 		{name: "fresh embedded chat", providerType: "embedded", native: true},
 		{name: "fenced continuation", providerType: "embedded", continuation: true},
-		{name: "remote continuation", providerType: "openai", native: true, continuation: true},
+		{name: "remote continuation", providerType: "openai", native: true, continuation: true, deferred: true},
+		{name: "fresh remote chat", providerType: "openai", native: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newTestModel(t)

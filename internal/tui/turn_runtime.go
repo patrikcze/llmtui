@@ -79,6 +79,10 @@ type turnRuntime struct {
 	pendingBudget   bool
 	approvalIdx     int
 
+	// frozenSystem is the system message of this turn's first request, reused
+	// verbatim by its native-tool continuations (see frozenSystemFor).
+	frozenSystem frozenSystemPrompt
+
 	mcpBatchCancel context.CancelFunc
 	mcpBatchGen    int
 	activity       *toolActivity
@@ -101,6 +105,7 @@ func (r *turnRuntime) transition(state turnState, outcome turnOutcome) turnTrans
 func (r *turnRuntime) resetTurn(progressThreshold int, progressRoot string) {
 	r.stopStream()
 	r.cancelToolBatch()
+	r.frozenSystem = frozenSystemPrompt{}
 	r.resetCycle()
 	r.pendingCalls = nil
 	r.pendingToolPlan = nil
@@ -346,7 +351,38 @@ func (r *turnRuntime) cancelToolBatch() bool {
 	return true
 }
 
+// frozenSystemPrompt is one turn's frozen system message. key names the
+// provider and model it was composed for; static is prompt.StaticSystem of
+// that request's input.
+type frozenSystemPrompt struct {
+	key    string
+	static string
+	system string
+}
+
+// freezeSystem records the system message a request was sent with.
+func (r *turnRuntime) freezeSystem(key, static, system string) {
+	r.frozenSystem = frozenSystemPrompt{key: key, static: static, system: system}
+}
+
+// frozenSystemFor returns the frozen system message when it was composed for
+// the same provider and model and its static part is unchanged. A change to
+// a static section mid-turn (a loaded skill, disclosed tools, a protocol
+// fallback) must reach the model, so it disables reuse until the next
+// request freezes a new system message.
+func (r *turnRuntime) frozenSystemFor(key, static string) (string, bool) {
+	f := r.frozenSystem
+	if f.system == "" || f.key != key || f.static != static {
+		return "", false
+	}
+	return f.system, true
+}
+
 func (r *turnRuntime) complete(outcome turnOutcome) turnTransition {
+	switch outcome {
+	case turnOutcomeFinalAnswer, turnOutcomeExecutionFailure, turnOutcomeCancelled:
+		r.frozenSystem = frozenSystemPrompt{} // the turn is over
+	}
 	switch outcome {
 	case turnOutcomeFinalAnswer:
 		return r.transition(turnCompleted, outcome)

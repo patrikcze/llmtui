@@ -50,7 +50,9 @@ func TestVerifiedAgentRecordsContinuationCompaction(t *testing.T) {
 	var sawNote bool
 	for _, req := range prov.requests {
 		for _, message := range req.Messages {
-			if message.Role == provider.RoleSystem && strings.Contains(message.Content, "tool result(s) from this cycle were compacted out") {
+			// A continuation carries the current agent-cycle note in the
+			// runtime context after history, not in its frozen system message.
+			if strings.Contains(message.Content, "tool result(s) from this cycle were compacted out") {
 				sawNote = true
 			}
 		}
