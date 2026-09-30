@@ -18,7 +18,7 @@ have been measured.
 | 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
-| 4b | Skip the contract for trivial questions | — | — | **intentionally skipped** (no environment for the required real-model trial) |
+| 4b | Skip the contract for trivial questions | `perf/agent-skip-trivial-contract` | see PR | implemented **opt-in** (`agent.skip_trivial_contract`, default off); no real-model trial run |
 | 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | `perf/prompt-runtime-out-of-fresh-system` | see §3 | done: part 1 template check + part 2 implementation (`prompt.fresh_runtime_context`, auto = embedded) |
@@ -72,7 +72,17 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
     744 is also the executor-only upper bound, so 4a removes all eviction. The next run still diverges at the directive's `Original goal` line in the fresh system message; removing that is Step 6's job.
   - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
   - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
-- **Step 4b (intentionally skipped, maintainer decision 2026-09-30).** The plan forbids it until real-model trials show no increase in false completions, and that trial is not feasible. The contract request stays on every run. Revisit only if a trial harness with human-judged answers becomes available. Prompt 5.4 is kept for that case.
+- **Step 4b (implemented opt-in, maintainer decision 2026-09-30).**
+  - **Why opt-in.** The maintainer waived the real-model trial, so the feature ships behind `agent.skip_trivial_contract` (default `false`).
+  - **What counts as trivial** (`trivialContractRequest`, deliberately conservative):
+    - no attachment;
+    - at most 160 characters;
+    - a single sentence;
+    - no path, URL, code or filename characters;
+    - none of a list of workspace, command, web or code intent words (which also includes "and" and "then").
+  - **What happens instead.** One criterion, "answer the user's request as stated", is pinned locally without a contract request. The semantic verifier is unchanged.
+  - **Saving.** One control request per trivial run (contract ≈ 2 s on Gemma 4 E4B).
+  - **Before enabling it by default,** run prompt 5.4's trial.
 - **Step 4c (draft PR #159).**
   - **Scope, deliberately conservative.**
     - A later-cycle verification is no longer asked for the establishing-only `proposed_criteria` and `atomic_task`; schema and prompt now come in later-cycle and establishing variants.
@@ -243,7 +253,7 @@ LLMTUI_AGENT_AUDIT_DECODE=1 in the prefill replay (handoff §4) and report
 only what it measures. Gates as in CLAUDE.md. One draft PR, no AI trailers.
 ```
 
-### 5.4 Step 4b — intentionally skipped (no environment for the real-model trial)
+### 5.4 Step 4b — implemented opt-in; this trial is still needed before a default-on
 
 ```text
 Read CLAUDE.md, the plan's Step 4 and the handoff. Do NOT implement Step 4b
@@ -312,7 +322,7 @@ before coding.
 ## 6. Closing status (2026-09-30)
 
 All plan steps are either merged or **intentionally skipped**:
-- **Merged:** 1, 2, 3, 4a, 4c, 5, 6, 7.
-- **Intentionally skipped:** 4b, the flaky `TestToolOutputExpansionPreservesScrollAndSanitizes` (5.6), and fenced-protocol parity (5.7).
+- **Merged:** 1, 2, 3, 4a, 4c, 5, 6, 7; 4b implemented opt-in.
+- **Intentionally skipped:** the flaky `TestToolOutputExpansionPreservesScrollAndSanitizes` (5.6), and fenced-protocol parity (5.7).
 - **Why skipped:** the maintainer has no environment for the real-model trials they need, they need more compute than is available, or they cover protocols the maintainer does not use.
 - **Kept for reference:** the prompts above, if any of these is picked up later.

@@ -347,6 +347,12 @@ type AgentConfig struct {
 	// causes an unexpected early stop.
 	EnforceBudgetsLive bool             `mapstructure:"enforce_budgets_live" yaml:"enforce_budgets_live"`
 	Yield              AgentYieldConfig `mapstructure:"yield" yaml:"yield"`
+	// SkipTrivialContract replaces the task-contract model request with one
+	// locally pinned criterion for short, single-sentence requests with no
+	// workspace, command, web, or code intent (agent_contract_skip.go). The
+	// semantic verifier still checks the answer. Off by default: no
+	// real-model trial has shown it leaves false completions unchanged.
+	SkipTrivialContract bool `mapstructure:"skip_trivial_contract" yaml:"skip_trivial_contract"`
 }
 
 // AgentYieldConfig gates the Phase 2 same-episode yield continuation (see
@@ -1093,6 +1099,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context.timezone", "")
 
 	v.SetDefault("agent.enabled", false)
+	v.SetDefault("agent.skip_trivial_contract", false)
 	v.SetDefault("agent.max_cycles", 8)
 	v.SetDefault("agent.max_tool_calls", 32)
 	v.SetDefault("agent.max_tokens", 100000)
@@ -1368,6 +1375,10 @@ agent:
   path: "~/.local/share/llmtui/agent-runs"
   max_memory_kb: 64
   max_runs: 32
+  # Skip the task-contract model request for short, single-sentence questions
+  # with no file/command/web/code intent; one criterion is pinned locally and
+  # the verifier still checks the answer. Experimental; off by default.
+  skip_trivial_contract: false
   # Checks max_tool_calls/max_tokens on every tool round, not only when a
   # cycle completes. Set false to fall back to the cycle-boundary-only
   # check if this causes an unexpected early stop.
