@@ -667,11 +667,27 @@ interaction choice-only.
 ## Cancellation and safety
 
 `Esc`, the first `Ctrl+C`, or `/agent cancel` cancels the current executor,
-tool batch, or verifier. Late stream, tool, and verifier messages carry
+tool batch, or verifier. Late stream and verifier messages carry
 generation/run IDs and are ignored after cancellation. Partial executor text is
 kept under the normal chat rule but is not verified as completion. Side-effect
 operations continue to use the durable operation journal, so an interrupted
 write/command/MCP call is not silently replayed.
+
+A cancelled tool batch is different, because some of its calls may already
+have changed the workspace. The batch stops before starting its next call, and
+its results are kept instead of discarded: every call that ran keeps its real
+result, and every call that never started gets a synthetic *not executed*
+result (`cancelled_before_start`), so history stays call/result-paired. The
+synthetic result is never evidence: it is recorded as blocked, not counted as
+an executed tool call, and never counts as read coverage. After `Esc` or
+`Ctrl+C` an agent run stays active until the batch reports back, then ends as
+`cancelled` with the cycle's completed calls in its partial execution record;
+`/agent cancel` ends it at once. Nothing continues the turn. If you submit
+again before the batch reports back, the new turn supersedes it and its late
+results are dropped as before.
+
+A new `/agent` run still starts from the text of earlier turns only, so it does
+not see the cancelled batch's native call/result pair; plain chat does.
 
 Agent mode never changes `tools.approve`, activates tools, connects MCP servers,
 or grants network access. `/tools auto` remains an explicit high-trust choice

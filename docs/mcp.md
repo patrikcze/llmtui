@@ -108,7 +108,9 @@ grants. Per-call approval is otherwise governed by each server's own
 **Execution.** Native and MCP batches share one asynchronous, serialized,
 cancellable executor. Each MCP call is bounded by that server's `timeout`
 (default 30s). Press Esc or Ctrl+C to cancel an in-flight batch, the same as
-an in-flight streaming response.
+an in-flight streaming response. Calls that already finished keep their
+results; calls not yet started are reported to the model as not executed (see
+[Cancellation and safety](agent-loop.md#cancellation-and-safety)).
 
 Calls in a model-emitted batch execute sequentially in the order the model
 provided. Some MCP servers serialize session state or explicitly disallow

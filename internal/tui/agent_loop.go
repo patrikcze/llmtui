@@ -46,16 +46,20 @@ type agentLoopState struct {
 	// its system prompt) while leaving the current cycle's messages, and
 	// the current run's tool state, untouched.
 	cycleBoundaries []int
-	ctx             context.Context
-	runCancel       context.CancelFunc
-	execution       agent.ExecutionResult
-	initialImages   []provider.Image
-	contracting     bool
-	contractCancel  context.CancelFunc
-	contractGen     int
-	verifying       bool
-	verifyCancel    context.CancelFunc
-	verifyGen       int
+	// pendingBatchCancel is the reason of a user cancel whose tool batch has
+	// not delivered its results yet; the run stays active until they arrive
+	// (see finalizeCancelledToolBatch). Empty means none.
+	pendingBatchCancel string
+	ctx                context.Context
+	runCancel          context.CancelFunc
+	execution          agent.ExecutionResult
+	initialImages      []provider.Image
+	contracting        bool
+	contractCancel     context.CancelFunc
+	contractGen        int
+	verifying          bool
+	verifyCancel       context.CancelFunc
+	verifyGen          int
 	// shadow holds the generation counters of Laya's advisory, shadow-only
 	// observations, and assist the state of its two add-only assists. Both
 	// live beside, never inside, the authoritative cycle state above — see
@@ -2004,8 +2008,16 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 			m.complete(turnOutcomeCancelled)
 		}
 		if m.mcpBatchCancel != nil {
-			m.cancelToolBatch()
+			// Keep the batch's completed results when they arrive; the run
+			// itself is cancelled right away below.
+			m.cancelToolBatchByUser()
+			m.clearProviderContinuations()
 			m.relayout()
+		}
+		if save, ok := m.finalizeCancelledToolBatch(); ok {
+			// A Ctrl+C/Esc already cancelled the batch; end the run now.
+			m.notice = "agent run cancelled"
+			return save
 		}
 		m.completePendingAsk("agent run cancelled by the user")
 		if m.agentNeedsUserInput() {

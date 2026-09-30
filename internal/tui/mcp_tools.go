@@ -371,6 +371,13 @@ func runPlannedToolBatch(
 			if plan.blocked[i] != "" {
 				continue
 			}
+			if ctx.Err() != nil {
+				// Cancelled between calls: nothing below may start. The
+				// synthetic result keeps history call/result-paired and is
+				// never evidence (see markNotStartedResults).
+				executed = append(executed, notStartedResult(c))
+				continue
+			}
 			execute := func() tools.Result {
 				// A call flagged with InputErr (e.g. the embedded runtime
 				// couldn't type-check an argument against the tool's
@@ -389,8 +396,48 @@ func runPlannedToolBatch(
 			executed = append(executed, executeDurableCall(c, guards[0], execute))
 		}
 		results, observed, statuses := plan.mergeResults(executed)
+		observed = markNotStartedResults(results, observed, statuses)
 		return mcpToolResultsMsg{results: results, observed: observed, statuses: statuses}
 	}
+}
+
+// cancelledBeforeStartCode marks the synthetic result of a call that a
+// cancelled batch never started.
+const cancelledBeforeStartCode = "cancelled_before_start"
+
+// notStartedResult is the result of a call that was never started because
+// its batch was cancelled first. It is certain that nothing ran, so Effect
+// is none; the text tells the model not to treat it as done.
+func notStartedResult(c tools.Call) tools.Result {
+	err := errors.New("not executed: the batch was cancelled before this call started; " +
+		"do not count this as completed work or verification, and retry it only if it is still needed")
+	return tools.Result{Call: c, Err: err, Meta: tools.ResultMeta{
+		Outcome: tools.OutcomeCancelled, Effect: tools.EffectNone,
+		Error: &tools.ErrorInfo{Code: cancelledBeforeStartCode, Retry: tools.RetryLater, Message: err.Error()},
+	}}
+}
+
+func isNotStartedResult(r tools.Result) bool {
+	return r.Meta.Error != nil && r.Meta.Error.Code == cancelledBeforeStartCode
+}
+
+// markNotStartedResults reclassifies not-started calls, which mergeResults
+// saw as executed, as agent.ActionBlocked (the runtime withheld execution)
+// and removes them from the progress ledger's observed set. A blocked slot is
+// neither evidence nor tool-budget usage and never advances read coverage.
+func markNotStartedResults(results, observed []tools.Result, statuses []agent.ActionStatus) []tools.Result {
+	for i, r := range results {
+		if isNotStartedResult(r) && i < len(statuses) {
+			statuses[i] = agent.ActionBlocked
+		}
+	}
+	kept := observed[:0]
+	for _, r := range observed {
+		if !isNotStartedResult(r) {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 func executeDurableCall(c tools.Call, guard operationGuard, execute func() tools.Result) tools.Result {
