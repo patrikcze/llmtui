@@ -366,3 +366,105 @@ func TestAgentCancelCommandAfterCtrlCEndsRunAndKeepsResults(t *testing.T) {
 		t.Fatal("the completed edit's result should be kept in the session")
 	}
 }
+
+// cancelEditThenContinue runs S7 — an edit_file that completes before the
+// user's Ctrl+C — and returns the model and provider ready for a next run.
+func cancelEditThenContinue(t *testing.T, next ...agentScriptStep) (*Model, *scriptedAgentProvider) {
+	t.Helper()
+	steps := append([]agentScriptStep{
+		{toolCalls: []provider.ToolCall{{ID: "e1", Name: tools.ToolEditFile, Arguments: `{"path":"greeting.txt","old_text":"hello","new_text":"goodbye"}`}}},
+	}, next...)
+	m, prov := configureAgentTestModel(t, steps...)
+	prov.contractReplies = []string{
+		`{"criteria":["greeting.txt says goodbye"],"needs_user_input":false,"question":"","user_options":[]}`,
+		`{"criteria":["greeting.txt says goodbye"],"needs_user_input":false,"question":"","user_options":[]}`,
+		`{"criteria":["report greeting.txt"],"needs_user_input":false,"question":"","user_options":[]}`,
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "greeting.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.toolsOn, m.toolsNative, m.toolsAutoApprove = true, true, true
+	m.toolRunner = tools.NewRunner(root, 64)
+	driveWithCancelBeforeResults(t, m, m.startVerifiedRun("Change greeting.txt to say goodbye.", nil))
+	return m, prov
+}
+
+// executorRequestAfter returns the first request after index from whose
+// system prompt is not a contract or verifier prompt.
+func executorRequestAfter(t *testing.T, prov *scriptedAgentProvider, from int) provider.ChatRequest {
+	t.Helper()
+	for _, req := range prov.requests[from:] {
+		if len(req.Messages) > 0 && !strings.Contains(req.Messages[0].Content, "You establish a task contract") && len(req.Tools) > 0 {
+			return req
+		}
+	}
+	t.Fatalf("no executor request after %d of %d", from, len(prov.requests))
+	return provider.ChatRequest{}
+}
+
+// TestNextAgentRunCarriesCancelledExchange is the S7 continuation: the run
+// after a cancel sees the completed edit_file call and its real result as a
+// native pair, followed by a text receipt that is also persisted in the
+// run's start turns. The carry lasts exactly one run.
+func TestNextAgentRunCarriesCancelledExchange(t *testing.T) {
+	m, prov := cancelEditThenContinue(t,
+		agentScriptStep{text: "greeting.txt already says goodbye."},
+		agentScriptStep{text: verifierJSON("passed", "criteria satisfied", "", false, false)},
+		agentScriptStep{text: "It says goodbye."},
+		agentScriptStep{text: verifierJSON("passed", "criteria satisfied", "", false, false)},
+	)
+	before := len(prov.requests)
+	driveAgentCommands(t, m, m.startVerifiedRun("Continue the previous task.", nil))
+	req := executorRequestAfter(t, prov, before)
+
+	callAt, resultAt, receiptAt := -1, -1, -1
+	for i, msg := range req.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.ID == "e1" && strings.Contains(call.Arguments, `"new_text":"goodbye"`) {
+				callAt = i
+			}
+		}
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "e1" {
+			resultAt = i
+		}
+		if msg.Role == provider.RoleAssistant && strings.HasPrefix(msg.Content, cancelledReceiptPrefix) {
+			receiptAt = i
+			if !strings.Contains(msg.Content, "edit_file greeting.txt: completed, changed the workspace") {
+				t.Fatalf("receipt = %q, want the edit's outcome", msg.Content)
+			}
+		}
+	}
+	if callAt < 0 || resultAt != callAt+1 || receiptAt != resultAt+1 {
+		t.Fatalf("call at %d, result at %d, receipt at %d: want call, result, receipt in order", callAt, resultAt, receiptAt)
+	}
+	turns := m.agentLoop.run.StartTurns
+	if n := len(turns); n == 0 || !strings.HasPrefix(turns[n-1].Content, cancelledReceiptPrefix) {
+		t.Fatalf("start turns = %+v, want the receipt persisted as the newest turn", turns)
+	}
+
+	before = len(prov.requests)
+	driveAgentCommands(t, m, m.startVerifiedRun("What does greeting.txt say?", nil))
+	for _, msg := range executorRequestAfter(t, prov, before).Messages {
+		if msg.ToolCallID == "e1" || strings.HasPrefix(msg.Content, cancelledReceiptPrefix) {
+			t.Fatalf("a later run still carries the cancelled exchange: %+v", msg)
+		}
+	}
+}
+
+// TestClearedSessionDropsCancelledExchange: after /history clear, the next
+// run carries neither the native exchange nor the receipt.
+func TestClearedSessionDropsCancelledExchange(t *testing.T) {
+	m, prov := cancelEditThenContinue(t,
+		agentScriptStep{text: "Done."},
+		agentScriptStep{text: verifierJSON("passed", "criteria satisfied", "", false, false)},
+	)
+	m.session.Clear()
+	before := len(prov.requests)
+	driveAgentCommands(t, m, m.startVerifiedRun("Continue the previous task.", nil))
+	for _, msg := range executorRequestAfter(t, prov, before).Messages {
+		if msg.ToolCallID == "e1" || strings.HasPrefix(msg.Content, cancelledReceiptPrefix) {
+			t.Fatalf("a cleared conversation still carries the cancelled exchange: %+v", msg)
+		}
+	}
+}

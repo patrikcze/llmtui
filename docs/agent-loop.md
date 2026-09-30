@@ -686,8 +686,14 @@ an executed tool call, and never counts as read coverage. After `Esc` or
 again before the batch reports back, the new turn supersedes it and its late
 results are dropped as before.
 
-A new `/agent` run still starts from the text of earlier turns only, so it does
-not see the cancelled batch's native call/result pair; plain chat does.
+A new `/agent` run normally sees earlier turns as text only. The run started
+right after a cancelled batch is the exception: its first cycle also carries
+that batch's native call/result pair, followed by a short receipt of each
+call's outcome (`[llmtui receipt, not a user request] …`). The receipt is also
+kept in the run's persisted start turns, so it survives `/agent resume`. The
+carry lasts one run, and nothing is carried if the conversation was cleared or
+replaced (`/history clear`, `/history load`) in between. Plain chat keeps the
+pair in its normal history.
 
 Agent mode never changes `tools.approve`, activates tools, connects MCP servers,
 or grants network access. `/tools auto` remains an explicit high-trust choice
