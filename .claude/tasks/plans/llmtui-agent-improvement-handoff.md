@@ -21,7 +21,7 @@ have been measured.
 | 4b | Skip the contract for trivial questions | — | — | **skipped by maintainer decision (2026-09-30)**: the required 20-task real-model trial cannot be run; the contract stays on every run |
 | 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
-| 6 | Stable system prefix across turns | — | — | **not started: needs template check + your decision on CLAUDE.md rule 5** |
+| 6 | Stable system prefix across turns | — | — | **part 1 done (template check, see §3); part 2 awaits the maintainer's decision on CLAUDE.md rule 5** |
 | 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | merged |
 
 Fixture outcomes on the PR branches:
@@ -89,7 +89,20 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
   - **Request size.** −33 bytes per verifier request.
   - **Wall time.** No reliable difference measured; host throughput varied between runs.
 - **Step 5 scope.** Only native-tool continuations are bounded. Fenced-protocol results travel in a user message and still fail as before when oversized.
-- **Step 6.** Needs the template check (two consecutive user turns) on your GGUFs and a decision on CLAUDE.md rule 5.
+- **Step 6, part 1 (template check, 2026-09-30).**
+  - **Method.** Rendered through the repo's own path (`renderChatTemplateWithProtocol`: llama.cpp's native renderer with the jinja fallback). The message shape is Step 6's: a runtime-context user message immediately before the raw user message. Tested fresh (system, runtime, raw) and as a follow-up (system, user, assistant, runtime, raw).
+
+    | Template | Result | Rendering between the two user messages |
+    |---|---|---|
+    | Gemma 4 E4B Q4_K_M (GGUF metadata; the only local GGUF) | accepted; two separate user turns, not merged; raw user last and verbatim | `<turn|>\n<|turn>user\n` |
+    | gpt-oss-20b (`mlx-community/gpt-oss-20b-MXFP4-Q8/chat_template.jinja`, the model LM Studio serves) | accepted; two separate user turns; raw user last and verbatim | `<|end|><|start|>user<|message|>` |
+    | LM Studio / Ollama server-side renderers | **not verified**: both servers were down; LM Studio uses the jinja file above, but its own renderer was not exercised | — |
+
+  - **Measured benefit (from Step 4a).** With Step 6 simulated plus 4a, the S3 follow-up executor reuses 4,891 tokens instead of 744.
+  - **Decision needed before part 2.** CLAUDE.md "Architecture" rule 5 says the raw user message goes in last, verbatim. Part 2 keeps that. What it adds is a request-local runtime-context *user-role* message immediately before the raw user message on fresh requests, which today exists only after history on continuations.
+  - **Proposed gating for part 2.**
+    - Embedded: on for templates that pass this check.
+    - Remote providers: off unless enabled by config, until their server-side rendering is verified.
 - **Step 7 scope.** Only native-tool continuations in plain chat are replayed. The first request of a plain turn keeps its partial reply, as before. Fenced continuations are not replayed.
 - **Flaky test.** `TestToolOutputExpansionPreservesScrollAndSanitizes` (stale bubblezone zone) fails intermittently. It was queued as a separate task and has not been fixed.
 - **Environmental failures in the cloud container**, unrelated to these PRs:
