@@ -19,7 +19,7 @@ have been measured.
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
 | 4b | Skip the contract for trivial questions | — | — | **not started: needs real-model trials** |
-| 4c | Smaller verifier replies | — | — | **not started** (parser part is cloud-able; decode savings are local) |
+| 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | see PR | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | — | — | **not started: needs template check + your decision on CLAUDE.md rule 5** |
 | 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | merged |
@@ -73,7 +73,21 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
   - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
   - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
 - **Step 4b.** The plan forbids it until real-model trials show no increase in false completions.
-- **Step 4c.** Not started. The parser and schema change is cloud-runnable. The payoff (decode tokens) is local.
+- **Step 4c (draft PR).**
+  - **Scope, deliberately conservative.**
+    - A later-cycle verification is no longer asked for the establishing-only `proposed_criteria` and `atomic_task`; schema and prompt now come in later-cycle and establishing variants.
+    - The parser accepts an omitted `recommended_next` or `needs_user_input`, parsing them exactly like `""` / `false`.
+    - `retryable` and `criteria` stay required: omitting either changes stop decisions. A defaulted `retryable` reads as "impossible". Criteria entries, even echoed `pending`, feed the inferred `new_evidence` that lets a retry through.
+  - **Measured.** Gemma 4 E4B, unconstrained decode of the verifier requests from 7 fixture scenarios:
+
+    | Variant | Verifier completion tokens | Decisions |
+    |---|---|---|
+    | Old prompt | 774 | — |
+    | Shipped variant | 651 (−16%) | identical in 7/7: verdict, retryable, needs_user_input, criteria statuses; `recommended_next` present in the same 3 inconclusive cases |
+    | Aggressive ("omit anything empty"; not shipped) | 503–542 (−30–35%) | changed 1/7 (S2: retryable true→false, `c1` pending→satisfied); one reply omitted `criteria`, which forces an extra repair request |
+
+  - **Request size.** −33 bytes per verifier request.
+  - **Wall time.** No reliable difference measured; host throughput varied between runs.
 - **Step 5 scope.** Only native-tool continuations are bounded. Fenced-protocol results travel in a user message and still fail as before when oversized.
 - **Step 6.** Needs the template check (two consecutive user turns) on your GGUFs and a decision on CLAUDE.md rule 5.
 - **Step 7 scope.** Only native-tool continuations in plain chat are replayed. The first request of a plain turn keeps its partial reply, as before. Fenced continuations are not replayed.

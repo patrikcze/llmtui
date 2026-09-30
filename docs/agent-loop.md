@@ -462,10 +462,17 @@ request is made.
 
 The parser accepts one JSON object, including a fenced object or harmless prose
 around it, and strictly validates the resulting envelope before any of it
-reaches run state. Six fields are required — `verdict`, `summary`,
-`recommended_next`, `retryable`, `needs_user_input`, and `criteria` (plus
-`proposed_criteria` and `atomic_task` for an establishing verification) — and
-each must be correctly typed: a scalar field set to explicit JSON `null` is
+reaches run state. The prompt and response schema ask for six fields —
+`verdict`, `summary`, `recommended_next`, `retryable`, `needs_user_input`, and
+`criteria` — plus `proposed_criteria` and `atomic_task` only for an
+establishing verification (a later cycle is no longer asked to emit those two
+always-empty fields). The parser requires `verdict`, `summary`, `retryable`,
+and `criteria` (and the two establishing fields when establishing); an omitted
+`recommended_next` or `needs_user_input` parses exactly like `""` / `false`.
+`retryable` and `criteria` stay required because their omission would change
+stop decisions: a defaulted `retryable` would read as "impossible", and
+criterion entries feed the inferred `new_evidence` that lets a retry through.
+Each present field must be correctly typed: a scalar field set to explicit JSON `null` is
 rejected the same as a missing key, while a required array field set to `null`
 is accepted and normalized to an empty slice, since some backends legitimately
 emit `null` for an empty required array under schema enforcement. A small set

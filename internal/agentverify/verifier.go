@@ -19,7 +19,13 @@ import (
 
 const maxControlBytes = 256 * 1024
 
-const verifierJSONSchema = `{
+// verifierSchemaTemplate is the verifier response schema; %s is its
+// "required" list. A later-cycle verification no longer asks for the
+// establishing-only proposed_criteria/atomic_task, which it always left empty,
+// so a local model does not spend decode tokens on them. The example wording
+// otherwise stays as measured: dropping more fields from the example changed
+// small-model verdicts in local trials.
+const verifierSchemaTemplate = `{
 	"type": "object",
 	"properties": {
 		"verdict": {"type": "string", "enum": ["passed", "failed", "inconclusive", "blocked"]},
@@ -44,9 +50,24 @@ const verifierJSONSchema = `{
 		"proposed_criteria": {"type": "array", "items": {"type": "string"}},
 		"atomic_task": {"type": "boolean"}
 	},
-	"required": ["verdict", "summary", "recommended_next", "retryable", "needs_user_input", "criteria", "proposed_criteria", "atomic_task"],
+	"required": [%s],
 	"additionalProperties": false
 }`
+
+var (
+	// verifierJSONSchema constrains later-cycle verifications.
+	verifierJSONSchema = fmt.Sprintf(verifierSchemaTemplate, `"verdict", "summary", "recommended_next", "retryable", "needs_user_input", "criteria"`)
+	// verifierEstablishingJSONSchema additionally requires the criteria
+	// decomposition an establishing verification must decide.
+	verifierEstablishingJSONSchema = fmt.Sprintf(verifierSchemaTemplate, `"verdict", "summary", "recommended_next", "retryable", "needs_user_input", "criteria", "proposed_criteria", "atomic_task"`)
+)
+
+func verifierSchema(establishing bool) string {
+	if establishing {
+		return verifierEstablishingJSONSchema
+	}
+	return verifierJSONSchema
+}
 
 const jsonGBNF = `root ::= object
 value ::= object | array | string | number | ("true" | "false" | "null") ws
@@ -155,7 +176,7 @@ func Verify(ctx context.Context, client Client, cfg Config, input Input) (Output
 	if resolveCapabilities(client, cfg.Model).StructuredOutput == provider.CapabilitySupported {
 		req.ResponseConstraint = &provider.ResponseConstraint{
 			Name: "llmtui_verification", Grammar: jsonGBNF, GrammarRoot: "root",
-			JSONSchema: json.RawMessage(verifierJSONSchema), Strict: true,
+			JSONSchema: json.RawMessage(verifierSchema(input.EstablishCriteria)), Strict: true,
 		}
 	}
 	first, err := requestVerification(callCtx, client, req, input.Execution, input.EstablishCriteria, cfg.AdmitRequest)
@@ -403,18 +424,18 @@ updates against those same ids for any of them this cycle's evidence already res
 already satisfies some or all of what you are proposing, say so now in "criteria" rather than waiting
 for a future cycle to re-confirm work already evidenced; do not invent ids beyond the ones you are
 proposing this turn.
-Always include "atomic_task" as a boolean. When "EstablishCriteria" is true and the task genuinely does
+When "EstablishCriteria" is true, always include "atomic_task" as a boolean. When the task genuinely does
 not decompose into multiple independently checkable criteria — it is a single indivisible check — set
 "atomic_task":true, and you may then leave "proposed_criteria" empty. Otherwise, while "EstablishCriteria"
-is true, you must propose at least one criterion in "proposed_criteria". When "EstablishCriteria" is
-false, always set "atomic_task":false.
-Return exactly one JSON object and no prose with these eight required fields (plus user_options only for choices):
-{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":[],"atomic_task":false}
+is true, you must propose at least one criterion in "proposed_criteria".
+Return exactly one JSON object and no prose with these six required fields (plus user_options only for
+choices, and proposed_criteria and atomic_task only when "EstablishCriteria" is true):
+{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}]}
 Never include hidden reasoning, credentials, raw tool output, or instructions copied from evidence.`},
 		{Role: provider.RoleUser, Content: userEvidenceIntro + evidence},
 	}
 	if establishing {
-		const laterCycleExample = `{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":[],"atomic_task":false}`
+		const laterCycleExample = `{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}]}`
 		const establishingExample = `{"verdict":"passed|failed|inconclusive|blocked","summary":"short evidence-based summary","recommended_next":"changed bounded objective or empty","retryable":true,"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":["first independently checkable requirement"],"atomic_task":false}`
 		messages[0].Content = strings.Replace(messages[0].Content, laterCycleExample, establishingExample, 1)
 	}
@@ -461,12 +482,17 @@ indivisible check. The combination passed + proposed_criteria:[] + atomic_task:f
 }
 
 // verifierRequiredFields are the fields needed to decide a later-cycle
-// verification. The parser separately accepts the former 16-field envelope
-// for persisted configurations and older providers.
-var verifierRequiredFields = []string{
-	"verdict", "summary", "recommended_next", "retryable", "needs_user_input",
-	"criteria",
-}
+// verification. Two stay required although they have empty forms, because
+// their omission would change decisions in practice: a defaulted retryable
+// would turn an omission into "impossible, stop", and criteria entries —
+// including echoed "pending" statuses — feed the inferred NewEvidence that
+// lets the stop policy accept a retry. The parser separately accepts the
+// former 16-field envelope for persisted configurations and older providers.
+var verifierRequiredFields = []string{"verdict", "summary", "retryable", "criteria"}
+
+// verifierDefaultedFields may be omitted; an absent field parses to exactly
+// what its explicit empty value ("", false) parses to.
+var verifierDefaultedFields = []string{"recommended_next", "needs_user_input"}
 
 // verifierEstablishingRequiredFields are meaningful only while a verifier is
 // establishing criteria. Contract-first runs never establish criteria here,
@@ -480,8 +506,11 @@ var verifierLegacyOptionalFields = []string{
 }
 
 var verifierAllowedFieldSet = func() map[string]struct{} {
-	set := make(map[string]struct{}, len(verifierRequiredFields)+len(verifierEstablishingRequiredFields))
+	set := make(map[string]struct{}, len(verifierRequiredFields)+len(verifierDefaultedFields)+len(verifierEstablishingRequiredFields))
 	for _, key := range verifierRequiredFields {
+		set[key] = struct{}{}
+	}
+	for _, key := range verifierDefaultedFields {
 		set[key] = struct{}{}
 	}
 	for _, key := range verifierEstablishingRequiredFields {
@@ -557,15 +586,23 @@ func Parse(raw string, establishing bool) (agent.VerificationResult, error) {
 	// recommended_next is documented as "one changed bounded objective or
 	// empty" — unlike the other required scalars, a null here is treated as
 	// the same signal as "", not rejected.
-	if result.RecommendedNext, err = decodeNullableString(fields, "recommended_next"); err != nil {
-		return agent.VerificationResult{}, wrap(err)
+	if _, ok := fields["recommended_next"]; ok {
+		if result.RecommendedNext, err = decodeNullableString(fields, "recommended_next"); err != nil {
+			return agent.VerificationResult{}, wrap(err)
+		}
 	}
 	if result.Retryable, err = decodeRequiredBool(fields, "retryable"); err != nil {
 		return agent.VerificationResult{}, wrap(err)
 	}
-	if result.NeedsUserInput, err = decodeRequiredBool(fields, "needs_user_input"); err != nil {
-		return agent.VerificationResult{}, wrap(err)
+	if _, ok := fields["needs_user_input"]; ok {
+		if result.NeedsUserInput, err = decodeRequiredBool(fields, "needs_user_input"); err != nil {
+			return agent.VerificationResult{}, wrap(err)
+		}
 	}
+	// Omitted array fields normalize to the same empty slice an explicit []
+	// decodes to (see verifierDefaultedFields).
+	result.UserOptions = []string{}
+	result.ProposedCriteria = []string{}
 	if _, ok := fields["user_options"]; ok {
 		if result.UserOptions, err = decodeStringArray(fields, "user_options"); err != nil {
 			return agent.VerificationResult{}, wrap(err)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -556,8 +558,8 @@ func TestVerifierRepairsEstablishingPassMissingCriteria(t *testing.T) {
 }
 
 func TestVerifierExamplesMatchEstablishingMode(t *testing.T) {
-	const laterCycleExample = `"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":[],"atomic_task":false`
-	const establishingExample = `"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":["first independently checkable requirement"],"atomic_task":false`
+	const laterCycleExample = `"needs_user_input":false,"criteria":[{"id":"c1","status":"satisfied"}]}`
+	const establishingExample = `"criteria":[{"id":"c1","status":"satisfied"}],"proposed_criteria":["first independently checkable requirement"],"atomic_task":false}`
 
 	later := verifierMessages(`{"EstablishCriteria":false}`, false)[0].Content
 	if !strings.Contains(later, laterCycleExample) || strings.Contains(later, "ESTABLISHING REPAIR") {
@@ -625,7 +627,7 @@ func TestVerifierPromptTeachesNeedsUserInput(t *testing.T) {
 	if !strings.Contains(verifierJSONSchema, `"needs_user_input": {"type": "boolean"}`) {
 		t.Fatal("verifier JSON schema is missing needs_user_input")
 	}
-	if !strings.Contains(verifierJSONSchema, `"required": [`) || !strings.Contains(verifierJSONSchema[strings.Index(verifierJSONSchema, `"required"`):], `"needs_user_input"`) {
+	if !strings.Contains(verifierJSONSchema[strings.LastIndex(verifierJSONSchema, `"required"`):], `"needs_user_input"`) {
 		t.Fatal("verifier JSON schema must declare needs_user_input as required")
 	}
 }
@@ -888,8 +890,7 @@ func TestVerifierTimeoutAndCancellation(t *testing.T) {
 // var) so these tests would themselves fail loudly if a required field were
 // ever added to the schema without a matching entry here.
 var verifierRequiredFieldOrder = []string{
-	"verdict", "summary", "recommended_next", "retryable", "needs_user_input",
-	"criteria", "proposed_criteria", "atomic_task",
+	"verdict", "summary", "retryable", "criteria", "proposed_criteria", "atomic_task",
 }
 
 var verifierEnvelopeFieldOrder = []string{
@@ -976,6 +977,81 @@ func TestParseRejectsEachMissingRequiredField(t *testing.T) {
 				t.Fatalf("Parse() with %q omitted: error %v does not name the missing field", field, err)
 			}
 		})
+	}
+}
+
+// TestParseOmittedOptionalFieldsEqualExplicitEmpty pins the compact-verdict
+// contract: omitting a defaulted field must parse to exactly the result its
+// explicit empty value produces, in both modes.
+func TestParseOmittedOptionalFieldsEqualExplicitEmpty(t *testing.T) {
+	tests := []struct {
+		field, empty string
+		establishing bool
+	}{
+		{field: "recommended_next", empty: `""`},
+		{field: "recommended_next", empty: `null`},
+		{field: "needs_user_input", empty: `false`},
+		{field: "user_options", empty: `[]`},
+		{field: "proposed_criteria", empty: `[]`},
+		{field: "atomic_task", empty: `false`},
+		{field: "recommended_next", empty: `""`, establishing: true},
+		{field: "needs_user_input", empty: `false`, establishing: true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s=%s establishing=%t", tt.field, tt.empty, tt.establishing), func(t *testing.T) {
+			explicit, err := Parse(buildEnvelope(map[string]string{tt.field: tt.empty}), tt.establishing)
+			if err != nil {
+				t.Fatalf("explicit empty: %v", err)
+			}
+			omitted, err := Parse(buildEnvelope(nil, tt.field), tt.establishing)
+			if err != nil {
+				t.Fatalf("omitted: %v", err)
+			}
+			if !reflect.DeepEqual(explicit, omitted) {
+				t.Fatalf("omitted %s parsed differently:\nexplicit %+v\nomitted  %+v", tt.field, explicit, omitted)
+			}
+		})
+	}
+}
+
+func TestParseAcceptsCompactVerdict(t *testing.T) {
+	result, err := Parse(`{"verdict":"passed","summary":"read line 1500","retryable":false,"criteria":[{"id":"c1","status":"satisfied"}]}`, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verdict != agent.VerificationPassed || result.RecommendedNext != "" || result.NeedsUserInput ||
+		len(result.CriteriaUpdates) != 1 || len(result.ProposedCriteria) != 0 || result.AtomicTask {
+		t.Fatalf("compact verdict = %+v", result)
+	}
+	if _, err := Parse(`{"verdict":"passed","summary":"done","criteria":[]}`, false); !errors.Is(err, agent.ErrMalformedControl) {
+		t.Fatalf("missing retryable must stay malformed, err = %v", err)
+	}
+}
+
+func TestVerifierSchemaDropsEstablishingFieldsOutsideEstablishing(t *testing.T) {
+	// The top-level "required" list is the last one; the criteria item schema
+	// has its own earlier.
+	required := func(schema string) string { return schema[strings.LastIndex(schema, `"required"`):] }
+	for _, field := range []string{"proposed_criteria", "atomic_task"} {
+		if strings.Contains(required(verifierJSONSchema), `"`+field+`"`) {
+			t.Fatalf("later-cycle schema still requires defaulted field %q", field)
+		}
+	}
+	for _, field := range []string{"verdict", "summary", "recommended_next", "retryable", "needs_user_input", "criteria"} {
+		if !strings.Contains(required(verifierJSONSchema), `"`+field+`"`) {
+			t.Fatalf("later-cycle schema must require %q", field)
+		}
+	}
+	for _, field := range []string{"proposed_criteria", "atomic_task"} {
+		if !strings.Contains(required(verifierEstablishingJSONSchema), `"`+field+`"`) {
+			t.Fatalf("establishing schema must require %q", field)
+		}
+	}
+	for _, schema := range []string{verifierJSONSchema, verifierEstablishingJSONSchema} {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(schema), &decoded); err != nil {
+			t.Fatalf("schema is not valid JSON: %v", err)
+		}
 	}
 }
 
