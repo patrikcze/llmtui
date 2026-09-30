@@ -19,7 +19,7 @@ have been measured.
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
 | 4b | Skip the contract for trivial questions | — | — | **not started: needs real-model trials** |
-| 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | see PR | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
+| 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | — | — | **not started: needs template check + your decision on CLAUDE.md rule 5** |
 | 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | merged |
@@ -73,7 +73,7 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
   - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
   - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
 - **Step 4b.** The plan forbids it until real-model trials show no increase in false completions.
-- **Step 4c (draft PR).**
+- **Step 4c (draft PR #159).**
   - **Scope, deliberately conservative.**
     - A later-cycle verification is no longer asked for the establishing-only `proposed_criteria` and `atomic_task`; schema and prompt now come in later-cycle and establishing variants.
     - The parser accepts an omitted `recommended_next` or `needs_user_input`, parsing them exactly like `""` / `false`.
