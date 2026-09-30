@@ -117,7 +117,12 @@ Each run establishes a contract, then follows the execution stages:
    provider capabilities, tools, verified cycle memory, and current objective.
 4. **Executor** — the active provider streams one bounded objective through the
    existing model/tool loop. A cycle can contain several related tool calls,
-   but it cannot recursively start another run.
+   but it cannot recursively start another run. The cycle's first request
+   carries the `Agent Cycle` directive in its system message; its tool-round
+   and yield continuations repeat that system message byte for byte and send
+   the *current* directive in a runtime-context message after history (see
+   [prompt composition](prompt-composition.md)), so the prompt prefix stays
+   reusable across rounds.
 5. **Verifier** — a separate, tool-free provider request receives only the
    original task, current objective, acceptance criteria, and bounded observable
    results. It never receives the executor conversation or hidden reasoning.
@@ -527,7 +532,7 @@ The executor gets a separate, narrower cross-cycle memory: on a retry, prior
 cycles' raw tool-call/tool-result traffic is not resent (it would grow
 without bound across a multi-cycle run), but each prior cycle's tool calls
 still appear as one bounded `name(detail) succeeded|failed: kind[/code]` line per
-call in the `Agent Cycle` system-prompt section (`/prompt composed`) —
+call in the `Agent Cycle` section (`/prompt composed`) —
 enough for the executor to recognize it already tried a given URL, file
 path, or query and avoid blindly repeating it. `detail` is deliberately
 narrow: URLs, paths, and search patterns are included, but a `run_command`
