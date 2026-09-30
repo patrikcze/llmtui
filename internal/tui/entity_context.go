@@ -160,7 +160,12 @@ func (m *Model) resetEntities() {
 	m.resetVisionObservations()
 }
 
-func (m *Model) entityPromptRecords() []prompt.EntityRecord {
+// entityPromptRecords returns the Entity Context records for a request
+// whose conversation history is history. An entity whose producing tool
+// result is still in history (it carries a reference to the entity) gets
+// only its header: repeating its preview would send the same evidence twice.
+// get_entity_details still returns the full record.
+func (m *Model) entityPromptRecords(history []provider.Message) []prompt.EntityRecord {
 	if !m.entityToolsAvailable() {
 		return nil
 	}
@@ -171,20 +176,36 @@ func (m *Model) entityPromptRecords() []prompt.EntityRecord {
 		maxBytes = int(^uint(0) >> 1)
 	}
 	views := m.entities.MinimalViews(maxBytes)
+	inHistory := referencedEntityIDs(history)
 	records := make([]prompt.EntityRecord, 0, len(views))
 	for _, view := range views {
 		records = append(records, prompt.EntityRecord{
-			ID:      view.ID.String(),
-			Kind:    string(view.Kind),
-			Label:   view.Label,
-			Source:  view.Source,
-			Trust:   string(view.Trust),
-			Scope:   string(view.Scope),
-			Preview: view.Preview,
-			Digest:  view.Digest,
+			PreviewInHistory: inHistory[view.ID.String()],
+			ID:               view.ID.String(),
+			Kind:             string(view.Kind),
+			Label:            view.Label,
+			Source:           view.Source,
+			Trust:            string(view.Trust),
+			Scope:            string(view.Scope),
+			Preview:          view.Preview,
+			Digest:           view.Digest,
 		})
 	}
 	return records
+}
+
+// referencedEntityIDs returns the entity IDs referenced by the tool results
+// in history.
+func referencedEntityIDs(history []provider.Message) map[string]bool {
+	ids := make(map[string]bool)
+	for _, msg := range history {
+		for _, ref := range msg.References {
+			if ref.ID != "" {
+				ids[ref.ID] = true
+			}
+		}
+	}
+	return ids
 }
 
 func (m *Model) entityToolsAvailable() bool {

@@ -613,6 +613,13 @@ the verbatim window, and the estimated used/budget token counts. Repeated
 identical compactions within one cycle are recorded once. When compaction
 removed tool results from the current cycle, the executor's controller
 directive says so, so it does not assume it can still see them.
+
+The directive's *retained observations* are de-duplicated against the exact
+history of each request: an observation whose excerpt is still verbatim in one
+of that request's tool results is cited in one line
+(`read_file(big.log) [cycle 1]: in the conversation above`) instead of being
+repeated. Once that result is compacted or projected out of the request, the
+full excerpt comes back, so evidence is never lost, only not sent twice.
 This makes "did truncation or summarization eat evidence this cycle needed"
 directly answerable from a run's persisted JSON instead of requiring
 after-the-fact message-size reconstruction.
