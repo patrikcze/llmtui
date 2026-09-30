@@ -14,15 +14,15 @@ have been measured.
 
 | Step | What | Branch | PR | State |
 |---|---|---|---|---|
-| 1 | Cancelled batch keeps completed mutations; the next run gets a receipt | `fix/tui-cancel-keeps-completed-mutations` | #152 | draft, CI green |
-| 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | ready, CI green |
-| 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | ready, CI green, **stacked on #153** |
+| 1 | Cancelled batch keeps completed mutations; the next run gets a receipt | `fix/tui-cancel-keeps-completed-mutations` | #152 | merged (after a master merge resolving `turn_runtime.go`) |
+| 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
+| 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | — | — | **not started: native, local** |
 | 4b | Skip the contract for trivial questions | — | — | **not started: needs real-model trials** |
 | 4c | Smaller verifier replies | — | — | **not started** (parser part is cloud-able; decode savings are local) |
-| 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | draft |
+| 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | — | — | **not started: needs template check + your decision on CLAUDE.md rule 5** |
-| 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | draft |
+| 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | merged |
 
 Fixture outcomes on the PR branches:
 - **S1 agent #3:** prefix reuse went from 21% on `master`, to 77% with Step 2, to 90% with Step 3; `copies_of_one_observed_line` went 3 → 1.
@@ -33,17 +33,22 @@ Fixture outcomes on the PR branches:
 
 A throwaway merge of #153, #154, #155 and #156 applies cleanly. On that tree, `internal/tui` tests pass and all 32 fixture scenarios complete (16 `done` and 16 plain-chat with an empty stop).
 
-## 2. Merge order (do this first)
+## 2. Merge history (done 2026-09-30)
 
-1. **Merge #153** (Step 2).
-2. **Retarget #154 to `master`**, then merge it (Step 3). GitHub may retarget automatically when #153's branch is deleted; if not, change the base in the PR's edit view.
-3. **Merge #155 and #156** (Steps 5 and 7). They are independent of each other and merge cleanly on top of 2 and 3.
-4. **Merge #152 last** (Step 1). It conflicts with Step 2 in exactly one file, `internal/tui/turn_runtime.go`, two hunks.
-   - Resolve by keeping both sides: Step 1 adds `userCancelledGen` and the cancel helpers; Step 2 adds `frozenSystem` and its reset.
-   - Both resets must survive in `resetTurn` and in the final/failure/cancel paths.
-   - Prompt: see §5.1.
+Merged into `master` with merge commits, in this order: #153, #154 (retargeted
+to `master`), #155, #156, then #152. #152 conflicted with Step 2 in
+`internal/tui/turn_runtime.go` (two hunks, both pure additions). The conflict was
+resolved in a master merge commit on its branch that keeps both sides:
+Step 1's `userCancelledGen` and cancel helpers, and Step 2's `frozenSystem` and its
+resets. On the merged tree, gofmt, vet, golangci-lint (0 issues),
+`go test ./...` and the fixture (all 32 scenarios, S7 included) were clean.
 
-The commits on these branches are authored as `Claude <noreply@anthropic.com>`. They carry no AI trailers, per CLAUDE.md. If you want your own authorship in history, squash-merge.
+The commits are authored as `Claude <noreply@anthropic.com>` and carry no AI
+trailers, per CLAUDE.md.
+
+The merged `perf/…`, `fix/…` branches and this `docs/…` branch still exist
+on `origin`, because the cloud session cannot delete branches. Delete them locally with
+`git push origin --delete <branch>`.
 
 ## 3. What was not implemented, and why
 
@@ -66,7 +71,7 @@ The commits on these branches are authored as `Claude <noreply@anthropic.com>`. 
 
 ## 4. Local verification after merging (your machine)
 
-Run these on a fresh `master` after §2:
+Run these on a fresh `master` (`git checkout master && git pull`):
 
 ```bash
 make check
@@ -107,23 +112,7 @@ Run it once on `b3208c8` (the baseline) and once on the new `master`, then compa
 
 ## 5. Prompts for a local Claude Code session
 
-Each prompt stands alone. Start each in a fresh session at the repo root on an up-to-date `master` (except 5.1).
-
-### 5.1 Resolve the #152 conflict after #153 and #154 are merged
-
-```text
-Read CLAUDE.md. PR #152 (branch fix/tui-cancel-keeps-completed-mutations)
-conflicts with master in internal/tui/turn_runtime.go after the Step 2 frozen
-system prefix merged. Merge origin/master into the branch (no rebase, no
-force-push). Resolve by keeping both sides: Step 1's userCancelledGen and
-cancel helpers, and Step 2's frozenSystem field and its resets. Both must
-still be cleared in resetTurn and on final/failure/cancel. Then run gofmt -l .,
-go vet ./..., golangci-lint run ./..., go test -count=1 ./..., the CLAUDE.md
-race subset, and LLMTUI_AGENT_AUDIT_TRACE=1 go test ./internal/tui -run
-'TestAgentAudit' -v -count=1. Confirm S7 and TestAgentAuditCancelAfterCompletedMutation
-pass and that no fixture scenario changed status. Commit as
-"merge: master into fix/tui-cancel-keeps-completed-mutations" and push.
-```
+Each prompt stands alone. Start each in a fresh session at the repo root on an up-to-date `master`.
 
 ### 5.2 Step 4a — second llama sequence for control requests (local, native)
 
