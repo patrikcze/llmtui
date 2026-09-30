@@ -131,17 +131,34 @@ func TestAgentAuditPrefillReplay(t *testing.T) {
 			// Full reply cost of the control requests: prefill plus decode of
 			// the JSON reply. Unconstrained (no grammar), so the reply length
 			// is the model's own, not the schema-forced minimum.
+			controlIndex := 0
 			for _, req := range seq {
 				if req.Kind == "executor" {
 					continue
 				}
 				started := time.Now()
-				result, err := rt.Generate(context.Background(), embedded.GenRequest{Messages: req.Messages, MaxTokens: 512, Temperature: 0, TopP: 1}, func(embedded.GenDelta) {})
+				var reply strings.Builder
+				result, err := rt.Generate(context.Background(), embedded.GenRequest{Messages: req.Messages, MaxTokens: 512, Temperature: 0, TopP: 1, Isolated: true}, func(delta embedded.GenDelta) {
+					if delta.Kind == embedded.DeltaText {
+						reply.WriteString(delta.Text)
+					}
+				})
 				if err != nil {
 					t.Fatalf("%s decode: %v", req.Kind, err)
 				}
-				t.Logf("%s control-decode %-8s prompt=%d completion=%d wall=%s", filepath.Base(file), req.Kind, result.PromptTokens, result.CompletionTokens, time.Since(started).Round(time.Millisecond))
+				t.Logf("%s control-decode %-8s prompt=%d completion=%d reply_bytes=%d wall=%s", filepath.Base(file), req.Kind, result.PromptTokens, result.CompletionTokens, reply.Len(), time.Since(started).Round(time.Millisecond))
+				if out := os.Getenv("LLMTUI_AGENT_AUDIT_REPLIES"); out != "" {
+					// Replies are fixture-derived control JSON, kept for parse checks.
+					name := fmt.Sprintf("%s.%s.%d.json", strings.TrimSuffix(filepath.Base(file), ".json"), req.Kind, controlIndex)
+					if err := os.WriteFile(filepath.Join(out, name), []byte(reply.String()), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				controlIndex++
 			}
+		}
+		if os.Getenv("LLMTUI_AGENT_AUDIT_DECODE_ONLY") == "1" {
+			continue
 		}
 		var executorOnly []auditReplayRequest
 		for _, req := range seq {
