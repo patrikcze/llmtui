@@ -52,6 +52,23 @@ fit at all, llmtui stops before contacting the provider and explains which
 overhead must be reduced. `/context` and `/debug last` show the estimated
 breakdown.
 
+A native tool batch can return more than its own continuation has room for,
+and dropping older history cannot help when the batch's newest results are
+the problem. So before a batch's results are recorded or appended, llmtui
+estimates the continuation that would carry them, including the retained
+observations, entity reference lines and entity previews those results will
+add, and cuts the newest successful results until it fits. Each cut result
+keeps its head and ends with `[truncated to fit the context window …]`; a
+`read_file` result keeps whole lines, and its header, line window and
+`next_offset` are rewritten to the lines actually kept. The cut result is a
+partial observation with an incomplete preview and file version, so read
+coverage and the agent's evidence ledger only ever count delivered lines, and
+a cut read cannot bind a later edit as a complete observation. Error results
+are never cut, and no result is cut below a short head. Fenced-protocol
+results travel in a user message, not a native continuation, and are not
+bounded this way. When even the bounded batch cannot fit, the results are
+left unchanged and the request fails with the explanation above.
+
 Large MCP catalogs use the same accounting when a `tool_search` result tries
 to disclose a full dynamic schema. llmtui tentatively prepares the next
 continuation with that schema and retains it only if the ordinary context
