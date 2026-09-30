@@ -53,7 +53,8 @@ targets the first missing interval, capped at the tool's 500-line maximum.
 Coverage hints are rebuilt after every tool round, including reads that follow
 a recovery nudge, so the next request never repeats an obsolete page hint.
 New delivered coverage resets the no-progress nudge budget; duplicate reads,
-unknown totals, and mixed file versions do not. The final reply and full
+unknown totals, mixed file versions, and re-reading lines that were already
+covered earlier in the episode do not. The final reply and full
 tool receipts remain available to verification.
 
 The Recent Messages section in `/prompt composed` is a shortened preview.

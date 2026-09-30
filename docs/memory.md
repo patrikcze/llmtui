@@ -10,7 +10,7 @@ Four memory tiers are available:
 | User | `user_preference` | YAML at `memory.path` |
 | Project | `project_architecture`, `project_convention`, `project_decision` | Versioned JSON under `memory/projects/<workspace-id>.json`, next to `memory.path` |
 | Episode | `episode` | Compact summary embedded in an explicitly saved session under `chat.history_dir` |
-| Agent run | objective, criteria, failures, evidence | Bounded live/persisted `AgentRun`; never automatically promoted |
+| Agent run | objective, criteria, failures, evidence | Bounded live/persisted `AgentRun`; the run record itself never enters retrieval, but a semantically verified outcome can be saved as a project record (see below) |
 
 The project workspace ID is a SHA-256 hash of the canonical,
 symlink-resolved launch directory. Project records therefore stay isolated:
@@ -40,8 +40,8 @@ preferences only. `/memory list episode` shows project-scoped summaries from
 saved sessions; `/memory list run` shows bounded state from the current/latest
 run.
 
-`/memory off` disables user/project/episode retrieval and verified-outcome
-promotion prompts for the current session. It does not delete stored records,
+`/memory off` disables user/project/episode retrieval and automatic
+verified-outcome saves for the current session. It does not delete stored records,
 disable agent verification, or remove the agent's bounded cycle memory and run
 persistence; those are controller state used to execute and resume `/agent on`.
 Explicit list, inspect, search, remove, and add commands remain available while
@@ -79,8 +79,9 @@ Project records created by commands are user-authored and approved. The store
 can hold model proposals in a pending-review state, but pending records are not
 searchable or injected into prompts.
 
-When memory is enabled, a verifier-passed agent run automatically saves one
-bounded outcome to project memory — no interactive prompt. The category
+When memory is enabled, an agent run whose final cycle passed **semantic
+verification** automatically saves one bounded outcome to project memory — no
+interactive prompt. The category
 (architecture, convention, or decision) is inferred from the run's objective
 and execution summary by deterministic keyword matching (never a model call),
 defaulting to `decision` — the most general bucket — when neither a stronger
@@ -88,7 +89,11 @@ architecture nor convention signal is present. The completion notice names the
 category and record ID so the save is visible without an interruption. The
 durable record remains `model_proposed` trust with approved review state and
 preserves source run/cycle provenance, exactly as an explicit promotion would.
-Memory-off, failed, parked, cancelled, or unverified runs are never promoted.
+Memory-off, failed, parked, or cancelled runs are never promoted, and neither
+is a run completed without a semantic verifier pass: in `agent.verifier.mode`
+`off` or `deterministic`, or when the criteria ledger alone settled the final
+cycle, the controller never read the executor's answer, so the outcome is not
+saved as verified.
 An unwanted or misclassified save is not destructive: `/memory remove <id>`
 deletes it, and `/memory off` stops future auto-saves for the session.
 

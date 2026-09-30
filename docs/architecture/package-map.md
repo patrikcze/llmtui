@@ -4,8 +4,9 @@ A layer-by-layer tour of every Go package under `internal/`, plus a
 cross-check for apparent duplication (the same noun — *skill*, *memory*,
 *tool*, *runtime* — showing up in several packages).
 
-Current inventory: 41 Go packages (40 under `internal/` plus `cmd/llmtui`),
-about 106k Go LOC including tests, measured 2026-09-15. Use `go list ./...`
+Current inventory: 42 Go packages (41 under `internal/` plus `cmd/llmtui`),
+about 139k Go LOC including tests (excluding `third_party/`), measured
+2026-09-30. Use `go list ./...`
 for the exact package inventory; keep this file in sync with the one-line list
 in the README's "Package layout" section. File lists below name production
 files unless a developer-only test or fixture is called out explicitly.
@@ -18,9 +19,9 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
                     └──> internal/tui ──────────> everything else
 ```
 
-- `internal/tui` is the hub: it directly imports 29 internal packages in the
+- `internal/tui` is the hub: it directly imports 31 internal packages in the
   current inventory.
-- `internal/provider` is the most-imported shared leaf, with 14 direct package
+- `internal/provider` is the most-imported shared leaf, with 15 direct package
   importers in the current inventory.
 - Nothing imports `internal/tui` except `internal/cli`.
 - Lower layers (`provider`, `config`, `history`, `tools`, `terminaltext`,
@@ -34,9 +35,9 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | Package | Purpose | Files |
 |---|---|---|
 | `cmd/llmtui` (outside `internal`) | `main()` only. Holds the `-ldflags` version vars, calls `cli.NewRootCmd`. | `main.go` |
-| `internal/cli` | The Cobra command tree: `chat`, `config`, `providers`, `models`, `runtime`, `doctor`, `history`, `stats`, `version`, `self`, and `personal-apps`. `root.go` owns flag → viper → config precedence (only binds flags the user actually set). Each other file is one subcommand. `self.go` (like `version.go`) bypasses config loading. | `root.go`, `chat.go`, `config.go`, `providers.go`, `models.go`, `runtime.go`, `doctor.go`, `history.go`, `stats.go`, `version.go`, `self.go`, `personal_apps.go` |
+| `internal/cli` | The Cobra command tree: `chat`, `config`, `providers`, `models`, `runtime`, `doctor`, `history`, `stats`, `version`, `self`, `personal-apps`, and `decision` (Laya model management and explicit `runtime status`/`predict`). `root.go` owns flag → viper → config precedence (only binds flags the user actually set). Each other file is one subcommand. `self.go` (like `version.go`) bypasses config loading. | `root.go`, `chat.go`, `config.go`, `providers.go`, `models.go`, `runtime.go`, `doctor.go`, `history.go`, `stats.go`, `version.go`, `self.go`, `personal_apps.go`, `decision.go`, `decision_runtime.go` |
 | `internal/app` | Config → concrete-provider factory. `factory.go` builds `provider.Provider` instances (embedded/ollama/openai/mock), HTTP clients, sampling defaults, `ActiveOverrides`. `skills.go` is two helpers translating config → `skill.Options` (shared by the TUI and `doctor` so they cannot drift). | `factory.go`, `skills.go` |
-| `internal/config` | Viper-based loader. Precedence: flags > env (`LLMTUI_`) > YAML > defaults. One file with every config struct + validation + path resolution. | `config.go` |
+| `internal/config` | Viper-based loader. Precedence: flags > env (`LLMTUI_`) > YAML > defaults. `config.go` holds every config struct + validation + path resolution; `embedded.go` the embedded-provider options. | `config.go`, `embedded.go` |
 
 ---
 
@@ -64,8 +65,9 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | `internal/prompt` | Builds provider-ready messages from inspectable **sections** (system, template, model hints, summary, memory, skills, RAG). Core rule: the raw user message is never rewritten. `Mode` = minimal / balanced / coding. See `docs/prompt-composition.md`. | `compose.go` |
 | `internal/contextmgr` | Keeps the conversation inside the model's context window — token estimation, truncation, summarization. Special-cases `local_context` tool output as volatile (keeps a provenance marker, drops the payload). See `docs/context-management.md`. | `contextmgr.go` |
 | `internal/modelprofile` | Per-model-family default tuning (context window, temperature, prompt style, JSON-mode support). Built-ins + config overrides. | `profile.go` |
-| `internal/agent` | Provider- and UI-independent **state machine** for bounded, verified `/agent` runs: stages (trigger → executor → verifier → memory-write), `criteria.go` (acceptance criteria + evidence ledger), `deterministic.go` (infer mechanical criteria for narrow requests), `policy.go` (`Decide()` — budget/stop logic, no side effects), receipts/recovery attribution, behavior statistics, and `store.go` (persist runs). See `docs/agent-loop.md` and `docs/architecture/v1-agent-runtime.md`. | `types.go`, `run.go`, `criteria.go`, `deterministic.go`, `policy.go`, `store.go`, `errors.go`, `assistance.go`, `observations.go`, `proof.go`, `receipts.go`, `recovered.go` |
-| `internal/agentverify` | Adapts `provider` to fresh-context, tool-free agent control requests: task-contract establishment before cycle 1 and semantic verification after execution. Deliberately separate from `agent`, which stays provider-neutral. | `contract.go`, `verifier.go` |
+| `internal/agent` | Provider- and UI-independent **state machine** for bounded, verified `/agent` runs, driven by the TUI adapter (`internal/tui/agent_loop.go`): stages (trigger → contract → rules-load → executor → verifier → memory-write → stop-check), `criteria.go` (semantic acceptance criteria, exact-read coverage proof, evidence ledger, read-coverage facts), `deterministic.go` (`EvaluateDeterministic` — failure-only mechanical verdicts and recovery objectives), `yield.go` (pure same-episode yield policy), `policy.go` (`Decide()` — budget/stop logic, no side effects), receipts/recovery attribution and executed-call accounting, behavior statistics, and `store.go` (persist runs: compaction, revision ordering, redaction). See `docs/agent-loop.md`; `docs/architecture/v1-agent-runtime.md` is the original design. | `types.go`, `run.go`, `criteria.go`, `deterministic.go`, `yield.go`, `policy.go`, `store.go`, `errors.go`, `assistance.go`, `observations.go`, `proof.go`, `receipts.go`, `recovered.go`, `replace_{unix,windows}.go` |
+| `internal/agentverify` | Adapts `provider` to fresh-context, tool-free agent control requests: task-contract establishment before cycle 1 and semantic verification after execution (strict envelope parse, one bounded format repair, one per-criterion repair for a bare multi-criterion pass). Deliberately separate from `agent`, which stays provider-neutral. | `contract.go`, `verifier.go` |
+| `internal/decision` | Opt-in **Laya** structured-decision engine: provider-independent typed decision contracts, logits decoding, golden fixtures, model acquisition/verification, and execution through an explicit MLX subprocess (`mlx_worker.py`). A decision is a typed signal, never an authorization primitive; the agent loop uses it only through the shadow/add-only seam in `internal/tui/agent_observer.go`, and nothing loads during normal chat startup. See `docs/decision-engine.md`. | `types.go`, `decode.go`, `golden.go`, `models.go`, `model_manager.go`, `preprocess.go`, `router.go`, `runtime.go`, `service.go`, `mlx.go`, `mlx_validation.go`, `doc.go` |
 | `internal/eval` | Developer-only, opt-in evaluation library and endpoint tests. Repeats contract-stage and safe native-tool conformance probes, records bounded content-safe metrics (including optional Phase 8 baseline/candidate/fixture binding), and writes JSONL reports. It never runs automatically in CI, never executes host tools, and is not part of the normal chat runtime. | `doc.go`, `live.go`; opt-in endpoint test `live_test.go`; fake-provider tests `live_test_internal_test.go` |
 
 ---
@@ -77,6 +79,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | `internal/memory` | Small user-curated preference snippets. Off by default, never auto-stores, must never hold secrets. See `docs/memory.md`. | `memory.go` |
 | `internal/rag` | Optional local workspace index + keyword retrieval (BM25-lite, no embeddings, no vector DB). `index.go` (build), `store.go` (on-disk `index.json`, one per workspace), `context.go` (render snippets as a labeled reference block), `secrets.go` (skip the whole file on a credential match). See `docs/rag.md`. | `rag.go`, `index.go`, `store.go`, `context.go`, `secrets.go` |
 | `internal/memoryindex` | The **aggregator / facade** above `memory` + `rag` + agent-runs + a project-fact store. `Retriever` fans a `Query` across pluggable `Source`s, dedups by content hash, sorts deterministically. `project_store.go` is its own persisted store of architecture / convention / decision facts. Powers `/memory search` and `/memory explain`. | `types.go`, `retriever.go`, `sources.go`, `user_source.go`, `rag_source.go`, `project_source.go`, `project_store.go` |
+| `internal/redact` | The one shared, best-effort secret-shaped-text pattern applied before bounded records reach disk (agent runs, project facts, episode summaries, entities). A last-line pattern match, not a secret manager. | `redact.go` |
 | `internal/history` | Session persistence + cumulative usage log (`usage.jsonl`) + episode records (which skills were active) + an append-only **operation journal** (`operations.go`) for crash-recovery / idempotency of non-idempotent `run_command`s. See `docs/architecture/v1-state-and-storage.md`. | `history.go`, `operations.go`, `usage.go` |
 | `internal/cache` | File-based response cache keyed on *everything* that varies the request (history, composed system prompt, RAG/memory context) — never on API keys. Unrelated to the "memory" packages despite the theme. See `docs/cache.md`. | `cache.go` |
 
@@ -86,7 +89,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 
 | Package | Purpose | Notable files |
 |---|---|---|
-| `internal/tools` | The workspace tool engine. `tools.go` (fenced-block protocol + `Runner`, workspace confinement), `native.go` (same tools as OpenAI/Ollama function specs), `registry.go` (single capability catalog + `SafetyClass`), `guardrails.go` (the command classifier — auto vs ask vs deny), `file_edit.go` / ranged read (surgical `edit_file`, ranged `read_file`), `search.go` (shell-free glob/grep), `diff.go` (display-only write diffs), `local_context.go` (time, clipboard, env — volatile observations), `web.go` (thin wrapper over `internal/web` plus entity adapters), `entity_details.go` (bounded controller lookup arguments), `personal_apps.go` (explicit personal-app operation routing), `ask_user.go` (control-flow barrier tool), and `tool_search.go` (discovery + ranking). See `docs/tools-architecture.md` and the "Workspace Tool Safety Invariants" in `CLAUDE.md`. | `tools.go`, `guardrails.go`, `local_context.go`, `native.go`, `search.go`, `file_edit.go`, `entity_details.go`, `personal_apps.go`, `tool_search.go` |
+| `internal/tools` | The workspace tool engine. `tools.go` (fenced-block protocol + `Runner`, workspace confinement), `native.go` (same tools as OpenAI/Ollama function specs), `native_args.go` (schema-checked native argument decoding: unknown-key rejection, the `file_path`→`path` alias, unambiguous scalar coercion), `registry.go` (single capability catalog + `SafetyClass`), `guardrails.go` (the command classifier — auto vs ask vs deny), `file_edit.go` / ranged read (surgical `edit_file`, ranged `read_file`), `search.go` (shell-free glob/grep), `diff.go` (display-only write diffs), `local_context.go` (time, clipboard, env — volatile observations), `web.go` (thin wrapper over `internal/web` plus entity adapters), `entity_details.go` (bounded controller lookup arguments), `personal_apps.go` (explicit personal-app operation routing), `ask_user.go` (control-flow barrier tool), and `tool_search.go` (discovery + ranking). See `docs/tools-architecture.md` and the "Workspace Tool Safety Invariants" in `CLAUDE.md`. | `tools.go`, `guardrails.go`, `local_context.go`, `native.go`, `native_args.go`, `search.go`, `search_v2.go`, `file_edit.go`, `file_write.go`, `result.go`, `registry.go`, `entity_details.go`, `personal_apps.go`, `tool_search.go` |
 | `internal/toolapi` | Read-only HTTP server exposing the *active* tool catalog (name / description / safety / approval / schema) — for external inspection (e.g. an editor), not execution. See `docs/tool-registry.md`. | `server.go` |
 | `internal/web` | The actual internet access: DuckDuckGo search (no key) + page fetch with readable-content extraction. `ssrf.go` blocks private / CGNAT / link-local / multicast / etc. ranges. | `web.go`, `fetch.go`, `search.go`, `ssrf.go` |
 | `internal/mcp` | Model Context Protocol: config + `Client` interface + `registry.go` (server state tracking) + `stdio.go` (concrete subprocess transport, SIGTERM → SIGKILL reaping, frame-size bounds). Nothing starts a subprocess on its own. See `docs/mcp.md`. | `mcp.go`, `registry.go`, `stdio.go`, `mock.go` |
@@ -103,14 +106,15 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 ## 6. TUI layer (`internal/tui`)
 
 One Bubble Tea `Model` split across files by concern. This is where most of
-the size is (`app.go` ~3000 LOC, several siblings 1200–1800). See
+the size is (`app.go` ~3800 LOC, several siblings 1800–2100). See
 `docs/tui-design.md`.
 
 | File(s) | Concern |
 |---|---|
 | `app.go` | The `Model` struct, `Update`/`View`, key routing, message dispatch. |
 | `pipeline.go` | Request assembly: cache key, prompt composition, RAG/memory injection, debug capture. |
-| `turn_runtime.go`, `agent_loop.go`, `toolloop_*` | The turn state machine (idle → streaming → approval → tools → results), shared by ordinary chat and `/agent`. |
+| `turn_runtime.go` | The turn state machine (idle → streaming → approval → tools → results), shared by ordinary chat and `/agent`. |
+| `agent_loop.go`, `agent_yield.go` | The `/agent` adapter that drives `internal/agent`: contract, cycle start/abandon, tool receipts and evidence accounting, verification routing, persistence, resume, and the same-episode yield decision. |
 | `agent_observer.go` | The single seam between the authoritative agent orchestration and Laya: shadow-only observation state (`agentShadowState`) and the two add-only assists (`agentAssistState`), plus the only helpers the orchestrator calls into them. The shadow/assist implementations live in `agent_decision_shadow.go`, `agent_yield_shadow.go`, `agent_criterion_assessment.go`, `agent_decision_policy.go`. |
 | `commands.go`, `commands_local.go`, `commands_memory.go`, `commands_skills.go` | Slash-command handlers, grouped by domain. See `docs/slash-commands.md`. |
 | `skills.go`, `tool_search.go`, `tool_registry.go`, `mcp_tools.go` | Model-side wiring into the `skill` / `tools` / `toolapi` / `mcp` engines. |
@@ -185,13 +189,13 @@ where both are needed (e.g. `llamart/vision.go`).
 
 ## Size hot-spots (not duplication, but worth knowing)
 
-1. `internal/tui` carries most of the complexity: `app.go` (~3000),
-   `commands_local.go` (~1800), `agent_loop.go` (~1200),
-   `pipeline.go` (~1500). `app.go`'s `Update` switch is the natural next
+1. `internal/tui` carries most of the complexity: `app.go` (~3800),
+   `commands_local.go` (~2100), `agent_loop.go` (~2100),
+   `pipeline.go` (~1800). `app.go`'s `Update` switch is the natural next
    extraction target (delegate more to `turn_runtime` / `commands`).
-2. `internal/tools/tools.go` (~1200) and `local_context.go` (~800) each mix
+2. `internal/tools/tools.go` (~2000) and `local_context.go` (~800) each mix
    protocol parsing, execution, and validation in one file.
-3. `internal/config/config.go` (~1300) is one file for the whole config
+3. `internal/config/config.go` (~1700) is one file for the whole config
    surface — a natural place to split structs from loading logic.
 
 Everything else is appropriately sized and single-purpose. The package

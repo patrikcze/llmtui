@@ -129,7 +129,12 @@ Each run establishes a contract, then follows the execution stages:
 
 The controller walks these stages as an explicit state machine. `continue` and
 `retry` return to the trigger boundary and begin a fresh cycle; every other
-stop decision is terminal for the run.
+decision stops the current execution. A run can also stop before the stop
+check: inside the executor as `no_progress`, `budget_exhausted`, `failed`, or
+(from a yield decision) `escalated`/`cancelled`, and at the verifier as
+`verification_unavailable` or `budget_exhausted`. `needs_user_input`,
+`parked`, and `verification_unavailable` are resumable (`/agent resume`); the
+others are final.
 
 ```mermaid
 stateDiagram-v2
@@ -139,14 +144,18 @@ stateDiagram-v2
     Contract --> NeedsInput: required information missing
     RulesLoad --> Executor: BeginCycle (compose prompt + directive)
     Executor --> Verifier: CompleteExecution (stream + run tools)
+    Executor --> Failed: no_progress / failed (partial execution kept)
+    Executor --> Budget: budget_exhausted (partial execution kept)
+    Executor --> NeedsInput: ask_user (live pause)
     Verifier --> MemoryWrite: CompleteVerification (fresh-context verdict)
+    Verifier --> Budget: verification_unavailable / budget_exhausted
     MemoryWrite --> StopCheck: WriteMemory
     StopCheck --> Trigger: continue / retry (next objective)
     StopCheck --> Done: done
-    StopCheck --> Failed: failed / no_progress
+    StopCheck --> Failed: failed
     StopCheck --> NeedsInput: needs_user_input
     StopCheck --> Parked: parked / escalated
-    StopCheck --> Budget: budget_exhausted / verification_unavailable
+    StopCheck --> Budget: budget_exhausted
     Done --> [*]
     Failed --> [*]
     NeedsInput --> [*]
@@ -357,10 +366,11 @@ looping:
 | Nudges without new progress | `agent.yield.max_nudges_without_progress` | `2` | Episode stops as `no_progress`, same as the no-progress detection above |
 | Provider attempts per episode | `agent.yield.max_episode_requests` | `64` | Episode stops as `budget_exhausted` |
 
-"Progress" here means the set of outstanding obligations actually changed
-since the last continuation (a read succeeded, or the target dropped out
-some other way) — an unrelated tool call or a longer answer does not reset
-the counter. A vision capture already in flight is finished first; the
+"Progress" here means the set of outstanding obligations changed since the
+last continuation (a criterion was proven or dropped out), or an obligation's
+contiguous covered lines rose above the episode's best so far — an unrelated
+tool call, a longer answer, or re-reading lines that were already covered does
+not reset the counter. A vision capture already in flight is finished first; the
 capture's own completion callback re-enters this same decision point rather
 than always jumping to verification.
 
@@ -374,7 +384,7 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | --- | --- |
 | `off` | No evaluation at all. The run completes on the executor's answer, recorded as explicitly unverified. |
 | `deterministic` | Mechanical checks only, never a model request. With no deterministic failure a cycle passes with low confidence. |
-| `adaptive` (default) | A conclusive mechanical failure (failed test, failed or denied tool call, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved semantic criteria. |
+| `adaptive` (default) | A conclusive mechanical failure (failed test, a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
@@ -436,13 +446,18 @@ request is made.
 
 The parser accepts one JSON object, including a fenced object or harmless prose
 around it, and strictly validates the resulting envelope before any of it
-reaches run state: every one of the schema's 16 required fields must be
-present and correctly typed (a scalar field set to explicit JSON `null` is
-rejected the same as a missing key; a required array field set to `null` is
-accepted and normalized to an empty slice, since some backends legitimately
-emit `null` for an empty required array under schema enforcement), and any
-key outside that set is rejected as unexpected — there is no partial-credit
-parse where an omitted field is silently zero-valued. Contract control data is
+reaches run state. Six fields are required — `verdict`, `summary`,
+`recommended_next`, `retryable`, `needs_user_input`, and `criteria` (plus
+`proposed_criteria` and `atomic_task` for an establishing verification) — and
+each must be correctly typed: a scalar field set to explicit JSON `null` is
+rejected the same as a missing key, while a required array field set to `null`
+is accepted and normalized to an empty slice, since some backends legitimately
+emit `null` for an empty required array under schema enforcement. A small set
+of optional fields (`user_options`, `evidence`, `failed_criteria`,
+`remaining_criteria`, `confidence`, `new_evidence`, `strategy_changed`,
+`transient_failure`) takes a documented default when absent — for example
+`confidence` 0.5 and `strategy_changed` false. Any key outside the required and
+optional sets is rejected as unexpected. Contract control data is
 validated with the same bounded, fenced-JSON-tolerant parser: an executable
 contract must contain one to twelve non-empty criteria, while an ambiguous task
 must contain a precise user question and no criteria. Malformed or invalid
@@ -473,9 +488,12 @@ means the verifier never produced a verdict to evaluate at all. A resumable
 run stopped this way can still be continued with `/agent resume`, which
 starts a fresh cycle rather than replaying anything.
 
-Deterministic evidence always wins. A failed test, failed or malformed tool
-call, permission denial, cancellation, or timeout cannot become `passed` merely
-because the evaluator says the result looks correct. Successful arbitrary
+Deterministic evidence always wins. A failed test, a failed or malformed
+trailing tool call, permission denial, cancellation, or timeout cannot become
+`passed` merely because the evaluator says the result looks correct. The one
+exception is deliberate: an observational `not_found`/`range_after_eof` read
+failure (see above) is evidence for the verifier to judge, because "the file
+does not exist" can itself be the correct answer. Successful arbitrary
 commands are not automatically treated as proof of every acceptance criterion;
 the verifier still evaluates their bounded outcome metadata.
 
@@ -495,19 +513,20 @@ detection.
 
 Alongside criteria, every cycle appends structured entries to a bounded
 evidence ledger (most recent 64): test results, tool outcomes, changed
-files, typed errors, and verdicts. Semantic verifications receive the pinned
-criteria with statuses, the ledger, and the bounded prior-cycle summaries —
+files, typed errors, and verdicts. Semantic verifications receive the still
+unresolved pinned criteria, controller-computed read-coverage facts, the
+ledger, and the bounded prior-cycle summaries —
 cross-cycle context without ever resending conversation history. A
 verifier's `new_evidence` claim is clamped to the executor's mechanical
 record: a retry cannot be justified by claimed progress the run never
 observed. Criteria and the ledger persist with the run and survive
-`/agent resume`. Runs simple enough to finish on deterministic evidence
-never establish criteria — that is expected, not a defect.
+`/agent resume`. Every run establishes its criteria in the task-contract stage
+before cycle 1; a run cannot reach an executor without them.
 
 The executor gets a separate, narrower cross-cycle memory: on a retry, prior
 cycles' raw tool-call/tool-result traffic is not resent (it would grow
 without bound across a multi-cycle run), but each prior cycle's tool calls
-still appear as one bounded `name(detail) succeeded|failed: kind` line per
+still appear as one bounded `name(detail) succeeded|failed: kind[/code]` line per
 call in the `Agent Cycle` system-prompt section (`/prompt composed`) —
 enough for the executor to recognize it already tried a given URL, file
 path, or query and avoid blindly repeating it. `detail` is deliberately
@@ -523,7 +542,7 @@ Default hard limits are:
 | Limit | Default | Meaning |
 | --- | ---: | --- |
 | Cycles | `8` | Maximum executor/verifier cycles |
-| Tool calls | `32` | Total calls across the run |
+| Tool calls | `32` | Executed tool calls across the run, excluding `ask_user`; rejected, blocked, and denied calls do not count |
 | Tokens | `100000` | Executor plus verifier usage when reported/estimated |
 | Elapsed time | `30m` | Active run duration; time waiting for your answer (`needs_user_input`) is excluded |
 | Repeated failures | `3` | Identical verifier failure fingerprint |
@@ -575,7 +594,10 @@ partial execution was never verified and is never treated as a completed cycle.
 
 Records contain the request (when prompt storage is allowed), stable metadata,
 limits, concise execution/verifier summaries, artifact paths, outcome classes,
-and bounded lifecycle events. They do not contain tool arguments/output, full
+bounded per-call receipts, read-coverage windows, and bounded lifecycle events.
+A receipt keeps at most one narrow resource identifier per call — a path, URL,
+search pattern, or a `run_command`'s program name, never its full command line
+or an MCP call's arguments. Records do not contain tool output, full
 transcripts, hidden reasoning, or provider reasoning events.
 
 When any executor request in a cycle — the first one or a tool-round or
