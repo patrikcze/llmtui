@@ -206,6 +206,27 @@ func TestChatPassesResponseGrammarToRuntime(t *testing.T) {
 	}
 }
 
+func TestChatPassesIsolatedHintToRuntime(t *testing.T) {
+	for _, isolated := range []bool{false, true} {
+		dir := t.TempDir()
+		modelPath := writeFakeModel(t, dir, "model.gguf")
+		rt := &scriptedRuntime{}
+		p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+
+		events, err := p.Chat(context.Background(), provider.ChatRequest{Isolated: isolated})
+		if err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		drain(events)
+		rt.pathMu.Lock()
+		got := rt.lastReq.Isolated
+		rt.pathMu.Unlock()
+		if got != isolated {
+			t.Errorf("runtime Isolated = %t, want %t", got, isolated)
+		}
+	}
+}
+
 func TestChatRejectsSchemaWithoutEmbeddedGrammar(t *testing.T) {
 	p := New("embedded", Options{}, fixedRuntime(&scriptedRuntime{}))
 	_, err := p.Chat(context.Background(), provider.ChatRequest{

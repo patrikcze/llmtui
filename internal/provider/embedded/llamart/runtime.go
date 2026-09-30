@@ -53,7 +53,9 @@ var abortCallbacks struct {
 
 // Runtime owns one llama.cpp model and context. Calls are serialized by the
 // embedded provider; Runtime itself deliberately provides no concurrency
-// contract.
+// contract. The context carries a conversation sequence with a reusable
+// token prefix and a scratch sequence for isolated control requests
+// (sequence.go).
 type Runtime struct {
 	model llama.Model
 	lctx  llama.Context
@@ -72,6 +74,11 @@ type Runtime struct {
 	// cleared memory and rebuilt a text-only cache.
 	kvContaminated bool
 	vision         visionNative
+	kv             kvNative
+	// nSeqMax is the sequence count the loaded context accepted. Isolated
+	// requests use the control sequence only when it is at least
+	// contextSequences; otherwise they share sequence 0 as before.
+	nSeqMax int
 
 	// purego callback slots live for the process lifetime. Install one callback
 	// per context and update this flag per request instead of allocating a new
@@ -82,7 +89,7 @@ type Runtime struct {
 
 // New returns an unloaded llama.cpp runtime.
 func New() *Runtime {
-	return &Runtime{kvTokens: []llama.Token{}, vision: defaultVisionNative()}
+	return &Runtime{kvTokens: []llama.Token{}, vision: defaultVisionNative(), kv: defaultKVNative()}
 }
 
 // Probe performs stat-only library validation. It never loads native code.
@@ -264,6 +271,7 @@ func (r *Runtime) Load(
 		)
 	}
 	r.lctx = lctx
+	r.nSeqMax = int(llama.NSeqMax(lctx))
 	mem, err := llama.GetMemory(lctx)
 	if err != nil {
 		return meta, fmt.Errorf("get model memory: %w", err)
@@ -422,6 +430,9 @@ func (r *Runtime) Generate(
 	}()
 
 	multimodal := len(images) > 0
+	// control marks an isolated request evaluated in the control sequence;
+	// nextPosition then tracks its positions like the multimodal path does.
+	control := false
 	maxNew := 0
 	var nextPosition llama.Pos
 	if multimodal {
@@ -437,17 +448,34 @@ func (r *Runtime) Generate(
 		if len(promptTokens) == 0 {
 			return result, errors.New("chat template produced no prompt tokens")
 		}
-		maxNew, err = generationBudget(len(promptTokens), req.MaxTokens, r.nCtx)
-		if err != nil {
-			return result, err
-		}
 		result.PromptTokens = len(promptTokens)
-		pending, err := r.preparePrompt(promptTokens)
-		if err != nil {
-			return result, err
-		}
-		if err := r.decodePrompt(ctx, pending, len(promptTokens), req.Progress); err != nil {
-			return result, err
+		if req.Isolated && r.nSeqMax >= contextSequences {
+			control = true
+			maxNew, err = r.prepareControlPrompt(len(promptTokens), req.MaxTokens)
+			if err != nil {
+				return result, err
+			}
+			defer func() {
+				if releaseErr := r.releaseControlSequence(); releaseErr != nil {
+					err = errors.Join(err, releaseErr)
+				}
+			}()
+			if err := r.decodeControlPrompt(ctx, promptTokens, req.Progress); err != nil {
+				return result, err
+			}
+			nextPosition = llama.Pos(len(promptTokens))
+		} else {
+			maxNew, err = generationBudget(len(promptTokens), req.MaxTokens, r.nCtx)
+			if err != nil {
+				return result, err
+			}
+			pending, err := r.preparePrompt(promptTokens)
+			if err != nil {
+				return result, err
+			}
+			if err := r.decodePrompt(ctx, pending, len(promptTokens), req.Progress); err != nil {
+				return result, err
+			}
 		}
 	}
 
@@ -497,12 +525,18 @@ func (r *Runtime) Generate(
 			return result, err
 		}
 		if len(batch) > 0 {
-			if multimodal {
+			switch {
+			case multimodal:
 				if err := r.decodeAt(ctx, batch[0], nextPosition); err != nil {
 					return result, err
 				}
 				nextPosition++
-			} else {
+			case control:
+				if err := r.decodeControl(ctx, batch, nextPosition); err != nil {
+					return result, err
+				}
+				nextPosition += llama.Pos(len(batch))
+			default:
 				if err := r.decode(ctx, batch); err != nil {
 					return result, err
 				}
@@ -625,6 +659,7 @@ func (r *Runtime) Close() (err error) {
 	r.mctx = 0
 	r.template = ""
 	r.nCtx = 0
+	r.nSeqMax = 0
 	r.batchSize = 0
 	r.protocol = provider.ModelProtocol{}
 	r.kvTokens = []llama.Token{}
@@ -950,6 +985,10 @@ func applyContextOptions(
 	}
 	params.NCtx = uint32(nCtx)
 	params.NBatch = uint32(batchSize)
+	// Conversation plus control sequence over one unified KV buffer, so the
+	// conversation keeps all n_ctx cells (see sequence.go).
+	params.NSeqMax = contextSequences
+	params.KVUnified = 1
 	if opts.UBatchSize > 0 {
 		params.NUbatch = uint32(opts.UBatchSize)
 	}

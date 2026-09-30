@@ -148,6 +148,8 @@ func EstablishContract(ctx context.Context, client Client, cfg Config, input Con
 		MaxTokens:   cfg.MaxTokens,
 		Stream:      false,
 		Reasoning:   verifierReasoning(cfg.Model),
+		// Fresh context by design: keep it out of the executor's cached prefix.
+		Isolated: true,
 	}
 	if resolveCapabilities(client, cfg.Model).StructuredOutput == provider.CapabilitySupported {
 		req.ResponseConstraint = &provider.ResponseConstraint{

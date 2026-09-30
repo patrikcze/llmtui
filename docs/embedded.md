@@ -472,6 +472,13 @@ advertise parallel tool calls in one assistant response.
   model and reports load/prompt progress in the TUI.
 - Prompt KV state is reused only when the token prefix is safe; otherwise the
   context is cleared and decoded again.
+- `/agent` task-contract and verifier requests run in a separate llama.cpp
+  sequence of the same context, so they no longer evict the conversation's
+  cached prompt: the next executor request reuses it instead of re-processing
+  the system prompt, tool specs, and history. When the context is too full to
+  hold both, the conversation cache is cleared first, as before. The extra
+  sequence costs a few tens of MiB (the sliding-window cache on SWA models);
+  it does not halve the usable context.
 - `Esc` cancels native decode and keeps the runtime reusable for the next
   prompt.
 - Switching models or providers frees the old projector, context, and model.

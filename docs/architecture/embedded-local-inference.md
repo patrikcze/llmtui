@@ -449,11 +449,21 @@ Per request (all inside the producer goroutine, engine lock held):
 1. Apply chat template (below) → prompt string → `Tokenize`.
 2. Validate context budget: prompt tokens + max new tokens ≤ effective
    `n_ctx` (min of configured `context_size`, model `n_ctx_train`).
-3. KV strategy (conservative): if the new prompt's token sequence starts
-   with the previous request's full token sequence, keep the KV cache and
-   decode only the suffix; otherwise `MemoryClear` and decode the full
-   prompt in `n_batch` chunks. Exact-prefix match only; anything unclear
-   falls back to full re-decode. Correctness over speed.
+3. KV strategy (conservative): the context holds two llama.cpp sequences
+   over one unified KV buffer (`n_seq_max = 2`, `kv_unified`), so each can
+   use all of `n_ctx`. Sequence 0 is the conversation: keep the longest
+   exact common token prefix with the previous conversation request, trim
+   the rest (`MemorySeqRm`), and decode only the suffix in `n_batch` chunks;
+   a refused trim or an empty prefix clears memory and re-decodes. Sequence
+   1 serves requests marked `provider.ChatRequest.Isolated` (task contract,
+   verifier): they decode from position 0 and the sequence is emptied after
+   every request, so they no longer displace the conversation prefix. If an
+   isolated prompt plus its reply does not fit in the cells the conversation
+   leaves free, or image embeddings make that usage unknown, memory is
+   cleared first (the single-sequence behaviour). Correctness over speed.
+   On Gemma 4 E4B at 131072 tokens the second sequence costs ~21 MiB (the
+   window-sized SWA cache grows from 1024 to 1536 cells); the full-attention
+   KV is unchanged.
 4. Generation loop: `Decode` → `SamplerSample` → EOG check →
    `TokenToPiece` into a UTF-8 assembler that emits only complete runes
    (partial multibyte sequences are buffered; the remainder is flushed at

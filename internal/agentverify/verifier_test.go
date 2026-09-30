@@ -181,7 +181,7 @@ func TestEstablishContractUsesFreshToolFreeContextAndRepairsMalformedOutput(t *t
 		t.Fatalf("requests = %d, want initial request plus one bounded repair", len(client.requests))
 	}
 	for i, req := range client.requests {
-		if len(req.Messages) != 2 || len(req.Tools) != 0 || req.Stream || req.Temperature != 0 || req.Reasoning != "off" {
+		if len(req.Messages) != 2 || len(req.Tools) != 0 || req.Stream || req.Temperature != 0 || req.Reasoning != "off" || !req.Isolated {
 			t.Fatalf("request %d is not an isolated tool-free control request: %+v", i, req)
 		}
 	}
@@ -344,7 +344,7 @@ func TestVerifierUsesFreshIsolatedContext(t *testing.T) {
 	if len(req.Messages) != 2 || req.Messages[0].Role != provider.RoleSystem || req.Messages[1].Role != provider.RoleUser {
 		t.Fatalf("messages = %+v", req.Messages)
 	}
-	if len(req.Tools) != 0 || req.Stream || req.Reasoning != "off" || req.Temperature != 0 {
+	if len(req.Tools) != 0 || req.Stream || req.Reasoning != "off" || req.Temperature != 0 || !req.Isolated {
 		t.Fatalf("request = %+v", req)
 	}
 	if strings.Contains(req.Messages[1].Content, "unrelated conversation history") {

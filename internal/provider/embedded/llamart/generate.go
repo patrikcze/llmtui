@@ -338,7 +338,7 @@ func (r *Runtime) preparePrompt(prompt []llama.Token) ([]llama.Token, error) {
 	}
 
 	if prefix == 0 {
-		if err := llama.MemoryClear(r.mem, true); err != nil {
+		if err := r.kv.clear(r.mem, true); err != nil {
 			return nil, fmt.Errorf("clear model memory: %w", err)
 		}
 		r.kvTokens = []llama.Token{}
@@ -346,13 +346,13 @@ func (r *Runtime) preparePrompt(prompt []llama.Token) ([]llama.Token, error) {
 	}
 
 	if prefix < len(r.kvTokens) {
-		removed, err := llama.MemorySeqRm(r.mem, 0, llama.Pos(prefix), -1)
+		removed, err := r.kv.seqRm(r.mem, conversationSequence, llama.Pos(prefix), -1)
 		if err != nil || !removed {
 			trimErr := err
 			if trimErr == nil {
 				trimErr = errors.New("llama.cpp rejected partial memory removal")
 			}
-			if clearErr := llama.MemoryClear(r.mem, true); clearErr != nil {
+			if clearErr := r.kv.clear(r.mem, true); clearErr != nil {
 				return nil, errors.Join(
 					fmt.Errorf("trim model memory at token %d: %w", prefix, trimErr),
 					fmt.Errorf("clear model memory after trim failure: %w", clearErr),
