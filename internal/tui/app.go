@@ -320,6 +320,7 @@ type Model struct {
 	visionObservationIDs      map[string]entity.ID
 	visionObservationAttempts map[string]bool
 	visionObservationOrder    []string
+	visionObservationStatus   string
 	afterVisionCapture        bool
 	lastDebug                 debugInfo
 	// toolCallDiagnostics is intentionally process-local and content-free. It
@@ -2358,6 +2359,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.visionCapture.cancel()
 		m.visionCapture = nil
 		m.afterVisionCapture = false
+		m.visionObservationStatus = "capture cancelled; image retained"
 		m.notice = "vision observation capture cancelled — image retained"
 		m.refreshViewport()
 	case m.input.Value() != "":
@@ -3714,7 +3716,9 @@ func (m *Model) render() string {
 			verb = "Working"
 		}
 		tokens := ""
-		if m.agentVerifying() && m.verifierActivityHeight() > 0 {
+		if m.visionCapture != nil {
+			verb, start = "Observing image", m.visionCapture.startedAt
+		} else if m.agentVerifying() && m.verifierActivityHeight() > 0 {
 			verb, start = "Verifying", m.agentLoop.verifierStartedAt
 		} else if m.thinking {
 			if n := (m.streamBuf.Len() + m.reasoningLen) / 4; n > 0 {

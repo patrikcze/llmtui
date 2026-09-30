@@ -952,6 +952,9 @@ func (m *Model) debugOverlay() string {
 		return m.overlayFooter(&b)
 	}
 	m.kv(&b, "when", d.When.Format("15:04:05"))
+	if m.visionObservationStatus != "" {
+		m.kv(&b, "vision observation", m.visionObservationStatus)
+	}
 	m.kv(&b, "provider / model", d.Provider+" / "+d.Model)
 	m.kv(&b, "profile", d.Profile)
 	m.kv(&b, "prompt mode", d.PromptMode)
