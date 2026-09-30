@@ -81,8 +81,6 @@ type visionCaptureState struct {
 	startedAt  time.Time
 	provider   provider.Provider
 	model      string
-	scope      entity.Scope
-	scopeID    string
 	images     []visionCaptureImage
 	cancel     context.CancelFunc
 }
@@ -183,13 +181,8 @@ func (m *Model) maybeStartVisionCapture() tea.Cmd {
 		startedAt:  time.Now(),
 		provider:   m.prov,
 		model:      m.model,
-		scope:      entity.ScopeSession,
 		images:     newImages,
 		cancel:     cancel,
-	}
-	if m.agentRunActive() {
-		state.scope = entity.ScopeAgentRun
-		state.scopeID = m.agentRunID()
 	}
 	maxTokens := m.visionMaxTokens()
 	m.visionCapture = state
@@ -351,8 +344,7 @@ func (m *Model) handleVisionObservation(msg visionObservationMsg) tea.Cmd {
 			Label:    "user-provided image — " + label,
 			Metadata: entity.Metadata{ContentType: image.image.MIME, SizeBytes: len(image.image.Data), Index: image.index, Count: len(m.lastImages)},
 			Trust:    entity.TrustVisionModelDerived,
-			Scope:    state.scope,
-			ScopeID:  state.scopeID,
+			Scope:    entity.ScopeSession,
 			Payload:  payloads[index],
 			Preview:  visionObservationPreview(result),
 		})

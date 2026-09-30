@@ -72,7 +72,9 @@ memory, or a second provider/runtime. The entity source remains
 similarity never becomes web provenance. The attachment's byte digest, turn,
 image index, MIME, provider/model, capture version, timestamp, truncation, and
 raw-retention state remain controller-owned provenance. Raw image bytes are
-never stored in the entity or history.
+never stored in the entity or history. The bounded text observation is
+session-scoped, including when captured during an Agent run, so later turns in
+the same session can answer follow-up questions about that image.
 
 `get_entity_details` accepts an optional `kinds` filter. Use
 `{"query":"topic","kinds":["vision_observation"]}` when the user refers to
@@ -82,9 +84,10 @@ visual entity means the old visual evidence is unavailable.
 ## Agent relationship
 
 Agent cycles reuse the same registry and can carry session-scoped references
-across legitimate cycle boundaries. Run-scoped references are released at run
-end. An entity is never acceptance evidence by itself; the existing agent
-verification and evidence ledger remain authoritative.
+across legitimate cycle boundaries. Other run-scoped references are released
+at run end. A vision observation is an untrusted model-derived description,
+not acceptance evidence by itself; the existing agent verification and
+evidence ledger remain authoritative.
 
 ## Security
 

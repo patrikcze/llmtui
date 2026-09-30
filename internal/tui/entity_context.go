@@ -223,39 +223,14 @@ func (m *Model) entityContextTokenBudget() int {
 	return defaultEntityContextTokens
 }
 
-// applyCandidateScopePolicy is §21's "explicit candidate scope policy,"
-// replacing the blanket agent-run override this function used to apply to
-// every candidate regardless of kind: safe read/search/web/MCP output meant
-// for reuse across turns is session-scoped even when produced during an
-// active /agent run — only vision observations (agent-only, tied to the
-// attachment that triggered this specific run) stay run-scoped, matching
-// the existing, deliberately-preserved vision trust/kind-filter invariant
-// (§7 "Preserve Vision entities"). Provenance.RunID/Cycle are still
-// recorded whenever a run is active, regardless of which scope is chosen,
-// so a session-scoped entity retains which run/cycle actually produced it.
-//
-// Before this fix, EVERY candidate got entity.ScopeAgentRun whenever
-// m.agentRunActive() was true, and endAgentRun unconditionally released
-// that whole scope on every run termination (success, failure, budget
-// exhaustion, cancellation — see skills.go's endAgentRun) — so a file
-// version or captured body read during one agent run became unresolvable
-// the moment that run ended, even though nothing about the underlying
-// file/page/output had changed. A model that correctly remembered and
-// reused a resource_id from an earlier turn would then hit
-// resource_unavailable on a perfectly valid, unstale reference.
+// applyCandidateScopePolicy keeps bounded evidence available for later turns
+// in the current session, including vision observations captured during an
+// Agent run. Raw image bytes are never retained in the entity; vision
+// observations remain explicitly marked as model-derived and untrusted.
+// Provenance.RunID/Cycle still records which Agent run produced an entity.
 func (m *Model) applyCandidateScopePolicy(candidate *entity.Candidate) {
-	if candidate.Kind == entity.KindVisionObservation {
-		if m.agentRunActive() {
-			candidate.Scope = entity.ScopeAgentRun
-			candidate.ScopeID = m.agentRunID()
-		} else {
-			candidate.Scope = entity.ScopeSession
-			candidate.ScopeID = ""
-		}
-	} else {
-		candidate.Scope = entity.ScopeSession
-		candidate.ScopeID = ""
-	}
+	candidate.Scope = entity.ScopeSession
+	candidate.ScopeID = ""
 	if m.agentRunActive() {
 		candidate.Provenance.RunID = m.agentRunID()
 		candidate.Provenance.Cycle = m.agentLoop.run.Cycle
