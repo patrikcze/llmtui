@@ -399,8 +399,14 @@ func (m *Model) agentPromotionAvailable() bool {
 // store, or no verifier-passed cycle. A misclassification or unwanted
 // save is not destructive: /memory remove <id> undoes it, and
 // /memory off disables future auto-saves.
-func (m *Model) autoPromoteAgentOutcome() {
-	if !m.agentPromotionAvailable() {
+// autoPromoteAgentOutcome saves a completed run's outcome to project memory
+// only when a semantic verifier produced the passing verdict
+// (semanticVerified). A controller-synthesized pass — verifier.mode off or
+// deterministic, or a cycle the criteria ledger alone settled — never read
+// the executor's answer, so saving it as a "verified agent outcome" would put
+// unverified model output into approved project memory.
+func (m *Model) autoPromoteAgentOutcome(semanticVerified bool) {
+	if !semanticVerified || !m.agentPromotionAvailable() {
 		return
 	}
 	cycle := m.agentLoop.run.LatestCycle()
@@ -1301,7 +1307,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, tea.Batch(persist, shadowCmd, m.startNextAgentCycle(stop.NextObjective))
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
-		m.autoPromoteAgentOutcome()
+		m.autoPromoteAgentOutcome(verifierPath == "semantic")
 	case agent.DecisionNeedsUserInput:
 		if len(result.UserOptions) > 0 {
 			m.openAgentQuestionPicker(stop.Reason, result.UserOptions)
