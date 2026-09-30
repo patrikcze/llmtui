@@ -141,6 +141,10 @@ type EntityRecord struct {
 	Scope   string
 	Preview string
 	Digest  string
+	// PreviewInHistory reports that the tool result which produced this
+	// entity is already in the request's conversation history, so only the
+	// header is rendered and the preview is not repeated.
+	PreviewInHistory bool
 }
 
 // Include toggles individual helper sections.
@@ -241,7 +245,11 @@ func Compose(in Input) Output {
 	var runtimeContext strings.Builder
 	for _, s := range sections {
 		if deferRuntime && runtimeSection(s.Title) {
-			fmt.Fprintf(&runtimeContext, "\n\n### %s\n%s", s.Title, s.Content)
+			content, repeated := dedupeAgainstFrozen(s.Content, in.FrozenSystem)
+			if repeated {
+				continue
+			}
+			fmt.Fprintf(&runtimeContext, "\n\n### %s\n%s", s.Title, content)
 			continue
 		}
 		if system.Len() > 0 {
@@ -289,6 +297,35 @@ func Compose(in Input) Output {
 	}
 
 	return Output{Messages: msgs, Sections: preview}
+}
+
+// sectionPreambles are the fixed instructions at the head of runtime
+// sections. A continuation's frozen system message already carries them.
+var sectionPreambles = []string{
+	agentCyclePreamble, entityContextPreamble, activeContextPreamble, memoryPreamble,
+	projectMemoryPreamble, episodeMemoryPreamble, retrievedContextPreamble,
+}
+
+const preambleInSystem = "(Standing instructions for this section: as in the system message above.)"
+
+// dedupeAgainstFrozen trims what a runtime section would repeat from the
+// frozen system message. repeated reports that the whole section is already
+// there verbatim, so it is left out; otherwise any fixed preamble present in
+// the frozen message is replaced by a pointer to it. Only verbatim text is
+// removed, so nothing the model cannot already see is dropped.
+func dedupeAgainstFrozen(content, frozen string) (out string, repeated bool) {
+	if frozen == "" {
+		return content, false
+	}
+	if strings.Contains(frozen, content) {
+		return "", true
+	}
+	for _, preamble := range sectionPreambles {
+		if strings.Contains(content, preamble) && strings.Contains(frozen, preamble) {
+			content = strings.Replace(content, preamble, preambleInSystem, 1)
+		}
+	}
+	return content, false
 }
 
 // StaticSystem returns the part of the system message that does not change
@@ -512,7 +549,11 @@ func formatEntityContext(records []EntityRecord, maxTokens int) string {
 			record.Scope,
 			record.Digest,
 		)
-		entry.WriteString(untrusted.Frame("entity_preview", record.ID, record.Preview))
+		if record.PreviewInHistory {
+			entry.WriteString("  preview omitted: the tool result that produced this entity is in the conversation above")
+		} else {
+			entry.WriteString(untrusted.Frame("entity_preview", record.ID, record.Preview))
+		}
 		entry.WriteString("\n  </entity>")
 		if maxTokens > 0 && provider.EstimateTokens(b.String()+entry.String()+closing) > maxTokens {
 			continue
