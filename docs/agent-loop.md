@@ -126,6 +126,10 @@ Each run establishes a contract, then follows the execution stages:
 5. **Verifier** — a separate, tool-free provider request receives only the
    original task, current objective, acceptance criteria, and bounded observable
    results. It never receives the executor conversation or hidden reasoning.
+   Contract and verifier requests set `provider.ChatRequest.Isolated`; the
+   embedded provider evaluates them in a separate llama.cpp sequence so they
+   do not evict the executor's cached prompt (see [embedded](embedded.md)).
+   Remote providers ignore the hint.
 6. **Memory write** — a concise cycle summary records verdict, failed/remaining
    criteria, artifact names, and the recommended next objective.
 7. **Stop check** — deterministic policy chooses `done`, `continue`, `retry`,

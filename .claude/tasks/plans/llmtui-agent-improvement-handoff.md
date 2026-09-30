@@ -17,7 +17,7 @@ have been measured.
 | 1 | Cancelled batch keeps completed mutations; the next run gets a receipt | `fix/tui-cancel-keeps-completed-mutations` | #152 | merged (after a master merge resolving `turn_runtime.go`) |
 | 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
-| 4a | Second llama sequence for control requests | — | — | **not started: native, local** |
+| 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
 | 4b | Skip the contract for trivial questions | — | — | **not started: needs real-model trials** |
 | 4c | Smaller verifier replies | — | — | **not started** (parser part is cloud-able; decode savings are local) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
@@ -57,7 +57,21 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
   - Step 2 deliberately keeps the turn's first runtime sections inside the frozen prefix; that is what buys the 77–90% reuse.
   - Getting under the targets means removing runtime sections from the fresh system message, which is Step 6.
   - Everything verbatim-duplicated is already gone (`copies=1`).
-- **Step 4a.** Native llama.cpp boundary. It can be unit-tested with the fake runtime in the cloud, but its acceptance criterion (≥ 5,000 reused tokens in the S3 replay) needs a GGUF and the runtime.
+- **Step 4a (merged, #158).**
+  - **What it does.** Contract and verifier requests carry `provider.ChatRequest.Isolated`. The embedded runtime evaluates them in llama.cpp sequence 1 (`n_seq_max=2`, unified KV) and empties that sequence afterwards, so they no longer evict the executor's cached prompt.
+  - **Memory cost.** About +21 MiB on Gemma 4 E4B at 131k context: SWA cache 40 → 60 MiB; full-attention KV unchanged at 2,048 MiB.
+  - **Measured locally.** Gemma 4 E4B Q4_K_M, Metal, prefill replay, S3 follow-up executor request:
+
+    | Setup | Reused | Evaluated |
+    |---|---|---|
+    | Old behaviour (shared) | 5 | 6,125 |
+    | 4a (isolated) | **744** | 5,386 |
+    | Step 6 simulated, shared | 5 | 6,196 (10.6 s) |
+    | Step 6 simulated + 4a | **4,891** | 1,310 (1.6 s) |
+
+    744 is also the executor-only upper bound, so 4a removes all eviction. The next run still diverges at the directive's `Original goal` line in the fresh system message; removing that is Step 6's job.
+  - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
+  - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
 - **Step 4b.** The plan forbids it until real-model trials show no increase in false completions.
 - **Step 4c.** Not started. The parser and schema change is cloud-runnable. The payoff (decode tokens) is local.
 - **Step 5 scope.** Only native-tool continuations are bounded. Fenced-protocol results travel in a user message and still fail as before when oversized.
@@ -95,18 +109,22 @@ Run it once on `b3208c8` (the baseline) and once on the new `master`, then compa
 
 **Manual checks in LM Studio**, with the embedded provider too if you have a GGUF:
 
-1. **Step 1.**
+1. **Step 4a (embedded only).**
+   - Run two consecutive `/agent` tasks with the embedded provider.
+   - The second task's first executor request should report prompt progress that starts well past 0, not a full re-process.
+   - `TestIsolatedRequestPreservesConversationPrefix` is the automated form of this check; it needs `YZMA_LIB` and `LLMTUI_TEST_GGUF`.
+2. **Step 1.**
    - Run `/agent` with a task that writes a file and then runs more tools.
    - Press `Esc` or `Ctrl+C` after the write finished but before the batch ends.
    - Type `continue`. The run must not redo the write. `/debug last` should show the `[llmtui receipt, not a user request] …` block and the carried call/result pair.
-2. **Step 2/3.**
+3. **Step 2/3.**
    - Run a multi-round `/agent` task.
    - In `/debug last`, the system message must be byte-identical across the turn's continuations.
    - LM Studio's log should show large cached-prefix hits on continuations.
-3. **Step 5.**
+4. **Step 5.**
    - Set `context.max_context_tokens: 8192` and ask for a summary of three ~120-line files in one go.
    - The turn completes, with at least one `[truncated to fit the context window …]` result and a `next_offset` the model can use.
-4. **Step 7.**
+5. **Step 7.**
    - Hard to trigger by hand. One way: in plain chat with tools on, kill or restart the LM Studio server while it streams the answer after a tool call.
    - Expect the notice `provider stream was interrupted — replaying the request once`.
 

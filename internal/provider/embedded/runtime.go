@@ -37,6 +37,9 @@ type GenRequest struct {
 	Temperature       float64
 	TopP              float64
 	MaxTokens         int
+	// Isolated mirrors provider.ChatRequest.Isolated: the runtime may
+	// evaluate the request outside the conversation's cached prefix.
+	Isolated bool
 	// Progress receives non-content activity such as prompt-processing
 	// updates. The provider surfaces it as reasoning so the TUI's inactivity
 	// watchdog is reset without mixing status text into the answer.

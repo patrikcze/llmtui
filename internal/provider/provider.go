@@ -261,6 +261,13 @@ type ChatRequest struct {
 	// mutually exclusive with native tool calling because both install an
 	// output grammar on embedded and many remote runtimes.
 	ResponseConstraint *ResponseConstraint
+	// Isolated marks a self-contained control request (task contract,
+	// verifier) whose prompt shares nothing with the ongoing conversation. A
+	// backend that keeps a single prompt cache may evaluate it in a separate
+	// slot so the conversation's cached prefix survives the request. It is a
+	// scheduling hint only: it never changes the response, and backends
+	// without such a slot ignore it.
+	Isolated bool
 }
 
 // ValidateResponseConstraint validates a request's structured-output fields.

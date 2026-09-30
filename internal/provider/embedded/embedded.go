@@ -412,6 +412,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
 		MaxTokens:         req.MaxTokens,
+		Isolated:          req.Isolated,
 		Progress: func(message string) {
 			provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: message})
 		},

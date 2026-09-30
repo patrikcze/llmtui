@@ -40,7 +40,9 @@ type auditReplayRow struct {
 	elapsed              time.Duration
 }
 
-func auditReplaySequence(t *testing.T, rt *Runtime, opts embedded.Options, seq []auditReplayRequest) ([]auditReplayRow, time.Duration) {
+// auditReplaySequence replays seq. With isolate, control requests carry the
+// Isolated hint exactly as production contract/verifier requests do.
+func auditReplaySequence(t *testing.T, rt *Runtime, opts embedded.Options, seq []auditReplayRequest, isolate bool) ([]auditReplayRow, time.Duration) {
 	t.Helper()
 	// Start every trial from an unrelated cached prompt, as after a previous task.
 	if _, err := rt.Generate(context.Background(), embedded.GenRequest{
@@ -52,7 +54,7 @@ func auditReplaySequence(t *testing.T, rt *Runtime, opts embedded.Options, seq [
 	rows := make([]auditReplayRow, 0, len(seq))
 	var total time.Duration
 	for _, req := range seq {
-		gen := embedded.GenRequest{Messages: req.Messages, Tools: req.Tools, MaxTokens: 1, Temperature: 0, TopP: 1}
+		gen := embedded.GenRequest{Messages: req.Messages, Tools: req.Tools, MaxTokens: 1, Temperature: 0, TopP: 1, Isolated: isolate && req.Kind != "executor"}
 		if len(req.Tools) > 0 {
 			gen.ToolFormat, _ = embedded.ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
 		}
@@ -70,6 +72,9 @@ func auditReplaySequence(t *testing.T, rt *Runtime, opts embedded.Options, seq [
 			result.PromptTokens = max(len(rt.kvTokens)-1, 0)
 		}
 		reused := min(commonPrefix(before, rt.kvTokens), result.PromptTokens)
+		if gen.Isolated && rt.nSeqMax >= contextSequences {
+			reused = 0 // evaluated from scratch in the control sequence
+		}
 		rows = append(rows, auditReplayRow{kind: req.Kind, prompt: result.PromptTokens, reused: reused, eval: result.PromptTokens - reused, elapsed: elapsed})
 		total += elapsed
 	}
@@ -145,16 +150,17 @@ func TestAgentAuditPrefillReplay(t *testing.T) {
 			}
 		}
 		for _, variant := range []struct {
-			name string
-			seq  []auditReplayRequest
-		}{{"as-issued", seq}, {"executor-only", executorOnly}} {
-			if variant.name == "executor-only" && strings.Contains(file, "_STABLE") {
+			name    string
+			seq     []auditReplayRequest
+			isolate bool
+		}{{"as-issued", seq, true}, {"as-issued-shared", seq, false}, {"executor-only", executorOnly, false}} {
+			if variant.name != "as-issued" && strings.Contains(file, "_STABLE") {
 				continue // the counterfactual only needs the as-issued sequence
 			}
 			var totals []time.Duration
 			var last []auditReplayRow
 			for range trials {
-				rows, total := auditReplaySequence(t, rt, opts, variant.seq)
+				rows, total := auditReplaySequence(t, rt, opts, variant.seq, variant.isolate)
 				totals = append(totals, total)
 				last = rows
 			}
