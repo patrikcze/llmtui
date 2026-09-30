@@ -194,13 +194,17 @@ func (m *Model) entityPromptRecords(history []provider.Message) []prompt.EntityR
 	return records
 }
 
-// referencedEntityIDs returns the entity IDs referenced by the tool results
-// in history.
+// referencedEntityIDs returns IDs whose producing evidence is already
+// present in conversation history. Vision observation references are
+// excluded because the user message carries only the ID, not its payload.
 func referencedEntityIDs(history []provider.Message) map[string]bool {
 	ids := make(map[string]bool)
 	for _, msg := range history {
 		for _, ref := range msg.References {
-			if ref.ID != "" {
+			// Vision observations are linked from the original user message,
+			// which contains only an entity reference, not the observation text.
+			// Keep their bounded preview in Entity Context for the next request.
+			if ref.ID != "" && ref.Kind != string(entity.KindVisionObservation) {
 				ids[ref.ID] = true
 			}
 		}

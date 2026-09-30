@@ -2773,11 +2773,11 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		if len(m.pendingCalls) == 0 {
 			m.complete(turnOutcomeFinalAnswer)
 			captureCmd := m.maybeStartVisionCapture()
+			if captureCmd != nil {
+				m.afterVisionCapture = true
+				return m, captureCmd
+			}
 			if m.agentRunActive() {
-				if captureCmd != nil {
-					m.afterVisionCapture = true
-					return m, captureCmd
-				}
 				return m, m.handleAgentYield()
 			}
 			m.endAgentRun()

@@ -300,17 +300,6 @@ func buildAgentYieldDirective(decision agent.YieldDecision, obligations []agent.
 	return string(b)
 }
 
-// resumeAfterVisionCapture is the single completion point for a vision
-// capture requested during agent execution (m.afterVisionCapture), win or
-// lose. It replaces a direct startAgentVerification call so a capture that
-// completes while yield continuation is enabled re-enters the same decision
-// boundary handleStreamEvent uses, instead of always jumping straight to
-// verification. Capture itself only ever runs once per yield decision —
-// maybeStartVisionCapture is not invoked again from here.
-func (m *Model) resumeAfterVisionCapture() tea.Cmd {
-	return m.handleAgentYield()
-}
-
 // equalStringSlices reports whether a and b contain the same criterion IDs
 // in the same order. PendingExactReadObligations iterates run.Criteria in
 // its stable, pinned-once order, so order-sensitive comparison is
