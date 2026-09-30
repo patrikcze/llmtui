@@ -359,6 +359,10 @@ type preparedRequest struct {
 	// commitPrepared can freeze it for the rest of the turn.
 	staticSystem string
 	frozen       bool
+	// raw and fresh identify a turn's first request, whose runtime-context
+	// message (composed.RuntimeContext) is frozen for its continuations.
+	raw   string
+	fresh bool
 }
 
 const compactedContinuationAnchor = "[Compacted continuation] Continue the original request " +
@@ -373,7 +377,10 @@ type compositionBase struct {
 	// exact history being composed, so evidence already in that history is
 	// cited instead of repeated (and returns once it is compacted away).
 	runtimeFor func(history []provider.Message) (directive string, entities []prompt.EntityRecord)
-	ragResults []rag.Result
+	// turnRaw and turnContext, when set on a continuation, reinsert the
+	// turn's first runtime-context message before its raw user message.
+	turnRaw, turnContext string
+	ragResults           []rag.Result
 	// memoryHits is the selected ranked result used by ActiveContext and
 	// threaded through preparedRequest into debugInfo. Direct legacy fields
 	// remain independently populated for diagnostics and configured fallback.
@@ -542,12 +549,16 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
-	// Restrict the extra context turn to native-tool continuations, on every
-	// provider: they end with tool (or assistant) messages, so the context
-	// message never makes two user turns in a row. Fresh chat keeps its
-	// original layout, including templates requiring strict user/assistant
-	// alternation and the verbatim trailing user message.
-	deferRuntimeContext := omitRaw && m.useNativeTools()
+	// Native-tool continuations always carry runtime sections in a context
+	// message after history: they end with tool (or assistant) messages, so
+	// it never makes two user turns in a row. A turn's first request does the
+	// same only when prompt.fresh_runtime_context allows it, because there the
+	// context message directly precedes the verbatim raw user message — two
+	// consecutive user turns, which strict-alternation templates reject. Doing
+	// it keeps the system message identical across turns, so a backend's
+	// prompt cache survives from one task to the next.
+	deferRuntimeContext := m.useNativeTools() &&
+		(omitRaw || m.cfg.Prompt.FreshRuntimeContextAsMessage(m.isEmbeddedProvider()))
 	if m.toolRecoveryFeedback != "" && !deferRuntimeContext {
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + m.toolRecoveryFeedback)
 	}
@@ -619,6 +630,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	if deferRuntimeContext {
 		if frozen, ok := m.frozenSystemFor(m.frozenSystemKey(), base.staticSystem); ok {
 			base.input.FrozenSystem = frozen
+		}
+		if omitRaw {
+			base.turnRaw, base.turnContext = m.frozenTurnContext()
 		}
 	}
 	return base
@@ -743,9 +757,34 @@ func composeFromBase(base compositionBase, recent []provider.Message, summary st
 	if base.runtimeFor != nil {
 		in.AgentDirective, in.Entities = base.runtimeFor(recent)
 	}
-	in.RecentMessages = recent
+	in.RecentMessages = withTurnContext(recent, base.turnRaw, base.turnContext)
+	if len(in.RecentMessages) > len(recent) {
+		// Only when it was actually repeated may sections it carries be skipped.
+		in.FrozenContext = base.turnContext
+	}
 	in.SessionSummary = summary
 	return prompt.Compose(in)
+}
+
+// withTurnContext returns history with the turn's first runtime-context
+// message reinserted immediately before the latest user message equal to the
+// turn's raw message, where the first request sent it. It returns history
+// unchanged when there is no context or the raw message is no longer present
+// (compacted away), and never mutates history.
+func withTurnContext(history []provider.Message, raw, context string) []provider.Message {
+	if context == "" || raw == "" {
+		return history
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != provider.RoleUser || history[i].Content != raw {
+			continue
+		}
+		out := make([]provider.Message, 0, len(history)+1)
+		out = append(out, history[:i]...)
+		out = append(out, provider.Message{Role: provider.RoleUser, Content: context})
+		return append(out, history[i:]...)
+	}
+	return history
 }
 
 func (m *Model) summarizeMessages(messages []provider.Message, maxTokens int) string {
@@ -1271,6 +1310,8 @@ func (m *Model) prepareFromBase(base compositionBase, omitRaw bool) (preparedReq
 		compactedToolResults: compactedToolResults,
 		staticSystem:         base.staticSystem,
 		frozen:               base.input.FrozenSystem != "",
+		raw:                  base.input.RawMessage,
+		fresh:                !base.input.OmitRaw,
 	}, nil
 }
 
@@ -1311,6 +1352,9 @@ func (m *Model) commitPrepared(prepared preparedRequest) {
 		if msgs := prepared.composed.Messages; len(msgs) > 0 && msgs[0].Role == provider.RoleSystem {
 			m.freezeSystem(m.frozenSystemKey(), prepared.staticSystem, msgs[0].Content)
 		}
+	}
+	if prepared.fresh {
+		m.freezeTurnContext(prepared.raw, prepared.composed.RuntimeContext)
 	}
 }
 

@@ -279,6 +279,35 @@ type PromptConfig struct {
 	IncludeModelHints      bool   `mapstructure:"include_model_hints" yaml:"include_model_hints"`
 	IncludeFormattingHints bool   `mapstructure:"include_formatting_hints" yaml:"include_formatting_hints"`
 	HelperText             string `mapstructure:"helper_text" yaml:"helper_text,omitempty"`
+	// FreshRuntimeContext places the changing runtime sections (agent
+	// directive, active context, entities, memory, RAG) of a turn's first
+	// native-tool request: "message" sends them as a request-local context
+	// message just before the verbatim raw user message, so the system
+	// prefix stays byte-identical across turns; "system" keeps them in the
+	// system message; "auto" (default) uses "message" for the embedded
+	// provider and "system" for remote providers. See
+	// docs/prompt-composition.md.
+	FreshRuntimeContext string `mapstructure:"fresh_runtime_context" yaml:"fresh_runtime_context"`
+}
+
+// Fresh-request runtime-context placements; see PromptConfig.FreshRuntimeContext.
+const (
+	FreshRuntimeContextAuto    = "auto"
+	FreshRuntimeContextMessage = "message"
+	FreshRuntimeContextSystem  = "system"
+)
+
+// FreshRuntimeContextAsMessage reports whether a turn's first request sends
+// its runtime sections as a context message. Unknown values behave like
+// "auto".
+func (c PromptConfig) FreshRuntimeContextAsMessage(embedded bool) bool {
+	switch strings.ToLower(strings.TrimSpace(c.FreshRuntimeContext)) {
+	case FreshRuntimeContextMessage:
+		return true
+	case FreshRuntimeContextSystem:
+		return false
+	}
+	return embedded
 }
 
 // ContextConfig configures context-window management.
@@ -1053,6 +1082,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("prompt.include_local_memory", true)
 	v.SetDefault("prompt.include_model_hints", true)
 	v.SetDefault("prompt.include_formatting_hints", true)
+	v.SetDefault("prompt.fresh_runtime_context", FreshRuntimeContextAuto)
 
 	v.SetDefault("context.strategy", "auto")
 	v.SetDefault("context.max_context_tokens", 0)
@@ -1309,6 +1339,10 @@ prompt:
   include_local_memory: true
   include_model_hints: true
   include_formatting_hints: true
+  # Where a turn's first request puts changing runtime context. message keeps
+  # the system prefix reusable across turns (needs a template that accepts two
+  # consecutive user messages); auto = message for embedded, system otherwise.
+  fresh_runtime_context: auto # auto | message | system
 
 # Context-window management for local models. Reserve at least max_tokens so
 # request preparation leaves enough room for the configured response ceiling.

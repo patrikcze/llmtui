@@ -18,10 +18,10 @@ have been measured.
 | 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
-| 4b | Skip the contract for trivial questions | — | — | **skipped by maintainer decision (2026-09-30)**: the required 20-task real-model trial cannot be run; the contract stays on every run |
+| 4b | Skip the contract for trivial questions | — | — | **intentionally skipped** (no environment for the required real-model trial) |
 | 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
-| 6 | Stable system prefix across turns | — | — | **part 1 done (template check, see §3); part 2 awaits the maintainer's decision on CLAUDE.md rule 5** |
+| 6 | Stable system prefix across turns | `perf/prompt-runtime-out-of-fresh-system` | see §3 | done: part 1 template check + part 2 implementation (`prompt.fresh_runtime_context`, auto = embedded) |
 | 7 | Plain-chat mid-stream replay parity | `fix/tui-plain-chat-stream-replay` | #156 | merged |
 
 Fixture outcomes on the PR branches:
@@ -72,7 +72,7 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
     744 is also the executor-only upper bound, so 4a removes all eviction. The next run still diverges at the directive's `Original goal` line in the fresh system message; removing that is Step 6's job.
   - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
   - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
-- **Step 4b (skipped, maintainer decision 2026-09-30).** The plan forbids it until real-model trials show no increase in false completions, and that trial is not feasible. The contract request stays on every run. Revisit only if a trial harness with human-judged answers becomes available. Prompt 5.4 is kept for that case.
+- **Step 4b (intentionally skipped, maintainer decision 2026-09-30).** The plan forbids it until real-model trials show no increase in false completions, and that trial is not feasible. The contract request stays on every run. Revisit only if a trial harness with human-judged answers becomes available. Prompt 5.4 is kept for that case.
 - **Step 4c (draft PR #159).**
   - **Scope, deliberately conservative.**
     - A later-cycle verification is no longer asked for the establishing-only `proposed_criteria` and `atomic_task`; schema and prompt now come in later-cycle and establishing variants.
@@ -103,8 +103,29 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
   - **Proposed gating for part 2.**
     - Embedded: on for templates that pass this check.
     - Remote providers: off unless enabled by config, until their server-side rendering is verified.
+- **Step 6, part 2 (implemented, 2026-09-30).**
+  - **Setting.** `prompt.fresh_runtime_context`: `auto` (default: embedded on, remote off), `message`, or `system`.
+  - **How it works.**
+    - A turn's first native-tool request sends its runtime sections as the labeled context message just before the verbatim raw user message. The system message is therefore identical across turns.
+    - The turn runtime freezes that context message and reinserts it before the same raw user message on every continuation (`withTurnContext`), so the whole first request stays a reusable prefix.
+    - `prompt.Input.FrozenContext` makes the trailing context skip sections the frozen one carries unchanged.
+  - **LM Studio (192.168.88.30).** Gemma 4 and gpt-oss-20b both accept two consecutive user messages and use the first one's content. To get the cross-turn gain there, set `prompt.fresh_runtime_context: message`.
+  - **Fixture (embedded).**
+    - S3 second-run executor keeps 75% of the prefix (was 20%), with `system_changed=false`.
+    - Within a turn, the S1 first continuation reuses the whole first request (90%, 1,735 new bytes, the same as Step 2).
+  - **Real model** (Gemma 4 E4B, embedded, evaluated tokens):
+
+    | Scenario | Before | After |
+    |---|---|---|
+    | S3, two runs | 16,003 | 12,040 (−25%) |
+    | S3 follow-up executor request | 5,394 | 1,373 |
+    | S1 | 8,588 | 8,646 (+0.7%) |
+    | S5 | 10,024 | 10,134 (+1.1%) |
+
+    Continuation costs within a turn are unchanged.
+  - **Step 3 byte targets.** Still not met in the default remote layout. With `message`, the fresh system message is 3.2 KB instead of 6.4 KB.
 - **Step 7 scope.** Only native-tool continuations in plain chat are replayed. The first request of a plain turn keeps its partial reply, as before. Fenced continuations are not replayed.
-- **Flaky test.** `TestToolOutputExpansionPreservesScrollAndSanitizes` (stale bubblezone zone) fails intermittently. It was queued as a separate task and has not been fixed.
+- **Flaky test (intentionally skipped, maintainer decision 2026-09-30).** `TestToolOutputExpansionPreservesScrollAndSanitizes` (stale bubblezone zone) fails intermittently. It was queued as a separate task and has not been fixed.
 - **Environmental failures in the cloud container**, unrelated to these PRs:
   - `internal/procutil` `TestTerminateReapsStubbornGrandchild`;
   - `internal/tools` `TestRunCommandKillsBackgroundDescendants`.
@@ -159,7 +180,7 @@ Run it once on `b3208c8` (the baseline) and once on the new `master`, then compa
 
 Each prompt stands alone. Start each in a fresh session at the repo root on an up-to-date `master`.
 
-### 5.2 Step 4a — second llama sequence for control requests (local, native)
+### 5.2 Step 4a — done (#158)
 
 ```text
 Read CLAUDE.md, .claude/tasks/plans/llmtui-agent-improvement-plan.md (Step 4
@@ -198,7 +219,7 @@ go test ./..., race subset. Conventional Commits (perf(embedded): ...), no AI
 trailers, one draft PR.
 ```
 
-### 5.3 Step 4c — smaller verifier replies (parser in the cloud or locally; decode savings locally)
+### 5.3 Step 4c — done (#159)
 
 ```text
 Read CLAUDE.md, the plan's Step 4 and the handoff. Read the internal/agentverify
@@ -222,7 +243,7 @@ LLMTUI_AGENT_AUDIT_DECODE=1 in the prefill replay (handoff §4) and report
 only what it measures. Gates as in CLAUDE.md. One draft PR, no AI trailers.
 ```
 
-### 5.4 Step 4b — skip the contract for trivial questions (trials first; no code until the data says so)
+### 5.4 Step 4b — intentionally skipped (no environment for the real-model trial)
 
 ```text
 Read CLAUDE.md, the plan's Step 4 and the handoff. Do NOT implement Step 4b
@@ -237,7 +258,7 @@ open a draft PR on perf/agent-skip-trivial-contract, with the trial table in
 the body. Otherwise report the numbers and stop.
 ```
 
-### 5.5 Step 6 — stable system prefix across turns (template check, then my decision)
+### 5.5 Step 6 — done (see §3)
 
 ```text
 Read CLAUDE.md (Architecture rule 5), docs/prompt-composition.md, the plan's
@@ -262,7 +283,7 @@ from Step 3 are re-measured and reported. Gates as in CLAUDE.md. One draft PR, n
 AI trailers.
 ```
 
-### 5.6 Flaky TUI test
+### 5.6 Flaky TUI test — intentionally skipped
 
 ```text
 Read CLAUDE.md. internal/tui TestToolOutputExpansionPreservesScrollAndSanitizes
@@ -275,7 +296,7 @@ the UI and keep the test. Branch fix/tui-tool-output-zone-flake, one draft
 PR, no AI trailers.
 ```
 
-### 5.7 Fenced-protocol parity for Steps 5 and 7 (optional, only if you use fenced tools)
+### 5.7 Fenced-protocol parity for Steps 5 and 7 — intentionally skipped (maintainer uses no fenced-tool models)
 
 ```text
 Read CLAUDE.md, the handoff §3 and internal/tui/tool_result_budget.go. Steps 5
@@ -286,3 +307,12 @@ the smallest extension, with the same invariants: a cut read records only
 delivered lines, and a replay never re-executes a tool. Stop for my approval
 before coding.
 ```
+
+
+## 6. Closing status (2026-09-30)
+
+All plan steps are either merged or **intentionally skipped**:
+- **Merged:** 1, 2, 3, 4a, 4c, 5, 6, 7.
+- **Intentionally skipped:** 4b, the flaky `TestToolOutputExpansionPreservesScrollAndSanitizes` (5.6), and fenced-protocol parity (5.7).
+- **Why skipped:** the maintainer has no environment for the real-model trials they need, they need more compute than is available, or they cover protocols the maintainer does not use.
+- **Kept for reference:** the prompts above, if any of these is picked up later.

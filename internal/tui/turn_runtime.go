@@ -391,11 +391,31 @@ type frozenSystemPrompt struct {
 	key    string
 	static string
 	system string
+	// turnRaw and turnContext record the raw user message of the turn's
+	// first request and the runtime-context message placed just before it
+	// (prompt.fresh_runtime_context). Continuations repeat that context
+	// message verbatim at the same place so the prompt prefix stays reusable
+	// through the raw user message.
+	turnRaw     string
+	turnContext string
 }
 
-// freezeSystem records the system message a request was sent with.
+// freezeSystem records the system message a request was sent with. The
+// turn's first context message, if any, is kept.
 func (r *turnRuntime) freezeSystem(key, static, system string) {
-	r.frozenSystem = frozenSystemPrompt{key: key, static: static, system: system}
+	r.frozenSystem.key, r.frozenSystem.static, r.frozenSystem.system = key, static, system
+}
+
+// freezeTurnContext records the runtime-context message a turn's first
+// request placed immediately before its raw user message.
+func (r *turnRuntime) freezeTurnContext(raw, context string) {
+	r.frozenSystem.turnRaw, r.frozenSystem.turnContext = raw, context
+}
+
+// frozenTurnContext returns the turn's first runtime-context message and the
+// raw user message it preceded, or empty strings when there is none.
+func (r *turnRuntime) frozenTurnContext() (raw, context string) {
+	return r.frozenSystem.turnRaw, r.frozenSystem.turnContext
 }
 
 // frozenSystemFor returns the frozen system message when it was composed for
