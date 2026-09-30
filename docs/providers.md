@@ -92,8 +92,11 @@ sampling or context fields into remote requests.
   history, and the same request is resent. This is side-effect free because
   tool calls are only acted on after a clean terminal event. A second
   interruption in the same round, a cancellation, the run's own deadline, or a
-  protocol/size error still fails the run. Ordinary chat keeps the partial
-  reply and leaves retrying to you.
+  protocol/size error still fails the run. Ordinary chat applies the same
+  single replay to a native-tool continuation (the request that carries tool
+  results you already approved and ran), so one dropped stream does not throw
+  that work away. The first request of an ordinary turn is not replayed: its
+  partial reply is kept and retrying is left to you.
 
 `/doctor` checks reachability, whether the selected model exists, streaming
 and token-usage support, and where the context window number comes from.
