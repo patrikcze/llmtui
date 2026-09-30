@@ -111,7 +111,10 @@ Each run establishes a contract, then follows the execution stages:
    decomposes the immutable user request into stable acceptance criteria. The
    controller pins IDs (`c1`, `c2`, …) before an executor request or tool call
    is possible. If essential information is missing, the run stops for user
-   input before execution.
+   input before execution. With the experimental `agent.skip_trivial_contract`,
+   a short single-sentence request with no workspace, command, web, or code
+   intent skips this request: one criterion ("answer the user's request as
+   stated") is pinned locally and verification is unchanged.
 3. **Rules load** — the existing prompt composer deterministically assembles the
    system prompt, template, active skills, bounded history, user memory, RAG,
    provider capabilities, tools, verified cycle memory, and current objective.

@@ -590,6 +590,9 @@ func (m *Model) startAgentContract() tea.Cmd {
 	if run.HasCriteria() {
 		return m.startInitialAgentCycle(run.Request, m.agentLoop.initialImages)
 	}
+	if cmd := m.skipTrivialContract(run); cmd != nil {
+		return cmd
+	}
 	maxTokens := m.cfg.Agent.Verifier.MaxTokens
 	if exceeded, reason := m.agentModelRequestBudgetExceeded("task contract", 0, maxTokens); exceeded {
 		return m.terminateAgentModelRequestBudget(reason)
