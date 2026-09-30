@@ -508,6 +508,13 @@ Documented in detail in [cache.md](cache.md), [memory.md](memory.md),
 [prompt-composition.md](prompt-composition.md), and
 [context-management.md](context-management.md).
 
+`prompt.fresh_runtime_context` (default `auto`) places a turn's first-request
+runtime context: `message` keeps the system message identical across turns so
+a prompt cache survives from one task to the next (needs a chat template that
+accepts two consecutive user messages; LM Studio with Gemma 4 and gpt-oss
+does), `system` keeps it in the system message, and `auto` uses `message` for
+the embedded provider only. See [prompt-composition.md](prompt-composition.md).
+
 `context.timezone` (default `""`) selects the zone reported by
 `local_context(kind="time")`. Empty uses the system-local zone. A non-empty
 value must be a valid IANA name such as `Europe/Prague`; an unloadable name is

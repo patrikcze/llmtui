@@ -83,6 +83,9 @@ Six things that are easy to get wrong:
    Native-tool continuations (every provider) repeat their turn's first system
    message byte for byte and put changing controller/reference sections in a
    request-local context message after history, so the prefix stays reusable.
+   With `prompt.fresh_runtime_context` (auto = embedded only) a turn's first
+   request puts that context message just *before* the raw user message, and
+   continuations repeat it there; the raw message still goes last, verbatim.
    This context is not a user submission and is never persisted.
 6. **Personal apps are explicit macOS capabilities.** Mail and Calendar stay
    off until separately configured and connected by the person at the

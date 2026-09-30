@@ -39,8 +39,25 @@ message after history. Continuations end with tool (or assistant) messages, so
 this never creates two user turns in a row. On tool/yield continuations the raw
 message is omitted, but this runtime context remains. It is never saved as a
 user turn or used to grant permissions. Existing untrusted-content framing
-remains intact. Fresh requests and fenced-tool requests keep the layout above,
-including templates that require strict user/assistant alternation.
+remains intact. Fenced-tool requests keep the layout above.
+
+**Runtime context on a turn's first request** (`prompt.fresh_runtime_context`,
+default `auto`). With `message`, the first native-tool request of a turn also
+sends its runtime sections as the labeled context message, placed immediately
+**before** the verbatim raw user message, so the system message is identical
+from one turn to the next and a backend keeps its cached system/tool prefix
+across tasks. That context message is frozen for the turn: every continuation
+repeats it verbatim right before the same raw user message (when that message
+is still in history), so the whole first request stays a reusable prefix, and
+the trailing context message leaves out sections it already carries unchanged.
+The raw user message is still last and never rewritten. This does create two
+consecutive user messages, which strict-alternation templates reject, so
+`auto` enables it only for the embedded provider; `system` keeps the runtime
+sections in the system message; `message` enables it everywhere. Verified to
+render as two separate user turns: Gemma 4 E4B (GGUF template), gpt-oss-20b
+(jinja template), and LM Studio serving both models. Measured on Gemma 4 E4B
+(embedded): a follow-up agent task's first executor request evaluated 1,373
+instead of 5,394 prompt tokens; single-turn tasks changed by about +1%.
 
 The frozen system message is reused only while it still applies:
 - it was composed for the same provider and model;
