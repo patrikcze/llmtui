@@ -51,7 +51,7 @@ func TestAgentDirectiveShowsCriterionReadFacts(t *testing.T) {
 	m.agentLoop.execution = agent.ExecutionResult{ReadObservations: []agent.ReadObservation{
 		{Target: "report.md", StartLine: 1, EndLine: 120, TotalLines: &total},
 	}}
-	directive := m.agentDirective()
+	directive := m.agentDirective(nil)
 	if !strings.Contains(directive, `observed so far: lines 1-120 of 300 of "report.md" delivered contiguously`) {
 		t.Fatalf("directive lacks the criterion fact:\n%s", directive)
 	}

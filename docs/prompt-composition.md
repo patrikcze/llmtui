@@ -57,7 +57,17 @@ The frozen message may carry stale turn-start runtime data, for example an
 empty "observed so far"; the fresher data follows in the context message. This
 keeps the system/tool/history token prefix reusable by a backend's prompt or KV
 cache; it does not freeze references or omit fresh evidence. The response cache
-key hashes every composed message, including the context message. Gemma's
+key hashes every composed message, including the context message. The context
+message does not repeat what the frozen system message already holds: a runtime
+section that is there verbatim is left out, and a section's fixed preamble is
+replaced by a pointer to the system message. Only verbatim text is removed.
+
+Evidence is sent once. In Entity Context, an entity whose producing tool result
+is in the request's history keeps only its header (id, kind, label, digest);
+its preview returns once that result leaves the history, and
+`get_entity_details` always returns the full record. The agent directive
+applies the same rule to retained observations (see
+[the agent loop](agent-loop.md)). Gemma's
 provider followup reminder is applied consistently to cloned user-role messages
 so adding a context turn does not rewrite an earlier prompt turn. Compaction
 can still legitimately change the prefix.

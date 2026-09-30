@@ -369,7 +369,11 @@ type compositionBase struct {
 	// staticSystem is prompt.StaticSystem(input), used to decide whether a
 	// frozen system message still applies.
 	staticSystem string
-	ragResults   []rag.Result
+	// runtimeFor rebuilds the evidence-bearing runtime sections for the
+	// exact history being composed, so evidence already in that history is
+	// cited instead of repeated (and returns once it is compacted away).
+	runtimeFor func(history []provider.Message) (directive string, entities []prompt.EntityRecord)
+	ragResults []rag.Result
 	// memoryHits is the selected ranked result used by ActiveContext and
 	// threaded through preparedRequest into debugInfo. Direct legacy fields
 	// remain independently populated for diagnostics and configured fallback.
@@ -576,7 +580,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			SystemPrompt:               systemPrompt,
 			RuntimeContextAfterHistory: deferRuntimeContext,
 			RuntimeFeedback:            m.toolRecoveryFeedback,
-			AgentDirective:             m.agentDirective(),
+			AgentDirective:             m.agentDirective(nil),
 			TemplateName:               m.template,
 			TemplatePrompt:             templatePrompt,
 			Mode:                       m.effectivePromptMode(),
@@ -587,7 +591,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			EpisodeMemory:              episodeMemory,
 			ActiveContext:              activeContext,
 			UseActiveContext:           m.cfg.Memory.Retrieval.Enabled,
-			Entities:                   m.entityPromptRecords(),
+			Entities:                   m.entityPromptRecords(nil),
 			EntityToolsAvailable:       m.entityToolsAvailable(),
 			EntityMaxTokens:            m.entityContextTokenBudget(),
 			RetrievedContext:           retrieved,
@@ -609,6 +613,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 	// while nothing static in it changed, so the backend keeps the prefix;
 	// the current runtime sections follow history instead.
 	base.staticSystem = prompt.StaticSystem(base.input)
+	base.runtimeFor = func(history []provider.Message) (string, []prompt.EntityRecord) {
+		return m.agentDirective(history), m.entityPromptRecords(history)
+	}
 	if deferRuntimeContext {
 		if frozen, ok := m.frozenSystemFor(m.frozenSystemKey(), base.staticSystem); ok {
 			base.input.FrozenSystem = frozen
@@ -733,6 +740,9 @@ func shortMemoryID(id string) string { return memoryindex.ShortID(id) }
 
 func composeFromBase(base compositionBase, recent []provider.Message, summary string) prompt.Output {
 	in := base.input
+	if base.runtimeFor != nil {
+		in.AgentDirective, in.Entities = base.runtimeFor(recent)
+	}
 	in.RecentMessages = recent
 	in.SessionSummary = summary
 	return prompt.Compose(in)
