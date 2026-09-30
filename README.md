@@ -528,8 +528,8 @@ context and does not bypass MCP approval.
 
 ## Web tools
 
-`/web on` (or `tools.web.enabled: true`) adds two more tools on top of
-agent mode:
+`/web on` (or `tools.web.enabled: true`) adds two more tools on top of the
+workspace tools, in ordinary chat and `/agent on` alike:
 
 - `web_search` — DuckDuckGo search, **no API key needed**; returns titles,
   URLs, and snippets. Runs automatically (only the model's query leaves
@@ -653,6 +653,11 @@ internal/contextmgr/      context-window budgeting + heuristic summaries
 internal/entity/          bounded ephemeral runtime entities (opaque IDs)
 internal/agent/           provider-neutral verified-run state, policy, memory
 internal/agentverify/     fresh-context provider verifier adapter
+internal/decision/        opt-in Laya structured-decision engine (advisory only; llmtui decision)
+internal/redact/          shared best-effort secret redaction before records reach disk
+internal/personalapps/    opt-in Apple Mail/Calendar domain (docs/personal-apps.md)
+internal/selfupdate/      llmtui binary self-update (llmtui self …)
+internal/testutil/        hermetic test helpers (tests only)
 internal/eval/            opt-in developer evaluation and JSONL reporting
 internal/memory/          opt-in user preference snippets (/memory)
 internal/memoryindex/     unified retrieval + typed project memory (/memory)

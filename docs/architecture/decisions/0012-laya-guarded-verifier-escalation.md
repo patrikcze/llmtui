@@ -3,6 +3,14 @@
 Status: Accepted
 Date: 2026-09-25
 
+> **2026-09-30 note.** Since the typed-criteria removal (audit P2-6), only
+> **one** synthetic-PASS branch is `GuardEligible`: the early
+> all-criteria-resolved shortcut under `adaptive` mode. The
+> mechanically-complete-cycle shortcut described below required a run with no
+> pinned criteria, which the contract-first flow never produces, and was
+> removed. The escalation-only constraint is unchanged. The rest of this ADR is
+> kept as written.
+
 ## Context
 
 ADR 0010 and ADR 0011 shipped two shadow-only Laya observations — a

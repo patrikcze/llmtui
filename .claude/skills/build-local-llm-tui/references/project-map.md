@@ -57,3 +57,5 @@ the non-obvious design decisions and the conventions.
 - `docs/providers.md`: provider behavior, streaming, retry, reasoning, timeout semantics.
 - `docs/prompt-composition.md`: prompt sections and modes.
 - `docs/rag.md`, `docs/mcp.md`, `docs/cache.md`, `docs/memory.md`, `docs/context-management.md`, `docs/slash-commands.md` when those areas change.
+- `docs/agent-loop.md`, `docs/architecture/README.md` (authoritative current state), and the relevant ADR (as a dated note, never a rewrite) when `/agent` behavior, defaults, or stop outcomes change.
+- `docs/architecture/package-map.md` and the README "Package layout" list when a package or a notable file is added, removed, or repurposed; `CLAUDE.md` when a line reference, count, or convention it cites changes.

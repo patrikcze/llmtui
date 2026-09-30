@@ -67,7 +67,9 @@ calibration evidence is recorded in the [Phase 8 report](architecture/next-gener
 Retrieved memory is reference data, not authorization. The unified Active
 Context marks source/scope/trust/freshness and frames every record separately;
 it cannot grant tools, network access, or prove that an agent action succeeded.
-Agent outcomes become project records only after a verifier-passed completion,
+Agent outcomes become project records only after a completion whose final
+cycle passed *semantic* verification (never from `off`/`deterministic`
+verifier modes or a ledger-settled cycle),
 saved automatically with a deterministically inferred category (never a model
 call) and named in the completion notice; `/memory remove <id>` undoes an
 unwanted save and `/memory off` stops future ones.

@@ -102,10 +102,12 @@ tool-enabled chat, and `/agent on` all drive the same
 - **Tool-enabled chat** — the same turn plus an inline tool loop, bounded by
   `tools.max_iterations` per user message; when the budget is spent the *user*
   decides whether to grant more rounds.
-- **`/agent on`** — a state machine (`internal/agent`) that wraps the same
-  primitives into bounded, self-verifying *cycles*. It adds no second way to
-  reach the model or execute a tool; any future mode that did would be a
-  regression against ADR 0001.
+- **`/agent on`** — bounded, self-verifying *cycles* around the same
+  primitives. `internal/agent` is the pure, provider- and UI-independent state
+  machine and stop policy; `internal/tui/agent_loop.go` (with
+  `agent_yield.go`) is the adapter that drives it through Bubble Tea messages.
+  It adds no second way to reach the model or execute a tool; any future mode
+  that did would be a regression against ADR 0001.
 
 `internal/tui/turn_runtime.go` (`turnRuntime`) is the explicit shared state
 machine: it owns provider request generation, cancellation, the inactivity
@@ -151,7 +153,8 @@ Per [ADR 0002](decisions/0002-live-progress-ledger-and-budget-enforcement.md),
   tool-result-shaped block entry is fed back so the model sees it as normal
   flow. A second block after a strategy-change window terminates the run
   `no_progress` (a dedicated outcome, `agent.DecisionNoProgress`, distinct
-  from `DecisionFailed`). Ledger lifetime is per-run and spans `/agent`
+  from `DecisionFailed`); an exhausted yield nudge budget (below) ends the
+  same way. Ledger lifetime is per-run and spans `/agent`
   cycles — it is a longer-lived counter than the per-cycle budget.
 - **Live budget enforcement.** `startToolBatch` / `runToolPlan` short-circuit
   before executing a batch that would cross an already-known hard ceiling
@@ -197,17 +200,24 @@ trigger → contract → (rules_load → executor → verifier → memory_write 
    same tool approval, execution, result and continuation loop as ordinary
    chat. No agent-specific tool executor exists.
 3. **Verifier.** A fresh two-message, tool-free request evaluates observable
-   evidence against the pinned criteria. **Deterministic evidence decides
-   first** (`agent.EvaluateDeterministic`): a failed test, a failed/denied
-   trailing tool call, or a typed execution error is conclusive and clamps any
-   optimistic semantic verdict (`ApplyDeterministicEvidence`). A tool failure
-   the executor recovered from later in the same cycle is not counted — that
-   exemption now also applies to what the semantic verifier sees
-   (`agent.PruneRecoveredToolErrors`), so a normal recover-and-proceed
-   sequence does not read as a failed cycle. Under the default `adaptive`
-   policy the semantic model call is skipped when mechanical evidence already
-   settles the cycle (never on cycle 1). `agent.verifier.mode: always`
-   restores full rigour; `deterministic` and `off` are also available.
+   evidence against the still unresolved pinned criteria. **Deterministic
+   evidence decides first** (`agent.EvaluateDeterministic`): a failed test, a
+   failed/denied trailing tool call, or a typed execution error is conclusive
+   and clamps any optimistic semantic verdict (`ApplyDeterministicEvidence`).
+   Two refinements: a trailing *observational* read failure (`not_found`,
+   `range_after_eof` from `read_file`/`list_dir`/`glob`/`grep`) is left for the
+   verifier to judge, and any other trailing failure carries a
+   controller-authored recovery objective that earns exactly one recovery
+   cycle. A tool failure the executor recovered from later in the same cycle
+   is not counted (`agent.PruneRecoveredToolErrors`). Under the default
+   `adaptive` policy the semantic model call is skipped only when that
+   deterministic evidence is conclusive or every pinned criterion is already
+   resolved (in practice an exact-read criterion proven by delivered read
+   coverage). Every contract criterion is semantic; exact-read coverage is the
+   only mechanical proof. A bare multi-criterion `passed` is sent back once
+   for per-ID statuses and never satisfies several criteria implicitly.
+   `agent.verifier.mode: always` restores full rigour; `deterministic` and
+   `off` are also available.
 4. **Memory write.** One concise cycle entry — objective, execution summary,
    verdict, bounded per-call lines, changed files. Never raw prompts, tool
    output, or reasoning. A no-op write (a file rewritten with its own bytes)
@@ -219,7 +229,9 @@ trigger → contract → (rules_load → executor → verifier → memory_write 
    context, or new evidence is rejected.
 
 Promotion of a verified outcome to project memory happens automatically after
-a verifier-passed completion — no interactive prompt. The category
+a completion whose final cycle passed *semantic* verification — no interactive
+prompt; controller-synthesized passes (`off`/`deterministic` modes, a
+ledger-settled cycle) are never promoted. The category
 (architecture/convention/decision) is inferred deterministically from the
 run's objective and execution summary (`tui.classifyProjectMemoryCategory`,
 word-boundary keyword matching, never a model call); the completion notice
@@ -228,6 +240,31 @@ names the category and record ID. See [`../memory.md`](../memory.md).
 Run limits (`agent.max_cycles`, `max_tool_calls`, `max_tokens`,
 `max_elapsed`, `max_repeated_failures`) are in `agent.Limits`; runs persist to
 `agent.path` via `agent.NewFileStore` with on-disk redaction.
+`max_tool_calls` counts executed calls only (`agent.ExecutedToolCalls`), and
+`max_elapsed` counts active time — waiting for the user is excluded
+(`AgentRun.PausedFor`).
+
+Inside a cycle, three more mechanisms shape the executor episode:
+
+- **Same-episode yield continuation** ([ADR 0013](decisions/0013-agent-execution-yield-policy.md),
+  `agent.EvaluateYield`, on by default via `agent.yield.enabled`). A clean
+  no-tool completion that still owes an exact-read criterion gets a bounded
+  nudge in the same cycle, naming the next unread window. Progress is a strict
+  increase in contiguous coverage; `agent.yield.max_nudges_without_progress`
+  and `agent.yield.max_episode_requests` bound it.
+- **Interrupted-stream replay.** A stream that fails after it started
+  (dropped connection, missing terminal signal, inactivity stall) is resent
+  once per model round inside an agent run; tool calls are only acted on after
+  a clean terminal event, so the replay has no side effects.
+- **Partial-execution persistence.** A run stopped inside the executor
+  (no-progress, budget, provider or preparation failure, terminal yield)
+  commits the cycle's receipts, errors, changed files, and read coverage as a
+  `partial` execution (`AgentRun.AbandonCycle`) before terminating. Oversized
+  run records are compacted rather than rejected, and saves are ordered by a
+  monotonic revision.
+
+Laya's advisory observations and add-only assists reach the orchestrator only
+through `internal/tui/agent_observer.go`; see [`../decision-engine.md`](../decision-engine.md).
 
 ---
 
