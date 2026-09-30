@@ -25,6 +25,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tools"
@@ -455,6 +456,19 @@ func TestAgentAuditCancelAfterCompletedMutation(t *testing.T) {
 	}
 	onDisk, _ := os.ReadFile(root + "/greeting.txt")
 	firstStatus, firstStop := m.agentLoop.run.Status, m.agentLoop.run.StopReason
+	sessionEditResult := false
+	for _, msg := range m.session.Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "e1" {
+			sessionEditResult = true
+		}
+	}
+	partialChanged, partialExecuted := 0, 0
+	if cycle := m.agentLoop.run.LatestCycle(); cycle != nil && cycle.Execution != nil && cycle.Execution.Partial {
+		partialChanged = len(cycle.Execution.ChangedFiles)
+		partialExecuted = agent.ExecutedToolCalls(cycle.Execution.ToolCalls)
+	}
+	t.Logf("first run: session_edit_result=%t run_partial_changed_files=%d run_partial_executed_calls=%d run_tool_calls=%d",
+		sessionEditResult, partialChanged, partialExecuted, m.agentLoop.run.ToolCalls)
 	before := len(prov.records)
 	driveAgentCommands(t, m, m.startVerifiedRun("Continue the previous task.", nil))
 	var cont *auditRecord

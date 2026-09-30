@@ -46,6 +46,15 @@ type agentLoopState struct {
 	// its system prompt) while leaving the current cycle's messages, and
 	// the current run's tool state, untouched.
 	cycleBoundaries []int
+	// pendingBatchCancel is the reason of a user cancel whose tool batch has
+	// not delivered its results yet; the run stays active until they arrive
+	// (see finalizeCancelledToolBatch). Empty means none.
+	pendingBatchCancel string
+	// lastCancelled is the most recent user-cancelled batch, waiting to be
+	// carried into the next run; carriedExchange is that batch's native
+	// call/result messages for the current run's first cycle.
+	lastCancelled   *cancelledExchange
+	carriedExchange []provider.Message
 	ctx             context.Context
 	runCancel       context.CancelFunc
 	execution       agent.ExecutionResult
@@ -540,6 +549,13 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	run.StartContextCaptured = true
 	run.StartSummary = truncateAgentText(m.summary, maxAgentStartSummaryBytes)
 	run.StartTurns = snapshotAgentStartTurns(m.session.Messages)
+	exchange, receipt := m.takeCancelledExchange()
+	m.agentLoop.carriedExchange = exchange
+	if receipt != "" {
+		run.StartTurns = appendAgentStartTurn(run.StartTurns, agent.ContextTurn{
+			Role: string(provider.RoleAssistant), Content: truncateAgentText(receipt, maxAgentStartTurnBytes),
+		})
+	}
 	m.agentLoop.run = run
 	m.agentLoop.historyStart = len(m.session.Messages)
 	m.agentLoop.cycleBoundaries = nil
@@ -797,6 +813,16 @@ func (m *Model) startInitialAgentCycle(request string, images []provider.Image) 
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(run.ID), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
+}
+
+// appendAgentStartTurn adds turn as the newest start turn, keeping the
+// maxAgentStartTurns bound.
+func appendAgentStartTurn(turns []agent.ContextTurn, turn agent.ContextTurn) []agent.ContextTurn {
+	turns = append(turns, turn)
+	if len(turns) > maxAgentStartTurns {
+		turns = append([]agent.ContextTurn(nil), turns[len(turns)-maxAgentStartTurns:]...)
+	}
+	return turns
 }
 
 func snapshotAgentStartTurns(messages []provider.Message) []agent.ContextTurn {
@@ -2033,8 +2059,16 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 			m.complete(turnOutcomeCancelled)
 		}
 		if m.mcpBatchCancel != nil {
-			m.cancelToolBatch()
+			// Keep the batch's completed results when they arrive; the run
+			// itself is cancelled right away below.
+			m.cancelToolBatchByUser()
+			m.clearProviderContinuations()
 			m.relayout()
+		}
+		if save, ok := m.finalizeCancelledToolBatch(); ok {
+			// A Ctrl+C/Esc already cancelled the batch; end the run now.
+			m.notice = "agent run cancelled"
+			return save
 		}
 		m.completePendingAsk("agent run cancelled by the user")
 		if m.agentNeedsUserInput() {
@@ -2106,6 +2140,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	// Decide still counts the persisted total.
 	m.agentLoop.liveToolCalls = msg.run.ToolCalls
 	m.agentLoop.cycleBoundaries = nil
+	m.agentLoop.carriedExchange = nil // only a freshly started run carries one
 	m.agentLoop.execution = agent.ExecutionResult{}
 	m.agentLoop.initialImages = nil
 	m.resetAgentContext()

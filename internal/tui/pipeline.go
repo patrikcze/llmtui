@@ -935,11 +935,32 @@ func (m *Model) requestHistory() (messages []provider.Message, summary string, a
 			}
 			summary = m.agentLoop.run.StartSummary
 		}
+		// A batch the user cancelled just before this run stays visible as
+		// its native call/result pair, since a completed call in it may
+		// already have changed the workspace. It goes before its receipt,
+		// the newest start turn, so the history reads in order.
+		prior = insertCarriedExchange(prior, m.agentLoop.carriedExchange)
 		current := m.projectAgentExecutorHistory(messages[start:])
 		return append(prior, current...), summary, true
 	}
 	projected := projectPriorCyclesInRun(messages, start, m.agentLoop.cycleBoundaries)
 	return m.projectAgentExecutorHistory(projected), "", true
+}
+
+// insertCarriedExchange places exchange before a trailing cancelled-batch
+// receipt in prior, or at the end when there is none.
+func insertCarriedExchange(prior, exchange []provider.Message) []provider.Message {
+	if len(exchange) == 0 {
+		return prior
+	}
+	at := len(prior)
+	if at > 0 && prior[at-1].Role == provider.RoleAssistant && strings.HasPrefix(prior[at-1].Content, cancelledReceiptPrefix) {
+		at--
+	}
+	out := make([]provider.Message, 0, len(prior)+len(exchange))
+	out = append(out, prior[:at]...)
+	out = append(out, exchange...)
+	return append(out, prior[at:]...)
 }
 
 // Rejected no-tool completions stay visible in the transcript but do not

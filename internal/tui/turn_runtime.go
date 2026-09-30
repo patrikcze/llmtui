@@ -85,8 +85,16 @@ type turnRuntime struct {
 
 	mcpBatchCancel context.CancelFunc
 	mcpBatchGen    int
-	activity       *toolActivity
-	progress       *progressLedger
+	// userCancelledGen is the generation of a batch the user cancelled
+	// (Ctrl+C, Esc, /agent cancel) whose results have not arrived yet. Its
+	// calls may already have changed the workspace, so its results are kept
+	// rather than dropped (see acceptCancelledToolResults). A batch that is
+	// superseded instead — a new submission or a newer batch starts before
+	// they arrive — clears it, and its results stay stale as before. Zero
+	// means none.
+	userCancelledGen int
+	activity         *toolActivity
+	progress         *progressLedger
 }
 
 func newTurnRuntime(progressThreshold int, progressRoot string) turnRuntime {
@@ -105,6 +113,7 @@ func (r *turnRuntime) transition(state turnState, outcome turnOutcome) turnTrans
 func (r *turnRuntime) resetTurn(progressThreshold int, progressRoot string) {
 	r.stopStream()
 	r.cancelToolBatch()
+	r.userCancelledGen = 0 // a new turn supersedes a cancelled batch
 	r.frozenSystem = frozenSystemPrompt{}
 	r.resetCycle()
 	r.pendingCalls = nil
@@ -318,6 +327,7 @@ func (r *turnRuntime) beginToolBatch(parent context.Context, calls []tools.Call)
 	}
 	r.clearPendingTools()
 	r.advanceToolRound()
+	r.userCancelledGen = 0 // a newer batch supersedes a cancelled one
 	ctx, cancel := context.WithCancel(parent)
 	r.mcpBatchCancel = cancel
 	r.mcpBatchGen++
@@ -348,6 +358,29 @@ func (r *turnRuntime) cancelToolBatch() bool {
 	r.mcpBatchGen++
 	r.activity = nil
 	r.transition(turnCancelled, turnOutcomeCancelled)
+	return true
+}
+
+// cancelToolBatchByUser cancels the running batch like cancelToolBatch and
+// remembers its generation, so its results — which may include calls that
+// already completed — are adopted when they arrive instead of dropped.
+func (r *turnRuntime) cancelToolBatchByUser() bool {
+	gen := r.mcpBatchGen
+	if !r.cancelToolBatch() {
+		return false
+	}
+	r.userCancelledGen = gen
+	return true
+}
+
+// acceptCancelledToolResults reports whether gen is the user-cancelled
+// batch still awaiting its results, and consumes that marker. It never
+// resumes the turn: the caller records the results and stops.
+func (r *turnRuntime) acceptCancelledToolResults(gen int) bool {
+	if gen == 0 || gen != r.userCancelledGen {
+		return false
+	}
+	r.userCancelledGen = 0
 	return true
 }
 

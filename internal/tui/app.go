@@ -1052,11 +1052,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errText = "generation stopped"
 				m.refreshViewport()
 			} else if m.mcpBatchCancel != nil {
-				m.cancelToolBatch()
-				m.relayout()
-				m.cancelVerifiedRun("tool batch cancelled by the user")
-				m.endAgentRun()
-				agentSave = m.persistAgentRun()
+				agentSave, _ = m.userCancelToolBatch("tool batch cancelled by the user")
 				m.errText = "tool batch cancelled"
 				m.refreshViewport()
 			} else if strings.HasPrefix(m.input.Value(), "/") {
@@ -1243,12 +1239,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mcpToolResultsMsg:
 		if !m.acceptToolResults(msg.gen) {
-			// A stale batch: it was cancelled (plain Esc/Ctrl+C, no resend)
-			// or superseded by a newer one (cancel-then-resend). Either way,
-			// its results must never tally, set notice/errText, or feed back
-			// into the model — that would poison or corrupt the turn that's
-			// actually still running (or silently continue a turn the user
-			// already stopped).
+			if m.acceptCancelledToolResults(msg.gen) {
+				// The user cancelled this batch and nothing superseded it:
+				// keep what already ran, paired with its calls, and stop.
+				return m, m.adoptCancelledToolResults(msg)
+			}
+			// A superseded batch (a new submission or a newer batch began
+			// before its results arrived): its results must never tally,
+			// set notice/errText, or feed back into the model — that would
+			// poison or corrupt the turn that's actually still running.
 			return m, nil
 		}
 		m.relayout()
@@ -1589,6 +1588,8 @@ func (m *Model) send() tea.Cmd {
 	}
 	m.resetToolDisclosure()
 	m.releasePendingVersionPins()
+	// A new submission supersedes a cancelled batch still finishing.
+	cancelSave, _ := m.finalizeCancelledToolBatch()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
@@ -1596,11 +1597,11 @@ func (m *Model) send() tea.Cmd {
 			// and the ledger must keep the evidence it already collected in
 			// this run, so a stuck pattern from before the input pause is
 			// still recognized after it (docs/architecture/v1-agent-runtime.md §3).
-			return m.resumeVerifiedRunWithInput(text, images)
+			return tea.Batch(cancelSave, m.resumeVerifiedRunWithInput(text, images))
 		}
-		return m.startVerifiedRun(text, images)
+		return tea.Batch(cancelSave, m.startVerifiedRun(text, images))
 	}
-	return m.dispatch(text, images)
+	return tea.Batch(cancelSave, m.dispatch(text, images))
 }
 
 // maybeRunTools handles fenced ```tool blocks in the newest assistant reply.
@@ -2210,6 +2211,7 @@ func (m *Model) retryLast() tea.Cmd {
 		}
 	}
 	m.releasePendingVersionPins()
+	cancelSave, _ := m.finalizeCancelledToolBatch()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
 	m.errText = ""
 	m.notice = "retrying last message"
@@ -2223,11 +2225,11 @@ func (m *Model) retryLast() tea.Cmd {
 	// reached it, because retryLast() had skipped attaching one.
 	if m.agentOn {
 		if m.agentNeedsUserInput() {
-			return m.resumeVerifiedRunWithInput(m.lastUserMsg, m.lastImages)
+			return tea.Batch(cancelSave, m.resumeVerifiedRunWithInput(m.lastUserMsg, m.lastImages))
 		}
-		return m.startVerifiedRun(m.lastUserMsg, m.lastImages)
+		return tea.Batch(cancelSave, m.startVerifiedRun(m.lastUserMsg, m.lastImages))
 	}
-	return m.dispatch(m.lastUserMsg, m.lastImages)
+	return tea.Batch(cancelSave, m.dispatch(m.lastUserMsg, m.lastImages))
 }
 
 type firstStreamMsg struct {
@@ -2348,11 +2350,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()
 	case m.mcpBatchCancel != nil:
-		m.cancelToolBatch()
-		m.relayout()
-		m.cancelVerifiedRun("tool batch cancelled by the user")
-		m.endAgentRun()
-		agentSave = m.persistAgentRun()
+		agentSave, _ = m.userCancelToolBatch("tool batch cancelled by the user")
 		m.errText = "mcp tool batch cancelled"
 		m.notice = "press ctrl+c again to exit"
 		m.refreshViewport()

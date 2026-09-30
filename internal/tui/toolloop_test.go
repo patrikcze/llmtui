@@ -1063,14 +1063,15 @@ func TestMCPBatchCancelViaEsc(t *testing.T) {
 	}
 }
 
-// TestMCPStaleResultsDroppedAfterPlainEsc guards the "worse than originally
-// suspected" manifestation of the missing-generation-token bug: a *plain*
-// Esc with no resend must actually stop the turn. Before the fix, the
-// already-launched goroutine's tea.Cmd still delivered its mcpToolResultsMsg
-// after Esc, and the handler was unconditional — it tallied the (usually
-// cancelled-error) results and dispatched sendToolResults/continueChat
-// anyway, so Esc looked like it worked but the turn silently continued.
-func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
+// TestMCPPlainEscKeepsResultsWithoutContinuing guards two things about a
+// *plain* Esc with no resend. It must actually stop the turn: before the
+// generation-token fix, the already-launched goroutine's mcpToolResultsMsg
+// was handled unconditionally and dispatched sendToolResults/continueChat, so
+// Esc looked like it worked but the turn silently continued. And the batch's
+// result must not be lost: the call may already have had a side effect, so
+// the result is kept as exactly one call-paired tool message, without a new
+// model request.
+func TestMCPPlainEscKeepsResultsWithoutContinuing(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true
 	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
@@ -1090,7 +1091,6 @@ func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
 	}
 
 	messagesBefore := len(m.session.Messages)
-	toolOKBefore, toolErrBefore := m.toolOK, m.toolErr
 
 	// Plain Esc — no resend follows.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
@@ -1107,18 +1107,14 @@ func TestMCPStaleResultsDroppedAfterPlainEsc(t *testing.T) {
 	}
 	_, cmd2 := m.Update(resultsMsg)
 	if cmd2 != nil {
-		t.Error("a stale mcpToolResultsMsg must not trigger a new dispatch (sendToolResults/continueChat)")
+		t.Error("a cancelled batch's results must not trigger a new dispatch (sendToolResults/continueChat)")
 	}
 	if m.thinking {
-		t.Error("m.thinking must stay false — the stale message must not start a new turn")
+		t.Error("m.thinking must stay false — the cancelled batch must not start a new turn")
 	}
-	if len(m.session.Messages) != messagesBefore {
-		t.Errorf("session.Messages grew from %d to %d — the stale results were fed back to the model",
-			messagesBefore, len(m.session.Messages))
-	}
-	if m.toolOK != toolOKBefore || m.toolErr != toolErrBefore {
-		t.Errorf("toolOK/toolErr changed (%d/%d -> %d/%d) — a dropped stale message must not be tallied",
-			toolOKBefore, toolErrBefore, m.toolOK, m.toolErr)
+	added := m.session.Messages[messagesBefore:]
+	if len(added) != 1 || added[0].Role != provider.RoleTool || added[0].ToolCallID != "c1" {
+		t.Fatalf("session gained %+v, want exactly one tool result paired with c1", added)
 	}
 }
 
