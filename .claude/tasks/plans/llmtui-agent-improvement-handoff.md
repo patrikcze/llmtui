@@ -18,7 +18,7 @@ have been measured.
 | 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
-| 4b | Skip the contract for trivial questions | — | — | **not started: needs real-model trials** |
+| 4b | Skip the contract for trivial questions | — | — | **skipped by maintainer decision (2026-09-30)**: the required 20-task real-model trial cannot be run; the contract stays on every run |
 | 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | — | — | **not started: needs template check + your decision on CLAUDE.md rule 5** |
@@ -72,7 +72,7 @@ on `origin`, because the cloud session cannot delete branches. Delete them local
     744 is also the executor-only upper bound, so 4a removes all eviction. The next run still diverges at the directive's `Original goal` line in the fresh system message; removing that is Step 6's job.
   - **Acceptance.** The ≥ 5,000 target is not met by 4a alone. It is reached (4,891) together with Step 6. The target predates the prompt shrink from Steps 2–3.
   - **Within one run (S1/S5/S8).** No change, because the contract precedes the cold first executor request and the verifier comes last.
-- **Step 4b.** The plan forbids it until real-model trials show no increase in false completions.
+- **Step 4b (skipped, maintainer decision 2026-09-30).** The plan forbids it until real-model trials show no increase in false completions, and that trial is not feasible. The contract request stays on every run. Revisit only if a trial harness with human-judged answers becomes available. Prompt 5.4 is kept for that case.
 - **Step 4c (draft PR #159).**
   - **Scope, deliberately conservative.**
     - A later-cycle verification is no longer asked for the establishing-only `proposed_criteria` and `atomic_task`; schema and prompt now come in later-cycle and establishing variants.
