@@ -117,7 +117,12 @@ Each run establishes a contract, then follows the execution stages:
    provider capabilities, tools, verified cycle memory, and current objective.
 4. **Executor** — the active provider streams one bounded objective through the
    existing model/tool loop. A cycle can contain several related tool calls,
-   but it cannot recursively start another run.
+   but it cannot recursively start another run. The cycle's first request
+   carries the `Agent Cycle` directive in its system message; its tool-round
+   and yield continuations repeat that system message byte for byte and send
+   the *current* directive in a runtime-context message after history (see
+   [prompt composition](prompt-composition.md)), so the prompt prefix stays
+   reusable across rounds.
 5. **Verifier** — a separate, tool-free provider request receives only the
    original task, current objective, acceptance criteria, and bounded observable
    results. It never receives the executor conversation or hidden reasoning.
@@ -286,6 +291,13 @@ unexpected early stop.
 A tool call cut off by `max_tokens` is never executed, in agent mode or
 ordinary chat — see [Local-model behavior](#local-model-behavior) below for
 how truncation is otherwise handled as deterministic evidence.
+
+A native batch whose results would not fit the next request no longer fails
+the run: its newest results are cut to fit before they are recorded (see
+[Context Management](context-management.md)). A cut `read_file` result
+records only the line window it delivered, so it cannot satisfy a
+whole-file read requirement or bind an edit as a complete observation; the
+executor rereads the rest with `offset`/`limit`.
 
 ## Repeated tool calls and no-progress detection
 
@@ -527,7 +539,7 @@ The executor gets a separate, narrower cross-cycle memory: on a retry, prior
 cycles' raw tool-call/tool-result traffic is not resent (it would grow
 without bound across a multi-cycle run), but each prior cycle's tool calls
 still appear as one bounded `name(detail) succeeded|failed: kind[/code]` line per
-call in the `Agent Cycle` system-prompt section (`/prompt composed`) —
+call in the `Agent Cycle` section (`/prompt composed`) —
 enough for the executor to recognize it already tried a given URL, file
 path, or query and avoid blindly repeating it. `detail` is deliberately
 narrow: URLs, paths, and search patterns are included, but a `run_command`
@@ -608,6 +620,13 @@ the verbatim window, and the estimated used/budget token counts. Repeated
 identical compactions within one cycle are recorded once. When compaction
 removed tool results from the current cycle, the executor's controller
 directive says so, so it does not assume it can still see them.
+
+The directive's *retained observations* are de-duplicated against the exact
+history of each request: an observation whose excerpt is still verbatim in one
+of that request's tool results is cited in one line
+(`read_file(big.log) [cycle 1]: in the conversation above`) instead of being
+repeated. Once that result is compacted or projected out of the request, the
+full excerpt comes back, so evidence is never lost, only not sent twice.
 This makes "did truncation or summarization eat evidence this cycle needed"
 directly answerable from a run's persisted JSON instead of requiring
 after-the-fact message-size reconstruction.

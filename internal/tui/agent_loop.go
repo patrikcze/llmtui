@@ -941,7 +941,12 @@ func (m *Model) agentContext() context.Context {
 // agentDirective supplies only bounded controller state. The prompt composer
 // wraps it in a fixed warning that keeps model-derived text below system and
 // user authority.
-func (m *Model) agentDirective() string {
+// agentDirective builds the controller directive for a request whose
+// conversation history is history. A retained observation whose excerpt is
+// still verbatim in one of history's tool results is cited in one line
+// instead of repeated; once that result is compacted or projected away, the
+// excerpt comes back, so evidence is de-duplicated but never lost.
+func (m *Model) agentDirective(history []provider.Message) string {
 	if !m.agentRunActive() || m.agentLoop.run.Stage != agent.StageExecutor {
 		return ""
 	}
@@ -991,6 +996,10 @@ func (m *Model) agentDirective() string {
 	if recent := m.agentLoop.observations.Recent(maxDirectiveObservations); len(recent) > 0 {
 		b.WriteString("Retained observations from earlier reads this run (already available — do not reread solely to recover these):\n")
 		for _, view := range recent {
+			if observationInHistory(view, history) {
+				fmt.Fprintf(&b, "- %s [cycle %d]: in the conversation above\n", view.ResourceLabel(), view.Cycle)
+				continue
+			}
 			fmt.Fprintf(&b, "- %s\n", view.FormatExcerpt())
 		}
 	}
@@ -1002,6 +1011,26 @@ func (m *Model) agentDirective() string {
 		fmt.Fprintf(&b, "Context note: %d earlier tool result(s) from this cycle were compacted out of the conversation to fit the context window. Retained observations are listed above; reread only content you still need verbatim.\n", n)
 	}
 	return truncateAgentText(b.String(), maxAgentDirectiveBytes)
+}
+
+// observationInHistory reports whether view's excerpt appears verbatim in a
+// tool result in history. Matching the text itself, not the resource, keeps
+// an excerpt whose own result was compacted away even when another read of
+// the same file is still in history.
+func observationInHistory(view agent.ObservationView, history []provider.Message) bool {
+	excerpt := strings.TrimSuffix(view.Excerpt, "…")
+	if strings.TrimSpace(excerpt) == "" {
+		return false
+	}
+	for _, msg := range history {
+		if msg.Role != provider.RoleTool && (msg.Role != provider.RoleUser || !strings.HasPrefix(msg.Content, tools.ResultsPrefix)) {
+			continue
+		}
+		if strings.Contains(msg.Content, excerpt) {
+			return true
+		}
+	}
+	return false
 }
 
 // maxDirectiveObservations bounds how many retained observations

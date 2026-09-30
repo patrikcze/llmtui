@@ -1299,7 +1299,7 @@ func TestAgentDirectiveExcludesWebAndMCPObservations(t *testing.T) {
 	}, false, uniformActionStatuses(2, agent.ActionExecuted))
 	_ = run
 
-	directive := m.agentDirective()
+	directive := m.agentDirective(nil)
 	if strings.Contains(directive, "WEB_MARKER") || strings.Contains(directive, "MCP_MARKER") {
 		t.Fatalf("directive retained a web/MCP observation: %s", directive)
 	}
@@ -1317,7 +1317,7 @@ func TestAgentDirectiveExcludesLocalContextObservations(t *testing.T) {
 		{Call: tools.Call{ID: "time-1", Tool: tools.ToolLocalContext, ContextKind: "time"}, Output: "VOLATILE_TIME_MARKER"},
 	}, false, uniformActionStatuses(1, agent.ActionExecuted))
 
-	directive := m.agentDirective()
+	directive := m.agentDirective(nil)
 	if strings.Contains(directive, "VOLATILE_TIME_MARKER") {
 		t.Fatalf("directive retained a volatile local_context observation: %s", directive)
 	}
@@ -1355,7 +1355,7 @@ func TestAgentDirectiveReportsEvictedObservations(t *testing.T) {
 		}, false, uniformActionStatuses(1, agent.ActionExecuted))
 	}
 
-	directive := m.agentDirective()
+	directive := m.agentDirective(nil)
 	if !strings.Contains(directive, "no longer retained") {
 		t.Fatalf("directive did not report an omission after cache overflow:\n%s", directive)
 	}
@@ -2553,7 +2553,7 @@ func TestAgentDirectiveTokenSnapshots(t *testing.T) {
 			}
 			m.agentOn = true
 			m.agentLoop.run = run
-			directive := m.agentDirective()
+			directive := m.agentDirective(nil)
 			if tokens := provider.EstimateTokens(directive); tokens > tt.maxTokens {
 				t.Fatalf("directive token snapshot = %d, want <= %d", tokens, tt.maxTokens)
 			}

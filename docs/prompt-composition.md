@@ -29,23 +29,48 @@ are separate sections you can always inspect with `/prompt preview`.
 11. **Recent Messages** — recent conversation, verbatim
 12. **Raw User Message** — your text, untouched
 
-For embedded native-tool continuations, invariant system/tool instructions and active skills
-stay before history. Changing Agent Cycle, Session Summary, memory/retrieval,
-Entity Context, and tool-recovery sections are grouped into a clearly labeled,
-request-local user-role context message after history and before the raw user
-message. On tool/yield continuations the raw message is omitted, but this
-runtime context remains. It is never saved as a user turn or used to grant
-permissions. Existing untrusted-content framing remains intact. Fresh chat,
-fenced-tool requests, and remote providers retain the layout above, including
-templates that require strict user/assistant alternation. Transitioning from
-the initial layout may invalidate its prefix once; successive native-tool
-continuations preserve the stable system and delivered history.
+**Frozen system message per turn.** The first request of a user turn (and of
+each agent cycle) is composed with the layout above, and its system message is
+kept for that turn. Every native-tool continuation of the turn, on any
+provider, repeats that system message byte for byte. The *current* Agent
+Cycle, Session Summary, memory/retrieval, Entity Context, and tool-recovery
+sections are grouped into a clearly labeled, request-local user-role context
+message after history. Continuations end with tool (or assistant) messages, so
+this never creates two user turns in a row. On tool/yield continuations the raw
+message is omitted, but this runtime context remains. It is never saved as a
+user turn or used to grant permissions. Existing untrusted-content framing
+remains intact. Fresh requests and fenced-tool requests keep the layout above,
+including templates that require strict user/assistant alternation.
 
-This placement preserves the system/history token prefix for embedded KV
-reuse; it does not freeze references or omit fresh evidence. Gemma's provider
-followup reminder is applied consistently to cloned user-role messages so
-adding a context turn does not rewrite an earlier prompt turn. Compaction,
-tool changes, and skill activation can still legitimately change the prefix.
+The frozen system message is reused only while it still applies:
+- it was composed for the same provider and model;
+- its static part (every section except the runtime ones listed above) is
+  unchanged. A skill loaded mid-turn, newly disclosed tools, or a native-tool
+  fallback changes it, and the continuation freezes its own system message
+  instead;
+- using it costs no history. It still holds the turn's first runtime sections,
+  so it is larger; when it would make the request compact more history or not
+  fit, the continuation uses the unfrozen layout (static sections in the system
+  message, runtime context after history).
+
+The frozen message may carry stale turn-start runtime data, for example an
+empty "observed so far"; the fresher data follows in the context message. This
+keeps the system/tool/history token prefix reusable by a backend's prompt or KV
+cache; it does not freeze references or omit fresh evidence. The response cache
+key hashes every composed message, including the context message. The context
+message does not repeat what the frozen system message already holds: a runtime
+section that is there verbatim is left out, and a section's fixed preamble is
+replaced by a pointer to the system message. Only verbatim text is removed.
+
+Evidence is sent once. In Entity Context, an entity whose producing tool result
+is in the request's history keeps only its header (id, kind, label, digest);
+its preview returns once that result leaves the history, and
+`get_entity_details` always returns the full record. The agent directive
+applies the same rule to retained observations (see
+[the agent loop](agent-loop.md)). Gemma's
+provider followup reminder is applied consistently to cloned user-role messages
+so adding a context turn does not rewrite an earlier prompt turn. Compaction
+can still legitimately change the prefix.
 
 During agent yield recovery, premature no-tool replies remain in the visible
 transcript but are excluded from subsequent executor requests. Read recovery

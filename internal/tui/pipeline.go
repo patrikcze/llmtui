@@ -355,13 +355,24 @@ type preparedRequest struct {
 	// verbatim window for this request — truncated or summarized.
 	compacted            int
 	compactedToolResults int
+	// staticSystem and frozen record how the system message was built, so
+	// commitPrepared can freeze it for the rest of the turn.
+	staticSystem string
+	frozen       bool
 }
 
 const compactedContinuationAnchor = "[Compacted continuation] Continue the original request " +
 	"using the session summary and tool results above."
 
 type compositionBase struct {
-	input      prompt.Input
+	input prompt.Input
+	// staticSystem is prompt.StaticSystem(input), used to decide whether a
+	// frozen system message still applies.
+	staticSystem string
+	// runtimeFor rebuilds the evidence-bearing runtime sections for the
+	// exact history being composed, so evidence already in that history is
+	// cited instead of repeated (and returns once it is compacted away).
+	runtimeFor func(history []provider.Message) (directive string, entities []prompt.EntityRecord)
 	ragResults []rag.Result
 	// memoryHits is the selected ranked result used by ActiveContext and
 	// threaded through preparedRequest into debugInfo. Direct legacy fields
@@ -531,10 +542,12 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
 	}
-	// Restrict the extra context turn to native-tool continuations. Fresh
-	// chat keeps its original layout, including templates requiring strict
-	// user/assistant alternation and the verbatim trailing user message.
-	deferRuntimeContext := m.isEmbeddedProvider() && omitRaw && m.useNativeTools()
+	// Restrict the extra context turn to native-tool continuations, on every
+	// provider: they end with tool (or assistant) messages, so the context
+	// message never makes two user turns in a row. Fresh chat keeps its
+	// original layout, including templates requiring strict user/assistant
+	// alternation and the verbatim trailing user message.
+	deferRuntimeContext := omitRaw && m.useNativeTools()
 	if m.toolRecoveryFeedback != "" && !deferRuntimeContext {
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + m.toolRecoveryFeedback)
 	}
@@ -560,14 +573,14 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		}
 	}
 
-	return compositionBase{
+	base := compositionBase{
 		input: prompt.Input{
 			RawMessage:                 raw,
 			Images:                     images,
 			SystemPrompt:               systemPrompt,
 			RuntimeContextAfterHistory: deferRuntimeContext,
 			RuntimeFeedback:            m.toolRecoveryFeedback,
-			AgentDirective:             m.agentDirective(),
+			AgentDirective:             m.agentDirective(nil),
 			TemplateName:               m.template,
 			TemplatePrompt:             templatePrompt,
 			Mode:                       m.effectivePromptMode(),
@@ -578,7 +591,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			EpisodeMemory:              episodeMemory,
 			ActiveContext:              activeContext,
 			UseActiveContext:           m.cfg.Memory.Retrieval.Enabled,
-			Entities:                   m.entityPromptRecords(),
+			Entities:                   m.entityPromptRecords(nil),
 			EntityToolsAvailable:       m.entityToolsAvailable(),
 			EntityMaxTokens:            m.entityContextTokenBudget(),
 			RetrievedContext:           retrieved,
@@ -596,6 +609,28 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 		memoryHits: memoryHits,
 		memoryDiag: memoryDiag,
 	}
+	// A continuation repeats its turn's first system message byte for byte
+	// while nothing static in it changed, so the backend keeps the prefix;
+	// the current runtime sections follow history instead.
+	base.staticSystem = prompt.StaticSystem(base.input)
+	base.runtimeFor = func(history []provider.Message) (string, []prompt.EntityRecord) {
+		return m.agentDirective(history), m.entityPromptRecords(history)
+	}
+	if deferRuntimeContext {
+		if frozen, ok := m.frozenSystemFor(m.frozenSystemKey(), base.staticSystem); ok {
+			base.input.FrozenSystem = frozen
+		}
+	}
+	return base
+}
+
+// frozenSystemKey identifies the provider and model a frozen system message
+// was composed for.
+func (m *Model) frozenSystemKey() string {
+	if m.prov == nil {
+		return ""
+	}
+	return m.prov.Name() + "\x00" + m.model
 }
 
 func buildMemoryRetrievalDiagnostics(
@@ -705,6 +740,9 @@ func shortMemoryID(id string) string { return memoryindex.ShortID(id) }
 
 func composeFromBase(base compositionBase, recent []provider.Message, summary string) prompt.Output {
 	in := base.input
+	if base.runtimeFor != nil {
+		in.AgentDirective, in.Entities = base.runtimeFor(recent)
+	}
 	in.RecentMessages = recent
 	in.SessionSummary = summary
 	return prompt.Compose(in)
@@ -1059,6 +1097,24 @@ func textualNativeToolResults(calls []provider.ToolCall, results []provider.Mess
 
 func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool) (preparedRequest, error) {
 	base := m.compositionBase(raw, images, omitRaw)
+	if base.input.FrozenSystem == "" {
+		return m.prepareFromBase(base, omitRaw)
+	}
+	// The frozen system message still carries the turn's first runtime
+	// sections while their current versions follow history, so it is larger.
+	// Reuse it only when that costs no history: otherwise the request would
+	// be compacted harder, or fail, just to keep a cache-friendly prefix.
+	frozen, frozenErr := m.prepareFromBase(base, omitRaw)
+	unfrozenBase := base
+	unfrozenBase.input.FrozenSystem = ""
+	unfrozen, unfrozenErr := m.prepareFromBase(unfrozenBase, omitRaw)
+	if frozenErr == nil && unfrozenErr == nil && frozen.compacted == unfrozen.compacted {
+		return frozen, nil
+	}
+	return unfrozen, unfrozenErr
+}
+
+func (m *Model) prepareFromBase(base compositionBase, omitRaw bool) (preparedRequest, error) {
 	specs := m.activeToolSpecs()
 	window, _ := m.contextWindow()
 	reserve := m.cfg.Context.ReserveResponseTokens
@@ -1213,6 +1269,8 @@ func (m *Model) prepareRequest(raw string, images []provider.Image, omitRaw bool
 		estimate:             est,
 		compacted:            len(older),
 		compactedToolResults: compactedToolResults,
+		staticSystem:         base.staticSystem,
+		frozen:               base.input.FrozenSystem != "",
 	}, nil
 }
 
@@ -1246,6 +1304,14 @@ func (m *Model) commitPrepared(prepared preparedRequest) {
 	m.ragLast = prepared.ragResults
 	m.ctxUsed = prepared.decision.Used
 	m.ctxWindow = prepared.estimate.Window
+	// The first request of a turn freezes its system message. A continuation
+	// that could not reuse the frozen one (a static section changed) freezes
+	// its own, so the requests after it stay stable again.
+	if !prepared.frozen {
+		if msgs := prepared.composed.Messages; len(msgs) > 0 && msgs[0].Role == provider.RoleSystem {
+			m.freezeSystem(m.frozenSystemKey(), prepared.staticSystem, msgs[0].Content)
+		}
+	}
 }
 
 // compose builds the provider-ready messages for a raw user message.
