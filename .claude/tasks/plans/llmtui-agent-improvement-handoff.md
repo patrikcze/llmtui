@@ -18,7 +18,7 @@ have been measured.
 | 2 | Freeze the system prefix for the whole turn | `perf/tui-frozen-system-prefix` | #153 | merged |
 | 3 | Stop sending the same evidence three times | `perf/tui-dedupe-evidence` | #154 | merged (retargeted to `master` after #153) |
 | 4a | Second llama sequence for control requests | `perf/embedded-control-sequence` | #158 | merged; S3 target met only together with Step 6 (see §3) |
-| 4b | Skip the contract for trivial questions | `perf/agent-skip-trivial-contract` | see PR | implemented **opt-in** (`agent.skip_trivial_contract`, default off); no real-model trial run |
+| 4b | Skip the contract for trivial questions | `perf/agent-skip-trivial-contract` | #161 | implemented **opt-in** (`agent.skip_trivial_contract`, default off); no real-model trial run |
 | 4c | Smaller verifier replies | `perf/agentverify-compact-verdict` | #159 | draft; conservative variant, −16% verifier decode tokens, same decisions (see §3) |
 | 5 | Oversized tool batch must not fail the run | `fix/tui-bound-oversized-tool-batch` | #155 | merged |
 | 6 | Stable system prefix across turns | `perf/prompt-runtime-out-of-fresh-system` | see §3 | done: part 1 template check + part 2 implementation (`prompt.fresh_runtime_context`, auto = embedded) |
