@@ -428,6 +428,11 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		genReq.ToolFormat, _ = ResolveToolFormat(opts.ToolFormat, opts.ModelPath)
 	}
 
+	// Non-Harmony runtimes stream their answer but do not populate Turn.
+	// Keep only a short prefix for the content-free tool-envelope diagnostic;
+	// otherwise a visible Gemma tool attempt is misreported as no intent.
+	const maxDiagnosticPrefixBytes = 512
+	var diagnosticPrefix strings.Builder
 	aborted := false
 	result, err := rt.Generate(genCtx, genReq, func(delta GenDelta) {
 		if aborted {
@@ -436,6 +441,8 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		eventType := provider.EventDelta
 		if delta.Kind == DeltaReasoning {
 			eventType = provider.EventReasoning
+		} else if remaining := maxDiagnosticPrefixBytes - diagnosticPrefix.Len(); remaining > 0 {
+			diagnosticPrefix.WriteString(delta.Text[:min(len(delta.Text), remaining)])
 		}
 		event := provider.ChatEvent{Type: eventType, Delta: delta.Text}
 		if eventType == provider.EventReasoning && protocol.HarmonyRequired {
@@ -481,7 +488,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 		return
 	}
 
-	content := ""
+	content := diagnosticPrefix.String()
 	if result.Turn != nil {
 		content = result.Turn.FinalContent
 	}

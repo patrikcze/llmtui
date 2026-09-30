@@ -222,8 +222,10 @@ payload-free diagnostics. When Entity Context tools are active and the
 selected model supports images, each new image gets one additional bounded,
 tool-free visual observation capture. The capture stores model-derived text only; successful
 capture removes the raw image from future in-memory provider history, while a
-failed capture leaves the raw image available. vision_max_tokens is capped at
-800. See
+failed capture leaves the raw image available. `vision_max_tokens` is the first
+capture attempt's output budget (default 800, capped at 4096). An incomplete
+capture is retried once with twice that budget, up to 4096; incomplete JSON is
+never retained. See
 [`architecture/entity-context-runtime.md`](architecture/entity-context-runtime.md).
 
 | Key | Default | Meaning |

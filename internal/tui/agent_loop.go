@@ -1338,6 +1338,17 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		m.refreshViewport()
 		return m, persist
 	}
+	// Semantic and synthetic verdicts cannot establish a filesystem mutation
+	// without the controller's own successful write receipt. This also covers
+	// an optimistic semantic verdict after the normal verifier route.
+	if (result.Verdict == agent.VerificationPassed || result.Verdict == agent.VerificationInconclusive) &&
+		missingFileWriteReceipt(run, m.agentLoop.execution) {
+		result = agent.VerificationResult{
+			Verdict: agent.VerificationFailed, Summary: "requested file write has no successful write_file or edit_file receipt",
+			Evidence: []string{"no file-write tool receipt"}, Retryable: true,
+			RecommendedNext: "Write the requested workspace file with write_file or edit_file, then report the observed tool result.",
+		}
+	}
 	result = satisfyLegacyPassedCriteria(run, result, verifierPath == "semantic")
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)

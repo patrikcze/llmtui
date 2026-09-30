@@ -2644,9 +2644,21 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		}
 		if pseudoRecovery.Allowed() {
 			m.toolRecoveryFeedback = visiblePseudoCallRecoveryFeedback
+			if !m.useNativeTools() {
+				m.toolRecoveryFeedback = visibleFencedCallRecoveryFeedback
+			}
 			m.notice = "provider emitted a visible tool envelope without a structured call — retrying once through the normal tool path"
 			m.refreshViewport()
 			return m, m.continueChat()
+		}
+		if pseudoRecovery.Reason != "" {
+			m.errText = "Model repeated a visible tool envelope without an executable tool call; nothing was executed."
+			m.notice = "tool-call recovery exhausted — nothing was executed"
+			m.failVerifiedRun(errors.New(m.errText))
+			m.complete(turnOutcomeExecutionFailure)
+			m.endAgentRun()
+			m.refreshViewport()
+			return m, m.persistAgentRun()
 		}
 		if malformedToolCall {
 			// This is usually a one-off backend parsing hiccup (observed:

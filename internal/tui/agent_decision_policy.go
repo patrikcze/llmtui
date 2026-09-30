@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -66,6 +67,15 @@ type agentVerificationPlan struct {
 // written; run/execution are read-only here (both must already be fully
 // populated by the caller, exactly as they were before this extraction).
 func planAgentVerification(run *agent.AgentRun, execution agent.ExecutionResult, mode string) agentVerificationPlan {
+	if (mode == config.VerifierModeOff || mode == config.VerifierModeDeterministic ||
+		(run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 && run.ContractCoverageJustified())) &&
+		missingFileWriteReceipt(run, execution) {
+		return agentVerificationPlan{Route: agentVerificationPlanSynthetic, Result: agent.VerificationResult{
+			Verdict: agent.VerificationFailed, Summary: "requested file write has no successful write_file or edit_file receipt",
+			Evidence: []string{"no file-write tool receipt"}, Retryable: true,
+			RecommendedNext: "Write the requested workspace file with write_file or edit_file, then report the observed tool result.",
+		}}
+	}
 	if run.HasCriteria() && len(run.UnresolvedCriteria()) == 0 && run.ContractCoverageJustified() {
 		return agentVerificationPlan{
 			Route: agentVerificationPlanSynthetic,
@@ -105,6 +115,30 @@ func planAgentVerification(run *agent.AgentRun, execution agent.ExecutionResult,
 		// shortcut above, which is mode-independent by construction).
 	}
 	return agentVerificationPlan{Route: agentVerificationPlanSemantic}
+}
+
+func missingFileWriteReceipt(run *agent.AgentRun, execution agent.ExecutionResult) bool {
+	if run == nil || !agent.MissingFileWriteReceipt(run.Request, execution) {
+		return false
+	}
+	// A later user response can explicitly replace the requested artifact
+	// after a denied write. The controller owns this resume prefix; only the
+	// user's new input after it may waive the original write obligation.
+	const userInputPrefix = "Continue the original request using the user's new input: "
+	for _, cycle := range run.Cycles {
+		if input, ok := strings.CutPrefix(cycle.Objective, userInputPrefix); ok {
+			input = strings.ToLower(input)
+			for _, waiver := range []string{"skip the write", "do not write", "don't write", "without writing", "without the file"} {
+				if strings.Contains(input, waiver) {
+					return false
+				}
+			}
+		}
+		if cycle.Execution != nil && agent.HasFileWriteReceipt(*cycle.Execution) {
+			return false
+		}
+	}
+	return true
 }
 
 // decisionCalibrationProfile binds every fact a guarded-assist decision

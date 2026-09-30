@@ -66,6 +66,33 @@ func TestChatStreamsDeltasInOrderThenDone(t *testing.T) {
 	}
 }
 
+func TestChatDiagnosesVisibleToolEnvelopeWithoutTurn(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := writeFakeModel(t, dir, "gemma-4-e4b.gguf")
+	rt := &scriptedRuntime{genPieces: []string{`<|tool_call>call:write_file{path:<|"|>report.md<|"|>}<tool_call|>`}}
+	p := New("embedded", testOptions(modelPath), fixedRuntime(rt))
+	events, err := p.Chat(context.Background(), provider.ChatRequest{Model: modelPath,
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "write report.md"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range drain(events) {
+		if event.Type != provider.EventDone {
+			continue
+		}
+		if len(event.ToolCalls) != 0 {
+			t.Fatalf("a visible envelope became an executable call: %+v", event.ToolCalls)
+		}
+		for _, diagnostic := range event.ToolCallDiagnostics {
+			if diagnostic.Classification == provider.ToolCallSuspectedCensored {
+				return
+			}
+		}
+		t.Fatalf("visible envelope was missed by diagnostics: %+v", event.ToolCallDiagnostics)
+	}
+	t.Fatal("no terminal event")
+}
+
 func TestChatMapsReasoningDeltasAndPropagatesMode(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")

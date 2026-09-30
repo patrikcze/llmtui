@@ -21,6 +21,28 @@ func cleanExecution() agent.ExecutionResult {
 	}
 }
 
+func TestPlanAgentVerificationRequiresObservedFileWrite(t *testing.T) {
+	run := &agent.AgentRun{Request: "Write the weather report to weather.md", Cycle: 1,
+		Criteria: []agent.Criterion{{ID: "c1", Kind: agent.CriterionSemantic, Status: agent.CriterionSatisfied}}}
+	for _, mode := range []string{config.VerifierModeOff, config.VerifierModeDeterministic, config.VerifierModeAdaptive, config.VerifierModeAlways} {
+		t.Run(mode, func(t *testing.T) {
+			plan := planAgentVerification(run, agent.ExecutionResult{Summary: "I wrote weather.md"}, mode)
+			if mode == config.VerifierModeAdaptive || mode == config.VerifierModeAlways {
+				if plan.Route != agentVerificationPlanSemantic {
+					t.Fatalf("semantic verifier was skipped in %s: %+v", mode, plan)
+				}
+			} else if plan.Route != agentVerificationPlanSynthetic || plan.Result.Verdict != agent.VerificationFailed ||
+				!plan.Result.Retryable || plan.GuardEligible {
+				t.Fatalf("unobserved write was accepted in %s: %+v", mode, plan)
+			}
+		})
+	}
+	plan := planAgentVerification(run, agent.ExecutionResult{ToolCalls: []agent.ToolCallRecord{{Name: "write_file", Succeeded: true}}}, config.VerifierModeDeterministic)
+	if plan.Result.Verdict != agent.VerificationPassed {
+		t.Fatalf("observed write did not clear the receipt guard: %+v", plan)
+	}
+}
+
 // twoCriteriaResolvedRun builds a run whose ContractCoverageJustified is
 // unconditionally true (genuine decomposition — more than one pinned
 // criterion) with every criterion already resolved, satisfying the early

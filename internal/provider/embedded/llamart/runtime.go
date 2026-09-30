@@ -608,10 +608,14 @@ func (r *Runtime) Generate(
 	if routeErr != nil {
 		return result, routeErr
 	}
+	// Reaching maxNew without EOS or a configured stop is a truncated turn
+	// for every template, including Gemma and constrained vision captures.
+	// The Harmony branch already reports this; the ordinary path must do so
+	// before tool parsing and before the provider emits EventDone.
+	result.Truncated = !terminated && !stopped
 	if harmony != nil {
 		turn, err := harmony.Finish()
 		if err != nil {
-			result.Truncated = !terminated
 			return result, err
 		}
 		result.ToolCalls = turn.ToolCalls

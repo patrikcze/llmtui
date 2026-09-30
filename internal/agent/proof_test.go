@@ -32,3 +32,26 @@ func TestRequestNamesUnaddressedMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestMissingFileWriteReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		request   string
+		execution ExecutionResult
+		want      bool
+	}{
+		{name: "claimed markdown file without call", request: "Write 30-09-2026-weather.md with the weather report", want: true},
+		{name: "claimed file after read", request: "Save the report to a file", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "read_file", Succeeded: true}}}, want: true},
+		{name: "failed write", request: "Create the report file", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "write_file", Succeeded: false}}}, want: true},
+		{name: "confirmed write", request: "Write the report file", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "write_file", Succeeded: true}}}},
+		{name: "confirmed edit", request: "Update the report.md", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "edit_file", Succeeded: true}}}},
+		{name: "informational", request: "Explain how to write a report file", want: false},
+		{name: "answer only", request: "Give me the weather report", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MissingFileWriteReceipt(tc.request, tc.execution); got != tc.want {
+				t.Fatalf("MissingFileWriteReceipt(%q) = %v, want %v", tc.request, got, tc.want)
+			}
+		})
+	}
+}

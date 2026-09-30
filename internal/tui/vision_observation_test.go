@@ -14,11 +14,13 @@ import (
 )
 
 type visionObservationTestProvider struct {
-	response  string
-	reasoning string
-	err       error
-	truncated bool
-	calls     []provider.ChatRequest
+	response       string
+	responses      []string
+	reasoning      string
+	err            error
+	truncated      bool
+	truncatedFirst bool
+	calls          []provider.ChatRequest
 }
 
 func (p *visionObservationTestProvider) Name() string { return "vision-test" }
@@ -31,6 +33,11 @@ func (p *visionObservationTestProvider) HealthCheck(context.Context) error { ret
 
 func (p *visionObservationTestProvider) Chat(_ context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	p.calls = append(p.calls, req)
+	response := p.response
+	if len(p.responses) >= len(p.calls) {
+		response = p.responses[len(p.calls)-1]
+	}
+	truncated := p.truncated || (p.truncatedFirst && len(p.calls) == 1)
 	events := make(chan provider.ChatEvent, 2)
 	go func() {
 		defer close(events)
@@ -41,11 +48,35 @@ func (p *visionObservationTestProvider) Chat(_ context.Context, req provider.Cha
 		if p.reasoning != "" {
 			events <- provider.ChatEvent{Type: provider.EventReasoning, Delta: p.reasoning}
 		} else {
-			events <- provider.ChatEvent{Type: provider.EventDelta, Delta: p.response}
+			events <- provider.ChatEvent{Type: provider.EventDelta, Delta: response}
 		}
-		events <- provider.ChatEvent{Type: provider.EventDone, Truncated: p.truncated}
+		events <- provider.ChatEvent{Type: provider.EventDone, Truncated: truncated}
 	}()
 	return events, nil
+}
+
+func TestVisionObservationRetriesIncompleteCaptureWithConfiguredBudget(t *testing.T) {
+	complete := `{"observations":[{"summary":"a diagram","observations":["two connected boxes"],"visible_text":[],"limitations":[]}]}`
+	for _, tc := range []struct {
+		name     string
+		provider *visionObservationTestProvider
+	}{
+		{name: "decoder unexpected EOF", provider: &visionObservationTestProvider{responses: []string{`{"observations":[{"summary":"unfinished`, complete}}},
+		{name: "provider truncation", provider: &visionObservationTestProvider{response: complete, truncatedFirst: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newVisionObservationTestModel(t, tc.provider)
+			m.cfg.Entities.VisionMaxTokens = 1200
+			completeVisionObservation(t, m, provider.Image{Data: []byte("diagram-png"), MIME: "image/png"})
+			if len(tc.provider.calls) != 2 || tc.provider.calls[0].MaxTokens != 1200 || tc.provider.calls[1].MaxTokens != 2400 {
+				t.Fatalf("capture attempts = %+v, want budgets 1200 then 2400", tc.provider.calls)
+			}
+			user := m.session.Messages[len(m.session.Messages)-2]
+			if len(user.Images) != 0 || len(user.References) != 1 {
+				t.Fatalf("recovered capture was not retained: %+v", user)
+			}
+		})
+	}
 }
 
 func boolPointerForTest(value bool) *bool { return &value }

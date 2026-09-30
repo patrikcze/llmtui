@@ -51,6 +51,38 @@ func TestVisiblePseudoCallRecoveryIsBoundedAndUsesStructuredRetry(t *testing.T) 
 	}
 }
 
+func TestVisibleGemmaEnvelopeRetriesThroughFencedProtocol(t *testing.T) {
+	const pseudo = `<|tool_call>call:write_file{path:<|"|>report.md<|"|>}<tool_call|>`
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: pseudo, toolCallDiagnostics: provider.ObserveToolCallResponse("test-model", true, pseudo, nil, false, false)},
+		agentScriptStep{text: "```tool write_file report.md\nrecovered content\n```"},
+	)
+	m.agentOn = false
+	m.toolsOn = true
+	m.toolsNative = false
+	m.toolsAutoApprove = false
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	driveAgentCommands(t, m, m.dispatch("write report.md", nil))
+	if len(prov.requests) != 2 || len(prov.requests[1].Tools) != 0 {
+		t.Fatalf("fenced retry requests = %+v", prov.requests)
+	}
+	if len(m.pendingCalls) != 1 || m.pendingCalls[0].Tool != tools.ToolWriteFile {
+		t.Fatalf("fenced retry did not reach normal approval: %+v", m.pendingCalls)
+	}
+	feedbackSeen := false
+	for _, message := range prov.requests[1].Messages {
+		feedbackSeen = feedbackSeen || strings.Contains(message.Content, "fenced tool format")
+	}
+	if !feedbackSeen {
+		t.Fatal("fenced retry did not receive protocol-specific feedback")
+	}
+	for _, message := range m.session.Messages {
+		if strings.Contains(message.Content, pseudo) {
+			t.Fatalf("visible native envelope entered history: %+v", message)
+		}
+	}
+}
+
 func TestVisiblePseudoCallNeverOverridesNativeToolCall(t *testing.T) {
 	m := newTestModel(t)
 	m.thinking = true

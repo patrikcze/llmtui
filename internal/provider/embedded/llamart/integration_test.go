@@ -260,6 +260,16 @@ func TestRuntimeVisionIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("token limit reports truncation", func(t *testing.T) {
+		limited := generateIntegration(t, runtime, embedded.GenRequest{
+			Messages:    []provider.Message{{Role: provider.RoleUser, Content: "List ten distinct colors, separated by commas."}},
+			Temperature: 0, TopP: 0.9, MaxTokens: 1,
+		})
+		if !limited.result.Truncated {
+			t.Fatalf("one-token Gemma response was not marked truncated: %+v", limited.result)
+		}
+	})
+
 	red := solidPNG(t, color.RGBA{R: 255, A: 255})
 	blue := solidPNG(t, color.RGBA{B: 255, A: 255})
 	t.Run("single image and exact usage", func(t *testing.T) {

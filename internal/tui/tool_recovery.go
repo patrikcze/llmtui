@@ -7,13 +7,14 @@ import (
 )
 
 const visiblePseudoCallRecoveryFeedback = "Tool-call recovery: the previous response used a visible tool-control envelope that was not decoded. If a tool is still needed, issue one call using only the currently offered tool schema. Do not repeat a textual tool envelope. Normal validation and approval still apply."
+const visibleFencedCallRecoveryFeedback = "Tool-call recovery: the previous response used a visible native tool-control envelope that was not decoded. If a tool is still needed, use the fenced tool format in the current instructions. Do not repeat the native envelope or claim execution without a tool result. Normal validation and approval still apply."
 
 // visiblePseudoCallRecoveryDecision accepts only a provider's strict,
 // content-free pseudo-call diagnosis. It does not inspect reply text, parse
 // arguments, infer a tool name, or create a call; a subsequent response must
 // still reach the ordinary native/fenced validation and approval pipeline.
 func (m *Model) visiblePseudoCallRecoveryDecision(events []provider.ToolCallDiagnostic, calls []provider.ToolCall, truncated, malformed bool) provider.ToolRecoveryDecision {
-	if !m.useNativeTools() || len(calls) != 0 || truncated || malformed {
+	if !m.toolsOn || m.toolRunner == nil || len(calls) != 0 || truncated || malformed {
 		return provider.ToolRecoveryDecision{}
 	}
 	for _, event := range events {

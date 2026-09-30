@@ -74,3 +74,45 @@ func wordNamesVerb(word, verb string) bool {
 	}
 	return false
 }
+
+// MissingFileWriteReceipt reports a narrow, observable gap: the user asked
+// for a workspace file to be written, but no successful write_file/edit_file
+// call was recorded. Verifier modes that skip semantic review must not turn
+// the executor's prose claim into a completed file mutation.
+func MissingFileWriteReceipt(request string, execution ExecutionResult) bool {
+	lower := strings.ToLower(strings.TrimSpace(request))
+	if strings.HasPrefix(lower, "explain how to ") || strings.HasPrefix(lower, "how do i ") {
+		return false
+	}
+	words := strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_'
+	})
+	wantsWrite, namesFile := false, false
+	for _, word := range words {
+		for _, verb := range []string{"write", "save", "create", "append", "update", "modify"} {
+			if wordNamesVerb(word, verb) {
+				wantsWrite = true
+			}
+		}
+		if word == "file" || word == "files" || word == "document" || word == "report" ||
+			strings.HasSuffix(word, ".md") || strings.HasSuffix(word, ".txt") || strings.HasSuffix(word, ".json") {
+			namesFile = true
+		}
+	}
+	if !wantsWrite || !namesFile {
+		return false
+	}
+	return !HasFileWriteReceipt(execution)
+}
+
+// HasFileWriteReceipt reads controller-owned tool results, never assistant
+// prose. A successful whole-file or surgical write is a valid receipt even
+// when the file already held the requested bytes and no diff was produced.
+func HasFileWriteReceipt(execution ExecutionResult) bool {
+	for _, call := range execution.ToolCalls {
+		if call.Succeeded && (call.Name == "write_file" || call.Name == "edit_file") {
+			return true
+		}
+	}
+	return false
+}

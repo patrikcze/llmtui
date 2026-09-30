@@ -595,6 +595,31 @@ func TestAgentEvolutionContractCoverageGapForcesSemanticVerification(t *testing.
 	}
 }
 
+func TestAgentRejectsClaimedFileWriteWithoutReceipt(t *testing.T) {
+	m, prov := configureAgentTestModel(t,
+		agentScriptStep{text: "The weather report was written to report.md."},
+		agentScriptStep{text: verifierJSON("passed", "report complete", "", false, false)},
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "write-report", Name: tools.ToolWriteFile, Arguments: `{"path":"report.md","content":"Weather report"}`}}},
+		agentScriptStep{text: "write_file confirmed report.md"},
+		agentScriptStep{text: verifierJSON("passed", "report complete", "", false, false)},
+	)
+	prov.contractReplies = []string{`{"criteria":["write report.md"],"needs_user_input":false,"question":"","user_options":[]}`}
+	root := t.TempDir()
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolsAutoApprove = true
+	m.toolRunner = tools.NewRunner(root, 64)
+	m.cfg.Agent.Verifier.Mode = "adaptive"
+	driveAgentCommands(t, m, m.startVerifiedRun("Write the weather report to report.md.", nil))
+	if run := m.agentLoop.run; run.Status != agent.DecisionDone || run.Cycle != 2 ||
+		run.Cycles[0].Verification.Verdict != agent.VerificationFailed {
+		t.Fatalf("unobserved write was accepted or recovery failed: %+v", run)
+	}
+	if data, err := os.ReadFile(root + "/report.md"); err != nil || string(data) != "Weather report" {
+		t.Fatalf("report.md = %q, %v", data, err)
+	}
+}
+
 // TestVerifiedAgentSingleCriterionRequestWithoutMutationVerbStillShortcuts
 // proves the Phase 2 coverage guard is narrowly scoped: a single pinned
 // criterion for a request that names no unaddressed mutating verb — even
@@ -1532,12 +1557,12 @@ func TestVerifiedAgentEmptyCompletionAfterToolWorkIsVerifiedNotFailed(t *testing
 // run doesn't accept a cut-off answer as done.
 func TestVerifiedAgentTruncatedExecutorReplyForcesRetry(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
-		agentScriptStep{text: "partial write attempt", truncated: true},
+		agentScriptStep{text: "partial answer", truncated: true},
 		agentScriptStep{text: verifierJSON("passed", "looks complete", "", false, false)},
-		agentScriptStep{text: "completed the write this time"},
+		agentScriptStep{text: "completed the answer this time"},
 		agentScriptStep{text: verifierJSON("passed", "complete", "", false, false)},
 	)
-	driveAgentCommands(t, m, m.startVerifiedRun("write the file", nil))
+	driveAgentCommands(t, m, m.startVerifiedRun("answer the question", nil))
 
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
 		t.Fatalf("run = %+v, want a forced retry cycle after the truncated reply", m.agentLoop.run)
@@ -2606,12 +2631,12 @@ func TestAdaptiveCleanCycleAfterDeterministicFailureStillVerifiesSemantically(t 
 // verdict that would be discarded by the deterministic override.
 func TestAdaptiveDeterministicFailureSkipsSemanticVerifier(t *testing.T) {
 	m, prov := configureAgentTestModel(t,
-		agentScriptStep{text: "partial write attempt", truncated: true},
-		agentScriptStep{text: "completed the write this time"},
+		agentScriptStep{text: "partial answer", truncated: true},
+		agentScriptStep{text: "completed the answer this time"},
 		agentScriptStep{text: verifierJSON("passed", "complete", "", false, false)},
 	)
 	m.cfg.Agent.Verifier.Mode = "adaptive"
-	driveAgentCommands(t, m, m.startVerifiedRun("write the file", nil))
+	driveAgentCommands(t, m, m.startVerifiedRun("answer the question", nil))
 
 	if m.agentLoop.run.Status != agent.DecisionDone || m.agentLoop.run.Cycle != 2 {
 		t.Fatalf("run = %+v, want a deterministic retry then semantic completion", m.agentLoop.run)

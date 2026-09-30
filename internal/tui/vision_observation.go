@@ -22,6 +22,7 @@ import (
 const (
 	visionCaptureVersion   = "1"
 	defaultVisionMaxTokens = 800
+	maxVisionCaptureTokens = 4096
 	maxVisionImagesPerCall = 8
 	maxVisionStringBytes   = 2048
 	maxVisionItems         = 32
@@ -193,8 +194,8 @@ func (m *Model) maybeStartVisionCapture() tea.Cmd {
 
 func (m *Model) visionMaxTokens() int {
 	maxTokens := defaultVisionMaxTokens
-	if m.cfg != nil && m.cfg.Entities.VisionMaxTokens > 0 && m.cfg.Entities.VisionMaxTokens < maxTokens {
-		maxTokens = m.cfg.Entities.VisionMaxTokens
+	if m.cfg != nil && m.cfg.Entities.VisionMaxTokens > 0 {
+		maxTokens = min(m.cfg.Entities.VisionMaxTokens, maxVisionCaptureTokens)
 	}
 	return maxTokens
 }
@@ -352,7 +353,27 @@ func (m *Model) rememberVisionObservation(digest string, id entity.ID) {
 	}
 }
 
+var errVisionCaptureTruncated = errors.New("vision observation capture was truncated")
+
 func captureVisionObservations(
+	ctx context.Context,
+	prov provider.Provider,
+	model string,
+	images []visionCaptureImage,
+	maxTokens int,
+) ([]visionCaptureResult, error) {
+	observations, err := captureVisionObservationsOnce(ctx, prov, model, images, maxTokens)
+	if err == nil || maxTokens >= maxVisionCaptureTokens ||
+		(!errors.Is(err, errVisionCaptureTruncated) && !errors.Is(err, io.ErrUnexpectedEOF)) {
+		return observations, err
+	}
+	// A detailed image can outgrow the small default output budget. Retry
+	// once in a fresh capture request with a bounded larger budget; the
+	// decoder still requires complete, strict JSON before retaining data.
+	return captureVisionObservationsOnce(ctx, prov, model, images, min(maxVisionCaptureTokens, maxTokens*2))
+}
+
+func captureVisionObservationsOnce(
 	ctx context.Context,
 	prov provider.Provider,
 	model string,
@@ -400,7 +421,7 @@ func captureVisionObservations(
 		case provider.EventDone:
 			done = true
 			if event.Truncated {
-				return nil, errors.New("vision observation capture was truncated")
+				return nil, errVisionCaptureTruncated
 			}
 		}
 	}
