@@ -1252,6 +1252,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.relayout()
+		// Cut the newest results to what the continuation has room for
+		// before anything records or appends them.
+		msg.results = m.boundToolResultsToBudget(msg.results)
 		ok, failed := countToolOutcomes(msg.results)
 		m.toolOK += ok
 		m.toolErr += failed

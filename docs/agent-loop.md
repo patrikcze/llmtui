@@ -287,6 +287,13 @@ A tool call cut off by `max_tokens` is never executed, in agent mode or
 ordinary chat — see [Local-model behavior](#local-model-behavior) below for
 how truncation is otherwise handled as deterministic evidence.
 
+A native batch whose results would not fit the next request no longer fails
+the run: its newest results are cut to fit before they are recorded (see
+[Context Management](context-management.md)). A cut `read_file` result
+records only the line window it delivered, so it cannot satisfy a
+whole-file read requirement or bind an edit as a complete observation; the
+executor rereads the rest with `offset`/`limit`.
+
 ## Repeated tool calls and no-progress detection
 
 A run-scoped ledger fingerprints every tool call by its tool identity and
