@@ -132,3 +132,119 @@ func TestRetryableStreamError(t *testing.T) {
 		}
 	}
 }
+
+// plainChatToolModel is configureAgentTestModel in ordinary chat with native
+// tools on a temp workspace.
+func plainChatToolModel(t *testing.T, steps ...agentScriptStep) (*Model, *scriptedAgentProvider) {
+	t.Helper()
+	m, prov := configureAgentTestModel(t, steps...)
+	m.agentOn = false
+	m.toolsOn, m.toolsNative, m.toolsAutoApprove = true, true, true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	return m, prov
+}
+
+func toolMessages(m *Model) int {
+	n := 0
+	for _, message := range m.session.Messages {
+		if message.Role == provider.RoleTool {
+			n++
+		}
+	}
+	return n
+}
+
+// TestOrdinaryChatReplaysInterruptedToolContinuationOnce is plan step 7 (S6
+// plain): a native-tool continuation interrupted mid-stream used to end the
+// turn with the tool work thrown away. It is replayed once, like an agent
+// request; the partial text never enters history and the tool is not rerun.
+func TestOrdinaryChatReplaysInterruptedToolContinuationOnce(t *testing.T) {
+	m, prov := plainChatToolModel(t,
+		agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}},
+		agentScriptStep{text: "partial answer that must be discarded", streamErr: fmt.Errorf("mid-stream: %w", provider.ErrStreamInterrupted)},
+		agentScriptStep{text: "The workspace is empty."},
+	)
+	driveAgentCommands(t, m, m.dispatch("list the workspace", nil))
+
+	if m.errText != "" {
+		t.Fatalf("turn failed: %s", m.errText)
+	}
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider requests = %d, want tool round + interrupted + replay", len(prov.requests))
+	}
+	if got := toolMessages(m); got != 1 {
+		t.Errorf("tool messages = %d, want the call executed exactly once", got)
+	}
+	for _, message := range m.session.Messages {
+		if strings.Contains(message.Content, "partial answer that must be discarded") {
+			t.Fatal("interrupted partial text entered conversation history")
+		}
+	}
+	if last := m.session.Messages[len(m.session.Messages)-1]; last.Role != provider.RoleAssistant || last.Content != "The workspace is empty." {
+		t.Fatalf("last message = %+v, want the replayed answer", last)
+	}
+	interrupted, replay := prov.requests[1], prov.requests[2]
+	if len(interrupted.Messages) != len(replay.Messages) {
+		t.Errorf("replay has %d messages, interrupted request had %d", len(replay.Messages), len(interrupted.Messages))
+	}
+}
+
+// TestOrdinaryChatContinuationReplayIsBounded: one replay per model round.
+// A second interruption in the same round keeps the partial reply and ends
+// the turn as before; a transport-unrelated error is never replayed; and a
+// later round gets its own replay.
+func TestOrdinaryChatContinuationReplayIsBounded(t *testing.T) {
+	listCall := agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-1", Name: tools.ToolListDir, Arguments: `{}`}}}
+	t.Run("second interruption in the same round fails", func(t *testing.T) {
+		m, prov := plainChatToolModel(t,
+			listCall,
+			agentScriptStep{text: "first", streamErr: provider.ErrStreamInterrupted},
+			agentScriptStep{text: "second", streamErr: fmt.Errorf("read stream: %w", syscall.ECONNRESET)},
+			agentScriptStep{text: "must never be requested"},
+		)
+		driveAgentCommands(t, m, m.dispatch("list the workspace", nil))
+		if len(prov.requests) != 3 {
+			t.Fatalf("provider requests = %d, want tool round + interrupted + one replay", len(prov.requests))
+		}
+		if !strings.Contains(m.errText, "partial reply kept") {
+			t.Errorf("errText = %q, want the partial reply preserved", m.errText)
+		}
+	})
+	t.Run("first request of the turn is not replayed", func(t *testing.T) {
+		m, prov := plainChatToolModel(t,
+			agentScriptStep{text: "partial", streamErr: provider.ErrStreamInterrupted},
+			agentScriptStep{text: "must never be requested"},
+		)
+		driveAgentCommands(t, m, m.dispatch("hello", nil))
+		if len(prov.requests) != 1 || !strings.Contains(m.errText, "partial reply kept") {
+			t.Fatalf("provider requests = %d, errText = %q; want the single interrupted request with its partial reply kept", len(prov.requests), m.errText)
+		}
+	})
+	t.Run("non-transport error is not replayed", func(t *testing.T) {
+		m, prov := plainChatToolModel(t,
+			listCall,
+			agentScriptStep{text: "x", streamErr: provider.ErrResponseTooLarge},
+			agentScriptStep{text: "must never be requested"},
+		)
+		driveAgentCommands(t, m, m.dispatch("list the workspace", nil))
+		if len(prov.requests) != 2 || m.errText == "" {
+			t.Fatalf("provider requests = %d, errText = %q; want the failed continuation only", len(prov.requests), m.errText)
+		}
+	})
+	t.Run("each round gets its own replay", func(t *testing.T) {
+		m, prov := plainChatToolModel(t,
+			listCall,
+			agentScriptStep{text: "a", streamErr: provider.ErrStreamInterrupted},
+			agentScriptStep{toolCalls: []provider.ToolCall{{ID: "call-2", Name: tools.ToolListDir, Arguments: `{}`}}},
+			agentScriptStep{text: "b", streamErr: provider.ErrStreamInterrupted},
+			agentScriptStep{text: "Done."},
+		)
+		driveAgentCommands(t, m, m.dispatch("list the workspace twice", nil))
+		if m.errText != "" {
+			t.Fatalf("turn failed: %s", m.errText)
+		}
+		if len(prov.requests) != 5 || toolMessages(m) != 2 {
+			t.Fatalf("provider requests = %d, tool messages = %d; want 5 and 2", len(prov.requests), toolMessages(m))
+		}
+	})
+}

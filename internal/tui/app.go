@@ -2507,9 +2507,10 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !msg.ok {
-		// Channel closed without a terminal event. If the inactivity watchdog
-		// tripped, say so; otherwise treat it as a clean finish.
-		if cmd, ok := m.replayInterruptedAgentStream(provider.ErrStreamInterrupted, false); ok {
+		// Channel closed without a terminal event. An agent request or a
+		// plain-chat tool continuation is replayed once; otherwise, if the
+		// inactivity watchdog tripped, say so, else treat it as a clean finish.
+		if cmd, ok := m.replayInterruptedStream(provider.ErrStreamInterrupted, false); ok {
 			return m, cmd
 		}
 		if m.streamCanceledByIdle() {
@@ -2788,7 +2789,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, m.continueChat()
 		}
-		if cmd, ok := m.replayInterruptedAgentStream(msg.event.Err, msg.requestFailed); ok {
+		if cmd, ok := m.replayInterruptedStream(msg.event.Err, msg.requestFailed); ok {
 			return m, cmd
 		}
 		// A cancellation caused by the idle watchdog surfaces here as
@@ -2803,22 +2804,32 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// replayInterruptedAgentStream resends the current executor request once
-// when its stream was interrupted after it started — a dropped connection,
-// a stream that ended without a terminal signal, or an inactivity stall.
-// Without this, one transient backend hiccup (common with local servers)
-// failed the whole multi-cycle agent run. The replay is side-effect free:
-// providers emit tool calls only on EventDone, so nothing from the
-// interrupted generation ran, and its partial text is discarded rather than
-// entering history. It is bounded to one replay per model round (see
-// turnRuntime.claimStreamReplay), applies only to an active agent run, and
-// never to cancellation, the run's own deadline, a request whose pre-stream
-// retries were already exhausted, or a non-transport error.
-func (m *Model) replayInterruptedAgentStream(err error, requestFailed bool) (tea.Cmd, bool) {
-	if !m.agentRunActive() || requestFailed {
+// replayInterruptedStream resends the current request once when its stream
+// was interrupted after it started — a dropped connection, a stream that
+// ended without a terminal signal, or an inactivity stall. Without this, one
+// transient backend hiccup (common with local servers) failed the whole
+// multi-cycle agent run, or ended a plain-chat turn halfway through its tool
+// work. The replay is side-effect free: providers emit tool calls only on
+// EventDone, so nothing from the interrupted generation ran, and its partial
+// text is discarded rather than entering history. It is bounded to one
+// replay per model round (see turnRuntime.claimStreamReplay) and never
+// applies to cancellation, the run's own deadline, a request whose
+// pre-stream retries were already exhausted, or a non-transport error.
+//
+// It applies to every request of an active agent run, and in ordinary chat
+// only to a native-tool continuation: that request resends tool results the
+// user already approved and ran, so failing it throws that work away. The
+// first request of an ordinary turn is the user's own message; its partial
+// reply is kept and retrying is left to the user.
+func (m *Model) replayInterruptedStream(err error, requestFailed bool) (tea.Cmd, bool) {
+	if requestFailed {
 		return nil, false
 	}
-	if m.agentLoop.ctx != nil && m.agentLoop.ctx.Err() != nil {
+	if m.agentRunActive() {
+		if m.agentLoop.ctx != nil && m.agentLoop.ctx.Err() != nil {
+			return nil, false
+		}
+	} else if !m.useNativeTools() || m.toolDepth == 0 {
 		return nil, false
 	}
 	stalled := m.streamCanceledByIdle()

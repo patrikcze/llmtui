@@ -70,7 +70,7 @@ type turnRuntime struct {
 	malformedToolCallRetried bool
 	hasHiddenToolRecovery    bool
 	// streamReplayed records that the current model round already used its
-	// single mid-stream interruption replay (see replayInterruptedAgentStream).
+	// single mid-stream interruption replay (see replayInterruptedStream).
 	// It is independent of the tool-recovery budget: a transport drop says
 	// nothing about the model's tool-call behavior.
 	streamReplayed  bool
