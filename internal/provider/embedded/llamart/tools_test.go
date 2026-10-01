@@ -897,3 +897,70 @@ func TestToolOutputRouterGemmaRejectsImpossibleKey(t *testing.T) {
 		t.Fatalf("Finish returned calls %+v, err %T %v, want *embedded.MalformedToolCallError", calls, err, err)
 	}
 }
+
+// TestToolOutputRouterGemmaBareNullOmitsOptionalArgument is the regression
+// for a live Gemma 4 E4B write_file call: Gemma's call syntax has no JSON
+// null, so a bare `expected_resource_id:null` reached the tool as the string
+// "null" and the write failed with `invalid expected_resource_id "null"`.
+// An optional argument given a bare null is omitted, like JSON null over
+// HTTP; a required one is left as is, so the tool still reports it.
+func TestToolOutputRouterGemmaBareNullOmitsOptionalArgument(t *testing.T) {
+	writeFile := provider.ToolSpec{
+		Name: "write_file",
+		Parameters: []byte(`{"type":"object","properties":{` +
+			`"path":{"type":"string"},"content":{"type":"string"},` +
+			`"expected_resource_id":{"type":"string"},"offset":{"type":"integer"},"literal":{"type":"boolean"}},` +
+			`"required":["path","content"]}`),
+	}
+	tests := []struct {
+		name string
+		raw  string
+		want map[string]any
+	}{
+		{
+			name: "string",
+			raw:  `<|tool_call>call:write_file{path:<|"|>a.md<|"|>,content:<|"|>hi<|"|>,expected_resource_id:null}<tool_call|>`,
+			want: map[string]any{"path": "a.md", "content": "hi"},
+		},
+		{
+			name: "integer and boolean",
+			raw:  `<|tool_call>call:write_file{path:<|"|>a.md<|"|>,content:<|"|>hi<|"|>,offset:null,literal: null }<tool_call|>`,
+			want: map[string]any{"path": "a.md", "content": "hi"},
+		},
+		{
+			name: "required argument is kept",
+			raw:  `<|tool_call>call:write_file{path:<|"|>a.md<|"|>,content:null}<tool_call|>`,
+			want: map[string]any{"path": "a.md", "content": "null"},
+		},
+		{
+			name: "a real value is kept",
+			raw:  `<|tool_call>call:write_file{path:<|"|>a.md<|"|>,content:<|"|>hi<|"|>,expected_resource_id:<|"|>ent_00003<|"|>}<tool_call|>`,
+			want: map[string]any{"path": "a.md", "content": "hi", "expected_resource_id": "ent_00003"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{writeFile})
+			router.Push(tc.raw)
+			_, calls, err := router.Finish()
+			if err != nil {
+				t.Fatalf("Finish: %v", err)
+			}
+			if len(calls) != 1 || calls[0].ArgumentsError != "" {
+				t.Fatalf("calls = %+v", calls)
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(calls[0].Arguments), &got); err != nil {
+				t.Fatalf("arguments are not JSON: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("arguments = %v, want %v", got, tc.want)
+			}
+			for key, want := range tc.want {
+				if got[key] != want {
+					t.Fatalf("arguments = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
