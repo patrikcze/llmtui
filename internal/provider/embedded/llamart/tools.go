@@ -711,6 +711,14 @@ func normalizeToolCalls(parsed []message.ToolCall, tools []provider.ToolSpec) ([
 		arguments := make(map[string]any, len(call.Function.Arguments))
 		var argErr error
 		for key, raw := range call.Function.Arguments {
+			// Gemma's call syntax has no JSON null: a bare `key:null` arrives
+			// as the text "null", which a string argument would otherwise keep
+			// verbatim (a live write_file failed on expected_resource_id
+			// "null"). Omit such an optional argument, as JSON null is over
+			// HTTP; a required one stays, so the tool reports it.
+			if strings.TrimSpace(raw) == "null" && !requiredArgument(schema, key) {
+				continue
+			}
 			value, err := normalizeArgument(raw, propertySchema(schema, key))
 			if err != nil {
 				argErr = fmt.Errorf("argument %q is invalid: %w", key, err)
@@ -750,6 +758,18 @@ func missingRequiredArgument(schema map[string]any, arguments map[string]string)
 		}
 	}
 	return "", nil
+}
+
+// requiredArgument reports whether schema's "required" list names key.
+// missingRequiredArgument has already validated the list's shape.
+func requiredArgument(schema map[string]any, key string) bool {
+	entries, _ := schema["required"].([]any)
+	for _, entry := range entries {
+		if name, _ := entry.(string); name == key {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeArgument(raw string, schema map[string]any) (any, error) {

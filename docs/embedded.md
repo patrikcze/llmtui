@@ -442,7 +442,11 @@ advertise parallel tool calls in one assistant response.
   missing required arguments remain errors. Gemma bracketed array arguments
   (`calendar_ids:[<|"|>a<|"|>, <|"|>b<|"|>]`) are re-parsed by llmtui: the
   upstream parser has no `[` case and would otherwise drop every element after
-  the first and silently swallow the next argument's key. A Gemma-only prompt
+  the first and silently swallow the next argument's key. Gemma's syntax has
+  no JSON null, so an optional argument written as a bare `null`
+  (`expected_resource_id:null`) is omitted, as JSON null is over HTTP, instead
+  of reaching the tool as the text `"null"`; a required one is still passed on
+  and reported by the tool. A Gemma-only prompt
   hint asks the
   model to answer after tool results and is applied to a cloned request—it is
   not written into the conversation history.
