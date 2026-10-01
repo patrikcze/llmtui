@@ -16,7 +16,7 @@ const (
 
 // EntityDetailsInstructions is the fenced-protocol guidance added only when
 // the controller has enabled the entity runtime.
-const EntityDetailsInstructions = `- get_entity_details — find stored runtime data with {"query":"name or topic keywords","kinds":["vision_observation"]} (returns up to 8 minimal candidates), or expand exact returned IDs with {"entity_ids":["ent_00001"],"level":"full"}. Use exactly one selector. Query lookup never expands full payloads. Entity kind/source matters: web results are not image evidence; for a prior screenshot/image use kinds=["vision_observation"], and if none exists report that visual evidence is unavailable. Call it alone.`
+const EntityDetailsInstructions = `- get_entity_details — find stored runtime data with {"query":"name or topic keywords","kinds":["vision_observation"]} (returns up to 8 minimal candidates), or expand exact returned IDs with {"entity_ids":["ent_00001"],"level":"full"}. Use exactly one selector. Query lookup never expands full payloads. Entity kind/source matters: web results are not image evidence; an image attached to the current user message is visible directly and needs no lookup; for a screenshot/image from an earlier message that is no longer attached, use kinds=["vision_observation"], and if none exists report that visual evidence is unavailable. Call it alone.`
 
 type entityDetailsArgs struct {
 	EntityIDs []string `json:"entity_ids"`
