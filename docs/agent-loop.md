@@ -257,6 +257,11 @@ least one of these is true:
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
 
+A rejected retry ends the run as `failed`, and its stop reason starts with
+the verifier's own cause (for example `requested file write has no successful
+write_file or edit_file receipt; retry rejected because …`), so the run says
+what failed rather than only that it could not retry.
+
 "New evidence" means new *information*, not activity: a successful result
 whose content digest this run has not seen, a changed file, a user answer or
 decision, or the first occurrence of an observational failure such as "that

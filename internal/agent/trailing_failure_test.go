@@ -170,3 +170,27 @@ func TestBoundExecutionDropsMalformedErrorCode(t *testing.T) {
 		t.Errorf("bounded codes = %q, %q; want not_found and empty", execution.ToolCalls[0].ErrorCode, execution.ToolCalls[1].ErrorCode)
 	}
 }
+
+// TestRejectedRetryKeepsVerifierCause: when a repeated failure's retry is
+// rejected, the stop reason still names what failed. Seen live: a run whose
+// requested file write never succeeded ended only with "retry rejected
+// because it has no changed objective…", which read as if the failure had
+// gone unverified.
+func TestRejectedRetryKeepsVerifierCause(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	run := newContractRun(t, now)
+	failed := ToolCallRecord{
+		Name: "write_file", Detail: "summary.md", Succeeded: false,
+		ErrorKind: ErrorToolValidation, ErrorCode: "invalid_arguments", Status: ActionExecuted,
+	}
+	trailingFailureRun(t, run, failed, now)
+	second := trailingFailureRun(t, run, failed, now)
+	if second.Decision != DecisionFailed {
+		t.Fatalf("decision = %s (%q), want failed", second.Decision, second.Reason)
+	}
+	for _, want := range []string{"deterministic tool failure: write_file", "retry rejected because"} {
+		if !strings.Contains(second.Reason, want) {
+			t.Errorf("stop reason %q is missing %q", second.Reason, want)
+		}
+	}
+}

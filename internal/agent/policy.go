@@ -99,7 +99,14 @@ func retryResult(run *AgentRun, verify *VerificationResult) StopResult {
 	next := strings.TrimSpace(verify.RecommendedNext)
 	changed := next != "" && !strings.EqualFold(next, strings.TrimSpace(run.Objective))
 	if !changed && !verify.NewEvidence && !verify.StrategyChanged && !verify.TransientFailure {
-		return StopResult{Decision: DecisionFailed, Reason: "retry rejected because it has no changed objective, strategy, context, or new evidence"}
+		// Keep the verifier's own cause: without it the run's only visible
+		// stop reason never says what failed (for example a requested file
+		// write with no successful write receipt).
+		reason := "retry rejected because it has no changed objective, strategy, context, or new evidence"
+		if summary := strings.TrimSpace(verify.Summary); summary != "" {
+			reason = summary + "; " + reason
+		}
+		return StopResult{Decision: DecisionFailed, Reason: reason}
 	}
 	if next == "" {
 		next = "Retry the bounded objective using the new evidence or corrected strategy."
