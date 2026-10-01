@@ -14,8 +14,7 @@ func TestClickDragSelectsAndCopiesText(t *testing.T) {
 	}
 	m.refreshViewport()
 
-	m.View() // triggers zone.Scan(), registering the chat viewport's bounds
-	z := waitForZone(t, chatViewportZoneID)
+	z := renderedZone(t, m, chatViewportZoneID)
 
 	m.Update(tea.MouseClickMsg{X: z.StartX + 2, Y: z.StartY, Button: tea.MouseLeft})
 	if !m.sel.selecting {
@@ -40,8 +39,7 @@ func TestClickDragSelectsInsideDebugOverlay(t *testing.T) {
 	m := newTestModel(t)
 	m.openOverlay(func() string { return "debug detail\nsecond line" })
 
-	m.View() // triggers zone.Scan(), registering the viewport's bounds
-	z := waitForZone(t, chatViewportZoneID)
+	z := renderedZone(t, m, chatViewportZoneID)
 
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	if !m.sel.selecting {
@@ -59,8 +57,7 @@ func TestSingleCellClickDoesNotSelect(t *testing.T) {
 	m.session.AddAssistant("some reply text")
 	m.refreshViewport()
 
-	m.View()
-	z := waitForZone(t, chatViewportZoneID)
+	z := renderedZone(t, m, chatViewportZoneID)
 
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	_, cmd := m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
@@ -78,8 +75,7 @@ func TestClickOutsideViewportDoesNotSelect(t *testing.T) {
 	m.session.AddAssistant("some reply text")
 	m.refreshViewport()
 
-	m.View()
-	waitForZone(t, chatViewportZoneID)
+	renderedZone(t, m, chatViewportZoneID)
 
 	// Far outside any real terminal size; guaranteed out of the zone's
 	// bounds regardless of layout.
@@ -96,8 +92,7 @@ func TestScrollClearsSelection(t *testing.T) {
 	}
 	m.refreshViewport()
 
-	m.View()
-	z := waitForZone(t, chatViewportZoneID)
+	z := renderedZone(t, m, chatViewportZoneID)
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseMotionMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseReleaseMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
@@ -117,8 +112,7 @@ func TestEscClearsSelection(t *testing.T) {
 	m.session.AddAssistant("some reply text")
 	m.refreshViewport()
 
-	m.View()
-	z := waitForZone(t, chatViewportZoneID)
+	z := renderedZone(t, m, chatViewportZoneID)
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseMotionMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseReleaseMsg{X: z.StartX + 5, Y: z.StartY, Button: tea.MouseLeft})
