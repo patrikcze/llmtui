@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -31,8 +32,7 @@ func addToolOutputTestBatch(m *Model) {
 
 func clickToolOutput(t *testing.T, m *Model, index int) {
 	t.Helper()
-	m.View()
-	z := waitForZone(t, toolOutputZoneID(index))
+	z := renderedZone(t, m, toolOutputZoneID(index))
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 }
@@ -68,8 +68,7 @@ func TestToolOutputClickGuards(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := newTestModel(t)
 			addToolOutputTestBatch(m)
-			m.View()
-			z := waitForZone(t, toolOutputZoneID(2))
+			z := renderedZone(t, m, toolOutputZoneID(2))
 			msg := tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft}
 			switch name {
 			case "drag":
@@ -141,6 +140,39 @@ func TestToolOutputExpansionPreservesScrollAndSanitizes(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(transcript), "last") {
 		t.Fatal("expanded output was truncated")
+	}
+}
+
+// A zone ID is process-global, so an earlier render with another layout
+// leaves bounds behind under the same ID. The click must use this frame's.
+func TestToolOutputClickIgnoresStaleZoneFromEarlierRender(t *testing.T) {
+	// One P keeps the zone worker from running until this goroutine yields,
+	// which is the starved-worker ordering a loaded -race run hits.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+	earlier := newTestModel(t)
+	earlier.resize(100, 40)
+	addToolOutputTestBatch(earlier)
+	stale := *renderedZone(t, earlier, toolOutputZoneID(2))
+
+	m := newTestModel(t)
+	m.resize(55, 20)
+	m.session.AddMessage(provider.Message{
+		Role:      provider.RoleAssistant,
+		ToolCalls: []provider.ToolCall{{ID: "only", Name: "run_command", Arguments: `{"command":"echo only"}`}},
+	})
+	m.session.AddMessage(provider.Message{
+		Role: provider.RoleTool, ToolCallID: "only", ToolName: "run_command", Content: "only output\nonly detail",
+	})
+	m.refreshViewport()
+
+	z := renderedZone(t, m, toolOutputZoneID(2))
+	if z.StartY == stale.StartY {
+		t.Fatalf("got the earlier render's bounds (row %d) for a caption this frame draws elsewhere", z.StartY)
+	}
+	clickToolOutput(t, m, 2)
+	if !strings.Contains(ansi.Strip(m.viewport.View()), "only detail") {
+		t.Fatal("click used the earlier render's bounds and did not expand the result")
 	}
 }
 

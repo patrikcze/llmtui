@@ -23,16 +23,14 @@ func TestClickingReasoningHeaderTogglesVisibility(t *testing.T) {
 	m.showReasoning = false
 	m.refreshViewport()
 
-	m.View() // triggers zone.Scan(), registering the header's bounds
-	z := waitForZone(t, reasoningZoneID(1))
+	z := renderedZone(t, m, reasoningZoneID(1))
 
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	if !m.showReasoning {
 		t.Error("clicking the collapsed header did not show reasoning")
 	}
 
-	m.View()
-	z = waitForZone(t, reasoningZoneID(1))
+	z = renderedZone(t, m, reasoningZoneID(1))
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	if m.showReasoning {
 		t.Error("clicking the expanded header did not hide reasoning again")
@@ -49,8 +47,7 @@ func TestClickingLiveReasoningHeaderToggles(t *testing.T) {
 	m.reasoningBuf.WriteString("still working on it")
 	m.refreshViewport()
 
-	m.View()
-	z := waitForZone(t, liveReasoningZoneID)
+	z := renderedZone(t, m, liveReasoningZoneID)
 
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	if m.showReasoning {
@@ -71,8 +68,7 @@ func TestReasoningClickResetsSelectionState(t *testing.T) {
 	})
 	m.showReasoning = false
 	m.refreshViewport()
-	m.View()
-	z := waitForZone(t, reasoningZoneID(1))
+	z := renderedZone(t, m, reasoningZoneID(1))
 
 	m.Update(tea.MouseClickMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
@@ -97,9 +93,8 @@ func TestDraggingThroughReasoningHeaderStillSelectsText(t *testing.T) {
 	})
 	m.showReasoning = false
 	m.refreshViewport()
-	m.View()
-	z := waitForZone(t, chatViewportZoneID)
-	rz := waitForZone(t, reasoningZoneID(1))
+	z := renderedZone(t, m, chatViewportZoneID)
+	rz := renderedZone(t, m, reasoningZoneID(1))
 	before := m.showReasoning
 
 	// Drag from one cell before the header's start to its end — a real

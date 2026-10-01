@@ -420,8 +420,7 @@ func TestModelsPickerClickSelectsRow(t *testing.T) {
 	}
 	m.openModelsPicker(models)
 
-	m.View() // triggers zone.Scan(), registering row bounds
-	z := waitForZone(t, pickerRowZoneID(2))
+	z := renderedZone(t, m, pickerRowZoneID(2))
 
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 
@@ -511,8 +510,7 @@ func TestProfilePickerClickSelectsRow(t *testing.T) {
 	targetIdx := (m.picker.pickerIdx + 1) % len(m.picker.pickerItems)
 	target := m.picker.pickerItems[targetIdx]
 
-	m.View() // triggers zone.Scan(), registering row bounds
-	z := waitForZone(t, pickerRowZoneID(targetIdx))
+	z := renderedZone(t, m, pickerRowZoneID(targetIdx))
 
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 
@@ -527,22 +525,33 @@ func TestProfilePickerClickSelectsRow(t *testing.T) {
 	}
 }
 
-// waitForZone polls zone.Get: Scan() (called from View()) registers zone
-// bounds via a background worker rather than synchronously, so a click
-// immediately after View() in a test needs to wait for that to land — a
-// real Program never hits this since Update always trails View by at least
-// one event-loop tick.
-func waitForZone(t *testing.T, id string) *zone.ZoneInfo {
+// zoneRenderBarrierID marks the end of a frame rendered by renderedZone.
+const zoneRenderBarrierID = "test-render-barrier"
+
+// renderedZone renders m the way View() does and returns the bounds id has
+// in that frame. Scan() registers zones through a background worker on a
+// process-global manager, so zone.Get right after View() can still answer
+// with bounds left by an earlier render or an earlier test; a click aimed
+// there misses once the worker catches up. The barrier is the last marker
+// in the frame, so the worker stores it last: once it is visible, every
+// zone in this frame is current. A real Program never hits this since
+// Update always trails View by at least one event-loop tick.
+func renderedZone(t *testing.T, m *Model, id string) *zone.ZoneInfo {
 	t.Helper()
+	zone.Clear(zoneRenderBarrierID)
+	zone.Scan(m.render() + zone.Mark(zoneRenderBarrierID, " "))
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if z := zone.Get(id); z != nil {
-			return z
+	for zone.Get(zoneRenderBarrierID) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("zone worker never registered the rendered frame")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("zone %q never registered", id)
-	return nil
+	z := zone.Get(id)
+	if z == nil {
+		t.Fatalf("zone %q is not in the rendered frame", id)
+	}
+	return z
 }
 
 func TestPickerEscapeCancelsSelection(t *testing.T) {
@@ -1090,8 +1099,7 @@ func TestStopButtonClickStopsGeneration(t *testing.T) {
 		t.Fatal("model should be thinking after send")
 	}
 
-	m.View() // triggers zone.Scan(), registering the stop button's bounds
-	z := waitForZone(t, stopButtonZoneID)
+	z := renderedZone(t, m, stopButtonZoneID)
 
 	m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 

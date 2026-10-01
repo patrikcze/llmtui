@@ -242,8 +242,7 @@ func TestApprovalMenuClickSelectsYes(t *testing.T) {
 	m.resize(80, 24)
 	root := pendingWrite(t, m)
 
-	m.View() // triggers zone.Scan(), registering row bounds
-	z := waitForZone(t, approvalRowZoneID(approvalYes))
+	z := renderedZone(t, m, approvalRowZoneID(approvalYes))
 
 	_, cmd := m.Update(tea.MouseReleaseMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseLeft})
 	if cmd == nil {
