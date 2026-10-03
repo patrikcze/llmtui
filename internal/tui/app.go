@@ -182,6 +182,10 @@ type Model struct {
 	sel         selectionState
 	notice      string
 	overlayOpen bool
+	// modal draws the open overlay as a centered dialog (see modal.go).
+	modal modalState
+	// probes holds the /providers dialog's provider checks (modal_views.go).
+	probes providerProbeState
 	// transcriptFocused is the F6 keyboard-only transcript navigation mode:
 	// while true, paging keys scroll the chat viewport instead of reaching
 	// the composer. See the tea.KeyPressMsg case in Update.
@@ -1275,6 +1279,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.sendToolResults(msg.results)
 
+	case providerProbeMsg:
+		m.handleProviderProbe(msg)
+		return m, nil
+
 	case modelsResultMsg:
 		if msg.err != nil {
 			m.errText = "list models: " + msg.err.Error()
@@ -1446,6 +1454,9 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.togglePluginPicker(selection)
 		}
 		return m, m.toggleSkillPicker(selection)
+	}
+	if msg.String() == "r" && m.picker.pickerKind == pickerProvider {
+		return m, m.startProviderProbes()
 	}
 	if msg.String() == "q" {
 		m.closeOverlay()
@@ -1749,6 +1760,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 		// command (e.g. /help) would otherwise still be "the thing on
 		// screen" while Enter silently resolves this prompt underneath it.
 		m.overlayOpen = false
+		m.dropModal() // a pending prompt owns the full transcript area
 		m.keys.keysMode = false
 		m.pinPendingVersions(plan)
 		m.waitForApproval(plan, true)
@@ -1761,6 +1773,7 @@ func (m *Model) startPlannedToolBatch(plan toolBatchPlan) tea.Cmd {
 				m.recordToolCallDiagnostics(provider.ToolCallDiagnostic{Stage: provider.ToolCallStageApprovalRequired, Classification: provider.ToolCallApprovalBlocked, ToolCallID: c.ID, ToolName: c.Tool})
 			}
 			m.overlayOpen = false
+			m.dropModal() // a pending prompt owns the full transcript area
 			m.keys.keysMode = false
 			m.pinPendingVersions(plan)
 			m.waitForApproval(plan, false)
@@ -3129,6 +3142,9 @@ func (m *Model) resize(w, h int) {
 		m.viewport.SetWidth(w)
 		m.viewport.SetHeight(vpHeight)
 	}
+	if m.overlayOpen && m.modal.title != "" {
+		m.applyModalSize(w, vpHeight)
+	}
 
 	renderWidth := w - 4
 	if renderWidth < 20 {
@@ -3162,7 +3178,9 @@ func (m *Model) resize(w, h int) {
 		if m.picker.pickerKind != pickerNone {
 			m.renderPicker()
 		} else if m.overlayRender != nil {
-			m.viewport.SetContent(m.overlayRender())
+			content := m.overlayRender()
+			m.viewport.SetContent(content)
+			m.fitModalHeight(content)
 		}
 		return
 	}
@@ -3733,6 +3751,9 @@ func (m *Model) render() string {
 	}
 
 	chatView := m.applySelectionHighlight(m.viewport.View())
+	if m.modalActive() {
+		chatView = m.renderModal()
+	}
 	sections := []string{zone.Mark(chatViewportZoneID, chatView)}
 	if m.activity != nil {
 		sections = append(sections, m.renderActivity())

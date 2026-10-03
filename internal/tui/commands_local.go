@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	zone "github.com/lrstanley/bubblezone/v2"
 	"gopkg.in/yaml.v3"
 
 	"github.com/patrikcze/llmtui/internal/app"
@@ -55,8 +54,7 @@ func cmdProvider(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "list":
-		m.openProvidersPicker()
-		return nil
+		return m.openProvidersPicker()
 	case "switch":
 		return m.switchProvider(rest)
 	default:
@@ -165,29 +163,6 @@ func (m *Model) profileOverlay() string {
 	m.kv(&b, "reasoning hint", fmt.Sprintf("%v", prof.ReasoningHint))
 	b.WriteString("\n" + m.theme.SystemNote.Render("/profile set <name> · /profile auto · /profile list"))
 	return m.overlayFooter(&b)
-}
-
-func (m *Model) profileListOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("model profiles") + "\n\n")
-	for i, p := range m.profiles {
-		marker := "  "
-		name := m.theme.StatusValue.Render(fmt.Sprintf("%-10s", p.Name))
-		if m.picker.pickerKind == pickerProfile && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			name = m.theme.BadgeOK.Render(fmt.Sprintf("%-10s", p.Name))
-		}
-		row := fmt.Sprintf("%s%s %s", marker, name,
-			m.theme.StatusBar.Render(fmt.Sprintf("ctx %s · temp %.2f · %s · matches: %s",
-				components.FormatTokens(p.ContextWindow), p.PreferredTemperature, p.PromptStyle, strings.Join(p.Match, ", "))))
-		// zone.Mark must be the outermost wrap: everything inside `row` is
-		// already fully styled/sanitized, and nothing downstream may
-		// re-sanitize this string or the marker escape sequence is lost.
-		b.WriteString(zone.Mark(pickerRowZoneID(i), row) + "\n")
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("custom profiles come from model_profiles in the config") + "\n")
-	b.WriteString(m.theme.SystemNote.Render("↑/↓ select · enter pin · esc cancel · click a row to pin it"))
-	return b.String()
 }
 
 func modelprofileByName(m *Model, name string) (any, bool) {
@@ -1490,7 +1465,7 @@ func cmdTools(m *Model, args string) tea.Cmd {
 	}
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.toolsOverlay() })
+		m.openModalOverlay("Workspace tools", "↑/↓ scroll · esc close", func() string { return m.toolsOverlay() })
 	case "on":
 		m.toolsOn = true
 		mode := "writes & commands will ask for approval"
@@ -1961,52 +1936,6 @@ func (m *Model) mcpInspectOverlay(name string) string {
 	m.kv(&b, "timeout", s.Config.Timeout.String())
 	if s.LastErr != nil {
 		m.kv(&b, "last error", s.LastErr.Error())
-	}
-	return m.overlayFooter(&b)
-}
-
-func (m *Model) toolsOverlay() string {
-	approval := "ask (y/n before writes & commands)"
-	if m.toolsAutoApprove {
-		approval = "auto (no confirmation)"
-	} else if n := m.approvalPolicy.Active(time.Now()); n > 0 {
-		approval = fmt.Sprintf("ask + %d scoped grant(s), each expiring within 15 min", n)
-	}
-	protocol := "prompt-based (fenced blocks)"
-	if m.toolsNative {
-		protocol = "native function calling (auto-falls back if unsupported)"
-	}
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
-	output := "compact one-line summaries (/tools output for full text)"
-	if m.toolsShowOutput {
-		output = "full (/tools output to collapse)"
-	}
-	m.kv(&b, "enabled", onOff(m.toolsOn))
-	m.kv(&b, "web", onOff(m.webOn))
-	m.kv(&b, "approval", approval)
-	m.kv(&b, "protocol", protocol)
-	m.kv(&b, "output", output)
-	m.kv(&b, "workspace", m.toolRunner.Root())
-	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
-	m.kv(&b, "file/output cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))
-	m.kv(&b, "command timeout", m.toolRunner.CommandTimeout.String())
-	b.WriteString("\n")
-	b.WriteString(m.theme.UserLabel.Render("available tools") + "\n")
-	m.kv(&b, tools.ToolListDir, "list a directory in the workspace (auto)")
-	m.kv(&b, tools.ToolReadFile, "read a file's contents (auto)")
-	m.kv(&b, tools.ToolGlob, "find workspace files by glob pattern (auto)")
-	m.kv(&b, tools.ToolGrep, "search workspace contents with a regular expression (auto; secret files skipped)")
-	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
-	m.kv(&b, tools.ToolEditFile, "replace one exact unique text fragment in an existing file (approval)")
-	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
-	m.kv(&b, tools.ToolAskUser, "ask a clarification with choices or text input (chat and agent; not approval)")
-	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")
-	m.kv(&b, tools.ToolWebFetch, "fetch one page as Markdown (approval per URL)")
-	b.WriteString("\n")
-	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nand symlink escapes are rejected; writes into .git, key-material dirs, and\nshell startup files are blocked; reads of likely secret files (.env, *.pem,\nid_rsa) ask first; command environments are stripped of secrets; every\naction is shown in the chat before and after (see /tools check <cmd>)") + "\n")
-	if !m.toolsOn {
-		b.WriteString("\n" + m.theme.SystemNote.Render("enable with /tools on (or tools.enabled in config)") + "\n")
 	}
 	return m.overlayFooter(&b)
 }

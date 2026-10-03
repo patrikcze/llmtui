@@ -19,7 +19,18 @@ Top to bottom, always full-screen (alt-screen mode):
                                  or the animated working/stop buttons
 ```
 
-Overlays (`/help`, `/usage`, `/doctor`, pickers, …) render inside the
+`/providers`, `/models`, `/profile list`, and `/tools` open as **dialogs**: a
+rounded, titled frame centered over the dimmed transcript, with key hints in
+the bottom border, sized to its content. `/providers` shows the provider list
+(status dot, name, model count or `offline`) next to the highlighted
+provider's details and models; `/models` and `/profile list` are column
+tables; `/tools` groups settings, the tool table, and the safety notes. Below
+50 columns or 8 rows the dialog falls back to the full-area overlay. A
+pending tool approval or `ask_user` question closes the dialog so the next key
+answers it. Dialog text is drawn with the theme colours only; the terminal's
+own font is used — llmtui cannot change it.
+
+Other overlays (`/help`, `/usage`, `/doctor`, …) render inside the
 viewport area, scroll with `↑`/`↓`/`PgUp`/`PgDn`, and close with `Esc`,
 `Enter`, or `q`. The `/models` and `/providers` pickers instead use `↑`/`↓`
 to move the selection, `Enter` to switch, and `Esc` to cancel; navigating a

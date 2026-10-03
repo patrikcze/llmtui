@@ -42,7 +42,7 @@ type selectionState struct {
 // overlay still uses this viewport, so it is selectable too — especially
 // important for /debug last diagnostics.
 func (m *Model) beginSelection(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
-	if msg.Button != tea.MouseLeft {
+	if msg.Button != tea.MouseLeft || m.modalActive() {
 		return m, nil
 	}
 	z := zone.Get(chatViewportZoneID)

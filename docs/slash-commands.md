@@ -37,7 +37,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | --- | --- |
 | `/provider` · `/provider list` | Choose a configured provider |
 | `/provider switch <name>` (or `/provider <name>`) | Switch provider |
-| `/providers` | Choose a configured provider with `↑`/`↓` and `Enter` |
+| `/providers` | Providers dialog: status, details and models per provider; `↑`/`↓` + `Enter` switches, `r` rechecks |
 
 ## Model
 | Command | Description |

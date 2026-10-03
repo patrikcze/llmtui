@@ -340,7 +340,7 @@ navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
 | `/models` | List models on the current provider |
 | `/model <id>` | Switch to a different model |
 | `/profile list` | Choose and pin a model profile with `↑`/`↓` and `Enter` |
-| `/providers` | List configured providers |
+| `/providers` | Providers dialog with status, details, and models |
 | `/provider <name>` | Switch provider (adopts its default model) |
 | `/stats` | Session + all-time token usage, durations, and tok/s |
 | `/usage` | Usage dashboard: tokens-per-day chart, activity heatmap, per-model breakdown, streaks |

@@ -399,7 +399,7 @@ func TestModelsPickerNavigatesAndSelects(t *testing.T) {
 	// process), so strip them before checking the two land next to each
 	// other as plain text.
 	view := ansi.Strip(m.viewport.View())
-	if m.picker.pickerIdx != 2 || !strings.Contains(view, "▸ omega") {
+	if m.picker.pickerIdx != 2 || !strings.Contains(selectedPickerLine(view), "omega") {
 		t.Fatalf("down did not select omega:\n%s", view)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -479,7 +479,7 @@ func TestProfilesPickerNavigatesAndPinsSelection(t *testing.T) {
 	// process), so strip them before checking the two land next to each
 	// other as plain text.
 	view := ansi.Strip(m.viewport.View())
-	if want == "qwen" || !strings.Contains(view, "▸ "+want) {
+	if want == "qwen" || !strings.Contains(selectedPickerLine(view), want) {
 		t.Fatalf("down did not move profile selection to %q:\n%s", want, view)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -1120,4 +1120,15 @@ func userMessages(m *Model) int {
 		}
 	}
 	return n
+}
+
+// selectedPickerLine returns the plain-text picker row carrying the ▸
+// selection marker, or "" when none does.
+func selectedPickerLine(view string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "▸") {
+			return line
+		}
+	}
+	return ""
 }
