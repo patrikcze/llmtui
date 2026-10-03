@@ -488,7 +488,7 @@ func TestSkillsPickerNavigatesAndTogglesSessionActivation(t *testing.T) {
 	if !m.overlayOpen || m.picker.pickerKind != pickerSkill {
 		t.Fatal("/skills list should open the skills picker")
 	}
-	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter activate/deactivate") {
+	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.render(), "enter activate/deactivate") {
 		t.Fatalf("skills picker = items %v, view:\n%s", m.picker.pickerItems, m.viewport.View())
 	}
 
@@ -646,7 +646,7 @@ func TestPluginsPickerNavigatesAndTogglesEnablement(t *testing.T) {
 	if !m.overlayOpen || m.picker.pickerKind != pickerPlugin {
 		t.Fatal("/plugins list should open the plugins picker")
 	}
-	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.viewport.View(), "enter enable/disable") {
+	if len(m.picker.pickerItems) != 2 || !strings.Contains(m.render(), "enter enable/disable") {
 		t.Fatalf("plugins picker = items %v, view:\n%s", m.picker.pickerItems, m.viewport.View())
 	}
 

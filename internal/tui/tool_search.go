@@ -134,6 +134,7 @@ func (m *Model) handleToolSearchBatch(calls []tools.Call) (tea.Cmd, bool) {
 	}
 	if m.toolDepth >= m.toolMaxIter() {
 		m.overlayOpen = false
+		m.dropModal() // a pending prompt owns the full transcript area
 		m.keys.keysMode = false
 		m.waitForApproval(newToolBatchPlan(calls), true)
 		m.refreshViewport()

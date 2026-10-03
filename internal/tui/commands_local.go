@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	zone "github.com/lrstanley/bubblezone/v2"
 	"gopkg.in/yaml.v3"
 
 	"github.com/patrikcze/llmtui/internal/app"
@@ -45,6 +44,9 @@ func (m *Model) kv(b *strings.Builder, key, value string) {
 }
 
 func (m *Model) overlayFooter(b *strings.Builder) string {
+	if m.modalActive() {
+		return b.String() // the dialog's bottom border carries the key hints
+	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
 	return b.String()
 }
@@ -55,8 +57,7 @@ func cmdProvider(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "list":
-		m.openProvidersPicker()
-		return nil
+		return m.openProvidersPicker()
 	case "switch":
 		return m.switchProvider(rest)
 	default:
@@ -165,29 +166,6 @@ func (m *Model) profileOverlay() string {
 	m.kv(&b, "reasoning hint", fmt.Sprintf("%v", prof.ReasoningHint))
 	b.WriteString("\n" + m.theme.SystemNote.Render("/profile set <name> · /profile auto · /profile list"))
 	return m.overlayFooter(&b)
-}
-
-func (m *Model) profileListOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("model profiles") + "\n\n")
-	for i, p := range m.profiles {
-		marker := "  "
-		name := m.theme.StatusValue.Render(fmt.Sprintf("%-10s", p.Name))
-		if m.picker.pickerKind == pickerProfile && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			name = m.theme.BadgeOK.Render(fmt.Sprintf("%-10s", p.Name))
-		}
-		row := fmt.Sprintf("%s%s %s", marker, name,
-			m.theme.StatusBar.Render(fmt.Sprintf("ctx %s · temp %.2f · %s · matches: %s",
-				components.FormatTokens(p.ContextWindow), p.PreferredTemperature, p.PromptStyle, strings.Join(p.Match, ", "))))
-		// zone.Mark must be the outermost wrap: everything inside `row` is
-		// already fully styled/sanitized, and nothing downstream may
-		// re-sanitize this string or the marker escape sequence is lost.
-		b.WriteString(zone.Mark(pickerRowZoneID(i), row) + "\n")
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("custom profiles come from model_profiles in the config") + "\n")
-	b.WriteString(m.theme.SystemNote.Render("↑/↓ select · enter pin · esc cancel · click a row to pin it"))
-	return b.String()
 }
 
 func modelprofileByName(m *Model, name string) (any, bool) {
@@ -364,7 +342,7 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "list":
-		m.openOverlay(func() string { return m.templateOverlay() })
+		m.openTemplatePicker()
 	case "use":
 		if _, ok := m.cfg.Templates[rest]; !ok {
 			return m.fail(fmt.Sprintf("no template named %q (see /template list)", rest))
@@ -386,7 +364,7 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 		m.kv(&b, "temperature", fmt.Sprintf("%.2f", t.Temperature))
 		b.WriteString("\n" + m.theme.UserLabel.Render("system prompt") + "\n")
 		b.WriteString("  " + m.theme.StatusValue.Render(t.SystemPrompt) + "\n")
-		m.openOverlay(func() string { return m.overlayFooter(&b) })
+		m.openModalOverlay("Template · "+rest, "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.overlayFooter(&b) })
 	default:
 		// `/template golang` is shorthand for use.
 		if _, ok := m.cfg.Templates[sub]; ok {
@@ -397,32 +375,6 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 		return m.fail("usage: /template [list|use <name>|clear|inspect <name>]")
 	}
 	return nil
-}
-
-func (m *Model) templateOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("templates") + "\n\n")
-	if len(m.cfg.Templates) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no templates configured — add a templates: section to the config") + "\n")
-	}
-	names := make([]string, 0, len(m.cfg.Templates))
-	for name := range m.cfg.Templates {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		t := m.cfg.Templates[name]
-		marker := "  "
-		label := m.theme.StatusValue.Render(fmt.Sprintf("%-12s", name))
-		if name == m.template {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-12s", name))
-		}
-		fmt.Fprintf(&b, "%s%s %s\n", marker, label,
-			m.theme.StatusBar.Render(fmt.Sprintf("%s · mode %s · temp %.2f", t.Description, t.PromptMode, t.Temperature)))
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("/template use <name> · /template clear"))
-	return m.overlayFooter(&b)
 }
 
 // --- /context -----------------------------------------------------------------
@@ -785,7 +737,7 @@ func cmdDebug(m *Model, args string) tea.Cmd {
 		m.debugMode = false
 		m.notice = "debug mode off"
 	case "last":
-		m.openOverlay(func() string { return m.debugOverlay() })
+		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "tool-calls":
 		if strings.TrimSpace(rest) == "test" {
 			return m.startToolCallConformanceProbe()
@@ -793,7 +745,7 @@ func cmdDebug(m *Model, args string) tea.Cmd {
 		if strings.TrimSpace(rest) != "" {
 			return m.fail("usage: /debug tool-calls [test]")
 		}
-		m.openOverlay(func() string { return m.toolCallDiagnosticsOverlay() })
+		m.openModalOverlay("Debug · tool calls", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.toolCallDiagnosticsOverlay() })
 	default:
 		return m.fail("usage: /debug [on|off|last|tool-calls]")
 	}
@@ -840,15 +792,15 @@ func cmdEntities(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.entityStatusOverlay() })
+		m.openModalOverlay("Entities", "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.entityStatusOverlay() })
 	case "list":
-		m.openOverlay(func() string { return m.entityListOverlay() })
+		m.openEntitiesPicker()
 	case "inspect":
 		id, extra := splitArgs(rest)
 		if id == "" || extra != "" {
 			return m.fail("usage: /entities inspect <id>")
 		}
-		m.openOverlay(func() string { return m.entityInspectOverlay(id) })
+		m.inspectEntity(id)
 	default:
 		return m.fail("usage: /entities [status|list|inspect <id>]")
 	}
@@ -874,24 +826,6 @@ func (m *Model) entityStatusOverlay() string {
 	m.kv(&b, "representation", fmt.Sprintf("minimal (full expansions this request: %d / %d)", s.ExpandedThisReq, s.MaxFullExpansions))
 	m.kv(&b, "context budget", fmt.Sprintf("%d tokens", m.cfg.Entities.MaxContextTokens))
 	b.WriteString("\n" + m.theme.SystemNote.Render("/entities list · /entities inspect <id>"))
-	return m.overlayFooter(&b)
-}
-
-func (m *Model) entityListOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("entities — list") + "\n\n")
-	if !m.entitiesEnabled() {
-		b.WriteString(m.theme.SystemNote.Render("entity context runtime is disabled") + "\n")
-		return m.overlayFooter(&b)
-	}
-	views := m.entities.MinimalViews(16 * 1024)
-	if len(views) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no live entities") + "\n")
-		return m.overlayFooter(&b)
-	}
-	for _, view := range views {
-		fmt.Fprintf(&b, "  %s  %-12s %s · %s\n", m.theme.StatusValue.Render(view.ID.String()), view.Kind, view.Label, view.Source)
-	}
 	return m.overlayFooter(&b)
 }
 
@@ -1291,7 +1225,7 @@ func cmdUsage(m *Model, args string) tea.Cmd {
 	case "session":
 		m.openOverlay(func() string { return m.statsOverlay() })
 	case "last":
-		m.openOverlay(func() string { return m.debugOverlay() })
+		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "reset":
 		m.session.Stats = nil
 		m.session.TotalPromptTokens = 0
@@ -1328,7 +1262,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "":
-		m.openOverlay(func() string { return m.historyOverlay() })
+		m.openHistoryPicker()
 	case "save":
 		m.saveWithNotice()
 	case "clear":
@@ -1358,7 +1292,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		if rest == "" || m.historyDir == "" {
 			return m.fail("usage: /history search <query>")
 		}
-		m.openOverlay(func() string { return m.historySearchOverlay(rest) })
+		m.openModalOverlay("History search · "+terminaltext.Sanitize(rest), "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.historySearchOverlay(rest) })
 	case "export":
 		format, _ := splitArgs(rest)
 		return m.exportHistory(format)
@@ -1490,7 +1424,7 @@ func cmdTools(m *Model, args string) tea.Cmd {
 	}
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.toolsOverlay() })
+		m.openModalOverlay("Workspace tools", "↑/↓ scroll · esc close", func() string { return m.toolsOverlay() })
 	case "on":
 		m.toolsOn = true
 		mode := "writes & commands will ask for approval"
@@ -1961,52 +1895,6 @@ func (m *Model) mcpInspectOverlay(name string) string {
 	m.kv(&b, "timeout", s.Config.Timeout.String())
 	if s.LastErr != nil {
 		m.kv(&b, "last error", s.LastErr.Error())
-	}
-	return m.overlayFooter(&b)
-}
-
-func (m *Model) toolsOverlay() string {
-	approval := "ask (y/n before writes & commands)"
-	if m.toolsAutoApprove {
-		approval = "auto (no confirmation)"
-	} else if n := m.approvalPolicy.Active(time.Now()); n > 0 {
-		approval = fmt.Sprintf("ask + %d scoped grant(s), each expiring within 15 min", n)
-	}
-	protocol := "prompt-based (fenced blocks)"
-	if m.toolsNative {
-		protocol = "native function calling (auto-falls back if unsupported)"
-	}
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("workspace tools") + "\n\n")
-	output := "compact one-line summaries (/tools output for full text)"
-	if m.toolsShowOutput {
-		output = "full (/tools output to collapse)"
-	}
-	m.kv(&b, "enabled", onOff(m.toolsOn))
-	m.kv(&b, "web", onOff(m.webOn))
-	m.kv(&b, "approval", approval)
-	m.kv(&b, "protocol", protocol)
-	m.kv(&b, "output", output)
-	m.kv(&b, "workspace", m.toolRunner.Root())
-	m.kv(&b, "max rounds/turn", fmt.Sprintf("%d", m.cfg.Tools.MaxIterations))
-	m.kv(&b, "file/output cap", fmt.Sprintf("%d KB", m.cfg.Tools.MaxFileKB))
-	m.kv(&b, "command timeout", m.toolRunner.CommandTimeout.String())
-	b.WriteString("\n")
-	b.WriteString(m.theme.UserLabel.Render("available tools") + "\n")
-	m.kv(&b, tools.ToolListDir, "list a directory in the workspace (auto)")
-	m.kv(&b, tools.ToolReadFile, "read a file's contents (auto)")
-	m.kv(&b, tools.ToolGlob, "find workspace files by glob pattern (auto)")
-	m.kv(&b, tools.ToolGrep, "search workspace contents with a regular expression (auto; secret files skipped)")
-	m.kv(&b, tools.ToolWriteFile, "create or overwrite a file (approval)")
-	m.kv(&b, tools.ToolEditFile, "replace one exact unique text fragment in an existing file (approval)")
-	m.kv(&b, tools.ToolRunCommand, "run one shell command; read-only ones (ls, grep, git status, …) auto")
-	m.kv(&b, tools.ToolAskUser, "ask a clarification with choices or text input (chat and agent; not approval)")
-	m.kv(&b, tools.ToolWebSearch, "search the web via DuckDuckGo (auto; /web on)")
-	m.kv(&b, tools.ToolWebFetch, "fetch one page as Markdown (approval per URL)")
-	b.WriteString("\n")
-	b.WriteString(m.theme.SystemNote.Render("everything is confined to the workspace directory: absolute paths, \"..\",\nand symlink escapes are rejected; writes into .git, key-material dirs, and\nshell startup files are blocked; reads of likely secret files (.env, *.pem,\nid_rsa) ask first; command environments are stripped of secrets; every\naction is shown in the chat before and after (see /tools check <cmd>)") + "\n")
-	if !m.toolsOn {
-		b.WriteString("\n" + m.theme.SystemNote.Render("enable with /tools on (or tools.enabled in config)") + "\n")
 	}
 	return m.overlayFooter(&b)
 }

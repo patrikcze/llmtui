@@ -19,7 +19,24 @@ Top to bottom, always full-screen (alt-screen mode):
                                  or the animated working/stop buttons
 ```
 
-Overlays (`/help`, `/usage`, `/doctor`, pickers, …) render inside the
+`/providers`, `/models`, `/profile list`, `/tools`, `/skills list`,
+`/plugins`, `/history`, `/template list`, `/personal-apps`, `/entities`, `/help`
+and `/debug last` open as **dialogs**: a
+rounded, titled frame centered over the dimmed transcript, with key hints in
+the bottom border, sized to its content. `/providers` shows the provider list
+(status dot, name, model count or `offline`) next to the highlighted
+provider's details and models; `/models` and `/profile list` are column
+tables; `/tools` groups settings, the tool table, and the safety notes. The
+list dialogs are selectable (`Enter` loads a session, uses a template, toggles
+a skill or plugin, connects/disconnects a personal app, or inspects an
+entity); text dialogs such as `/help` and `/debug last` scroll, wrap to the
+dialog width, and stay drag-selectable for copying. Below
+50 columns or 8 rows the dialog falls back to the full-area overlay. A
+pending tool approval or `ask_user` question closes the dialog so the next key
+answers it. Dialog text is drawn with the theme colours only; the terminal's
+own font is used — llmtui cannot change it.
+
+Other overlays (`/help`, `/usage`, `/doctor`, …) render inside the
 viewport area, scroll with `↑`/`↓`/`PgUp`/`PgDn`, and close with `Esc`,
 `Enter`, or `q`. The `/models` and `/providers` pickers instead use `↑`/`↓`
 to move the selection, `Enter` to switch, and `Esc` to cancel; navigating a

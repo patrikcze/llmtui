@@ -595,7 +595,11 @@ safely (including inside a Markdown table cell) is kept as its original LaTeX.
 `ui.show_usage_chart` controls the persistent usage sparkline when the terminal
 has room for it. `ui.show_token_stats` controls session-token and speed
 telemetry in the status area. `ui.compact_mode` forces compact status and
-attachment chrome at every terminal width. `use_nerd_font` remains reserved;
+attachment chrome at every terminal width. `ui.provider_probe` (default `true`)
+lets the `/providers` dialog check each configured provider (health and model
+list, 3 s timeout, two at a time) while it is open — only configured
+endpoints, never at startup, embedded checks are stat-only; `false` shows the
+dialog without contacting anything, and `r` rechecks. `use_nerd_font` remains reserved;
 `animations` controls live spinner animation. The
 `privacy` section is declarative — the behaviors it describes (local-first,
 key redaction) are hardcoded and not configurable off; see

@@ -8,12 +8,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/provider"
-	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
 
@@ -77,13 +75,17 @@ const (
 	pickerSkill
 	pickerPlugin
 	pickerAgentQuestion
+	pickerHistory
+	pickerTemplate
+	pickerPersonalApps
+	pickerEntity
 )
 
 func slashCommands() []slashCommand {
 	return []slashCommand{
 		// --- Chat ---
 		{name: "help", usage: "/help [topic]", desc: "show keys and commands, grouped by category", category: "Chat", run: func(m *Model, args string) tea.Cmd {
-			m.openOverlay(func() string { return m.helpOverlay(args) })
+			m.openModalOverlay("Help", "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.helpOverlay(args) })
 			return nil
 		}},
 		{name: "copy", usage: "/copy", desc: "copy the last reply to the clipboard", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
@@ -110,8 +112,7 @@ func slashCommands() []slashCommand {
 		// --- Provider ---
 		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, run: cmdProvider},
 		{name: "providers", usage: "/providers", desc: "list configured providers", category: "Provider", run: func(m *Model, _ string) tea.Cmd {
-			m.openProvidersPicker()
-			return nil
+			return m.openProvidersPicker()
 		}},
 
 		// --- Model ---
@@ -343,6 +344,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 // same as before this existed.
 func (m *Model) openOverlay(render func() string) {
 	m.clearPicker()
+	m.dropModal()
 	m.overlayOpen = true
 	m.overlayRender = render
 	m.viewport.SetContent(render())
@@ -354,6 +356,7 @@ func (m *Model) closeOverlay() {
 	m.overlayRender = nil
 	m.usageState.active = false
 	m.clearPicker()
+	m.dropModal()
 	m.refreshViewport()
 }
 
@@ -363,6 +366,7 @@ func (m *Model) clearPicker() {
 	m.picker.pickerModels = []provider.ModelInfo{}
 	m.picker.pickerIdx = 0
 	m.picker.pickerHeader = ""
+	m.picker.historyMetas, m.picker.historyErr, m.picker.entityViews = nil, "", nil
 }
 
 func (m *Model) setModel(id string) {
@@ -383,7 +387,7 @@ func (m *Model) openModelsPicker(models []provider.ModelInfo) {
 	m.renderPicker()
 }
 
-func (m *Model) openProvidersPicker() {
+func (m *Model) openProvidersPicker() tea.Cmd {
 	m.picker.pickerKind = pickerProvider
 	m.picker.pickerItems = make([]string, 0, len(m.cfg.Providers))
 	for name := range m.cfg.Providers {
@@ -392,7 +396,9 @@ func (m *Model) openProvidersPicker() {
 	sort.Strings(m.picker.pickerItems)
 	m.picker.pickerIdx = selectedIndex(m.picker.pickerItems, m.prov.Name())
 	m.overlayOpen = true
+	probe := m.startProviderProbes()
 	m.renderPicker()
+	return probe
 }
 
 func (m *Model) openProfilesPicker() {
@@ -431,9 +437,13 @@ var pickerHeaderLines = map[pickerKind]int{
 	pickerModel:         2,
 	pickerProvider:      2,
 	pickerProfile:       2,
-	pickerSkill:         3,
-	pickerPlugin:        3,
+	pickerSkill:         2,
+	pickerPlugin:        2,
 	pickerAgentQuestion: 4,
+	pickerHistory:       2,
+	pickerTemplate:      2,
+	pickerPersonalApps:  2,
+	pickerEntity:        2,
 }
 
 // renderPicker rebuilds the picker overlay and scrolls just enough to keep
@@ -443,6 +453,11 @@ var pickerHeaderLines = map[pickerKind]int{
 // scroll position back to the top on every keypress and could leave the
 // selection entirely off-screen.
 func (m *Model) renderPicker() {
+	if title, hint, ok := m.pickerModalTitle(); ok {
+		m.ensureModal(title, hint)
+	} else {
+		m.dropModal()
+	}
 	var content string
 	switch m.picker.pickerKind {
 	case pickerModel:
@@ -457,8 +472,17 @@ func (m *Model) renderPicker() {
 		content = m.pluginsPickerOverlay()
 	case pickerAgentQuestion:
 		content = m.agentQuestionPickerOverlay()
+	case pickerHistory:
+		content = m.historyPickerOverlay()
+	case pickerTemplate:
+		content = m.templatePickerOverlay()
+	case pickerPersonalApps:
+		content = m.personalAppsPickerOverlay()
+	case pickerEntity:
+		content = m.entitiesPickerOverlay()
 	}
 	m.viewport.SetContent(content)
+	m.fitModalHeight(content)
 	if header, ok := pickerHeaderLines[m.picker.pickerKind]; ok {
 		m.viewport.EnsureVisible(header+m.picker.pickerIdx, 0, 0)
 	} else {
@@ -537,59 +561,6 @@ func (m *Model) helpOverlay(topic string) string {
 	return b.String()
 }
 
-func (m *Model) modelsOverlay(models []provider.ModelInfo) string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("models on "+terminaltext.Sanitize(m.prov.Name())) + "\n\n")
-
-	if len(models) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no models found") + "\n")
-	}
-	for i, mi := range models {
-		marker := "  "
-		id := terminaltext.Sanitize(mi.ID)
-		label := m.theme.StatusValue.Render(id)
-		if m.picker.pickerKind == pickerModel && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(id)
-		}
-		line := marker + label
-		if mi.Description != "" {
-			line += "  " + m.theme.StatusBar.Render(terminaltext.Sanitize(mi.Description))
-		}
-		b.WriteString(zone.Mark(pickerRowZoneID(i), line) + "\n")
-	}
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
-	return b.String()
-}
-
-func (m *Model) providersOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("configured providers") + "\n\n")
-
-	names := make([]string, 0, len(m.cfg.Providers))
-	for name := range m.cfg.Providers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for i, name := range names {
-		pc := m.cfg.Providers[name]
-		marker := "  "
-		label := m.theme.StatusValue.Render(fmt.Sprintf("%-20s", name))
-		if m.picker.pickerKind == pickerProvider && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-20s", name))
-		}
-		row := fmt.Sprintf("%s%s %s", marker, label,
-			m.theme.StatusBar.Render(pc.Type+"  "+pc.BaseURL))
-		b.WriteString(zone.Mark(pickerRowZoneID(i), row) + "\n")
-	}
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter switch · esc cancel"))
-	return b.String()
-}
-
 func (m *Model) statsOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("session statistics") + "\n\n")
@@ -636,40 +607,6 @@ func (m *Model) statsOverlay() string {
 			b.WriteString("  " + m.theme.ChartBar.Render(components.Sparkline(totals, 40, false)) +
 				m.theme.StatusBar.Render("  tokens/day") + "\n")
 		}
-	}
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-	return b.String()
-}
-
-func (m *Model) historyOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("saved sessions") + "\n\n")
-
-	if m.historyDir == "" {
-		b.WriteString(m.theme.SystemNote.Render("history saving is disabled (chat.save_history)") + "\n")
-	} else {
-		metas, err := history.List(m.historyDir)
-		switch {
-		case err != nil:
-			b.WriteString(m.theme.ErrorText.Render(err.Error()) + "\n")
-		case len(metas) == 0:
-			b.WriteString(m.theme.SystemNote.Render("no saved sessions yet — /save or ctrl+s") + "\n")
-		default:
-			for _, meta := range metas {
-				marker := "  "
-				name := m.theme.StatusValue.Render(meta.Name)
-				if meta.Name == m.sessionName {
-					marker = m.theme.BadgeOK.Render("▸ ")
-					name = m.theme.BadgeOK.Render(meta.Name)
-				}
-				fmt.Fprintf(&b, "%s%s  %s\n", marker, name,
-					m.theme.StatusBar.Render(fmt.Sprintf("%s · %s/%s · %d msgs · %d tok",
-						meta.SavedAt.Format("2006-01-02 15:04"),
-						meta.Provider, meta.Model, meta.Messages, meta.Tokens)))
-			}
-		}
-		b.WriteString("\n" + m.theme.SystemNote.Render("stored in "+m.historyDir))
 	}
 
 	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))

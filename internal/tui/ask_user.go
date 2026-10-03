@@ -46,6 +46,7 @@ func (m *Model) handleAskUserBatch(calls []tools.Call) (tea.Cmd, bool) {
 
 func (m *Model) pauseForAskUser(call tools.Call) tea.Cmd {
 	m.overlayOpen = false
+	m.dropModal() // a pending prompt owns the full transcript area
 	m.keys.keysMode = false
 	m.pendingAsk = &pendingAskUser{call: call}
 	m.waitForUserInput()

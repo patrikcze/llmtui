@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/patrikcze/llmtui/internal/skill"
+	"github.com/patrikcze/llmtui/internal/terminaltext"
 	"github.com/patrikcze/llmtui/internal/tools"
 )
 
@@ -185,44 +185,6 @@ func (m *Model) skillsStatusOverlay() string {
 	return m.overlayFooter(&b)
 }
 
-func (m *Model) skillsPickerOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("skills") + "\n\n")
-	skills := m.skillMgr.Skills()
-	if len(skills) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no skills found — add one under a search path (/skills paths) or enable a plugin") + "\n")
-		b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-		return b.String()
-	}
-
-	b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%-26s %-9s %-22s %-8s %s", "id", "version", "source", "active", "description")) + "\n")
-	for i, s := range skills {
-		scope, isActive := m.skillMgr.IsActive(s.QualifiedID())
-		activeStr := "-"
-		if isActive {
-			activeStr = string(scope)
-		}
-		source := string(s.Source)
-		if s.Source == skill.SourcePlugin {
-			source = "plugin:" + s.PluginID
-		}
-		row := fmt.Sprintf("%-26s %-9s %-22s %-8s %s",
-			s.Meta.ID, orNone(s.Meta.Version), source, activeStr, truncateForRow(s.Meta.Description))
-		marker := "  "
-		label := m.theme.SystemNote.Render(row)
-		if isActive {
-			label = m.theme.StatusValue.Render(row)
-		}
-		if m.picker.pickerKind == pickerSkill && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(row)
-		}
-		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter activate/deactivate (session) · esc cancel"))
-	return b.String()
-}
-
 func (m *Model) skillsActiveOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.theme.Badge.Render("active skills (prompt order)") + "\n\n")
@@ -345,15 +307,15 @@ func cmdPlugins(m *Model, args string) tea.Cmd {
 	}
 	sub, rest := splitArgs(args)
 	switch sub {
-	case "", "status":
-		m.openOverlay(func() string { return m.pluginsListOverlay() })
-	case "list":
+	case "", "list":
 		m.openPluginsPicker()
+	case "status":
+		m.openModalOverlay("Plugins · status", "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.pluginsListOverlay() })
 	case "inspect":
 		if rest == "" {
 			return m.fail("usage: /plugins inspect <id> (see /plugins list)")
 		}
-		m.openOverlay(func() string { return m.pluginsInspectOverlay(rest) })
+		m.openModalOverlay("Plugin · "+terminaltext.Sanitize(rest), "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.pluginsInspectOverlay(rest) })
 	case "enable":
 		if rest == "" {
 			return m.fail("usage: /plugins enable <id>")
@@ -487,49 +449,6 @@ func (m *Model) togglePluginPicker(id string) tea.Cmd {
 		m.refreshViewport()
 	}
 	return nil
-}
-
-func (m *Model) pluginsPickerOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("plugins") + "\n\n")
-	plugins := m.skillMgr.Plugins()
-	if len(plugins) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no plugins found — put one at <plugin path>/<id>/plugin.yaml (/plugins paths)") + "\n")
-		b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-		return b.String()
-	}
-	b.WriteString(m.theme.UserLabel.Render(fmt.Sprintf("%-20s %-9s %-11s %-9s %s", "id", "version", "source", "state", "description")) + "\n")
-	for i, p := range plugins {
-		state := "disabled"
-		switch {
-		case p.Err != nil:
-			state = "invalid"
-		case p.Enabled:
-			state = "enabled"
-		}
-		desc := p.Manifest.Description
-		if p.Err != nil {
-			desc = p.Err.Error()
-		}
-		row := fmt.Sprintf("%-20s %-9s %-11s %-9s %s",
-			p.Manifest.ID, orNone(p.Manifest.Version), string(p.Source), state, truncateForRow(desc))
-		marker := "  "
-		label := m.theme.SystemNote.Render(row)
-		switch {
-		case p.Err != nil:
-			label = m.theme.BadgeWarn.Render(row)
-		case p.Enabled:
-			label = m.theme.StatusValue.Render(row)
-		}
-		if m.picker.pickerKind == pickerPlugin && i == m.picker.pickerIdx {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(row)
-		}
-		b.WriteString(zone.Mark(pickerRowZoneID(i), marker+label) + "\n")
-	}
-	b.WriteString("\n" + m.theme.StatusBar.Render("  enabling a plugin registers its skills and nothing else: no skill is\n  activated, no code runs, no MCP server starts") + "\n")
-	b.WriteString("\n" + m.theme.SystemNote.Render("↑/↓ select · enter enable/disable · esc cancel"))
-	return b.String()
 }
 
 func (m *Model) pluginsInspectOverlay(id string) string {

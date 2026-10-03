@@ -14,7 +14,7 @@ unavailable while a reply, tool batch, or verification is in progress — press
 ## Chat
 | Command | Description |
 | --- | --- |
-| `/help [topic]` | Keys and commands, grouped by category |
+| `/help [topic]` | Keys and commands, grouped by category (scrollable dialog) |
 | `/copy` | Copy the last reply to the clipboard |
 | `/clear` | Clear the conversation (and session summary) |
 | `/retry` | Retry the last user message with current settings |
@@ -37,7 +37,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | --- | --- |
 | `/provider` · `/provider list` | Choose a configured provider |
 | `/provider switch <name>` (or `/provider <name>`) | Switch provider |
-| `/providers` | Choose a configured provider with `↑`/`↓` and `Enter` |
+| `/providers` | Providers dialog: status, details and models per provider; `↑`/`↓` + `Enter` switches, `r` rechecks |
 
 ## Model
 | Command | Description |
@@ -58,7 +58,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/prompt preview` / `/prompt composed` | Full preview of the next request |
 | `/prompt raw` | Just the raw user message part |
 | `/prompt mode <minimal\|balanced\|coding\|strict>` | Set composition mode |
-| `/template [list\|use <name>\|clear\|inspect <name>]` | Conversation templates |
+| `/template [list\|use <name>\|clear\|inspect <name>]` | Conversation templates; `list` opens a dialog where `Enter` uses the highlighted template, or clears it when already active |
 
 ## Context
 | Command | Description |
@@ -111,7 +111,7 @@ cycle owns context. They never stop work automatically.
 | Command | Description |
 | --- | --- |
 | `/skills` · `/skills status` | Skills overlay: discovered, active, limits, model-driven load state |
-| `/skills list` | Arrow-key picker of discovered skills; `Enter` activates/deactivates the selected skill for the session |
+| `/skills list` | Dialog of discovered skills; `Enter` activates/deactivates the selected skill for the session |
 | `/skills active` | Active skills in deterministic prompt order |
 | `/skills inspect <id>` | Metadata, provenance, hash, recommended tools, content preview |
 | `/skills use <id> [--scope run\|session]` | Activate a skill (default: session; model-driven loads are always run-scoped) |
@@ -122,7 +122,7 @@ cycle owns context. They never stop work automatically.
 ## Plugins
 | Command | Description |
 | --- | --- |
-| `/plugins` · `/plugins list` | Discovered plugin packages and their state |
+| `/plugins` · `/plugins list` | Dialog of discovered plugin packages; `Enter` enables/disables the selected plugin (`/plugins status` shows the read-only list) |
 | `/plugins inspect <id>` | Manifest, source, root, declared skills |
 | `/plugins enable <id>` | Register the plugin's skills (activates nothing, runs nothing) |
 | `/plugins disable <id>` | Unregister its skills; deactivates any that were active |
@@ -133,7 +133,9 @@ cycle owns context. They never stop work automatically.
 | Command | Description |
 | --- | --- |
 | `/doctor [provider [name]\|mcp\|personal-apps]` | Provider/model/network diagnostics; `personal-apps` passively checks Mail/Calendar configuration and the EventKit helper without launching it |
-| `/debug [on\|off\|last]` | Debug drawer for the last request |
+| `/personal-apps [status\|connect\|disconnect mail\|calendar]` | Mail/Calendar dialog: configuration, connection and scope per app; `Enter` connects or disconnects the highlighted app (your decision — the model can never do this) |
+| `/entities [status\|list\|inspect <id>]` | Runtime entity references; `list` opens a dialog where `Enter` shows the highlighted entity |
+| `/debug [on\|off\|last]` | Debug drawer for the last request (`last` opens a scrollable dialog; drag to copy text) |
 | `/keys [raw]` | Interactive key inspector |
 | `/config [path\|show\|reload]` | Configuration (secrets redacted) |
 
@@ -143,4 +145,4 @@ cycle owns context. They never stop work automatically.
 | `/usage [session\|last\|reset\|export]` | Usage dashboard and stats |
 | `/stats` | Per-exchange session table |
 | `/save` | Save the session |
-| `/history [load <name>\|search <q>\|export md\|json\|clear]` | Saved sessions |
+| `/history [load <name>\|search <q>\|export md\|json\|clear]` | Saved sessions; bare `/history` opens a dialog where `Enter` loads the highlighted session |
