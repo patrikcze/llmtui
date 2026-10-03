@@ -37,6 +37,18 @@ func (m *Model) pickerModalTitle() (title, hint string, ok bool) {
 		return "Models · " + name, "↑/↓ select · enter switch · esc close", true
 	case pickerProfile:
 		return "Model profiles", "↑/↓ select · enter pin · click a row to pin · esc close", true
+	case pickerSkill:
+		return "Skills", "↑/↓ select · enter activate/deactivate (session) · esc close", true
+	case pickerPlugin:
+		return "Plugins", "↑/↓ select · enter enable/disable · esc close", true
+	case pickerHistory:
+		return "Saved sessions", "↑/↓ select · enter load · esc close", true
+	case pickerTemplate:
+		return "Templates", "↑/↓ select · enter use / clear · esc close", true
+	case pickerPersonalApps:
+		return "Personal apps", "↑/↓ select · enter connect/disconnect · esc close", true
+	case pickerEntity:
+		return "Entities", "↑/↓ select · enter inspect · esc close", true
 	}
 	return "", "", false
 }

@@ -113,6 +113,9 @@ type Column struct {
 	Right bool
 }
 
+// minFlexWidth is the narrowest a flexible table column may become.
+const minFlexWidth = 12
+
 // TableRow lays cells out in columns within total cells, separated by two
 // spaces. Cells are padded or truncated with an ellipsis to their column
 // width; escape sequences inside cells are preserved.
@@ -128,7 +131,9 @@ func TableRow(columns []Column, cells []string, total int) string {
 	}
 	gaps := 2 * max(len(columns)-1, 0)
 	if flexible > 0 {
-		share := max((total-fixed-gaps)/flexible, 1)
+		// A flexible column never collapses below minFlexWidth; on a narrow
+		// dialog the row then overflows and its right end is cut by the frame.
+		share := max((total-fixed-gaps)/flexible, minFlexWidth)
 		for i := range widths {
 			if widths[i] == 0 {
 				widths[i] = share

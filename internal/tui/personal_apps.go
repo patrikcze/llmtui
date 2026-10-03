@@ -173,10 +173,16 @@ func (m *Model) enterPersonalAppsPrivateSession(context.Context) error {
 func cmdPersonalApps(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	if m.personalApps == nil {
+		if sub == "" || sub == "status" {
+			// Passive configuration check only; nothing is launched.
+			m.openModalOverlay("Personal apps · disabled", "↑/↓ scroll · esc close", func() string { return m.personalAppsDoctorOverlay() })
+			return nil
+		}
 		return m.fail("personal apps integration is disabled — enable personal_apps.enabled (and mail/calendar.enabled) in config first")
 	}
 	switch sub {
 	case "", "status":
+		m.openPersonalAppsPicker()
 		m.notice = personalAppsStatusNotice(m.personalApps.Status())
 	case "connect":
 		return personalAppsConnect(m, rest)

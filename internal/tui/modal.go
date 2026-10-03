@@ -3,8 +3,15 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone/v2"
+
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
+
+// modalBodyZoneID marks the dialog body so text selection maps clicks into
+// the dialog's viewport instead of the hidden transcript.
+const modalBodyZoneID = "modal-body"
 
 // modalState presents the open overlay as a centered dialog over the dimmed
 // chat instead of letting it take over the whole transcript area. The overlay
@@ -102,15 +109,42 @@ func (m *Model) openModalOverlay(title, hint string, render func() string) {
 	m.clearPicker()
 	m.ensureModal(title, hint)
 	m.overlayOpen = true
-	m.overlayRender = render
-	content := render()
+	// Static text is word-wrapped to the dialog body instead of being cut
+	// off at its edge; resize re-runs this at the new width.
+	m.overlayRender = func() string { return m.wrapForModal(render()) }
+	content := m.overlayRender()
 	m.viewport.SetContent(content)
 	m.fitModalHeight(content)
 	m.viewport.GotoTop()
 }
 
+// wrapForModal word-wraps static overlay text to the dialog body width,
+// breaking long tokens such as paths when they cannot fit.
+func (m *Model) wrapForModal(s string) string {
+	if !m.modalActive() {
+		return s
+	}
+	return ansi.Wrap(s, m.modal.innerW, "/-_.,")
+}
+
+// selectionZoneID is the zone text selection maps clicks through: the
+// dialog body while a dialog is open, otherwise the transcript.
+func (m *Model) selectionZoneID() string {
+	if m.modalActive() {
+		return modalBodyZoneID
+	}
+	return chatViewportZoneID
+}
+
 // renderModal frames the viewport as the dialog over the dimmed backdrop.
+// The body (with any selection highlight) is padded to full width and
+// zone-marked so a drag selects text inside the dialog.
 func (m *Model) renderModal() string {
-	box := components.Modal(m.theme, m.modal.title, m.modal.hint, m.viewport.View(), m.modal.innerW, m.modal.innerH)
+	lines := strings.Split(m.applySelectionHighlight(m.viewport.View()), "\n")
+	for i, line := range lines {
+		lines[i] = components.FitWidth(line, m.modal.innerW)
+	}
+	body := zone.Mark(modalBodyZoneID, strings.Join(lines, "\n"))
+	box := components.Modal(m.theme, m.modal.title, m.modal.hint, body, m.modal.innerW, m.modal.innerH)
 	return components.Overlay(m.theme, m.modal.backdrop, m.modal.areaW, m.modal.areaH, box)
 }

@@ -827,7 +827,7 @@ func TestHistoryOverlayListsSessions(t *testing.T) {
 	if !m.overlayOpen {
 		t.Fatal("/history should open an overlay")
 	}
-	if !strings.Contains(m.historyOverlay(), m.sessionName) {
+	if !strings.Contains(m.historyPickerOverlay(), m.sessionName) {
 		t.Error("history overlay should list the saved session")
 	}
 }

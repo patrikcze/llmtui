@@ -44,6 +44,9 @@ func (m *Model) kv(b *strings.Builder, key, value string) {
 }
 
 func (m *Model) overlayFooter(b *strings.Builder) string {
+	if m.modalActive() {
+		return b.String() // the dialog's bottom border carries the key hints
+	}
 	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
 	return b.String()
 }
@@ -339,7 +342,7 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "list":
-		m.openOverlay(func() string { return m.templateOverlay() })
+		m.openTemplatePicker()
 	case "use":
 		if _, ok := m.cfg.Templates[rest]; !ok {
 			return m.fail(fmt.Sprintf("no template named %q (see /template list)", rest))
@@ -361,7 +364,7 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 		m.kv(&b, "temperature", fmt.Sprintf("%.2f", t.Temperature))
 		b.WriteString("\n" + m.theme.UserLabel.Render("system prompt") + "\n")
 		b.WriteString("  " + m.theme.StatusValue.Render(t.SystemPrompt) + "\n")
-		m.openOverlay(func() string { return m.overlayFooter(&b) })
+		m.openModalOverlay("Template · "+rest, "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.overlayFooter(&b) })
 	default:
 		// `/template golang` is shorthand for use.
 		if _, ok := m.cfg.Templates[sub]; ok {
@@ -372,32 +375,6 @@ func cmdTemplate(m *Model, args string) tea.Cmd {
 		return m.fail("usage: /template [list|use <name>|clear|inspect <name>]")
 	}
 	return nil
-}
-
-func (m *Model) templateOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("templates") + "\n\n")
-	if len(m.cfg.Templates) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no templates configured — add a templates: section to the config") + "\n")
-	}
-	names := make([]string, 0, len(m.cfg.Templates))
-	for name := range m.cfg.Templates {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		t := m.cfg.Templates[name]
-		marker := "  "
-		label := m.theme.StatusValue.Render(fmt.Sprintf("%-12s", name))
-		if name == m.template {
-			marker = m.theme.BadgeOK.Render("▸ ")
-			label = m.theme.BadgeOK.Render(fmt.Sprintf("%-12s", name))
-		}
-		fmt.Fprintf(&b, "%s%s %s\n", marker, label,
-			m.theme.StatusBar.Render(fmt.Sprintf("%s · mode %s · temp %.2f", t.Description, t.PromptMode, t.Temperature)))
-	}
-	b.WriteString("\n" + m.theme.SystemNote.Render("/template use <name> · /template clear"))
-	return m.overlayFooter(&b)
 }
 
 // --- /context -----------------------------------------------------------------
@@ -760,7 +737,7 @@ func cmdDebug(m *Model, args string) tea.Cmd {
 		m.debugMode = false
 		m.notice = "debug mode off"
 	case "last":
-		m.openOverlay(func() string { return m.debugOverlay() })
+		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "tool-calls":
 		if strings.TrimSpace(rest) == "test" {
 			return m.startToolCallConformanceProbe()
@@ -768,7 +745,7 @@ func cmdDebug(m *Model, args string) tea.Cmd {
 		if strings.TrimSpace(rest) != "" {
 			return m.fail("usage: /debug tool-calls [test]")
 		}
-		m.openOverlay(func() string { return m.toolCallDiagnosticsOverlay() })
+		m.openModalOverlay("Debug · tool calls", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.toolCallDiagnosticsOverlay() })
 	default:
 		return m.fail("usage: /debug [on|off|last|tool-calls]")
 	}
@@ -815,15 +792,15 @@ func cmdEntities(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.entityStatusOverlay() })
+		m.openModalOverlay("Entities", "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.entityStatusOverlay() })
 	case "list":
-		m.openOverlay(func() string { return m.entityListOverlay() })
+		m.openEntitiesPicker()
 	case "inspect":
 		id, extra := splitArgs(rest)
 		if id == "" || extra != "" {
 			return m.fail("usage: /entities inspect <id>")
 		}
-		m.openOverlay(func() string { return m.entityInspectOverlay(id) })
+		m.inspectEntity(id)
 	default:
 		return m.fail("usage: /entities [status|list|inspect <id>]")
 	}
@@ -849,24 +826,6 @@ func (m *Model) entityStatusOverlay() string {
 	m.kv(&b, "representation", fmt.Sprintf("minimal (full expansions this request: %d / %d)", s.ExpandedThisReq, s.MaxFullExpansions))
 	m.kv(&b, "context budget", fmt.Sprintf("%d tokens", m.cfg.Entities.MaxContextTokens))
 	b.WriteString("\n" + m.theme.SystemNote.Render("/entities list · /entities inspect <id>"))
-	return m.overlayFooter(&b)
-}
-
-func (m *Model) entityListOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("entities — list") + "\n\n")
-	if !m.entitiesEnabled() {
-		b.WriteString(m.theme.SystemNote.Render("entity context runtime is disabled") + "\n")
-		return m.overlayFooter(&b)
-	}
-	views := m.entities.MinimalViews(16 * 1024)
-	if len(views) == 0 {
-		b.WriteString(m.theme.SystemNote.Render("no live entities") + "\n")
-		return m.overlayFooter(&b)
-	}
-	for _, view := range views {
-		fmt.Fprintf(&b, "  %s  %-12s %s · %s\n", m.theme.StatusValue.Render(view.ID.String()), view.Kind, view.Label, view.Source)
-	}
 	return m.overlayFooter(&b)
 }
 
@@ -1266,7 +1225,7 @@ func cmdUsage(m *Model, args string) tea.Cmd {
 	case "session":
 		m.openOverlay(func() string { return m.statsOverlay() })
 	case "last":
-		m.openOverlay(func() string { return m.debugOverlay() })
+		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "reset":
 		m.session.Stats = nil
 		m.session.TotalPromptTokens = 0
@@ -1303,7 +1262,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "":
-		m.openOverlay(func() string { return m.historyOverlay() })
+		m.openHistoryPicker()
 	case "save":
 		m.saveWithNotice()
 	case "clear":
@@ -1333,7 +1292,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		if rest == "" || m.historyDir == "" {
 			return m.fail("usage: /history search <query>")
 		}
-		m.openOverlay(func() string { return m.historySearchOverlay(rest) })
+		m.openModalOverlay("History search · "+terminaltext.Sanitize(rest), "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.historySearchOverlay(rest) })
 	case "export":
 		format, _ := splitArgs(rest)
 		return m.exportHistory(format)

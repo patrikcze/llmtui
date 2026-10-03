@@ -49,8 +49,13 @@ func TestPersonalAppsDisabledLeavesToolAbsent(t *testing.T) {
 	}
 	m.errText = ""
 	cmdPersonalApps(m, "status")
-	if m.errText == "" {
+	if !m.overlayOpen || !strings.Contains(m.viewport.View(), "personal apps disabled") {
 		t.Fatal("cmdPersonalApps did not report the feature is disabled")
+	}
+	m.closeOverlay()
+	cmdPersonalApps(m, "connect mail")
+	if m.errText == "" {
+		t.Fatal("connect must still be refused while the feature is disabled")
 	}
 }
 

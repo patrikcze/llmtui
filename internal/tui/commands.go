@@ -75,13 +75,17 @@ const (
 	pickerSkill
 	pickerPlugin
 	pickerAgentQuestion
+	pickerHistory
+	pickerTemplate
+	pickerPersonalApps
+	pickerEntity
 )
 
 func slashCommands() []slashCommand {
 	return []slashCommand{
 		// --- Chat ---
 		{name: "help", usage: "/help [topic]", desc: "show keys and commands, grouped by category", category: "Chat", run: func(m *Model, args string) tea.Cmd {
-			m.openOverlay(func() string { return m.helpOverlay(args) })
+			m.openModalOverlay("Help", "↑/↓ pgup/pgdn scroll · esc close", func() string { return m.helpOverlay(args) })
 			return nil
 		}},
 		{name: "copy", usage: "/copy", desc: "copy the last reply to the clipboard", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
@@ -362,6 +366,7 @@ func (m *Model) clearPicker() {
 	m.picker.pickerModels = []provider.ModelInfo{}
 	m.picker.pickerIdx = 0
 	m.picker.pickerHeader = ""
+	m.picker.historyMetas, m.picker.historyErr, m.picker.entityViews = nil, "", nil
 }
 
 func (m *Model) setModel(id string) {
@@ -432,9 +437,13 @@ var pickerHeaderLines = map[pickerKind]int{
 	pickerModel:         2,
 	pickerProvider:      2,
 	pickerProfile:       2,
-	pickerSkill:         3,
-	pickerPlugin:        3,
+	pickerSkill:         2,
+	pickerPlugin:        2,
 	pickerAgentQuestion: 4,
+	pickerHistory:       2,
+	pickerTemplate:      2,
+	pickerPersonalApps:  2,
+	pickerEntity:        2,
 }
 
 // renderPicker rebuilds the picker overlay and scrolls just enough to keep
@@ -463,6 +472,14 @@ func (m *Model) renderPicker() {
 		content = m.pluginsPickerOverlay()
 	case pickerAgentQuestion:
 		content = m.agentQuestionPickerOverlay()
+	case pickerHistory:
+		content = m.historyPickerOverlay()
+	case pickerTemplate:
+		content = m.templatePickerOverlay()
+	case pickerPersonalApps:
+		content = m.personalAppsPickerOverlay()
+	case pickerEntity:
+		content = m.entitiesPickerOverlay()
 	}
 	m.viewport.SetContent(content)
 	m.fitModalHeight(content)
@@ -590,40 +607,6 @@ func (m *Model) statsOverlay() string {
 			b.WriteString("  " + m.theme.ChartBar.Render(components.Sparkline(totals, 40, false)) +
 				m.theme.StatusBar.Render("  tokens/day") + "\n")
 		}
-	}
-
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-	return b.String()
-}
-
-func (m *Model) historyOverlay() string {
-	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("saved sessions") + "\n\n")
-
-	if m.historyDir == "" {
-		b.WriteString(m.theme.SystemNote.Render("history saving is disabled (chat.save_history)") + "\n")
-	} else {
-		metas, err := history.List(m.historyDir)
-		switch {
-		case err != nil:
-			b.WriteString(m.theme.ErrorText.Render(err.Error()) + "\n")
-		case len(metas) == 0:
-			b.WriteString(m.theme.SystemNote.Render("no saved sessions yet — /save or ctrl+s") + "\n")
-		default:
-			for _, meta := range metas {
-				marker := "  "
-				name := m.theme.StatusValue.Render(meta.Name)
-				if meta.Name == m.sessionName {
-					marker = m.theme.BadgeOK.Render("▸ ")
-					name = m.theme.BadgeOK.Render(meta.Name)
-				}
-				fmt.Fprintf(&b, "%s%s  %s\n", marker, name,
-					m.theme.StatusBar.Render(fmt.Sprintf("%s · %s/%s · %d msgs · %d tok",
-						meta.SavedAt.Format("2006-01-02 15:04"),
-						meta.Provider, meta.Model, meta.Messages, meta.Tokens)))
-			}
-		}
-		b.WriteString("\n" + m.theme.SystemNote.Render("stored in "+m.historyDir))
 	}
 
 	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))

@@ -1438,6 +1438,10 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.resumeVerifiedRunWithInput(selection, nil)
 		}
+		if kind == pickerEntity {
+			m.inspectEntity(selection)
+			return m, nil
+		}
 		if m.busy() {
 			m.errText = "changing a provider, model, or active skill is unavailable while a reply is running — esc to stop it first"
 			m.refreshViewport()
@@ -1452,6 +1456,16 @@ func (m *Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if kind == pickerPlugin {
 			return m, m.togglePluginPicker(selection)
+		}
+		if kind == pickerHistory {
+			return m, m.loadHistorySession(selection)
+		}
+		if kind == pickerTemplate {
+			m.toggleTemplate(selection)
+			return m, nil
+		}
+		if kind == pickerPersonalApps {
+			return m, m.togglePersonalApp(selection)
 		}
 		return m, m.toggleSkillPicker(selection)
 	}
@@ -1527,7 +1541,7 @@ func (m *Model) updateReasoningClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cm
 	if !hit {
 		return m, nil, false
 	}
-	if z := zone.Get(chatViewportZoneID); m.sel.selecting && z != nil {
+	if z := zone.Get(m.selectionZoneID()); m.sel.selecting && z != nil {
 		x, y := clampToZone(z, msg.X, msg.Y)
 		if x != m.sel.selStartX || y != m.sel.selStartY {
 			return m, nil, false
