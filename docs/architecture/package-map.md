@@ -131,6 +131,18 @@ the size is (`app.go` ~3800 LOC, several siblings 1800–2100). See
 
 - `internal/testutil` — hermetic HTTP test helpers shared across packages (`http.go`).
 
+## 8. Outside the Go module
+
+These are not Go packages, so `go list ./...` and the Go gates do not cover them.
+
+- `native/personal-apps-calendar/` — the EventKit Calendar companion. It is installed with `make calendar-helper-install` and driven by `internal/personalapps` (see `docs/personal-apps.md`).
+- `macos/setup/` — **LLMTUIGUI**, a SwiftUI macOS setup app (an Xcode project).
+  - It edits `~/.config/llmtui/config.yaml` graphically.
+  - It runs its own LM Studio / Ollama chat with an agent and tool loop, in Swift. That loop is independent of `internal/agent` and `internal/tools`.
+  - It calls the `llmtui` binary as a subprocess. It finds it through `LLMTUI_EXECUTABLE`, then the bundled `Contents/Helpers/llmtui`, then the usual install paths.
+  - It is built and tested by `make macos-setup` / `make macos-setup-test` and `.github/workflows/macos-setup.yml`.
+  - See `macos/setup/README.md`.
+
 ---
 
 ## Cross-check: why the same nouns appear in many folders

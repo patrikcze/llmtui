@@ -1,0 +1,9 @@
+# Xcode per-user state and build output (macOS setup app)
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.DS_Store
+
+# Local Xcode signing team (never commit)
+Signing.local.xcconfig

@@ -1,0 +1,12 @@
+// Signing settings shared by all targets.
+//
+// No Apple team ID is committed. For local signed builds in Xcode, copy
+// Signing.local.xcconfig.example to Signing.local.xcconfig (git-ignored) and
+// set your team there. Without it, builds are unsigned or ad-hoc signed,
+// which is what CI and scripts/package-app.sh use.
+//
+// Do not pick a team in Xcode's Signing & Capabilities tab: Xcode would write
+// DEVELOPMENT_TEAM into project.pbxproj, which CI rejects.
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"

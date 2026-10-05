@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/patrikcze/llmtui/actions/workflows/ci.yml/badge.svg)](https://github.com/patrikcze/llmtui/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/patrikcze/llmtui)](https://github.com/patrikcze/llmtui/releases/latest)
+[![macOS setup app](https://github.com/patrikcze/llmtui/actions/workflows/macos-setup.yml/badge.svg)](https://github.com/patrikcze/llmtui/actions/workflows/macos-setup.yml)
 
 A fast, keyboard-first terminal UI for chatting with **local LLMs** — Ollama,
 LM Studio, vLLM, llama.cpp, Unsloth, or any OpenAI-compatible server.
@@ -176,6 +177,13 @@ not in the project directory. Configure its printed executable path and the
 calendar IDs, then explicitly connect it in chat. See
 [Apple Mail and Calendar](docs/personal-apps.md) for the configuration and
 approval flow.
+
+On macOS, the **LLMTUIGUI** setup app gives you a graphical editor for the same
+`config.yaml`. It is aimed mainly at Personal Apps, but it also covers
+providers, profiles, tools and the agent. Each release attaches
+`LLMTUIGUI-<version>-macos-arm64.zip` with the matching llmtui embedded. The
+app is ad-hoc signed, not notarized, so open it the first time with
+right-click → **Open**. The source is in [`macos/setup`](macos/setup/README.md).
 
 Release archives also include starter skills and plugins under
 `examples/skills` and `examples/plugins`. They remain inert by default: add
@@ -631,6 +639,8 @@ make cover      # coverage report
 make tidy       # sync go.mod/go.sum
 make dist       # build this native release target into dist/ with checksums
 make clean      # remove artifacts
+make macos-setup       # macOS: build the LLMTUIGUI setup app with llmtui embedded (needs Xcode)
+make macos-setup-test  # macOS: run the setup app's unit tests
 make help       # list all targets, including the release-archive (dist-archive-*) ones
 ```
 
@@ -678,6 +688,8 @@ internal/procutil/        cross-platform process-group containment for run_comma
 internal/tui/             Bubble Tea chat screen
 internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme
+macos/setup/              LLMTUIGUI SwiftUI setup app (Xcode project, not Go)
+native/                   Swift companions (EventKit Calendar helper)
 ```
 
 The consolidated architecture reference is
