@@ -383,13 +383,13 @@ func cmdContext(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.contextStatusOverlay() })
+		m.openModalOverlay("Context", scrollHint, func() string { return m.contextStatusOverlay() })
 	case "summary":
-		m.openOverlay(func() string { return m.contextSummaryOverlay(m.contextSnapshot()) })
+		m.openModalOverlay("Context · summary", scrollHint, func() string { return m.contextSummaryOverlay(m.contextSnapshot()) })
 	case "preview":
-		m.openOverlay(func() string { return m.contextPreviewOverlay(m.contextSnapshot()) })
+		m.openModalOverlay("Context · preview", scrollHint, func() string { return m.contextPreviewOverlay(m.contextSnapshot()) })
 	case "refresh":
-		m.openOverlay(func() string { return m.contextStatusOverlay() })
+		m.openModalOverlay("Context", scrollHint, func() string { return m.contextStatusOverlay() })
 		m.notice = "context diagnostics refreshed"
 	case "summarize", "compact", "rebuild":
 		if blocked := m.contextMutationBlockedReason(); blocked != "" {
@@ -409,7 +409,7 @@ func cmdContext(m *Model, args string) tea.Cmd {
 		m.notice = "session summary cleared"
 	case "strategy":
 		if rest == "" {
-			m.openOverlay(func() string { return m.contextStrategyOverlay(m.contextSnapshot()) })
+			m.openModalOverlay("Context · strategy", scrollHint, func() string { return m.contextStrategyOverlay(m.contextSnapshot()) })
 			return nil
 		}
 		if blocked := m.contextMutationBlockedReason(); blocked != "" {
@@ -1137,7 +1137,7 @@ func cmdConfig(m *Model, args string) tea.Cmd {
 	sub, _ := splitArgs(args)
 	switch sub {
 	case "", "show":
-		m.openOverlay(func() string { return m.configOverlay() })
+		m.openModalOverlay("Configuration · secrets redacted", scrollHint, func() string { return m.configOverlay() })
 	case "path":
 		path := m.cfgPath
 		if path == "" {
@@ -1221,9 +1221,9 @@ func cmdUsage(m *Model, args string) tea.Cmd {
 			}
 			m.usageState = usageOverlayState{records: records, metas: metas, active: true}
 		}
-		m.openOverlay(func() string { return m.usageOverlay() })
+		m.openModalOverlayWith("Usage", "← → tab · r range · ↑/↓ scroll · esc close", true, true, func() string { return m.usageOverlay() })
 	case "session":
-		m.openOverlay(func() string { return m.statsOverlay() })
+		m.openModalOverlay("Session statistics", scrollHint, func() string { return m.statsOverlay() })
 	case "last":
 		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "reset":

@@ -9,6 +9,9 @@ import (
 	"github.com/patrikcze/llmtui/internal/tui/components"
 )
 
+// scrollHint is the key hint for scrollable text dialogs.
+const scrollHint = "↑/↓ pgup/pgdn scroll · esc close"
+
 // modalBodyZoneID marks the dialog body so text selection maps clicks into
 // the dialog's viewport instead of the hidden transcript.
 const modalBodyZoneID = "modal-body"
@@ -31,6 +34,10 @@ type modalState struct {
 	// maxInnerH is the tallest body the area allows; innerH shrinks to the
 	// content so a short list is not drawn in a mostly empty dialog.
 	maxInnerH int
+	// noWrap keeps pre-laid-out content (charts) from being word-wrapped;
+	// fixedHeight keeps the dialog at its full height, so a tabbed dialog
+	// does not change size when its content does.
+	noWrap, fixedHeight bool
 }
 
 // minModalBodyRows keeps a dialog from collapsing below a readable height.
@@ -87,7 +94,7 @@ func (m *Model) applyModalSize(areaW, areaH int) {
 // minModalBodyRows or above the area's maximum). Call after the overlay's
 // content is set and before scrolling to a selection.
 func (m *Model) fitModalHeight(content string) {
-	if !m.modalActive() {
+	if !m.modalActive() || m.modal.fixedHeight {
 		return
 	}
 	rows := strings.Count(strings.TrimRight(content, "\n"), "\n") + 1
@@ -104,10 +111,18 @@ func (m *Model) overlayWidth() int {
 	return max(m.width-2, 20)
 }
 
-// openModalOverlay opens a static (non-picker) overlay as a dialog.
+// openModalOverlay opens a static (non-picker) overlay as a dialog whose
+// text is word-wrapped to the dialog width.
 func (m *Model) openModalOverlay(title, hint string, render func() string) {
+	m.openModalOverlayWith(title, hint, false, false, render)
+}
+
+// openModalOverlayWith opens a static overlay as a dialog. noWrap keeps
+// pre-laid-out lines (charts) intact; fixedHeight keeps the full height.
+func (m *Model) openModalOverlayWith(title, hint string, noWrap, fixedHeight bool, render func() string) {
 	m.clearPicker()
 	m.ensureModal(title, hint)
+	m.modal.noWrap, m.modal.fixedHeight = noWrap, fixedHeight
 	m.overlayOpen = true
 	// Static text is word-wrapped to the dialog body instead of being cut
 	// off at its edge; resize re-runs this at the new width.
@@ -121,7 +136,7 @@ func (m *Model) openModalOverlay(title, hint string, render func() string) {
 // wrapForModal word-wraps static overlay text to the dialog body width,
 // breaking long tokens such as paths when they cannot fit.
 func (m *Model) wrapForModal(s string) string {
-	if !m.modalActive() {
+	if !m.modalActive() || m.modal.noWrap {
 		return s
 	}
 	return ansi.Wrap(s, m.modal.innerW, "/-_.,")

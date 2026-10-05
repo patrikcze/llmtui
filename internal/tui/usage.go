@@ -170,16 +170,26 @@ func (t modelTotal) total() int { return t.Prompt + t.Reply }
 // m.usageState.rangeSel.
 func (m *Model) usageOverlay() string {
 	var b strings.Builder
-	b.WriteString(m.theme.Badge.Render("usage") + "\n\n")
+	// In a dialog the frame carries the title and the key hints.
+	dialog := m.modalActive()
+	footer := func(hint string) string {
+		if dialog {
+			return ""
+		}
+		return "\n" + m.theme.SystemNote.Render(hint)
+	}
+	if !dialog {
+		b.WriteString(m.theme.Badge.Render("usage") + "\n\n")
+	}
 
 	if m.historyDir == "" {
 		b.WriteString(m.theme.SystemNote.Render("history saving is disabled (chat.save_history)") + "\n")
-		return b.String() + "\n" + m.theme.SystemNote.Render("esc to close")
+		return b.String() + footer("esc to close")
 	}
 	allRecords := m.usageState.records
 	if len(allRecords) == 0 {
 		b.WriteString(m.theme.SystemNote.Render("no usage recorded yet — chat a bit first") + "\n")
-		return b.String() + "\n" + m.theme.SystemNote.Render("esc to close")
+		return b.String() + footer("esc to close")
 	}
 
 	now := time.Now()
@@ -218,7 +228,7 @@ func (m *Model) usageOverlay() string {
 		m.writeUsageActivityTab(&b, rangeSel, records, now, ascii)
 	}
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close · ← → switch tab · r to cycle range"))
+	b.WriteString(footer("esc to close · ← → switch tab · r to cycle range"))
 	return b.String()
 }
 
@@ -226,7 +236,7 @@ func (m *Model) usageOverlay() string {
 func (m *Model) writeUsageActivityTab(b *strings.Builder, rangeSel usageRange, records []history.UsageRecord, now time.Time, ascii bool) {
 	byDay := dayTotals(records)
 	weeks := rangeSel.heatmapWeeks()
-	if avail := m.width - 8; avail > 0 && avail < weeks {
+	if avail := m.overlayWidth() - 8; avail > 0 && avail < weeks {
 		weeks = avail
 	}
 	heat := components.Heatmap(components.HeatmapData{
