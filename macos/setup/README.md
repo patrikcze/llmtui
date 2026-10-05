@@ -36,6 +36,21 @@ Accounts). That file is git-ignored. Do **not** pick a team in the target's
 Signing & Capabilities tab — Xcode would write it into `project.pbxproj`, and
 CI rejects a committed team ID.
 
+Xcode can still write `DEVELOPMENT_TEAM` into `project.pbxproj` on its own.
+Before committing, check with:
+
+```bash
+make macos-setup-guard
+```
+
+To run that check on every commit, install it as a pre-commit hook:
+
+```bash
+ln -s ../../macos/setup/scripts/check-no-signing-identity.sh .git/hooks/pre-commit
+```
+
+If it fails, delete the `DEVELOPMENT_TEAM = …;` lines from `project.pbxproj`.
+
 ## Build and test from the command line
 
 If `xcode-select` points at the Command Line Tools, the Makefile targets set

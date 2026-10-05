@@ -25,19 +25,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Reject committed team IDs and local Xcode files
-        run: |
-          fail=0
-          if grep -nE 'DEVELOPMENT_TEAM *= *[A-Z0-9]+' macos/setup/LLMTUIGUI.xcodeproj/project.pbxproj; then
-            echo "::error::project.pbxproj sets a DEVELOPMENT_TEAM. Keep it in Config/Signing.local.xcconfig (git-ignored) instead." >&2
-            fail=1
-          fi
-          tracked=$(git ls-files macos | grep -E '(^|/)(xcuserdata/|[^/]*\.xcuserstate$|Signing\.local\.xcconfig$|DerivedData/|build/)' || true)
-          if [ -n "$tracked" ]; then
-            echo "::error::per-user or build files are tracked:" >&2
-            echo "$tracked" >&2
-            fail=1
-          fi
-          exit "$fail"
+        run: macos/setup/scripts/check-no-signing-identity.sh
 
   test:
     name: Build and test (unsigned)
