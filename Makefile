@@ -102,6 +102,18 @@ calendar-helper-setup:
 	@$(MAKE) --no-print-directory calendar-helper-install
 	@$(MAKE) --no-print-directory calendar-helper-list
 
+## macos-setup: build the macOS setup app (LLMTUIGUI) with llmtui embedded, zipped into DIST
+.PHONY: macos-setup
+macos-setup: build
+	BUILD_NUMBER=$(or $(BUILD_NUMBER),1) macos/setup/scripts/package-app.sh ./$(BINARY) $(VERSION) $(DIST)
+
+## macos-setup-test: run the macOS setup app's unit tests (needs Xcode)
+.PHONY: macos-setup-test
+macos-setup-test:
+	DEVELOPER_DIR=$(or $(DEVELOPER_DIR),/Applications/Xcode.app/Contents/Developer) \
+	xcodebuild -quiet -project macos/setup/LLMTUIGUI.xcodeproj -scheme LLMTUIGUI \
+	  -derivedDataPath macos/setup/build/DerivedData CODE_SIGNING_ALLOWED=NO test
+
 ## fmt: format all Go sources
 .PHONY: fmt
 fmt:
@@ -266,5 +278,5 @@ dist-checksums:
 .PHONY: clean
 clean:
 	rm -f $(BINARY) coverage.out
-	rm -rf $(DIST)
+	rm -rf $(DIST) macos/setup/build
 	go clean

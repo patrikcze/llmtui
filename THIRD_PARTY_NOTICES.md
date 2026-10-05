@@ -1,6 +1,7 @@
 # Third-Party Notices
 
-llmtui's embedded local-inference provider builds on the following projects.
+llmtui's embedded local-inference provider and the macOS setup app build on
+the following projects.
 These notices apply in addition to the licenses of llmtui's Go module
 dependencies (see `go.mod`), each of which retains its own license.
 
@@ -67,3 +68,25 @@ OpenMP notices reproduced by the canonical license file.
 
 Full text:
 <https://github.com/llvm/llvm-project/blob/main/openmp/LICENSE.TXT>
+
+## KaTeX (github.com/KaTeX/KaTeX) — macOS setup app only
+
+The macOS setup app (`macos/setup`, `LLMTUIGUI.app`) bundles KaTeX's minified
+script, stylesheet and fonts to render math in chat answers.
+
+License: MIT License. Copyright (c) 2013-2020 Khan Academy and other
+contributors. The full text ships beside the files as
+`macos/setup/LLMTUIGUI/Rendering/KaTeX/KaTeX-LICENSE.txt`.
+
+Full text: <https://github.com/KaTeX/KaTeX/blob/main/LICENSE>
+
+## Mermaid (github.com/mermaid-js/mermaid) — macOS setup app only
+
+The macOS setup app bundles `mermaid.min.js` to render Mermaid diagrams in
+chat answers.
+
+License: MIT License. Copyright (c) 2014 - 2022 Knut Sveidqvist. The full
+text ships beside the file as
+`macos/setup/LLMTUIGUI/Rendering/Mermaid/Mermaid-LICENSE.txt`.
+
+Full text: <https://github.com/mermaid-js/mermaid/blob/develop/LICENSE>

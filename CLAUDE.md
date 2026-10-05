@@ -209,6 +209,37 @@ them **and add a regression test for the specific case it touches**:
   known size hot-spots. Add to them reluctantly; extraction targets are listed
   at the end of `docs/architecture/package-map.md`.
 
+## macOS setup app (`macos/setup`)
+
+**LLMTUIGUI** is a SwiftUI Xcode project, not Go. It edits
+`~/.config/llmtui/config.yaml` graphically, and it has its own Swift chat,
+agent and tool loop for LM Studio / Ollama. See `macos/setup/README.md`.
+
+- **Gates:** run `make macos-setup-test` (unit tests, Swift Testing) and
+  `make macos-setup` (Release build plus an ad-hoc signed zip in `dist/`).
+  Neither `make check` nor `go test ./...` touches it. CI runs it through
+  `.github/workflows/macos-setup.yml`.
+- **Xcode location:** `xcode-select` may point at the Command Line Tools. The
+  targets and `scripts/package-app.sh` default `DEVELOPER_DIR` to
+  `/Applications/Xcode.app`. For a raw `xcodebuild`, set it yourself.
+- **Source folders:** they are Xcode synchronized folders. A file added under
+  `LLMTUIGUI/` or `LLMTUIGUITests/` joins the target with no `project.pbxproj`
+  edit.
+- **Signing:** never commit a signing identity. `DEVELOPMENT_TEAM` comes only
+  from the git-ignored `Config/Signing.local.xcconfig`. CI fails if
+  `project.pbxproj` sets a team, or if `xcuserdata` or the local xcconfig is
+  tracked. Release builds are ad-hoc signed (no Apple Developer account) and
+  not notarized.
+- **Bundle ID:** keep `com.patriknakladalpersonalteam.LLMTUIGUI`. Changing it
+  resets users' macOS privacy grants (Automation, Calendars).
+- **Embedded llmtui:** the bundled copy lives at `Contents/Helpers/llmtui`.
+  The llama.cpp runtime is deliberately not bundled.
+- **Versioning:** the app's version is the llmtui version it is packaged with.
+- **Safety scope:** the Workspace Tool Safety Invariants above cover the Go
+  `internal/tools` / `internal/mcp`. The Swift tool loop is a separate
+  implementation that has not been audited against them. Do not assume parity,
+  and audit it before widening what its tools can do.
+
 ## Out of scope — ask first
 
 - `third_party/ffi/` — vendored upstream, plus the `go.mod` replace above.

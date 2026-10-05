@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>LLMTUIGUI reads only calendars selected in the saved LLMTUI Personal Apps scope when you explicitly connect Calendar for GUI chat.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>LLMTUIGUI uses Apple Events to read bounded metadata and selected message text from allowed Mail accounts after you explicitly connect Mail for GUI chat.</string>
+</dict>
+</plist>
