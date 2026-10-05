@@ -185,7 +185,7 @@ func slashCommands() []slashCommand {
 		// --- Session ---
 		{name: "usage", usage: "/usage [session|last|reset|export]", desc: "usage dashboard: charts, models, cache, streaks", category: "Session", run: cmdUsage},
 		{name: "stats", usage: "/stats", desc: "per-exchange session statistics", category: "Session", run: func(m *Model, _ string) tea.Cmd {
-			m.openOverlay(func() string { return m.statsOverlay() })
+			m.openModalOverlay("Session statistics", scrollHint, func() string { return m.statsOverlay() })
 			return nil
 		}},
 		{name: "save", usage: "/save", desc: "save this session to the history directory", category: "Session", run: func(m *Model, _ string) tea.Cmd {
@@ -609,8 +609,7 @@ func (m *Model) statsOverlay() string {
 		}
 	}
 
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-	return b.String()
+	return m.overlayFooter(&b)
 }
 
 // suggestionsView renders the command popup shown above the input.

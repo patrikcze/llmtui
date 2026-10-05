@@ -20,8 +20,9 @@ Top to bottom, always full-screen (alt-screen mode):
 ```
 
 `/providers`, `/models`, `/profile list`, `/tools`, `/skills list`,
-`/plugins`, `/history`, `/template list`, `/personal-apps`, `/entities`, `/help`
-and `/debug last` open as **dialogs**: a
+`/plugins`, `/history`, `/template list`, `/personal-apps`, `/entities`, `/help`,
+`/debug last`, `/usage`, `/stats`, `/context`, `/config` and `/memory` open as
+**dialogs**: a
 rounded, titled frame centered over the dimmed transcript, with key hints in
 the bottom border, sized to its content. `/providers` shows the provider list
 (status dot, name, model count or `offline`) next to the highlighted
@@ -30,7 +31,9 @@ tables; `/tools` groups settings, the tool table, and the safety notes. The
 list dialogs are selectable (`Enter` loads a session, uses a template, toggles
 a skill or plugin, connects/disconnects a personal app, or inspects an
 entity); text dialogs such as `/help` and `/debug last` scroll, wrap to the
-dialog width, and stay drag-selectable for copying. Below
+dialog width, and stay drag-selectable for copying. `/usage` keeps its tabs
+(`←`/`→`) and range (`r`) inside the dialog, renders its charts unwrapped, and
+keeps one size across tabs. Below
 50 columns or 8 rows the dialog falls back to the full-area overlay. A
 pending tool approval or `ask_user` question closes the dialog so the next key
 answers it. Dialog text is drawn with the theme colours only; the terminal's

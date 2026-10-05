@@ -28,7 +28,7 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		if !validMemoryListScope(scope) {
 			return m.fail("usage: /memory list [user|project|episode|run]")
 		}
-		m.openOverlay(func() string { return m.memoryListOverlay(scope) })
+		m.openModalOverlay("Memory", scrollHint, func() string { return m.memoryListOverlay(scope) })
 	case "on":
 		m.memEnabled = true
 		m.notice = "memory retrieval enabled for this session; nothing is stored automatically — use /memory add or /save"
@@ -36,7 +36,7 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		m.memEnabled = false
 		m.notice = "memory retrieval disabled for this session; stored records remain unchanged"
 	case "status":
-		m.openOverlay(func() string { return m.memoryStatusOverlay() })
+		m.openModalOverlay("Memory · status", scrollHint, func() string { return m.memoryStatusOverlay() })
 	case "add":
 		return cmdMemoryAdd(m, rest)
 	case "inspect":
@@ -51,7 +51,7 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		// back to the content already shown if the entry became unreadable
 		// in between (rare — resize shouldn't be able to fail where open
 		// just succeeded).
-		m.openOverlay(func() string {
+		m.openModalOverlay("Memory · "+terminaltext.Sanitize(rest), scrollHint, func() string {
 			if o, err := m.memoryInspectOverlay(rest); err == nil {
 				return o
 			}
@@ -68,7 +68,7 @@ func cmdMemory(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail("memory " + sub + ": " + err.Error())
 		}
-		m.openOverlay(func() string {
+		m.openModalOverlay("Memory · "+sub+" "+terminaltext.Sanitize(rest), scrollHint, func() string {
 			if o, err := m.memorySearchOverlay(rest, explain); err == nil {
 				return o
 			}
