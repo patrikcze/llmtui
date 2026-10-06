@@ -495,6 +495,32 @@ struct LLMTUIGUITests {
         #expect(trimmed.last?.text.contains("Answer 9") == true)
     }
 
+    @Test func elideOldestToolResultsIfOverBudgetTrimsOldestFirstWithinTheTurn() {
+        var messages: [OpenAIMessage] = [
+            .init(role: "system", content: "system prompt"),
+            .init(role: "user", content: "do the thing")
+        ]
+        let turnStartIndex = messages.count
+        for index in 0..<5 {
+            messages.append(.init(role: "assistant", content: nil as String?, toolCalls: [
+                OpenAIToolCall(id: "call-\(index)", type: "function", function: .init(name: "web_fetch", arguments: "{}"))
+            ]))
+            messages.append(.tool(content: "result \(index) " + String(repeating: "x", count: 2000), toolCallID: "call-\(index)"))
+        }
+
+        OpenAICompatibleChatService.elideOldestToolResultsIfOverBudget(&messages, from: turnStartIndex, contextWindow: 1024)
+
+        let toolContents = messages.filter { $0.role == "tool" }.map { $0.content?.plainText ?? "" }
+        #expect(toolContents.first?.contains("elided") == true)
+        // The budget is tight enough that more than one old result needs
+        // trimming, but the most recent one should survive untouched so
+        // the model still has its latest evidence to work from.
+        #expect(toolContents.last?.contains("result 4") == true)
+        #expect(OpenAICompatibleChatService.estimatedTokens(forRequestMessages: messages) <= Int(Double(1024) * 0.85) || toolContents.allSatisfy { $0.contains("elided") })
+        // Messages before turnStartIndex (system/user) are never touched.
+        #expect(messages[0].content?.plainText == "system prompt")
+    }
+
     @Test func contextWindowReadsMatchingModelProfile() {
         var configuration = LLMTUIConfiguration()
         configuration.provider.model = "llama3.1:8b"
@@ -813,11 +839,670 @@ struct LLMTUIGUITests {
         )
 
         #expect(!writeResult.isError)
-        #expect(readResult.content.contains("2: second"))
+        #expect(writeResult.content.contains("Created"))
+        #expect(readResult.content.contains("2| second"))
         #expect(!editResult.isError)
         #expect(try String(contentsOf: root.appending(path: "notes/test.txt"), encoding: .utf8) == "first\nupdated")
         #expect(escapeResult.isError)
         #expect(escapeResult.content.contains("outside the configured workspace"))
+    }
+
+    @Test func textDocumentPreservesCRLFLineCountAndRoundTrips() {
+        let withoutTrailingNewline = TextDocument("a\r\nb\r\nc")
+        #expect(withoutTrailingNewline.lineCount == 3)
+        #expect(withoutTrailingNewline.lines == ["a", "b", "c"])
+        #expect(withoutTrailingNewline.lineEnding == .crlf)
+        #expect(withoutTrailingNewline.text == "a\r\nb\r\nc")
+
+        let withTrailingNewline = TextDocument("a\r\nb\r\n")
+        #expect(withTrailingNewline.lineCount == 2)
+        #expect(withTrailingNewline.text == "a\r\nb\r\n")
+
+        let lfDocument = TextDocument("x\ny\n")
+        #expect(lfDocument.lineEnding == .lf)
+        #expect(lfDocument.text == "x\ny\n")
+
+        let empty = TextDocument("")
+        #expect(empty.lineCount == 0)
+        #expect(empty.text == "")
+    }
+
+    @Test func textDocumentLineOperationsReplaceInsertAndDelete() throws {
+        var document = TextDocument("1\n2\n3\n")
+        try document.replaceLines(start: 2, end: 2, with: ["X", "Y"])
+        #expect(document.lines == ["1", "X", "Y", "3"])
+
+        try document.insertLines(after: 0, newLines: ["top"])
+        #expect(document.lines == ["top", "1", "X", "Y", "3"])
+
+        try document.deleteLines(start: 2, end: 3)
+        #expect(document.lines == ["top", "Y", "3"])
+    }
+
+    @Test func textDocumentLineOperationsRejectOutOfRangeRequests() {
+        var document = TextDocument("1\n2\n")
+        #expect(throws: FileEditingError.self) {
+            try document.replaceLines(start: 1, end: 5, with: ["x"])
+        }
+        #expect(throws: FileEditingError.self) {
+            try document.insertLines(after: 10, newLines: ["x"])
+        }
+        #expect(throws: FileEditingError.self) {
+            try document.deleteLines(start: 0, end: 1)
+        }
+    }
+
+    @Test func textEditApplierAppliesMultipleEditsAtomically() throws {
+        let updated = try TextEditApplier.apply(
+            [
+                StringEdit(oldText: "a", newText: "A", replaceAll: false),
+                StringEdit(oldText: "c", newText: "C", replaceAll: false)
+            ],
+            to: "a\nb\nc",
+            path: "f.txt"
+        )
+        #expect(updated == "A\nb\nC")
+    }
+
+    @Test func textEditApplierFailsWithoutApplyingAnyEditWhenOneFails() {
+        #expect(throws: FileEditingError.self) {
+            _ = try TextEditApplier.apply(
+                [
+                    StringEdit(oldText: "a", newText: "A", replaceAll: false),
+                    StringEdit(oldText: "does-not-exist", newText: "Z", replaceAll: false)
+                ],
+                to: "a\nb\nc",
+                path: "f.txt"
+            )
+        }
+    }
+
+    @Test func textEditApplierReplaceAllReplacesEveryOccurrence() throws {
+        let updated = try TextEditApplier.apply(
+            [StringEdit(oldText: "x", newText: "y", replaceAll: true)],
+            to: "x-x-x",
+            path: "f.txt"
+        )
+        #expect(updated == "y-y-y")
+    }
+
+    @Test func textEditApplierReportsLineNumbersForZeroAndMultipleMatches() {
+        do {
+            _ = try TextEditApplier.apply([StringEdit(oldText: "missing", newText: "z", replaceAll: false)], to: "one\ntwo\n", path: "f.txt")
+            Issue.record("expected a no-match error")
+        } catch {
+            #expect(error.localizedDescription.contains("did not match"))
+        }
+
+        do {
+            _ = try TextEditApplier.apply([StringEdit(oldText: "dup", newText: "z", replaceAll: false)], to: "dup\nother\ndup\n", path: "f.txt")
+            Issue.record("expected a multiple-match error")
+        } catch {
+            #expect(error.localizedDescription.contains("matched 2 times"))
+            #expect(error.localizedDescription.contains("1, 3"))
+        }
+    }
+
+    @Test func nearbyContextFindsAFuzzyMatchWhenOldTextIsAParaphrase() {
+        // Reproduces the real failure this was added for: a model's old_text
+        // is a slightly reworded memory of a paragraph, not a literal copy
+        // of it, and the real paragraph is nowhere near the top of the file.
+        let source = """
+        ### Unrelated heading
+        some other line
+        another unrelated line
+        The day was clear with sunny periods, reaching an estimated high of 22 degrees earlier today.
+        trailing line
+        """
+        let paraphrase = "The day has been mostly clear with sunny periods, reaching an estimated high of 22 degrees earlier today."
+        let context = TextEditApplier.nearbyContext(for: paraphrase, in: source)
+        #expect(context.contains("most similar existing line is line 4"))
+        #expect(context.contains("The day was clear with sunny periods"))
+    }
+
+    @Test func editFileRefusesWithoutAReadInTheSameTurn() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "one\ntwo\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+
+        // Neither read_file nor write_file has touched this path in this
+        // context/turn — edit_file must refuse rather than let old_text be
+        // checked against content the model never actually saw.
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        let result = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","old_text":"one","new_text":"ONE"}"#.utf8),
+            context: context,
+            toolCallID: "edit-unread"
+        )
+        #expect(result.isError)
+        #expect(result.content.contains("hasn't been read"))
+    }
+
+    @Test func writeFileEchoesContentSoAFollowUpEditCanCopyItExactly() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let writeResult = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"first line\nsecond line\n"}"#.utf8),
+            context: context,
+            toolCallID: "write-1"
+        )
+        #expect(!writeResult.isError)
+        #expect(writeResult.content.contains("1| first line"))
+        #expect(writeResult.content.contains("2| second line"))
+
+        // write_file's own record satisfies edit_file's same-turn-read
+        // requirement, so a model can go straight from write_file to
+        // edit_file on the same path without an extra read_file round trip.
+        let editResult = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","old_text":"second line","new_text":"SECOND LINE"}"#.utf8),
+            context: context,
+            toolCallID: "edit-1"
+        )
+        #expect(!editResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "first line\nSECOND LINE\n")
+    }
+
+    @Test func editLinesRequiresAReadInTheSameTurnAndDetectsStaleContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "one\ntwo\nthree\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+
+        // The file exists on disk, but this turn never read or wrote it
+        // through a tool call — edit_lines must refuse outright.
+        let unreadContext = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        let unreadResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":2,"new_text":"TWO"}"#.utf8),
+            context: unreadContext,
+            toolCallID: "edit-unread"
+        )
+        #expect(unreadResult.isError)
+        #expect(unreadResult.content.contains("hasn't been read"))
+
+        // Read it through a tracked context, then change it on disk outside
+        // that tracker — the next edit_lines call must see it as stale.
+        let trackedContext = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        _ = await ToolRegistry.shared.execute(
+            name: "read_file",
+            arguments: Data(#"{"path":"a.txt"}"#.utf8),
+            context: trackedContext,
+            toolCallID: "r"
+        )
+        try "changed\nexternally\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+        let staleResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":1,"new_text":"X"}"#.utf8),
+            context: trackedContext,
+            toolCallID: "edit-stale"
+        )
+        #expect(staleResult.isError)
+        #expect(staleResult.content.contains("changed on disk"))
+    }
+
+    @Test func editLinesReplacesInsertsAndDeletesByLineNumber() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        _ = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"one\ntwo\nthree\n"}"#.utf8),
+            context: context,
+            toolCallID: "w"
+        )
+        _ = await ToolRegistry.shared.execute(
+            name: "read_file",
+            arguments: Data(#"{"path":"a.txt"}"#.utf8),
+            context: context,
+            toolCallID: "r"
+        )
+
+        let replaceResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":2,"new_text":"TWO"}"#.utf8),
+            context: context,
+            toolCallID: "edit-replace"
+        )
+        #expect(!replaceResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "one\nTWO\nthree\n")
+
+        let insertResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"insert","start_line":0,"new_text":"ZERO"}"#.utf8),
+            context: context,
+            toolCallID: "edit-insert"
+        )
+        #expect(!insertResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ZERO\none\nTWO\nthree\n")
+
+        let deleteResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"delete","start_line":1,"end_line":1}"#.utf8),
+            context: context,
+            toolCallID: "edit-delete"
+        )
+        #expect(!deleteResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "one\nTWO\nthree\n")
+    }
+
+    @Test func editFileAppliesMultipleEditsAsOneAtomicToolCall() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        _ = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"alpha\nbeta\ngamma\n"}"#.utf8),
+            context: context,
+            toolCallID: "w"
+        )
+
+        let result = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"gamma","new_text":"GAMMA"}]}"#.utf8),
+            context: context,
+            toolCallID: "edit-multi"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("2 edits applied"))
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ALPHA\nbeta\nGAMMA\n")
+
+        let atomicFailure = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","edits":[{"old_text":"beta","new_text":"BETA"},{"old_text":"not-there","new_text":"Z"}]}"#.utf8),
+            context: context,
+            toolCallID: "edit-multi-fail"
+        )
+        #expect(atomicFailure.isError)
+        // Neither edit from the failed call took effect.
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ALPHA\nbeta\nGAMMA\n")
+    }
+
+    @Test func globMatchesTopLevelFilesWithDoubleStarPattern() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appending(path: "dir"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "top".write(to: root.appending(path: "a.swift"), atomically: true, encoding: .utf8)
+        try "nested".write(to: root.appending(path: "dir/b.swift"), atomically: true, encoding: .utf8)
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let result = await ToolRegistry.shared.execute(
+            name: "glob",
+            arguments: Data(#"{"pattern":"**/*.swift"}"#.utf8),
+            context: context,
+            toolCallID: "glob-1"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("a.swift"))
+        #expect(result.content.contains("dir/b.swift"))
+    }
+
+    @Test func grepOutputUsesPathColonLineFormat() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "first\nneedle here\nlast\n".write(to: root.appending(path: "notes.txt"), atomically: true, encoding: .utf8)
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let result = await ToolRegistry.shared.execute(
+            name: "grep",
+            arguments: Data(#"{"pattern":"needle"}"#.utf8),
+            context: context,
+            toolCallID: "grep-1"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("notes.txt:2: needle here"))
+    }
+
+    @Test func toolRegistryTreatsEmptyArgumentsAsNoArguments() async {
+        let context = ToolExecutionContext(
+            workspaceURL: FileManager.default.temporaryDirectory,
+            timeout: .seconds(1)
+        )
+        let result = await ToolRegistry.shared.execute(
+            name: "local_context",
+            arguments: Data("".utf8),
+            context: context,
+            toolCallID: "empty-args"
+        )
+        #expect(!result.isError)
+    }
+
+    @Test func memoryStoreRoundTripsSnippetsAndEvictsOldestOverCap() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path, maxSnippets: 2)
+
+        let first = try await store.add(text: "Prefers dark mode", tags: ["ui"])
+        try await Task.sleep(for: .milliseconds(10))
+        _ = try await store.add(text: "Uses Swift and Go")
+        try await Task.sleep(for: .milliseconds(10))
+        let third = try await store.add(text: "Lives in Prague")
+
+        let loaded = try await store.load()
+        #expect(loaded.count == 2)
+        // The oldest ("Prefers dark mode") was evicted once the cap of 2 was exceeded.
+        #expect(!loaded.contains { $0.id == first.id })
+        #expect(loaded.contains { $0.id == third.id })
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o600)
+    }
+
+    @Test func memoryStoreParsesFixtureWrittenInYAMLV3Style() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        // Representative of what Go's yaml.v3 actually emits for a
+        // []Snippet: unquoted plain scalars where no escaping is needed, a
+        // double-quoted scalar when the text needs it, a block scalar for
+        // embedded newlines, and a nested tags list.
+        let fixture = #"""
+        - id: a1b2c3d4
+          text: Prefers concise answers
+          created_at: 2025-01-15T10:30:00Z
+          updated_at: 2025-01-15T10:30:00Z
+        - id: e5f6a7b8
+          text: "Uses a colon: like this"
+          created_at: 2025-02-01T00:00:00Z
+          updated_at: 2025-02-01T00:00:00Z
+          tags:
+            - style
+            - ui
+        - id: c9d0e1f2
+          text: |
+            Line one
+            Line two
+          created_at: 2025-03-01T00:00:00Z
+          updated_at: 2025-03-01T00:00:00Z
+        """#
+        try fixture.write(toFile: path, atomically: true, encoding: .utf8)
+        let store = MemoryStore(path: path)
+
+        let loaded = try await store.load()
+        #expect(loaded.count == 3)
+        #expect(loaded[0].text == "Prefers concise answers")
+        #expect(loaded[1].text == "Uses a colon: like this")
+        #expect(loaded[1].tags == ["style", "ui"])
+        #expect(loaded[2].text == "Line one\nLine two\n")
+    }
+
+    @Test func memoryStoreRemovesByExactIDOrUnambiguousPrefix() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+        let snippet = try await store.add(text: "Prefers tabs over spaces")
+
+        try await store.remove(id: String(snippet.id.prefix(4)))
+        let loaded = try await store.load()
+        #expect(loaded.isEmpty)
+
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.remove(id: "doesnotexist")
+        }
+    }
+
+    @Test func memoryStoreRelevantScoresByKeywordOverlapLikeGo() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+        _ = try await store.add(text: "Prefers dark mode in the editor")
+        _ = try await store.add(text: "Uses Swift for iOS development")
+        _ = try await store.add(text: "Lives in Prague")
+
+        let results = try await store.relevant(to: "What editor mode do they prefer?", limit: 5)
+        #expect(results.first?.text == "Prefers dark mode in the editor")
+        #expect(!results.contains { $0.text == "Lives in Prague" })
+    }
+
+    @Test func memoryStoreRejectsEmptyTextAndObviousSecrets() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.add(text: "   ")
+        }
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.add(text: "my api key is sk-abc123def456ghi789jkl012")
+        }
+        let loaded = try await store.load()
+        #expect(loaded.isEmpty)
+    }
+
+    @Test func textToolCallParserExtractsAClosedBlockAndStripsItFromRemainingText() {
+        let text = #"""
+        Let me check that for you.
+        <tool_call>{"name": "web_search", "arguments": {"query": "swift concurrency"}}</tool_call>
+        """#
+        let (calls, remaining) = TextToolCallParser.extract(from: text)
+        #expect(calls.count == 1)
+        #expect(calls.first?.name == "web_search")
+        #expect(calls.first?.argumentsJSON.contains("swift concurrency") == true)
+        #expect(!remaining.contains("<tool_call>"))
+        #expect(remaining.contains("Let me check"))
+    }
+
+    @Test func textToolCallParserToleratesAJSONFenceInsideTheBlock() {
+        let text = #"""
+        <tool_call>
+        ```json
+        {"name": "read_file", "arguments": {"path": "a.txt"}}
+        ```
+        </tool_call>
+        """#
+        let (calls, _) = TextToolCallParser.extract(from: text)
+        #expect(calls.count == 1)
+        #expect(calls.first?.name == "read_file")
+    }
+
+    @Test func textToolCallParserHandlesADanglingOpenTagFromATruncatedResponse() {
+        let text = #"""
+        I'll look that up now.
+        <tool_call>{"name": "web_search", "arguments": {"query": "trunc
+        """#
+        let (calls, remaining) = TextToolCallParser.extract(from: text)
+        // The JSON itself is incomplete, so it can't be parsed — this just
+        // confirms the dangling-tag path doesn't crash or hang, and the
+        // ordinary closed-block path remains the common case.
+        #expect(calls.isEmpty)
+        #expect(remaining.contains("I'll look that up now") || remaining.contains("<tool_call>"))
+    }
+
+    @Test func textToolCallParserReturnsNoCallsForPlainProse() {
+        let (calls, remaining) = TextToolCallParser.extract(from: "Just a normal answer, no tool needed.")
+        #expect(calls.isEmpty)
+        #expect(remaining == "Just a normal answer, no tool needed.")
+    }
+
+    @Test func textToolCallParserRejectsABlockWithNoName() {
+        let (calls, _) = TextToolCallParser.extract(from: #"<tool_call>{"arguments": {}}</tool_call>"#)
+        #expect(calls.isEmpty)
+    }
+
+    @Test func textToolCallParserAcceptsAStringArgumentsValue() {
+        let (calls, _) = TextToolCallParser.extract(from: #"<tool_call>{"name": "memory_search", "arguments": "{\"query\":\"x\"}"}</tool_call>"#)
+        #expect(calls.first?.argumentsJSON == #"{"query":"x"}"#)
+    }
+
+    @Test func textToolCallParserInstructionsListEachToolWithItsParameters() {
+        let tool = ToolRegistry.shared.definitions.first { $0.function.name == "read_file" }!
+        let instructions = TextToolCallParser.instructions(for: [tool])
+        #expect(instructions.contains("<tool_call>"))
+        #expect(instructions.contains("read_file"))
+        #expect(instructions.contains("offset"))
+        // Shared category guidance (file edits) is included, not just the
+        // calling-convention section.
+        #expect(instructions.contains("File edits:"))
+    }
+
+    @Test func memoryToolsRoundTripThroughToolRegistry() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let context = ToolExecutionContext(
+            workspaceURL: FileManager.default.temporaryDirectory,
+            timeout: .seconds(2),
+            memoryStore: MemoryStore(path: path)
+        )
+
+        let saveResult = await ToolRegistry.shared.execute(
+            name: "memory_save",
+            arguments: Data(#"{"text":"Prefers concise answers","tags":["style"]}"#.utf8),
+            context: context,
+            toolCallID: "save-1"
+        )
+        #expect(!saveResult.isError)
+        #expect(saveResult.content.contains("Remembered"))
+
+        let searchResult = await ToolRegistry.shared.execute(
+            name: "memory_search",
+            arguments: Data(#"{"query":"concise"}"#.utf8),
+            context: context,
+            toolCallID: "search-1"
+        )
+        #expect(!searchResult.isError)
+        #expect(searchResult.content.contains("Prefers concise answers"))
+
+        let id = String(saveResult.content.split(separator: " ")[2].dropLast(2))
+        let deleteResult = await ToolRegistry.shared.execute(
+            name: "memory_delete",
+            arguments: Data(#"{"id":"\#(id)"}"#.utf8),
+            context: context,
+            toolCallID: "delete-1"
+        )
+        #expect(!deleteResult.isError)
+
+        let afterDelete = await ToolRegistry.shared.execute(
+            name: "memory_search",
+            arguments: Data(#"{"query":"concise"}"#.utf8),
+            context: context,
+            toolCallID: "search-2"
+        )
+        #expect(afterDelete.content.contains("No remembered snippets"))
+    }
+
+    @Test func wordBoundaryMatcherDetectsGPTOSSButNotLookalikes() {
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "gpt-oss-20b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "openai/gpt-oss-120b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "gpt-oss20b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "GPT-OSS-20B"))
+        #expect(!WordBoundaryMatcher.matches("gpt-oss", in: "xgpt-ossy"))
+        #expect(!WordBoundaryMatcher.matches("gpt-oss", in: "llama-3.1-8b"))
+    }
+
+    @Test func modelFamilyDetectsGPTOSSFromIDOrArchitecture() {
+        #expect(ModelFamily.detect(modelID: "gpt-oss-20b", architecture: nil) == .gptOSS)
+        #expect(ModelFamily.detect(modelID: "local-model", architecture: "gpt-oss") == .gptOSS)
+        #expect(ModelFamily.detect(modelID: "qwen3-8b", architecture: "qwen3") == .other)
+    }
+
+    @Test func reasoningCapabilityDetectionPrefersGPTOSSOverReportedMetadata() {
+        let toggleMetadata = ProviderModelMetadata(
+            model: "gpt-oss-20b", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
+        )
+        // Even if a server mistakenly reports a plain on/off, GPT-OSS always
+        // gets the level-based menu — it has no real "off".
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: toggleMetadata) == .levels)
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: nil) == .levels)
+
+        let qwenToggle = ProviderModelMetadata(
+            model: "qwen3-8b", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
+        )
+        #expect(ReasoningCapabilityDetector.capability(modelID: "qwen3-8b", metadata: qwenToggle) == .toggle)
+
+        let noReasoning = ProviderModelMetadata(
+            model: "plain-model", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: false, defaultReasoningEnabled: nil
+        )
+        #expect(ReasoningCapabilityDetector.capability(modelID: "plain-model", metadata: noReasoning) == .unsupported)
+        #expect(ReasoningCapabilityDetector.capability(modelID: "unknown-model", metadata: nil) == .unknown)
+    }
+
+    @Test func reasoningChoicesOfferedMatchCapability() {
+        #expect(ChatReasoningChoice.offered(for: .levels) == [.automatic, .low, .medium, .high])
+        #expect(ChatReasoningChoice.offered(for: .toggle) == [.automatic, .on, .off])
+        #expect(ChatReasoningChoice.offered(for: .unsupported) == [.automatic])
+        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.low))
+        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.on))
+    }
+
+    @Test func reasoningRequestEncoderProducesEffortForLevelsAndTemplateKwargsForToggle() {
+        #expect(ReasoningRequestEncoder.requestBody(for: .automatic, capability: .levels).isEmpty)
+        let levelBody = ReasoningRequestEncoder.requestBody(for: .high, capability: .levels)
+        #expect(levelBody["reasoning_effort"] as? String == "high")
+        #expect(levelBody["chat_template_kwargs"] == nil)
+
+        // A level-only model has no real "off" — sending .off produces no
+        // extra body keys rather than an invalid field.
+        #expect(ReasoningRequestEncoder.requestBody(for: .off, capability: .levels).isEmpty)
+
+        let onBody = ReasoningRequestEncoder.requestBody(for: .on, capability: .toggle)
+        let onKwargs = onBody["chat_template_kwargs"] as? [String: Any]
+        #expect(onKwargs?["enable_thinking"] as? Bool == true)
+
+        let offBody = ReasoningRequestEncoder.requestBody(for: .off, capability: .toggle)
+        let offKwargs = offBody["chat_template_kwargs"] as? [String: Any]
+        #expect(offKwargs?["enable_thinking"] as? Bool == false)
+
+        #expect(ReasoningRequestEncoder.requestBody(for: .on, capability: .unsupported).isEmpty)
+    }
+
+    @Test func reasoningSupportTrackerRemembersUnsupportedModels() async {
+        let tracker = ReasoningSupportTracker()
+        #expect(await !tracker.isUnsupported("model-a"))
+        await tracker.markUnsupported("model-a")
+        #expect(await tracker.isUnsupported("model-a"))
+        #expect(await !tracker.isUnsupported("model-b"))
+    }
+
+    @Test func contextLengthErrorParserExtractsTheReportedAvailableTokenCount() {
+        let body = #"{"error":{"message":"Prompt exceeds maximum context length: 3142 tokens requested, 3072 available","type":"invalid_request_error","param":null,"code":400}}"#
+        #expect(ContextLengthErrorParser.availableTokens(in: body) == 3072)
+    }
+
+    @Test func contextLengthErrorParserReturnsNilForUnrelated400Bodies() {
+        #expect(ContextLengthErrorParser.availableTokens(in: #"{"error":"tools are not supported"}"#) == nil)
+        #expect(ContextLengthErrorParser.availableTokens(in: "") == nil)
+    }
+
+    @Test func contextWindowTrackerOnlyEverShrinksARememberedWindow() async {
+        let tracker = ContextWindowTracker()
+        #expect(await tracker.discovered(for: "model-a") == nil)
+        await tracker.record(3072, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 3072)
+        // A later, larger report never overrides an already-proven-correct
+        // smaller one from earlier this session.
+        await tracker.record(8192, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 3072)
+        // A genuinely smaller later report is adopted.
+        await tracker.record(2048, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 2048)
+        #expect(await tracker.discovered(for: "model-b") == nil)
+    }
+
+    @Test func chatRuntimeOptionsCarryToolsAndReasoningChoiceIndependently() {
+        let model = AppModel(nativeAgentEnabled: false)
+        model.configuration.provider.model = "gpt-oss-20b"
+
+        let options = model.chatRuntimeOptions(usesNativeAgent: false, usesTools: true, reasoning: .high)
+        #expect(!options.agentEnabled)
+        #expect(options.toolsEnabled)
+        #expect(options.reasoningChoice == .high)
+        #expect(options.reasoningCapability == .levels)
     }
 
     @Test func toolRegistryReturnsStructuredErrorsForBadCalls() async {

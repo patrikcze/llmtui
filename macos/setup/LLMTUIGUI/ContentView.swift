@@ -1504,6 +1504,61 @@ private extension Array {
     }
 }
 
+/// Lets the user choose a per-message reasoning setting, offering only the
+/// choices the active model actually supports — level-only models (GPT-OSS)
+/// never get a plain "Off", and an unrecognized model gets everything,
+/// marked as such, rather than a guess.
+struct ReasoningMenuButton: View {
+    let model: AppModel
+
+    private var capability: ReasoningCapability { model.chatReasoningCapability }
+    private var isDisabled: Bool {
+        capability == .unsupported
+            || model.configuration.provider.type == .embedded
+            || model.configuration.provider.type == .mock
+    }
+    private var isActive: Bool { model.nativeReasoningChoice != .automatic }
+
+    var body: some View {
+        Menu {
+            ForEach(ChatReasoningChoice.offered(for: capability)) { choice in
+                Button {
+                    model.nativeReasoningChoice = choice
+                } label: {
+                    if model.nativeReasoningChoice == choice {
+                        Label(choice.title, systemImage: "checkmark")
+                    } else {
+                        Text(choice.title)
+                    }
+                }
+            }
+            if capability == .unknown {
+                Divider()
+                Text("Not confirmed for this model — fetch model profile settings to detect it.")
+            }
+        } label: {
+            Image(systemName: isActive ? "brain.fill" : "brain")
+                .frame(width: 24, height: 24)
+                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                .background(isActive ? Color.accentColor.opacity(0.14) : Color.clear, in: Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(isDisabled)
+        .font(.title2)
+        .accessibilityLabel("Reasoning")
+        .accessibilityValue(model.nativeReasoningChoice.title)
+        .help(isDisabled
+            ? "This model doesn't support reasoning control"
+            : "Reasoning: \(model.nativeReasoningChoice.title)")
+    }
+}
+
+extension ChatReasoningChoice: Identifiable {
+    var id: String { rawValue }
+}
+
 struct ComposerView: View {
     let model: AppModel
 
@@ -1540,6 +1595,27 @@ struct ComposerView: View {
                     .help(model.nativeAgentEnabled
                         ? "Disable the native GUI agent for new messages"
                         : "Enable the native GUI agent for new messages")
+
+                    Button {
+                        model.nativeToolsEnabled.toggle()
+                    } label: {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(model.nativeToolsEnabled ? Color.accentColor : Color.secondary)
+                            .background(
+                                model.nativeToolsEnabled ? Color.accentColor.opacity(0.14) : Color.clear,
+                                in: Circle()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .font(.title2)
+                    .accessibilityLabel("Chat tools")
+                    .accessibilityValue(model.nativeToolsEnabled ? "Enabled" : "Disabled")
+                    .help(model.nativeToolsEnabled
+                        ? "Disable file, search, web, and memory tools for new messages"
+                        : "Enable file, search, web, and memory tools for new messages")
+
+                    ReasoningMenuButton(model: model)
 
                     Button("Attach image", systemImage: "paperclip") {
                         isPickingAttachment = true

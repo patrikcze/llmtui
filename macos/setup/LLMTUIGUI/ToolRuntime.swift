@@ -77,6 +77,27 @@ indirect enum JSONValue: Codable, Sendable, Equatable {
 struct ToolExecutionContext: Sendable {
     let workspaceURL: URL
     let timeout: Duration
+    /// Scoped to one chat turn (see `OpenAICompatibleChatService.send`), so
+    /// edit_lines' staleness check only ever compares against what this turn
+    /// itself has read or written, never a value left over from an earlier
+    /// message. Defaulted so existing call sites (tests, callers that only
+    /// ever use read-only tools) don't need to construct one explicitly.
+    let fileReadTracker: FileReadTracker
+    /// Defaults to the one real `~/.local/share/llmtui/memory.yaml` store;
+    /// tests inject one pointed at a throwaway file instead.
+    let memoryStore: MemoryStore
+
+    init(
+        workspaceURL: URL,
+        timeout: Duration,
+        fileReadTracker: FileReadTracker = FileReadTracker(),
+        memoryStore: MemoryStore = .shared
+    ) {
+        self.workspaceURL = workspaceURL
+        self.timeout = timeout
+        self.fileReadTracker = fileReadTracker
+        self.memoryStore = memoryStore
+    }
 }
 
 enum ToolRuntimeError: LocalizedError {
@@ -90,7 +111,6 @@ enum ToolRuntimeError: LocalizedError {
     case outputLimit
     case timedOut
     case commandFailed(Int32, String)
-    case editMatchCount(Int)
 
     var errorDescription: String? {
         switch self {
@@ -104,7 +124,6 @@ enum ToolRuntimeError: LocalizedError {
         case .outputLimit: "Tool output exceeded the configured limit."
         case .timedOut: "The command timed out."
         case .commandFailed(let code, let output): "Command exited with \(code): \(output)"
-        case .editMatchCount(let count): "Expected exactly one match, found \(count)."
         }
     }
 }
@@ -140,7 +159,7 @@ struct ToolRegistry: Sendable {
             ),
             Self.definition(
                 "read_file",
-                "Read a bounded range of lines from a text file.",
+                "Read a bounded range of lines from a text file. The result reports the file's total line count and shows each returned line prefixed 'N| ' for reference when editing.",
                 [
                     "path": Self.stringParam("Workspace-relative path to the file to read."),
                     "offset": Self.numberParam("1-based line number to start reading from. Defaults to 1.", default: 1),
@@ -151,7 +170,7 @@ struct ToolRegistry: Sendable {
             ),
             Self.definition(
                 "write_file",
-                "Create a new UTF-8 text file, or explicitly replace an entire existing file only when the user asked for a full rewrite. For targeted changes to an existing file, use edit_file instead.",
+                "Create a new UTF-8 text file, or explicitly replace an entire existing file only when the user asked for a full rewrite. For targeted changes to an existing file, use edit_file or edit_lines instead.",
                 [
                     "path": Self.stringParam("Workspace-relative path of the file to create or fully replace."),
                     "content": Self.stringParam("Full UTF-8 text content to write.")
@@ -161,13 +180,36 @@ struct ToolRegistry: Sendable {
             ),
             Self.definition(
                 "edit_file",
-                "Safely update an existing UTF-8 text file by replacing exactly one matching old_text occurrence with new_text. Read the file first, preserve unrelated content, and use this for specific lines or blocks instead of write_file.",
+                "Update an existing UTF-8 text file by replacing old_text with new_text. Provide either a single old_text/new_text pair, or a non-empty 'edits' array to apply several replacements to the same file as one atomic edit (if any one fails to match, none are applied). Each old_text must match exactly once in the file unless replace_all is true. The file must have been read this same turn — call read_file (or write_file, which echoes what it wrote) first, then copy old_text character-for-character from that result. Never type old_text from memory of what the file should contain, even a file you just wrote yourself — small wording differences are a common cause of this tool failing.",
                 [
                     "path": Self.stringParam("Workspace-relative path to the existing file to edit."),
-                    "old_text": Self.stringParam("The exact existing text to replace. It must match exactly once in the file."),
-                    "new_text": Self.stringParam("The replacement text.")
+                    "old_text": Self.stringParam("The exact existing text to replace. Omit this and new_text when using 'edits' instead."),
+                    "new_text": Self.stringParam("The replacement text for old_text."),
+                    "replace_all": Self.booleanParam("Replace every occurrence of old_text instead of requiring exactly one match. Defaults to false.", default: false),
+                    "edits": Self.objectArrayParam(
+                        "A list of old_text/new_text replacements to apply to the same file as one atomic edit, instead of the single old_text/new_text pair above.",
+                        itemProperties: [
+                            "old_text": Self.stringParam("The exact existing text to replace."),
+                            "new_text": Self.stringParam("The replacement text."),
+                            "replace_all": Self.booleanParam("Replace every occurrence of this entry's old_text. Defaults to false.", default: false)
+                        ],
+                        itemRequired: ["old_text", "new_text"]
+                    )
                 ],
-                required: ["path", "old_text", "new_text"],
+                required: ["path"],
+                safety: .mutating
+            ),
+            Self.definition(
+                "edit_lines",
+                "Replace, insert after, or delete a specific 1-based line range in an existing UTF-8 text file. Call read_file on this exact file earlier in this chat turn first — the edit is refused if the file hasn't been read this turn, or changed on disk since.",
+                [
+                    "path": Self.stringParam("Workspace-relative path to the existing file to edit."),
+                    "operation": Self.stringParam("One of 'replace', 'insert', or 'delete'."),
+                    "start_line": Self.numberParamRequired("1-based line number. For 'insert', new_text is inserted after this line — use 0 to insert at the top of the file."),
+                    "end_line": Self.numberParam("1-based inclusive end line for 'replace'/'delete'. Defaults to start_line, i.e. a single line. Ignored for 'insert'.", default: 0),
+                    "new_text": Self.stringParam("Replacement or inserted text, as one or more lines joined by '\\n'. Omit or leave empty for 'delete'.")
+                ],
+                required: ["path", "operation", "start_line"],
                 safety: .mutating
             ),
             Self.definition(
@@ -225,6 +267,33 @@ struct ToolRegistry: Sendable {
                 safety: .network
             ),
             Self.definition(
+                "memory_search",
+                "Search previously remembered user preferences and facts by keyword. Call this when the user refers to something they told you before, or before asking a question your earlier conversation may already answer.",
+                [
+                    "query": Self.stringParam("Words to match against remembered text."),
+                    "limit": Self.numberParam("Maximum number of snippets to return, up to 20. Defaults to 5.", default: 5)
+                ],
+                required: ["query"],
+                safety: .readOnly
+            ),
+            Self.definition(
+                "memory_save",
+                "Remember a short, durable user preference or fact for future conversations. Only call this when the user explicitly asks you to remember something, not speculatively. Never save secrets, API keys, or passwords.",
+                [
+                    "text": Self.stringParam("The preference or fact to remember, written as a short, self-contained statement."),
+                    "tags": Self.stringArrayParam("Optional short tags to help find this later.")
+                ],
+                required: ["text"],
+                safety: .mutating
+            ),
+            Self.definition(
+                "memory_delete",
+                "Forget a previously remembered snippet by its id (from memory_search results), or by an unambiguous 4+ character prefix of it.",
+                ["id": Self.stringParam("The snippet id, or an unambiguous prefix of at least 4 characters.")],
+                required: ["id"],
+                safety: .mutating
+            ),
+            Self.definition(
                 "local_context",
                 "Return non-sensitive local context: date/time, OS, hardware (CPU, GPU, memory, disk), and the workspace folder. Use this before answering questions about the machine itself, or to decide whether a task is feasible given available memory/disk/CPU.",
                 [:],
@@ -249,6 +318,23 @@ struct ToolRegistry: Sendable {
 
     private static func numberParam(_ description: String, default defaultValue: Double) -> JSONValue {
         .object(["type": .string("number"), "description": .string(description), "default": .number(defaultValue)])
+    }
+
+    private static func numberParamRequired(_ description: String) -> JSONValue {
+        .object(["type": .string("number"), "description": .string(description)])
+    }
+
+    private static func objectArrayParam(_ description: String, itemProperties: [String: JSONValue], itemRequired: [String]) -> JSONValue {
+        .object([
+            "type": .string("array"),
+            "description": .string(description),
+            "items": .object([
+                "type": .string("object"),
+                "properties": .object(itemProperties),
+                "required": .array(itemRequired.map(JSONValue.string)),
+                "additionalProperties": .boolean(false)
+            ])
+        ])
     }
 
     private static func booleanParam(_ description: String, default defaultValue: Bool) -> JSONValue {
@@ -279,14 +365,48 @@ struct ToolRegistry: Sendable {
             let content: String
             switch name {
             case "list_dir": content = try FileToolRuntime.listDir(path: object.string("path"), context: context)
-            case "read_file": content = try FileToolRuntime.readFile(path: object.string("path"), offset: object.int("offset", default: 1), limit: min(object.int("limit", default: 200), 500), context: context)
-            case "write_file": content = try FileToolRuntime.writeFile(path: object.string("path"), content: object.string("content"), context: context)
-            case "edit_file": content = try FileToolRuntime.editFile(path: object.string("path"), oldText: object.string("old_text"), newText: object.string("new_text"), context: context)
+            case "read_file": content = try await FileToolRuntime.readFile(path: object.string("path"), offset: object.int("offset", default: 1), limit: min(object.int("limit", default: 200), 500), context: context)
+            case "write_file": content = try await FileToolRuntime.writeFile(path: object.string("path"), content: object.string("content"), context: context)
+            case "edit_file":
+                let rawEdits = object.objectArray("edits")
+                let parsedEdits: [StringEdit] = try rawEdits.map { raw in
+                    guard let oldText = raw["old_text"] as? String, let newText = raw["new_text"] as? String else {
+                        throw ToolRuntimeError.invalidArguments("each edits[] entry needs old_text and new_text strings")
+                    }
+                    let replaceAll = (raw["replace_all"] as? NSNumber)?.boolValue ?? false
+                    return StringEdit(oldText: oldText, newText: newText, replaceAll: replaceAll)
+                }
+                content = try await FileToolRuntime.editFile(
+                    path: object.string("path"),
+                    oldText: try? object.string("old_text"),
+                    newText: try? object.string("new_text"),
+                    replaceAll: object.bool("replace_all", default: false),
+                    edits: parsedEdits.isEmpty ? nil : parsedEdits,
+                    context: context
+                )
+            case "edit_lines":
+                guard let operation = LineEditOperation(rawValue: try object.string("operation")) else {
+                    throw ToolRuntimeError.invalidArguments("operation must be one of 'replace', 'insert', or 'delete'")
+                }
+                let startLine = object.int("start_line", default: -1)
+                guard startLine >= 0 else { throw ToolRuntimeError.invalidArguments("start_line is required") }
+                let endLineRaw = object.int("end_line", default: 0)
+                content = try await FileToolRuntime.editLines(
+                    path: object.string("path"),
+                    operation: operation,
+                    startLine: startLine,
+                    endLine: endLineRaw > 0 ? endLineRaw : nil,
+                    newText: object.string("new_text", default: ""),
+                    context: context
+                )
             case "glob": content = try FileToolRuntime.glob(pattern: object.string("pattern"), path: object.string("path", default: "."), context: context)
             case "grep": content = try FileToolRuntime.grep(pattern: object.string("pattern"), path: object.string("path", default: "."), caseSensitive: object.bool("case_sensitive", default: true), maxResults: min(object.int("max_results", default: 50), 200), context: context)
             case "run_command": content = try await CommandToolRuntime.run(command: object.string("command"), arguments: object.stringArray("arguments"), directory: object.string("working_directory", default: "."), timeout: min(object.double("timeout_seconds", default: 30), 120), context: context)
             case "web_search": content = try await WebToolRuntime.search(query: object.string("query"), maxResults: min(object.int("max_results", default: 5), 10))
             case "web_fetch": content = try await WebToolRuntime.fetch(urlString: object.string("url"), maxChars: min(object.int("max_chars", default: 50000), 100000))
+            case "memory_search": content = try await MemoryToolRuntime.search(query: object.string("query"), limit: min(object.int("limit", default: 5), 20), store: context.memoryStore)
+            case "memory_save": content = try await MemoryToolRuntime.save(text: object.string("text"), tags: object.stringArray("tags"), store: context.memoryStore)
+            case "memory_delete": content = try await MemoryToolRuntime.delete(id: object.string("id"), store: context.memoryStore)
             case "local_context": content = LocalContextToolRuntime.value(context: context)
             default: throw ToolRuntimeError.unknownTool(name)
             }
@@ -309,6 +429,12 @@ struct ToolRegistry: Sendable {
     }
 
     private func decodeObject(_ data: Data) throws -> [String: AnyJSON] {
+        // Some local servers send an empty-string (or whitespace-only)
+        // arguments payload for a tool that takes no parameters, rather than
+        // the literal "{}". Treat that the same as an empty object instead
+        // of failing a tool like local_context that has nothing to decode.
+        let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty { return [:] }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ToolRuntimeError.invalidArguments("arguments must be a JSON object")
         }
@@ -330,6 +456,7 @@ private extension Dictionary where Key == String, Value == AnyJSON {
     func double(_ key: String, default fallback: Double) -> Double { (self[key]?.value as? NSNumber)?.doubleValue ?? fallback }
     func bool(_ key: String, default fallback: Bool) -> Bool { (self[key]?.value as? NSNumber)?.boolValue ?? fallback }
     func stringArray(_ key: String) -> [String] { (self[key]?.value as? [Any])?.compactMap { $0 as? String } ?? [] }
+    func objectArray(_ key: String) -> [[String: Any]] { (self[key]?.value as? [Any])?.compactMap { $0 as? [String: Any] } ?? [] }
 }
 
 private enum WorkspacePath {
@@ -371,18 +498,40 @@ private enum FileToolRuntime {
         }.joined(separator: "\n")
     }
 
-    static func readFile(path: String, offset: Int, limit: Int, context: ToolExecutionContext) throws -> String {
+    static func readFile(path: String, offset: Int, limit: Int, context: ToolExecutionContext) async throws -> String {
         let url = try WorkspacePath.resolve(path, context: context)
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])
         guard data.prefix(4096).allSatisfy({ $0 == 9 || $0 == 10 || $0 == 13 || $0 >= 32 }) else { throw ToolRuntimeError.binaryFile }
         let text = String(decoding: data, as: UTF8.self)
-        let lines = text.components(separatedBy: .newlines)
-        let start = max(offset - 1, 0)
-        let selected = Array(lines.dropFirst(start).prefix(limit))
-        return "path: \(path)\nlines: \(start + 1)-\(start + selected.count)\n\(selected.enumerated().map { "\($0.offset + start + 1): \($0.element)" }.joined(separator: "\n"))"
+        // Record the *full* content read, regardless of the requested
+        // offset/limit, so edit_lines' staleness check reflects what the
+        // file actually looked like when this turn last looked at it.
+        await context.fileReadTracker.recordRead(path: path, content: text)
+
+        let document = TextDocument(text)
+        let (start, selected) = document.slice(from: offset, limit: limit)
+        let endLine = start + selected.count - 1
+        let hasMore = endLine < document.lineCount
+
+        var header = "path: \(path)\ntotal_lines: \(document.lineCount)\n"
+        header += selected.isEmpty
+            ? "lines: (none in range)\n"
+            : "lines: \(start)-\(endLine) of \(document.lineCount)\n"
+        if hasMore {
+            header += "more lines follow — call read_file again with offset=\(endLine + 1) to continue.\n"
+        }
+
+        let body = selected.enumerated().map { index, line -> String in
+            let capped = line.count > 2000 ? String(line.prefix(2000)) + "…[line truncated]" : line
+            return "\(start + index)| \(capped)"
+        }.joined(separator: "\n")
+
+        return header
+            + "(Each line is shown as 'N| text' for reference only — do not include the 'N| ' prefix in old_text.)\n"
+            + body
     }
 
-    static func writeFile(path: String, content: String, context: ToolExecutionContext) throws -> String {
+    static func writeFile(path: String, content: String, context: ToolExecutionContext) async throws -> String {
         let url = try WorkspacePath.resolve(path, context: context, allowMissing: true)
         let fileManager = FileManager.default
         let existed = fileManager.fileExists(atPath: url.path)
@@ -408,21 +557,155 @@ private enum FileToolRuntime {
         guard verified == content else {
             throw ToolRuntimeError.invalidArguments("The file write could not be verified after saving.")
         }
+        await context.fileReadTracker.recordWrite(path: path, content: verified)
 
-        return existed
-            ? "Verified full replacement of \(path)"
-            : "Verified creation of \(path)"
+        let document = TextDocument(verified)
+        let lineWord = "\(document.lineCount) line\(document.lineCount == 1 ? "" : "s")"
+        let header = existed ? "Overwrote \(path) (\(lineWord))." : "Created \(path) (\(lineWord))."
+        // Echo the content actually on disk, numbered exactly like
+        // read_file, rather than just a line count. Without this, a model
+        // editing the file it just wrote has nothing but its own memory of
+        // what it intended to write — which a weaker model will sometimes
+        // get wrong — to build old_text from, and a mismatched guess at
+        // old_text is the single most common way edit_file fails. Bounded
+        // the same way read_file is, so writing a large file doesn't blow
+        // up the turn's context on its own.
+        guard document.lineCount > 0, document.lineCount <= 200 else {
+            return header + " Call read_file before editing it further — do not guess at its exact content from memory."
+        }
+        let body = document.lines.enumerated().map { "\($0.offset + 1)| \($0.element)" }.joined(separator: "\n")
+        return header + " Current content (copy old_text from here exactly, without the 'N| ' prefix, when editing):\n" + body
     }
 
-    static func editFile(path: String, oldText: String, newText: String, context: ToolExecutionContext) throws -> String {
+    /// `oldText`/`newText` are the single-pair form; `edits` (when non-nil
+    /// and non-empty) takes precedence and is applied atomically — see
+    /// `TextEditApplier`.
+    static func editFile(
+        path: String,
+        oldText: String?,
+        newText: String?,
+        replaceAll: Bool,
+        edits: [StringEdit]?,
+        context: ToolExecutionContext
+    ) async throws -> String {
         let url = try WorkspacePath.resolve(path, context: context)
         let source = try String(contentsOf: url, encoding: .utf8)
-        let count = source.components(separatedBy: oldText).count - 1
-        guard count == 1 else { throw ToolRuntimeError.editMatchCount(count) }
 
-        let updated = source.replacingOccurrences(of: oldText, with: newText)
-        let writeResult = try writeFile(path: path, content: updated, context: context)
-        return "\(writeResult)\nEdited \(path)\n1 replacement"
+        // Requiring a read in this same turn — not just rejecting a stale
+        // one — is what actually stops a model from guessing at old_text
+        // from memory of content it (or an earlier write_file call) is
+        // *assumed* to contain, rather than copying it from the tool's own
+        // echo of the real, current file. A mismatched guess used to only
+        // surface as a failed match after the fact; this catches it before
+        // the model even tries one.
+        switch await context.fileReadTracker.verify(path: path, currentContent: source) {
+        case .notRead: throw FileEditingError.notReadThisTurn(path: path)
+        case .stale: throw FileEditingError.staleRead(path: path)
+        case .upToDate: break
+        }
+
+        let resolvedEdits: [StringEdit]
+        if let edits, !edits.isEmpty {
+            resolvedEdits = edits
+        } else if let oldText, let newText {
+            resolvedEdits = [StringEdit(oldText: oldText, newText: newText, replaceAll: replaceAll)]
+        } else {
+            throw ToolRuntimeError.invalidArguments("edit_file requires either old_text and new_text, or a non-empty edits array")
+        }
+
+        let updated = try TextEditApplier.apply(resolvedEdits, to: source, path: path)
+        let writeResult = try await writeFile(path: path, content: updated, context: context)
+        let count = resolvedEdits.count
+        return "\(writeResult)\n\(count) edit\(count == 1 ? "" : "s") applied to \(path).\n\(editedRegionPreview(oldSource: source, newSource: updated))"
+    }
+
+    static func editLines(
+        path: String,
+        operation: LineEditOperation,
+        startLine: Int,
+        endLine: Int?,
+        newText: String,
+        context: ToolExecutionContext
+    ) async throws -> String {
+        let url = try WorkspacePath.resolve(path, context: context)
+        let source = try String(contentsOf: url, encoding: .utf8)
+
+        switch await context.fileReadTracker.verify(path: path, currentContent: source) {
+        case .notRead: throw FileEditingError.notReadThisTurn(path: path)
+        case .stale: throw FileEditingError.staleRead(path: path)
+        case .upToDate: break
+        }
+
+        var document = TextDocument(source)
+        let newLines = newText.isEmpty ? [] : newText.components(separatedBy: "\n")
+
+        let changedStart: Int
+        switch operation {
+        case .replace:
+            let end = endLine ?? startLine
+            try document.replaceLines(start: startLine, end: end, with: newLines)
+            changedStart = startLine
+        case .insert:
+            try document.insertLines(after: startLine, newLines: newLines)
+            changedStart = startLine + 1
+        case .delete:
+            let end = endLine ?? startLine
+            try document.deleteLines(start: startLine, end: end)
+            changedStart = startLine
+        }
+
+        let updated = document.text
+        let writeResult = try await writeFile(path: path, content: updated, context: context)
+        let changedCount = operation == .delete ? 0 : max(newLines.count, 1)
+        let contextStart = max(1, changedStart - 3)
+        let contextEnd = min(document.lineCount, changedStart + changedCount - 1 + 3)
+
+        let actionDescription: String
+        switch operation {
+        case .replace:
+            let end = endLine ?? startLine
+            actionDescription = startLine == end ? "Replaced line \(startLine)" : "Replaced lines \(startLine)-\(end)"
+        case .insert:
+            actionDescription = startLine == 0 ? "Inserted at the top of the file" : "Inserted after line \(startLine)"
+        case .delete:
+            let end = endLine ?? startLine
+            actionDescription = startLine == end ? "Deleted line \(startLine)" : "Deleted lines \(startLine)-\(end)"
+        }
+        var result = "\(writeResult)\n\(actionDescription) in \(path)."
+        if document.lineCount > 0, contextStart <= contextEnd {
+            let body = (contextStart...contextEnd).map { "\($0)| \(document.line($0) ?? "")" }.joined(separator: "\n")
+            result += "\nUpdated region (lines \(contextStart)-\(contextEnd) of \(document.lineCount)):\n\(body)"
+        }
+        return result
+    }
+
+    /// Shows the changed region of a text-replacement edit with its *new*
+    /// line numbers and a few lines of surrounding context, by diffing the
+    /// common prefix/suffix of lines before and after the edit — enough for
+    /// the model to make a follow-up edit without reading the file again.
+    private static func editedRegionPreview(oldSource: String, newSource: String) -> String {
+        let oldLines = TextDocument(oldSource).lines
+        let newLines = TextDocument(newSource).lines
+
+        var prefix = 0
+        while prefix < oldLines.count, prefix < newLines.count, oldLines[prefix] == newLines[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < oldLines.count - prefix,
+              suffix < newLines.count - prefix,
+              oldLines[oldLines.count - 1 - suffix] == newLines[newLines.count - 1 - suffix] {
+            suffix += 1
+        }
+
+        let changedStart = prefix
+        let changedEnd = newLines.count - suffix
+        let contextStart = max(0, changedStart - 3)
+        let contextEnd = min(newLines.count, changedEnd + 3)
+        guard contextStart < contextEnd else { return "" }
+
+        let body = (contextStart..<contextEnd).map { "\($0 + 1)| \(newLines[$0])" }.joined(separator: "\n")
+        return "Updated region (lines \(contextStart + 1)-\(contextEnd) of \(newLines.count)):\n\(body)"
     }
 
     static func glob(pattern: String, path: String, context: ToolExecutionContext) throws -> String {
@@ -445,8 +728,9 @@ private enum FileToolRuntime {
             guard (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else { continue }
             guard let data = try? Data(contentsOf: item, options: [.mappedIfSafe]), data.prefix(1024).allSatisfy({ $0 == 9 || $0 == 10 || $0 == 13 || $0 >= 32 }) else { continue }
             let text = String(decoding: data, as: UTF8.self)
+            let relative = item.path.replacingOccurrences(of: context.workspaceURL.path + "/", with: "")
             for (index, line) in text.components(separatedBy: .newlines).enumerated() where expression.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil {
-                output.append("\(item.path)\(index + 1): \(line)")
+                output.append("\(relative):\(index + 1): \(line)")
                 if output.count == maxResults { break }
             }
         }
@@ -455,9 +739,53 @@ private enum FileToolRuntime {
 }
 
 private enum GlobMatcher {
+    /// Translates a shell-style glob into a regular expression. `**/` is
+    /// handled as its own case — `(?:.*/)?`, i.e. zero or more path segments
+    /// — rather than folding into the generic `*` → `.*` substitution the
+    /// old implementation used; that version always left a literal `/`
+    /// right after `.*` in the compiled pattern, so `**/*.swift` could never
+    /// match a top-level file like `a.swift`, only something already inside
+    /// a subdirectory.
     static func matches(pattern: String, value: String) -> Bool {
-        let escaped = NSRegularExpression.escapedPattern(for: pattern).replacingOccurrences(of: "\\*\\*", with: ".*").replacingOccurrences(of: "\\*", with: "[^/]*").replacingOccurrences(of: "\\?", with: "[^/]")
-        return value.range(of: "^\(escaped)$", options: .regularExpression) != nil
+        var regex = ""
+        let characters = Array(pattern)
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "*", index + 1 < characters.count, characters[index + 1] == "*" {
+                if index + 2 < characters.count, characters[index + 2] == "/" {
+                    regex += "(?:.*/)?"
+                    index += 3
+                } else {
+                    regex += ".*"
+                    index += 2
+                }
+            } else if characters[index] == "*" {
+                regex += "[^/]*"
+                index += 1
+            } else if characters[index] == "?" {
+                regex += "[^/]"
+                index += 1
+            } else {
+                regex += NSRegularExpression.escapedPattern(for: String(characters[index]))
+                index += 1
+            }
+        }
+        return value.range(of: "^\(regex)$", options: .regularExpression) != nil
+    }
+}
+
+/// Collects a running process's combined stdout/stderr as it arrives. Without
+/// this, reading each pipe only after the process exits
+/// (`readDataToEndOfFile()`) can deadlock the whole tool call: a pipe's
+/// kernel buffer is bounded, so a command that prints more than that before
+/// exiting blocks on write forever while nothing is draining the read end —
+/// which then surfaces as a confusing timeout rather than the real cause.
+private actor CommandOutputCollector {
+    private(set) var data = Data()
+
+    func append(_ chunk: Data) {
+        guard data.count < 65536 else { return }
+        data.append(chunk)
     }
 }
 
@@ -473,20 +801,52 @@ private enum CommandToolRuntime {
         process.currentDirectoryURL = working
         process.standardOutput = output
         process.standardError = error
-        try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning {
-            try Task.checkCancellation()
-            if Date() >= deadline {
-                process.terminate()
-                throw ToolRuntimeError.timedOut
-            }
-            try await Task.sleep(for: .milliseconds(100))
+
+        let collector = CommandOutputCollector()
+        // readabilityHandler's declared type is `@Sendable (FileHandle) ->
+        // Void` (it runs on an internal dispatch queue) — the closure
+        // literal itself only captures an actor reference and is already
+        // safe, but it needs this annotated locally too, or assigning the
+        // same closure value to both handlers below triggers a
+        // "may introduce data races" warning at the point of conversion.
+        let drain: @Sendable (FileHandle) -> Void = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            Task { await collector.append(chunk) }
         }
-        let stdout = output.fileHandleForReading.readDataToEndOfFile()
-        let stderr = error.fileHandleForReading.readDataToEndOfFile()
-        let text = String(decoding: stdout + stderr, as: UTF8.self)
-        let limited = String(text.prefix(65536)) + (text.count > 65536 ? "\n[output truncated]" : "")
+        output.fileHandleForReading.readabilityHandler = drain
+        error.fileHandleForReading.readabilityHandler = drain
+        defer {
+            output.fileHandleForReading.readabilityHandler = nil
+            error.fileHandleForReading.readabilityHandler = nil
+        }
+
+        try process.run()
+
+        do {
+            try await withTaskCancellationHandler {
+                let deadline = Date().addingTimeInterval(timeout)
+                while process.isRunning {
+                    try Task.checkCancellation()
+                    if Date() >= deadline {
+                        process.terminate()
+                        throw ToolRuntimeError.timedOut
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } onCancel: {
+                process.terminate()
+            }
+        } catch is CancellationError {
+            process.terminate()
+            throw CancellationError()
+        }
+
+        // Let the readability handlers drain whatever the process flushed on
+        // exit before reading the final total.
+        try? await Task.sleep(for: .milliseconds(20))
+        let text = String(decoding: await collector.data, as: UTF8.self)
+        let limited = String(text.prefix(65536)) + (text.count >= 65536 ? "\n[output truncated]" : "")
         guard process.terminationStatus == 0 else { throw ToolRuntimeError.commandFailed(process.terminationStatus, limited) }
         return "exit code: 0\n\(limited)"
     }
@@ -730,6 +1090,32 @@ enum WebToolRuntime {
             return true
         }
         return false
+    }
+}
+
+/// Formats `MemoryStore` results as tool output text. Separate from
+/// `MemoryStore` itself so the store stays a plain data layer shared with
+/// whatever else might want it, while this owns only presentation.
+private enum MemoryToolRuntime {
+    static func search(query: String, limit: Int, store: MemoryStore) async throws -> String {
+        let matches = try await store.relevant(to: query, limit: limit)
+        guard !matches.isEmpty else { return "No remembered snippets matched \"\(query)\"." }
+        return matches.map(describe).joined(separator: "\n")
+    }
+
+    static func save(text: String, tags: [String], store: MemoryStore) async throws -> String {
+        let snippet = try await store.add(text: text, tags: tags)
+        return "Remembered (id \(snippet.id)): \(snippet.text)"
+    }
+
+    static func delete(id: String, store: MemoryStore) async throws -> String {
+        try await store.remove(id: id)
+        return "Forgot snippet \(id)."
+    }
+
+    private static func describe(_ snippet: MemorySnippet) -> String {
+        let tagSuffix = snippet.tags.isEmpty ? "" : " [\(snippet.tags.joined(separator: ", "))]"
+        return "\(snippet.id): \(snippet.text)\(tagSuffix)"
     }
 }
 
@@ -1043,9 +1429,11 @@ struct OpenAIResponseAccumulator: Sendable {
     /// from `content` so it's never mistaken for the final answer.
     var reasoning = ""
     var toolCalls: [Int: OpenAIToolCall] = [:]
+    var finishReason: String?
 
     mutating func append(_ event: OpenAIStreamEvent) -> (content: String?, reasoning: String?) {
         guard let choice = event.choices.first else { return (nil, nil) }
+        if let reason = choice.finishReason { finishReason = reason }
         // Some providers (notably Ollama) send an empty content string in the
         // same chunk as tool_calls. Process both instead of returning early,
         // or the tool call is silently dropped.
@@ -1083,7 +1471,14 @@ struct OpenAIResponseAccumulator: Sendable {
         let name = (previous?.function.name ?? "") + (delta.function?.name ?? "")
         let arguments = (previous?.function.arguments ?? "") + (delta.function?.arguments ?? "")
         toolCalls[delta.index] = OpenAIToolCall(
-            id: previous?.id ?? delta.id ?? "tool-\(delta.index)",
+            // A fixed "tool-\(index)" fallback would hand out the exact same
+            // ID every round a server omits one, and tool_call_id is meant
+            // to uniquely identify one call across the whole conversation.
+            // Generating a real UUID the first time this index is seen (and
+            // reusing it via `previous?.id` on every later delta for the
+            // same call) keeps it both stable within this response and
+            // unique across every other round and request.
+            id: previous?.id ?? delta.id ?? "call_\(UUID().uuidString)",
             type: previous?.type ?? delta.type ?? "function",
             function: .init(name: name, arguments: arguments)
         )
@@ -1093,6 +1488,10 @@ struct OpenAIResponseAccumulator: Sendable {
 struct OpenAIChatResponse: Sendable {
     let content: String?
     let toolCalls: [OpenAIToolCall]
+    /// "length" means the server cut the response off at a token limit —
+    /// including, possibly, mid-way through a tool call's arguments. Nil
+    /// when the server didn't report one at all.
+    let finishReason: String?
 }
 
 enum OpenAIRequestError: LocalizedError {
@@ -1118,11 +1517,54 @@ actor ToolSupportTracker {
     func markUnsupported(_ key: String) { unsupported.insert(key) }
 }
 
+/// Remembers, per provider+model, the real context window a server has
+/// reported in a "prompt exceeds maximum context length" error — which can
+/// be well under a guessed or missing Model Profile `context_window` (the
+/// 8192 fallback `OpenAICompatibleChatService.contextWindow` uses when no
+/// profile matches). Once discovered this session, it's trusted over the
+/// configured guess for every later turn with this same model.
+actor ContextWindowTracker {
+    static let shared = ContextWindowTracker()
+    private var windows: [String: Int] = [:]
+
+    func discovered(for key: String) -> Int? { windows[key] }
+
+    /// Only ever shrinks what's remembered for a model — a later, larger
+    /// report (unlikely, but servers can vary free context with load)
+    /// never overrides a smaller value already proven correct this session.
+    func record(_ window: Int, for key: String) {
+        if let existing = windows[key] {
+            windows[key] = min(existing, window)
+        } else {
+            windows[key] = window
+        }
+    }
+}
+
+/// Recognizes a context-length-exceeded error from a provider's HTTP 400
+/// body and extracts the real, available token count it reported — e.g.
+/// MLX-Serve's "Prompt exceeds maximum context length: 3142 tokens
+/// requested, 3072 available". Returns nil for any other 400 (tools
+/// rejected, a bad parameter, …), which must not be misread as this.
+enum ContextLengthErrorParser {
+    static func availableTokens(in body: String) -> Int? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(\d+)\s*tokens?\s*requested.*?(\d+)\s*(?:tokens?\s*)?available"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return nil }
+        let range = NSRange(body.startIndex..., in: body)
+        guard let match = regex.firstMatch(in: body, range: range),
+              let availableRange = Range(match.range(at: 2), in: body) else { return nil }
+        return Int(body[availableRange])
+    }
+}
+
 enum OpenAIRequest {
     static func send(
         configuration: LLMTUIConfiguration,
         messages: [OpenAIMessage],
         tools: [ToolDefinition],
+        reasoningBody: [String: Any] = [:],
         onText: @escaping (String) -> Void,
         onReasoning: ((String) -> Void)? = nil
     ) async throws -> OpenAIChatResponse {
@@ -1142,6 +1584,9 @@ enum OpenAIRequest {
         ]
         if !tools.isEmpty {
             body["tools"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(tools))
+        }
+        for (key, value) in reasoningBody {
+            body[key] = value
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -1165,7 +1610,11 @@ enum OpenAIRequest {
             if let chunk = delta.content { onText(chunk) }
             if let reasoning = delta.reasoning { onReasoning?(reasoning) }
         }
-        return OpenAIChatResponse(content: accumulator.content.isEmpty ? nil : accumulator.content, toolCalls: accumulator.toolCalls.keys.sorted().compactMap { accumulator.toolCalls[$0] })
+        return OpenAIChatResponse(
+            content: accumulator.content.isEmpty ? nil : accumulator.content,
+            toolCalls: accumulator.toolCalls.keys.sorted().compactMap { accumulator.toolCalls[$0] },
+            finishReason: accumulator.finishReason
+        )
     }
 }
 
