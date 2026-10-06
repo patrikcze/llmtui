@@ -163,7 +163,13 @@ enum LLMTUIDocumentationContext {
     static let nativeAgentInstructions = """
 
     ## Native LLMTUIGUI agent
-    Complete the user's objective using the tools available in this chat. Continue after tool results until the objective is genuinely complete. If a web request fails, try another relevant result, URL, or search query rather than stopping at the first failure. Do not claim success unless the tool transcript supports it. A verifier checks proposed final answers and may request another bounded cycle.
+    You are running in a bounded agent loop: understand the objective, make a short plan, take one step with a tool, check what that step actually returned, and repeat — rather than describing the whole plan up front and assuming each step worked.
+
+    - Work from the tools' actual results, never from what you expect or intend them to say. If a step's result doesn't support what you planned to do next, adjust the plan instead of proceeding as if it had worked.
+    - If a step fails (a web request, a tool error, an edit that didn't match), try a different approach — another result, a corrected argument, a smaller change — rather than repeating the exact same call or silently giving up.
+    - Only give a final answer once the objective is genuinely done, or you're truly stuck and need to say what's blocking you. Never claim something succeeded, was saved, or was sent unless a tool result actually confirms it.
+    - Each cycle you get is bounded; if you have several independent pieces of information to gather, do so efficiently rather than one tiny step at a time.
+    - A verifier checks your proposed final answer against the tool transcript before it's shown to the user, and may send you back for another bounded cycle if it finds the objective isn't actually met yet.
     """
 
     /// The bundled guide describes LLMTUI itself and must not redefine the
@@ -539,6 +545,18 @@ struct OpenAICompatibleChatService: ChatService {
                             currentlyAllowedTools = availableTools
                         }
 
+                        // Unlike fitHistoryToBudget (applied once, to
+                        // *previous* turns), nothing previously capped how
+                        // large *this* turn could grow: a handful of large
+                        // tool results (a big web_fetch, a verbose
+                        // run_command) can overflow a small model's context
+                        // window well before the call/cycle budget is hit.
+                        Self.elideOldestToolResultsIfOverBudget(
+                            &messages,
+                            from: turnStartIndex,
+                            contextWindow: Self.contextWindow(for: configuration)
+                        )
+
                         var toolsForRequest = toolsSupported ? currentlyAllowedTools : []
                         var reasoningBodyForRequest = reasoningSupported
                             ? ReasoningRequestEncoder.requestBody(for: runtimeOptions.reasoningChoice, capability: runtimeOptions.reasoningCapability)
@@ -585,6 +603,22 @@ struct OpenAICompatibleChatService: ChatService {
                         if isAgentRun {
                             if pendingAgentText.isEmpty { pendingAgentText = response.content ?? "" }
                             agentBudget.recordText(pendingAgentText)
+                        }
+
+                        // A response cut off at the token limit can leave a
+                        // tool call's JSON arguments mid-write, which
+                        // otherwise only surfaces as an opaque "Invalid tool
+                        // arguments" decode error with no indication of why.
+                        // This can't be inserted as its own conversation
+                        // message here without breaking the required
+                        // assistant-tool_calls -> tool-results ordering a
+                        // few lines down, so a truncated tool call's own
+                        // error result gets the explanation instead (below);
+                        // this status update is purely for the person
+                        // watching, not part of the request.
+                        let responseWasTruncated = response.finishReason == "length"
+                        if responseWasTruncated {
+                            continuation.yield(.status("Response was cut off at the model's token limit."))
                         }
 
                         if response.toolCalls.isEmpty, isAgentRun {
@@ -857,7 +891,16 @@ struct OpenAICompatibleChatService: ChatService {
                             if isAgentRun {
                                 agentBudget.recordToolResult(result)
                             }
-                            messages.append(.tool(content: result.content, toolCallID: call.id))
+                            // A truncated response, if it affected a tool
+                            // call's arguments at all, would only affect the
+                            // last one the server was still writing when the
+                            // token limit hit — not calls that had already
+                            // completed earlier in the same response.
+                            let isLastCall = call.id == response.toolCalls.last?.id
+                            let resultContent = (responseWasTruncated && isLastCall && result.isError)
+                                ? result.content + "\n(This may be because the response was cut off at the model's token limit rather than a genuinely malformed call — try again with shorter arguments.)"
+                                : result.content
+                            messages.append(.tool(content: resultContent, toolCallID: call.id))
                         }
 
                         if isAgentRun,
@@ -925,9 +968,20 @@ struct OpenAICompatibleChatService: ChatService {
             )
         }
 
-        let evidence = transcript.suffix(24).map { entry in
+        // An assistant turn that only made tool calls has nil content, so
+        // without this the verifier saw "assistant: " (nothing) followed by
+        // the tool's reply and had no idea what was actually attempted —
+        // it was evaluating the answer against evidence it couldn't
+        // actually read.
+        let evidence = transcript.suffix(24).map { entry -> String in
             let content = entry.content?.plainText ?? ""
-            return "\(entry.role): \(String(content.prefix(1600)))"
+            guard entry.role == "assistant", let calls = entry.toolCalls, !calls.isEmpty else {
+                return "\(entry.role): \(String(content.prefix(1600)))"
+            }
+            let callsDescription = calls.map { "\($0.function.name)(\($0.function.arguments))" }.joined(separator: "; ")
+            return content.isEmpty
+                ? "assistant: [called \(callsDescription)]"
+                : "assistant: \(String(content.prefix(1600))) [also called \(callsDescription)]"
         }.joined(separator: "\n\n")
         let prompt = """
         Evaluate whether the proposed answer genuinely completes the objective using only the evidence below. Do not continue the task and do not call tools. Return exactly one JSON object with this schema:
@@ -1075,6 +1129,46 @@ struct OpenAICompatibleChatService: ChatService {
         }
 
         return trimmed
+    }
+
+    /// Rough token estimate (characters / 4, plus a per-message overhead)
+    /// for the request actually sent to the provider — as opposed to
+    /// `estimatedTokens(for:)` above, which works over this app's
+    /// `[ChatMessage]` history model.
+    static func estimatedTokens(forRequestMessages messages: [OpenAIMessage]) -> Int {
+        messages.reduce(0) { total, message in
+            total + (message.content?.plainText?.count ?? 0) / 4 + 8
+        }
+    }
+
+    /// Replaces the oldest over-budget tool results in the *current* turn
+    /// (never anything from `history`, and never a user/assistant message)
+    /// with a short placeholder, oldest first, until the turn's estimated
+    /// size fits inside 85% of the model's context window or there's
+    /// nothing left to trim. `fitHistoryToBudget` already bounds everything
+    /// *before* `turnStartIndex`; nothing previously bounded how large the
+    /// turn itself could grow across several tool calls.
+    static func elideOldestToolResultsIfOverBudget(
+        _ messages: inout [OpenAIMessage],
+        from turnStartIndex: Int,
+        contextWindow: Int
+    ) {
+        let budget = Int(Double(contextWindow) * 0.85)
+        guard budget > 0, turnStartIndex < messages.count else { return }
+        let placeholder = "[earlier tool result elided from this turn to fit the model's context window]"
+        var index = turnStartIndex
+        while estimatedTokens(forRequestMessages: messages) > budget, index < messages.count {
+            defer { index += 1 }
+            guard messages[index].role == "tool",
+                  let content = messages[index].content?.plainText,
+                  content.count > placeholder.count, content != placeholder else { continue }
+            messages[index] = OpenAIMessage(
+                role: "tool",
+                content: placeholder,
+                toolCalls: messages[index].toolCalls,
+                toolCallID: messages[index].toolCallID
+            )
+        }
     }
 
     func resolveTool(_ request: ToolRequest, approved: Bool) {

@@ -495,6 +495,32 @@ struct LLMTUIGUITests {
         #expect(trimmed.last?.text.contains("Answer 9") == true)
     }
 
+    @Test func elideOldestToolResultsIfOverBudgetTrimsOldestFirstWithinTheTurn() {
+        var messages: [OpenAIMessage] = [
+            .init(role: "system", content: "system prompt"),
+            .init(role: "user", content: "do the thing")
+        ]
+        let turnStartIndex = messages.count
+        for index in 0..<5 {
+            messages.append(.init(role: "assistant", content: nil as String?, toolCalls: [
+                OpenAIToolCall(id: "call-\(index)", type: "function", function: .init(name: "web_fetch", arguments: "{}"))
+            ]))
+            messages.append(.tool(content: "result \(index) " + String(repeating: "x", count: 2000), toolCallID: "call-\(index)"))
+        }
+
+        OpenAICompatibleChatService.elideOldestToolResultsIfOverBudget(&messages, from: turnStartIndex, contextWindow: 1024)
+
+        let toolContents = messages.filter { $0.role == "tool" }.map { $0.content?.plainText ?? "" }
+        #expect(toolContents.first?.contains("elided") == true)
+        // The budget is tight enough that more than one old result needs
+        // trimming, but the most recent one should survive untouched so
+        // the model still has its latest evidence to work from.
+        #expect(toolContents.last?.contains("result 4") == true)
+        #expect(OpenAICompatibleChatService.estimatedTokens(forRequestMessages: messages) <= Int(Double(1024) * 0.85) || toolContents.allSatisfy { $0.contains("elided") })
+        // Messages before turnStartIndex (system/user) are never touched.
+        #expect(messages[0].content?.plainText == "system prompt")
+    }
+
     @Test func contextWindowReadsMatchingModelProfile() {
         var configuration = LLMTUIConfiguration()
         configuration.provider.model = "llama3.1:8b"

@@ -1423,9 +1423,11 @@ struct OpenAIResponseAccumulator: Sendable {
     /// from `content` so it's never mistaken for the final answer.
     var reasoning = ""
     var toolCalls: [Int: OpenAIToolCall] = [:]
+    var finishReason: String?
 
     mutating func append(_ event: OpenAIStreamEvent) -> (content: String?, reasoning: String?) {
         guard let choice = event.choices.first else { return (nil, nil) }
+        if let reason = choice.finishReason { finishReason = reason }
         // Some providers (notably Ollama) send an empty content string in the
         // same chunk as tool_calls. Process both instead of returning early,
         // or the tool call is silently dropped.
@@ -1480,6 +1482,10 @@ struct OpenAIResponseAccumulator: Sendable {
 struct OpenAIChatResponse: Sendable {
     let content: String?
     let toolCalls: [OpenAIToolCall]
+    /// "length" means the server cut the response off at a token limit —
+    /// including, possibly, mid-way through a tool call's arguments. Nil
+    /// when the server didn't report one at all.
+    let finishReason: String?
 }
 
 enum OpenAIRequestError: LocalizedError {
@@ -1556,7 +1562,11 @@ enum OpenAIRequest {
             if let chunk = delta.content { onText(chunk) }
             if let reasoning = delta.reasoning { onReasoning?(reasoning) }
         }
-        return OpenAIChatResponse(content: accumulator.content.isEmpty ? nil : accumulator.content, toolCalls: accumulator.toolCalls.keys.sorted().compactMap { accumulator.toolCalls[$0] })
+        return OpenAIChatResponse(
+            content: accumulator.content.isEmpty ? nil : accumulator.content,
+            toolCalls: accumulator.toolCalls.keys.sorted().compactMap { accumulator.toolCalls[$0] },
+            finishReason: accumulator.finishReason
+        )
     }
 }
 
