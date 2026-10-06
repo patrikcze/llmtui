@@ -228,7 +228,9 @@ agent and tool loop for LM Studio / Ollama. See `macos/setup/README.md`.
 - **Signing:** never commit a signing identity. `DEVELOPMENT_TEAM` comes only
   from the git-ignored `Config/Signing.local.xcconfig`. CI fails if
   `project.pbxproj` sets a team, or if `xcuserdata` or the local xcconfig is
-  tracked. Release builds are ad-hoc signed (no Apple Developer account) and
+  tracked (`make macos-setup-guard` runs the same check locally). Xcode
+  sometimes writes the team into `project.pbxproj` on its own; strip those
+  lines and never commit them. Release builds are ad-hoc signed (no Apple Developer account) and
   not notarized.
 - **Bundle ID:** keep `com.patriknakladalpersonalteam.LLMTUIGUI`. Changing it
   resets users' macOS privacy grants (Automation, Calendars).

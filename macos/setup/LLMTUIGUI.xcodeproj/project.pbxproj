@@ -6,9 +6,6 @@
 	objectVersion = 90;
 	objects = {
 
-/* Begin PBXBuildFile section */
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		E0628E2E306EC5F400D1CAC0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -20,9 +17,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0000000000000000000000C1 /* Config/Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 		000000000000000000000120 /* LLMTUIGUI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LLMTUIGUI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0628E27306EC28F00D1CAC0 /* LLMTUIGUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LLMTUIGUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		0000000000000000000000C1 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -71,7 +68,7 @@
 				000000000000000000000010 /* LLMTUIGUI */,
 				E0628E28306EC28F00D1CAC0 /* LLMTUIGUITests */,
 				000000000000000000000020 /* Products */,
-				0000000000000000000000C1 /* Signing.xcconfig */,
+				0000000000000000000000C1 /* Config/Signing.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -201,7 +198,7 @@
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "LLMTUIGUI" */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0000000000000000000000C1 /* Signing.xcconfig */;
+			baseConfigurationReference = 0000000000000000000000C1 /* Config/Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -272,7 +269,7 @@
 		};
 		000000000000000012000000 /* Release configuration for PBXProject "LLMTUIGUI" */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0000000000000000000000C1 /* Signing.xcconfig */;
+			baseConfigurationReference = 0000000000000000000000C1 /* Config/Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;

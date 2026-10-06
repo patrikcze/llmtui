@@ -107,6 +107,11 @@ calendar-helper-setup:
 macos-setup: build
 	BUILD_NUMBER=$(or $(BUILD_NUMBER),1) macos/setup/scripts/package-app.sh ./$(BINARY) $(VERSION) $(DIST)
 
+## macos-setup-guard: fail if a signing team or per-user Xcode state would be committed
+.PHONY: macos-setup-guard
+macos-setup-guard:
+	@macos/setup/scripts/check-no-signing-identity.sh
+
 ## macos-setup-test: run the macOS setup app's unit tests (needs Xcode)
 .PHONY: macos-setup-test
 macos-setup-test:
