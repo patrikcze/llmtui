@@ -1441,7 +1441,14 @@ struct OpenAIResponseAccumulator: Sendable {
         let name = (previous?.function.name ?? "") + (delta.function?.name ?? "")
         let arguments = (previous?.function.arguments ?? "") + (delta.function?.arguments ?? "")
         toolCalls[delta.index] = OpenAIToolCall(
-            id: previous?.id ?? delta.id ?? "tool-\(delta.index)",
+            // A fixed "tool-\(index)" fallback would hand out the exact same
+            // ID every round a server omits one, and tool_call_id is meant
+            // to uniquely identify one call across the whole conversation.
+            // Generating a real UUID the first time this index is seen (and
+            // reusing it via `previous?.id` on every later delta for the
+            // same call) keeps it both stable within this response and
+            // unique across every other round and request.
+            id: previous?.id ?? delta.id ?? "call_\(UUID().uuidString)",
             type: previous?.type ?? delta.type ?? "function",
             function: .init(name: name, arguments: arguments)
         )

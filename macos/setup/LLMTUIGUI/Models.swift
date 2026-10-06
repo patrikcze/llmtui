@@ -478,6 +478,13 @@ final class AppModel {
     private static let nativeToolsEnabledDefaultsKey = "nativeChatToolsEnabled"
     private static let nativeReasoningChoiceDefaultsKey = "nativeChatReasoningChoice"
     private var generationID: UUID?
+    /// The in-flight consumer task for the current turn. `stopGeneration()`
+    /// used to only clear `generationID`, which stopped the UI from
+    /// reacting to further events but left this task — and the network
+    /// stream, and any running tool call, such as a `run_command` with up to
+    /// 120 seconds left — running in the background until it happened to
+    /// finish or fail on its own.
+    private var generationTask: Task<Void, Never>?
 
     /// A rough, live estimate of how much of the model's context window the
     /// next request would use — there's no real token count to read until a
@@ -1068,7 +1075,7 @@ final class AppModel {
         )
 
         let runtimeOptions = chatRuntimeOptions(usesNativeAgent: usesNativeAgent, usesTools: usesTools, reasoning: reasoning)
-        Task {
+        generationTask = Task {
             do {
                 var response = ""
                 for try await event in chatService.send(
@@ -1165,6 +1172,8 @@ final class AppModel {
 
     func stopGeneration() {
         generationID = nil
+        generationTask?.cancel()
+        generationTask = nil
         chatService.cancel()
         finishStreamingResponse()
         pendingToolRequests.removeAll()

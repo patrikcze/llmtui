@@ -612,9 +612,15 @@ struct OpenAICompatibleChatService: ChatService {
                                     : " Missing requirements: \(decision.missingRequirements.joined(separator: "; "))."
                                 continuation.yield(.status("Verifier requested another agent cycle…"))
                                 messages.append(.init(role: "assistant", content: pendingAgentText))
+                                // A role:"system" message anywhere but the very
+                                // first position breaks several local chat
+                                // templates (Qwen, Llama, Gemma reject it
+                                // outright with a 400) — runtime notes use the
+                                // user role instead, clearly labeled as not
+                                // being from the person at the keyboard.
                                 messages.append(.init(
-                                    role: "system",
-                                    content: "Completion verification failed: \(decision.reason).\(missing) Continue working on the original objective. Use tools only when they can resolve the missing requirements; otherwise produce a corrected final answer."
+                                    role: "user",
+                                    content: "[Runtime note — not from the user] Completion verification failed: \(decision.reason).\(missing) Continue working on the original objective. Use tools only when they can resolve the missing requirements; otherwise produce a corrected final answer."
                                 ))
                                 continue
                             }
@@ -715,7 +721,11 @@ struct OpenAICompatibleChatService: ChatService {
                             // A model that loses track of what it already did will sometimes
                             // repeat the exact same call. Reuse the earlier result instead of
                             // re-running it (and re-prompting for approval) a second time.
-                            let cacheKey = "\(request.name)\u{1}\(request.arguments)"
+                            // Canonicalizing the arguments (sorted keys, no
+                            // incidental whitespace) catches a repeat even
+                            // when the model re-emits the same JSON object
+                            // with its keys in a different order.
+                            let cacheKey = "\(request.name)\u{1}\(Self.canonicalJSON(request.arguments))"
                             if let cached = toolCallCache[cacheKey] {
                                 messages.append(.tool(
                                     content: "You already called this tool with the same arguments earlier in this turn; reusing that result:\n\n\(cached.content)",
@@ -863,10 +873,10 @@ struct OpenAICompatibleChatService: ChatService {
                     continuation.yield(.status("Finishing up…"))
                     pendingAgentText = ""
                     messages.append(.init(
-                        role: "system",
+                        role: "user",
                         content: isAgentRun
-                            ? "The bounded agent run must stop now because a configured budget was reached. Give the best final answer possible from the evidence already gathered. Clearly identify anything incomplete. Do not request more tools."
-                            : "The tool budget for this turn is exhausted. Answer the user's request now using only the information already gathered above; do not request any more tools."
+                            ? "[Runtime note — not from the user] The bounded agent run must stop now because a configured budget was reached. Give the best final answer possible from the evidence already gathered. Clearly identify anything incomplete. Do not request more tools."
+                            : "[Runtime note — not from the user] The tool budget for this turn is exhausted. Answer the user's request now using only the information already gathered above; do not request any more tools."
                     ))
                     _ = try await OpenAIRequest.send(
                         configuration: configuration,
@@ -979,6 +989,20 @@ struct OpenAICompatibleChatService: ChatService {
                 : "The verifier did not return valid structured output; deterministic checks passed.",
             missingRequirements: hasUnresolvedToolFailures ? ["Recover from or work around the failed tool call"] : []
         )
+    }
+
+    /// Re-serializes a JSON object or array with sorted keys and no
+    /// incidental whitespace, so two tool calls that differ only in key
+    /// order or formatting are recognized as the same call. Falls back to
+    /// the raw string unchanged if it isn't valid JSON.
+    private static func canonicalJSON(_ raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let canonical = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: canonical, encoding: .utf8) else {
+            return raw
+        }
+        return text
     }
 
     private static func jsonObjectData(in text: String) -> Data? {
