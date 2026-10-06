@@ -1086,6 +1086,152 @@ struct LLMTUIGUITests {
         #expect(!result.isError)
     }
 
+    @Test func memoryStoreRoundTripsSnippetsAndEvictsOldestOverCap() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path, maxSnippets: 2)
+
+        let first = try await store.add(text: "Prefers dark mode", tags: ["ui"])
+        try await Task.sleep(for: .milliseconds(10))
+        _ = try await store.add(text: "Uses Swift and Go")
+        try await Task.sleep(for: .milliseconds(10))
+        let third = try await store.add(text: "Lives in Prague")
+
+        let loaded = try await store.load()
+        #expect(loaded.count == 2)
+        // The oldest ("Prefers dark mode") was evicted once the cap of 2 was exceeded.
+        #expect(!loaded.contains { $0.id == first.id })
+        #expect(loaded.contains { $0.id == third.id })
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o600)
+    }
+
+    @Test func memoryStoreParsesFixtureWrittenInYAMLV3Style() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        // Representative of what Go's yaml.v3 actually emits for a
+        // []Snippet: unquoted plain scalars where no escaping is needed, a
+        // double-quoted scalar when the text needs it, a block scalar for
+        // embedded newlines, and a nested tags list.
+        let fixture = #"""
+        - id: a1b2c3d4
+          text: Prefers concise answers
+          created_at: 2025-01-15T10:30:00Z
+          updated_at: 2025-01-15T10:30:00Z
+        - id: e5f6a7b8
+          text: "Uses a colon: like this"
+          created_at: 2025-02-01T00:00:00Z
+          updated_at: 2025-02-01T00:00:00Z
+          tags:
+            - style
+            - ui
+        - id: c9d0e1f2
+          text: |
+            Line one
+            Line two
+          created_at: 2025-03-01T00:00:00Z
+          updated_at: 2025-03-01T00:00:00Z
+        """#
+        try fixture.write(toFile: path, atomically: true, encoding: .utf8)
+        let store = MemoryStore(path: path)
+
+        let loaded = try await store.load()
+        #expect(loaded.count == 3)
+        #expect(loaded[0].text == "Prefers concise answers")
+        #expect(loaded[1].text == "Uses a colon: like this")
+        #expect(loaded[1].tags == ["style", "ui"])
+        #expect(loaded[2].text == "Line one\nLine two\n")
+    }
+
+    @Test func memoryStoreRemovesByExactIDOrUnambiguousPrefix() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+        let snippet = try await store.add(text: "Prefers tabs over spaces")
+
+        try await store.remove(id: String(snippet.id.prefix(4)))
+        let loaded = try await store.load()
+        #expect(loaded.isEmpty)
+
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.remove(id: "doesnotexist")
+        }
+    }
+
+    @Test func memoryStoreRelevantScoresByKeywordOverlapLikeGo() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+        _ = try await store.add(text: "Prefers dark mode in the editor")
+        _ = try await store.add(text: "Uses Swift for iOS development")
+        _ = try await store.add(text: "Lives in Prague")
+
+        let results = try await store.relevant(to: "What editor mode do they prefer?", limit: 5)
+        #expect(results.first?.text == "Prefers dark mode in the editor")
+        #expect(!results.contains { $0.text == "Lives in Prague" })
+    }
+
+    @Test func memoryStoreRejectsEmptyTextAndObviousSecrets() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = MemoryStore(path: path)
+
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.add(text: "   ")
+        }
+        await #expect(throws: MemoryStoreError.self) {
+            try await store.add(text: "my api key is sk-abc123def456ghi789jkl012")
+        }
+        let loaded = try await store.load()
+        #expect(loaded.isEmpty)
+    }
+
+    @Test func memoryToolsRoundTripThroughToolRegistry() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let context = ToolExecutionContext(
+            workspaceURL: FileManager.default.temporaryDirectory,
+            timeout: .seconds(2),
+            memoryStore: MemoryStore(path: path)
+        )
+
+        let saveResult = await ToolRegistry.shared.execute(
+            name: "memory_save",
+            arguments: Data(#"{"text":"Prefers concise answers","tags":["style"]}"#.utf8),
+            context: context,
+            toolCallID: "save-1"
+        )
+        #expect(!saveResult.isError)
+        #expect(saveResult.content.contains("Remembered"))
+
+        let searchResult = await ToolRegistry.shared.execute(
+            name: "memory_search",
+            arguments: Data(#"{"query":"concise"}"#.utf8),
+            context: context,
+            toolCallID: "search-1"
+        )
+        #expect(!searchResult.isError)
+        #expect(searchResult.content.contains("Prefers concise answers"))
+
+        let id = String(saveResult.content.split(separator: " ")[2].dropLast(2))
+        let deleteResult = await ToolRegistry.shared.execute(
+            name: "memory_delete",
+            arguments: Data(#"{"id":"\#(id)"}"#.utf8),
+            context: context,
+            toolCallID: "delete-1"
+        )
+        #expect(!deleteResult.isError)
+
+        let afterDelete = await ToolRegistry.shared.execute(
+            name: "memory_search",
+            arguments: Data(#"{"query":"concise"}"#.utf8),
+            context: context,
+            toolCallID: "search-2"
+        )
+        #expect(afterDelete.content.contains("No remembered snippets"))
+    }
+
     @Test func toolRegistryReturnsStructuredErrorsForBadCalls() async {
         let context = ToolExecutionContext(
             workspaceURL: FileManager.default.temporaryDirectory,

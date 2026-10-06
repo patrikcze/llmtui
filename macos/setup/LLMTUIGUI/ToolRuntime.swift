@@ -83,11 +83,20 @@ struct ToolExecutionContext: Sendable {
     /// message. Defaulted so existing call sites (tests, callers that only
     /// ever use read-only tools) don't need to construct one explicitly.
     let fileReadTracker: FileReadTracker
+    /// Defaults to the one real `~/.local/share/llmtui/memory.yaml` store;
+    /// tests inject one pointed at a throwaway file instead.
+    let memoryStore: MemoryStore
 
-    init(workspaceURL: URL, timeout: Duration, fileReadTracker: FileReadTracker = FileReadTracker()) {
+    init(
+        workspaceURL: URL,
+        timeout: Duration,
+        fileReadTracker: FileReadTracker = FileReadTracker(),
+        memoryStore: MemoryStore = .shared
+    ) {
         self.workspaceURL = workspaceURL
         self.timeout = timeout
         self.fileReadTracker = fileReadTracker
+        self.memoryStore = memoryStore
     }
 }
 
@@ -258,6 +267,33 @@ struct ToolRegistry: Sendable {
                 safety: .network
             ),
             Self.definition(
+                "memory_search",
+                "Search previously remembered user preferences and facts by keyword. Call this when the user refers to something they told you before, or before asking a question your earlier conversation may already answer.",
+                [
+                    "query": Self.stringParam("Words to match against remembered text."),
+                    "limit": Self.numberParam("Maximum number of snippets to return, up to 20. Defaults to 5.", default: 5)
+                ],
+                required: ["query"],
+                safety: .readOnly
+            ),
+            Self.definition(
+                "memory_save",
+                "Remember a short, durable user preference or fact for future conversations. Only call this when the user explicitly asks you to remember something, not speculatively. Never save secrets, API keys, or passwords.",
+                [
+                    "text": Self.stringParam("The preference or fact to remember, written as a short, self-contained statement."),
+                    "tags": Self.stringArrayParam("Optional short tags to help find this later.")
+                ],
+                required: ["text"],
+                safety: .mutating
+            ),
+            Self.definition(
+                "memory_delete",
+                "Forget a previously remembered snippet by its id (from memory_search results), or by an unambiguous 4+ character prefix of it.",
+                ["id": Self.stringParam("The snippet id, or an unambiguous prefix of at least 4 characters.")],
+                required: ["id"],
+                safety: .mutating
+            ),
+            Self.definition(
                 "local_context",
                 "Return non-sensitive local context: date/time, OS, hardware (CPU, GPU, memory, disk), and the workspace folder. Use this before answering questions about the machine itself, or to decide whether a task is feasible given available memory/disk/CPU.",
                 [:],
@@ -368,6 +404,9 @@ struct ToolRegistry: Sendable {
             case "run_command": content = try await CommandToolRuntime.run(command: object.string("command"), arguments: object.stringArray("arguments"), directory: object.string("working_directory", default: "."), timeout: min(object.double("timeout_seconds", default: 30), 120), context: context)
             case "web_search": content = try await WebToolRuntime.search(query: object.string("query"), maxResults: min(object.int("max_results", default: 5), 10))
             case "web_fetch": content = try await WebToolRuntime.fetch(urlString: object.string("url"), maxChars: min(object.int("max_chars", default: 50000), 100000))
+            case "memory_search": content = try await MemoryToolRuntime.search(query: object.string("query"), limit: min(object.int("limit", default: 5), 20), store: context.memoryStore)
+            case "memory_save": content = try await MemoryToolRuntime.save(text: object.string("text"), tags: object.stringArray("tags"), store: context.memoryStore)
+            case "memory_delete": content = try await MemoryToolRuntime.delete(id: object.string("id"), store: context.memoryStore)
             case "local_context": content = LocalContextToolRuntime.value(context: context)
             default: throw ToolRuntimeError.unknownTool(name)
             }
@@ -1023,6 +1062,32 @@ enum WebToolRuntime {
             return true
         }
         return false
+    }
+}
+
+/// Formats `MemoryStore` results as tool output text. Separate from
+/// `MemoryStore` itself so the store stays a plain data layer shared with
+/// whatever else might want it, while this owns only presentation.
+private enum MemoryToolRuntime {
+    static func search(query: String, limit: Int, store: MemoryStore) async throws -> String {
+        let matches = try await store.relevant(to: query, limit: limit)
+        guard !matches.isEmpty else { return "No remembered snippets matched \"\(query)\"." }
+        return matches.map(describe).joined(separator: "\n")
+    }
+
+    static func save(text: String, tags: [String], store: MemoryStore) async throws -> String {
+        let snippet = try await store.add(text: text, tags: tags)
+        return "Remembered (id \(snippet.id)): \(snippet.text)"
+    }
+
+    static func delete(id: String, store: MemoryStore) async throws -> String {
+        try await store.remove(id: id)
+        return "Forgot snippet \(id)."
+    }
+
+    private static func describe(_ snippet: MemorySnippet) -> String {
+        let tagSuffix = snippet.tags.isEmpty ? "" : " [\(snippet.tags.joined(separator: ", "))]"
+        return "\(snippet.id): \(snippet.text)\(tagSuffix)"
     }
 }
 

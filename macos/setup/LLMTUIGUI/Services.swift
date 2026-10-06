@@ -234,6 +234,13 @@ enum LLMTUIDocumentationContext {
             lines.append("- Use write_file only to create a new file or fully rewrite one at the user's explicit request.")
         }
 
+        if names.contains("memory_search") || names.contains("memory_save") {
+            lines.append("")
+            lines.append("Memory:")
+            lines.append("- Call memory_search when the user refers to a preference or fact from an earlier conversation, or before answering something your memory of this chat alone might not cover.")
+            lines.append("- Call memory_save only when the user explicitly asks you to remember something, as a short self-contained statement. Never save secrets, API keys, or passwords.")
+        }
+
         if names.contains("mail_search") || names.contains("calendar_events") {
             lines.append("")
             lines.append("GUI Personal Apps:")
