@@ -1517,6 +1517,48 @@ actor ToolSupportTracker {
     func markUnsupported(_ key: String) { unsupported.insert(key) }
 }
 
+/// Remembers, per provider+model, the real context window a server has
+/// reported in a "prompt exceeds maximum context length" error — which can
+/// be well under a guessed or missing Model Profile `context_window` (the
+/// 8192 fallback `OpenAICompatibleChatService.contextWindow` uses when no
+/// profile matches). Once discovered this session, it's trusted over the
+/// configured guess for every later turn with this same model.
+actor ContextWindowTracker {
+    static let shared = ContextWindowTracker()
+    private var windows: [String: Int] = [:]
+
+    func discovered(for key: String) -> Int? { windows[key] }
+
+    /// Only ever shrinks what's remembered for a model — a later, larger
+    /// report (unlikely, but servers can vary free context with load)
+    /// never overrides a smaller value already proven correct this session.
+    func record(_ window: Int, for key: String) {
+        if let existing = windows[key] {
+            windows[key] = min(existing, window)
+        } else {
+            windows[key] = window
+        }
+    }
+}
+
+/// Recognizes a context-length-exceeded error from a provider's HTTP 400
+/// body and extracts the real, available token count it reported — e.g.
+/// MLX-Serve's "Prompt exceeds maximum context length: 3142 tokens
+/// requested, 3072 available". Returns nil for any other 400 (tools
+/// rejected, a bad parameter, …), which must not be misread as this.
+enum ContextLengthErrorParser {
+    static func availableTokens(in body: String) -> Int? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(\d+)\s*tokens?\s*requested.*?(\d+)\s*(?:tokens?\s*)?available"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return nil }
+        let range = NSRange(body.startIndex..., in: body)
+        guard let match = regex.firstMatch(in: body, range: range),
+              let availableRange = Range(match.range(at: 2), in: body) else { return nil }
+        return Int(body[availableRange])
+    }
+}
+
 enum OpenAIRequest {
     static func send(
         configuration: LLMTUIConfiguration,

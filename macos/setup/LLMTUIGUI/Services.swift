@@ -461,7 +461,18 @@ struct OpenAICompatibleChatService: ChatService {
                     let fileReadTracker = FileReadTracker()
                     let personalApps = PersonalAppsRuntime.shared
                     try personalApps.validateHistoryProvider(configuration)
-                    let budgetedHistory = Self.fitHistoryToBudget(history, contextWindow: Self.contextWindow(for: configuration))
+                    let modelKey = "\(configuration.provider.baseURL)|\(configuration.provider.model)"
+                    // The configured/profile value is often just a guess —
+                    // an unset or wrong Model Profile context_window, or no
+                    // profile at all (the 8192 fallback). A server's own
+                    // "context length exceeded" error reports the real
+                    // number; once this model has hit that in an earlier
+                    // turn this session, it's trusted over the guess.
+                    var contextWindow = min(
+                        Self.contextWindow(for: configuration),
+                        await ContextWindowTracker.shared.discovered(for: modelKey) ?? Int.max
+                    )
+                    let budgetedHistory = Self.fitHistoryToBudget(history, contextWindow: contextWindow)
                     var messages = OpenAIMessage.history(budgetedHistory)
                     let isAgentRun = runtimeOptions.agentEnabled
                     // Agent mode always offers tools; ordinary chat does too
@@ -472,7 +483,6 @@ struct OpenAICompatibleChatService: ChatService {
                         includeWorkspaceTools: toolsRequested && !personalApps.privateSession
                     )
                     let availableTools = ordinaryTools + personalApps.advertisedDefinitions(configuration: configuration)
-                    let modelKey = "\(configuration.provider.baseURL)|\(configuration.provider.model)"
                     // Decided once for the whole turn, from what's already
                     // known about this model from an earlier turn — not
                     // re-evaluated mid-turn, since the system prompt (which
@@ -498,7 +508,7 @@ struct OpenAICompatibleChatService: ChatService {
                     // Everything appended from here on (tool calls and their results)
                     // belongs to this turn, and is replayed for follow-up turns via
                     // ChatMessage.toolTranscript.
-                    let turnStartIndex = messages.count
+                    var turnStartIndex = messages.count
                     // Ordinary chat retains its small bounded tool loop. Agent mode
                     // instead uses the agent.* cycle and live-budget contract shared
                     // with the Go application.
@@ -589,7 +599,7 @@ struct OpenAICompatibleChatService: ChatService {
                         Self.elideOldestToolResultsIfOverBudget(
                             &messages,
                             from: turnStartIndex,
-                            contextWindow: Self.contextWindow(for: configuration)
+                            contextWindow: contextWindow
                         )
 
                         var toolsForRequest = toolsSupported ? currentlyAllowedTools : []
@@ -610,6 +620,33 @@ struct OpenAICompatibleChatService: ChatService {
                         var response: OpenAIChatResponse
                         do {
                             response = try await performRequest(tools: toolsForRequest, reasoningBody: reasoningBodyForRequest)
+                        } catch OpenAIRequestError.http(400, let body) where ContextLengthErrorParser.availableTokens(in: body) != nil {
+                            // The server itself just reported its real
+                            // context window, which can be well under a
+                            // guessed/missing Model Profile context_window
+                            // (the 8192 fallback when no profile matches).
+                            // Trust it from here on for this model, shrink
+                            // this turn to fit, and retry once — dropping
+                            // tools and reasoning too, since both add to the
+                            // prompt and neither is worth losing this retry
+                            // over.
+                            let reported = ContextLengthErrorParser.availableTokens(in: body) ?? contextWindow
+                            await ContextWindowTracker.shared.record(reported, for: modelKey)
+                            contextWindow = min(contextWindow, reported)
+                            continuation.yield(.status("This model's real context window is smaller than expected (~\(reported) tokens) — trimming the conversation and retrying…"))
+
+                            let shrunkHistory = Self.fitHistoryToBudget(budgetedHistory, contextWindow: contextWindow)
+                            var rebuiltPrefix = OpenAIMessage.history(shrunkHistory)
+                            rebuiltPrefix.insert(.init(role: "system", content: systemPrompt), at: 0)
+                            rebuiltPrefix.append(.user(text: message, attachments: visionAttachments))
+                            let turnMessagesSoFar = Array(messages[turnStartIndex...])
+                            messages = rebuiltPrefix + turnMessagesSoFar
+                            turnStartIndex = rebuiltPrefix.count
+                            Self.elideOldestToolResultsIfOverBudget(&messages, from: turnStartIndex, contextWindow: contextWindow)
+
+                            toolsForRequest = []
+                            reasoningBodyForRequest = [:]
+                            response = try await performRequest(tools: [], reasoningBody: [:])
                         } catch OpenAIRequestError.http(400, _) where !reasoningBodyForRequest.isEmpty {
                             // Some local servers reject a reasoning_effort or
                             // chat_template_kwargs key they don't recognize.

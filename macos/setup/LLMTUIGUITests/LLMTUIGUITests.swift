@@ -1469,6 +1469,31 @@ struct LLMTUIGUITests {
         #expect(await !tracker.isUnsupported("model-b"))
     }
 
+    @Test func contextLengthErrorParserExtractsTheReportedAvailableTokenCount() {
+        let body = #"{"error":{"message":"Prompt exceeds maximum context length: 3142 tokens requested, 3072 available","type":"invalid_request_error","param":null,"code":400}}"#
+        #expect(ContextLengthErrorParser.availableTokens(in: body) == 3072)
+    }
+
+    @Test func contextLengthErrorParserReturnsNilForUnrelated400Bodies() {
+        #expect(ContextLengthErrorParser.availableTokens(in: #"{"error":"tools are not supported"}"#) == nil)
+        #expect(ContextLengthErrorParser.availableTokens(in: "") == nil)
+    }
+
+    @Test func contextWindowTrackerOnlyEverShrinksARememberedWindow() async {
+        let tracker = ContextWindowTracker()
+        #expect(await tracker.discovered(for: "model-a") == nil)
+        await tracker.record(3072, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 3072)
+        // A later, larger report never overrides an already-proven-correct
+        // smaller one from earlier this session.
+        await tracker.record(8192, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 3072)
+        // A genuinely smaller later report is adopted.
+        await tracker.record(2048, for: "model-a")
+        #expect(await tracker.discovered(for: "model-a") == 2048)
+        #expect(await tracker.discovered(for: "model-b") == nil)
+    }
+
     @Test func chatRuntimeOptionsCarryToolsAndReasoningChoiceIndependently() {
         let model = AppModel(nativeAgentEnabled: false)
         model.configuration.provider.model = "gpt-oss-20b"
