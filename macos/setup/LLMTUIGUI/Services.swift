@@ -283,6 +283,12 @@ protocol ChatService: Sendable {
 
 struct NativeChatRuntimeOptions: Equatable, Sendable {
     var agentEnabled: Bool
+    /// Offers the workspace/web/memory tools in ordinary (non-agent) chat
+    /// when the composer's tools toggle is on, independent of the Go
+    /// `tools.enabled` YAML setting.
+    var toolsEnabled: Bool = false
+    var reasoningChoice: ChatReasoningChoice = .automatic
+    var reasoningCapability: ReasoningCapability = .unknown
 
     static let ordinary = NativeChatRuntimeOptions(agentEnabled: false)
 }
@@ -293,6 +299,10 @@ struct NativeChatRuntimePolicy: Equatable, Sendable {
     let maximumTokens = 100_000
     let maximumRepeatedFailures = 3
     let maximumElapsedSeconds: TimeInterval = 30 * 60
+    /// Ordinary chat with the tools toggle on gets more rounds than the
+    /// bare minimum (2) a tool-free turn needs, without adopting the full
+    /// agent budget (cycles, verifier, …) meant for the explicit agent mode.
+    let ordinaryToolsIterationLimit = 10
 
     static let standard = NativeChatRuntimePolicy()
 }
@@ -436,8 +446,12 @@ struct OpenAICompatibleChatService: ChatService {
                     let budgetedHistory = Self.fitHistoryToBudget(history, contextWindow: Self.contextWindow(for: configuration))
                     var messages = OpenAIMessage.history(budgetedHistory)
                     let isAgentRun = runtimeOptions.agentEnabled
+                    // Agent mode always offers tools; ordinary chat does too
+                    // when the composer's own tools toggle is on — these are
+                    // independent switches, so either one is enough.
+                    let toolsRequested = isAgentRun || runtimeOptions.toolsEnabled
                     let ordinaryTools = ToolRegistry.shared.chatDefinitions(
-                        includeWorkspaceTools: isAgentRun && !personalApps.privateSession
+                        includeWorkspaceTools: toolsRequested && !personalApps.privateSession
                     )
                     let availableTools = ordinaryTools + personalApps.advertisedDefinitions(configuration: configuration)
                     // The dynamic tool section sits right after the user's own system
@@ -459,7 +473,9 @@ struct OpenAICompatibleChatService: ChatService {
                     // instead uses the agent.* cycle and live-budget contract shared
                     // with the Go application.
                     let nativePolicy = NativeChatRuntimePolicy.standard
-                    let iterationLimit = isAgentRun ? nativePolicy.maximumCycles : 2
+                    let iterationLimit = isAgentRun
+                        ? nativePolicy.maximumCycles
+                        : (toolsRequested ? nativePolicy.ordinaryToolsIterationLimit : 2)
                     var agentBudget = AgentExecutionBudget(policy: nativePolicy)
                     let toolCallLimit = isAgentRun ? agentBudget.maximumToolCalls : 20
                     let repeatedFailureLimit = isAgentRun ? agentBudget.maximumRepeatedFailures : 3
@@ -513,6 +529,7 @@ struct OpenAICompatibleChatService: ChatService {
                             continuation.yield(.status("Thinking…"))
                         }
                         let toolsSupported = !(await ToolSupportTracker.shared.isUnsupported(modelKey))
+                        let reasoningSupported = !(await ReasoningSupportTracker.shared.isUnsupported(modelKey))
                         let currentlyAllowedTools: [ToolDefinition]
                         if personalApps.privateSession {
                             currentlyAllowedTools = [ToolRegistry.shared.askUserDefinition]
@@ -521,29 +538,47 @@ struct OpenAICompatibleChatService: ChatService {
                             currentlyAllowedTools = availableTools
                         }
 
-                        let toolsForRequest = toolsSupported ? currentlyAllowedTools : []
-                        let response: OpenAIChatResponse
-                        do {
-                            response = try await OpenAIRequest.send(
+                        var toolsForRequest = toolsSupported ? currentlyAllowedTools : []
+                        var reasoningBodyForRequest = reasoningSupported
+                            ? ReasoningRequestEncoder.requestBody(for: runtimeOptions.reasoningChoice, capability: runtimeOptions.reasoningCapability)
+                            : [:]
+                        func performRequest(tools: [ToolDefinition], reasoningBody: [String: Any]) async throws -> OpenAIChatResponse {
+                            try await OpenAIRequest.send(
                                 configuration: configuration,
                                 messages: messages,
-                                tools: toolsForRequest,
+                                tools: tools,
+                                reasoningBody: reasoningBody,
                                 onText: onText,
                                 onReasoning: onReasoning
                             )
+                        }
+
+                        let response: OpenAIChatResponse
+                        do {
+                            response = try await performRequest(tools: toolsForRequest, reasoningBody: reasoningBodyForRequest)
+                        } catch OpenAIRequestError.http(400, _) where !reasoningBodyForRequest.isEmpty {
+                            // Some local servers reject a reasoning_effort or
+                            // chat_template_kwargs key they don't recognize.
+                            // Retry once without it before touching tools.
+                            await ReasoningSupportTracker.shared.markUnsupported(modelKey)
+                            continuation.yield(.status("Model rejected the reasoning setting — continuing without it."))
+                            reasoningBodyForRequest = [:]
+                            do {
+                                response = try await performRequest(tools: toolsForRequest, reasoningBody: [:])
+                            } catch OpenAIRequestError.http(400, _) where !toolsForRequest.isEmpty {
+                                await ToolSupportTracker.shared.markUnsupported(modelKey)
+                                continuation.yield(.status("Model doesn't support tools — chatting without them."))
+                                toolsForRequest = []
+                                response = try await performRequest(tools: [], reasoningBody: [:])
+                            }
                         } catch OpenAIRequestError.http(400, _) where !toolsForRequest.isEmpty {
                             // Some local servers (or models without tool-calling support)
                             // reject any request that includes tool definitions. Fall back
                             // to a tool-free request and remember this for later turns.
                             await ToolSupportTracker.shared.markUnsupported(modelKey)
                             continuation.yield(.status("Model doesn't support tools — chatting without them."))
-                            response = try await OpenAIRequest.send(
-                                configuration: configuration,
-                                messages: messages,
-                                tools: [],
-                                onText: onText,
-                                onReasoning: onReasoning
-                            )
+                            toolsForRequest = []
+                            response = try await performRequest(tools: [], reasoningBody: reasoningBodyForRequest)
                         }
 
                         if isAgentRun {

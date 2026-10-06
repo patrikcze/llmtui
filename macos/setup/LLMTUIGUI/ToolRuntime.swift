@@ -1481,6 +1481,7 @@ enum OpenAIRequest {
         configuration: LLMTUIConfiguration,
         messages: [OpenAIMessage],
         tools: [ToolDefinition],
+        reasoningBody: [String: Any] = [:],
         onText: @escaping (String) -> Void,
         onReasoning: ((String) -> Void)? = nil
     ) async throws -> OpenAIChatResponse {
@@ -1500,6 +1501,9 @@ enum OpenAIRequest {
         ]
         if !tools.isEmpty {
             body["tools"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(tools))
+        }
+        for (key, value) in reasoningBody {
+            body[key] = value
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)

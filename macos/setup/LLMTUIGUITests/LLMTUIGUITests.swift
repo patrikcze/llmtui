@@ -1232,6 +1232,96 @@ struct LLMTUIGUITests {
         #expect(afterDelete.content.contains("No remembered snippets"))
     }
 
+    @Test func wordBoundaryMatcherDetectsGPTOSSButNotLookalikes() {
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "gpt-oss-20b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "openai/gpt-oss-120b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "gpt-oss20b"))
+        #expect(WordBoundaryMatcher.matches("gpt-oss", in: "GPT-OSS-20B"))
+        #expect(!WordBoundaryMatcher.matches("gpt-oss", in: "xgpt-ossy"))
+        #expect(!WordBoundaryMatcher.matches("gpt-oss", in: "llama-3.1-8b"))
+    }
+
+    @Test func modelFamilyDetectsGPTOSSFromIDOrArchitecture() {
+        #expect(ModelFamily.detect(modelID: "gpt-oss-20b", architecture: nil) == .gptOSS)
+        #expect(ModelFamily.detect(modelID: "local-model", architecture: "gpt-oss") == .gptOSS)
+        #expect(ModelFamily.detect(modelID: "qwen3-8b", architecture: "qwen3") == .other)
+    }
+
+    @Test func reasoningCapabilityDetectionPrefersGPTOSSOverReportedMetadata() {
+        let toggleMetadata = ProviderModelMetadata(
+            model: "gpt-oss-20b", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
+        )
+        // Even if a server mistakenly reports a plain on/off, GPT-OSS always
+        // gets the level-based menu — it has no real "off".
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: toggleMetadata) == .levels)
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: nil) == .levels)
+
+        let qwenToggle = ProviderModelMetadata(
+            model: "qwen3-8b", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
+        )
+        #expect(ReasoningCapabilityDetector.capability(modelID: "qwen3-8b", metadata: qwenToggle) == .toggle)
+
+        let noReasoning = ProviderModelMetadata(
+            model: "plain-model", loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: false, defaultReasoningEnabled: nil
+        )
+        #expect(ReasoningCapabilityDetector.capability(modelID: "plain-model", metadata: noReasoning) == .unsupported)
+        #expect(ReasoningCapabilityDetector.capability(modelID: "unknown-model", metadata: nil) == .unknown)
+    }
+
+    @Test func reasoningChoicesOfferedMatchCapability() {
+        #expect(ChatReasoningChoice.offered(for: .levels) == [.automatic, .low, .medium, .high])
+        #expect(ChatReasoningChoice.offered(for: .toggle) == [.automatic, .on, .off])
+        #expect(ChatReasoningChoice.offered(for: .unsupported) == [.automatic])
+        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.low))
+        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.on))
+    }
+
+    @Test func reasoningRequestEncoderProducesEffortForLevelsAndTemplateKwargsForToggle() {
+        #expect(ReasoningRequestEncoder.requestBody(for: .automatic, capability: .levels).isEmpty)
+        let levelBody = ReasoningRequestEncoder.requestBody(for: .high, capability: .levels)
+        #expect(levelBody["reasoning_effort"] as? String == "high")
+        #expect(levelBody["chat_template_kwargs"] == nil)
+
+        // A level-only model has no real "off" — sending .off produces no
+        // extra body keys rather than an invalid field.
+        #expect(ReasoningRequestEncoder.requestBody(for: .off, capability: .levels).isEmpty)
+
+        let onBody = ReasoningRequestEncoder.requestBody(for: .on, capability: .toggle)
+        let onKwargs = onBody["chat_template_kwargs"] as? [String: Any]
+        #expect(onKwargs?["enable_thinking"] as? Bool == true)
+
+        let offBody = ReasoningRequestEncoder.requestBody(for: .off, capability: .toggle)
+        let offKwargs = offBody["chat_template_kwargs"] as? [String: Any]
+        #expect(offKwargs?["enable_thinking"] as? Bool == false)
+
+        #expect(ReasoningRequestEncoder.requestBody(for: .on, capability: .unsupported).isEmpty)
+    }
+
+    @Test func reasoningSupportTrackerRemembersUnsupportedModels() async {
+        let tracker = ReasoningSupportTracker()
+        #expect(await !tracker.isUnsupported("model-a"))
+        await tracker.markUnsupported("model-a")
+        #expect(await tracker.isUnsupported("model-a"))
+        #expect(await !tracker.isUnsupported("model-b"))
+    }
+
+    @Test func chatRuntimeOptionsCarryToolsAndReasoningChoiceIndependently() {
+        let model = AppModel(nativeAgentEnabled: false)
+        model.configuration.provider.model = "gpt-oss-20b"
+
+        let options = model.chatRuntimeOptions(usesNativeAgent: false, usesTools: true, reasoning: .high)
+        #expect(!options.agentEnabled)
+        #expect(options.toolsEnabled)
+        #expect(options.reasoningChoice == .high)
+        #expect(options.reasoningCapability == .levels)
+    }
+
     @Test func toolRegistryReturnsStructuredErrorsForBadCalls() async {
         let context = ToolExecutionContext(
             workspaceURL: FileManager.default.temporaryDirectory,

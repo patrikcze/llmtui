@@ -306,6 +306,8 @@ struct QueuedMessage: Identifiable, Equatable {
     let text: String
     let attachments: [ChatAttachment]
     let usesNativeAgent: Bool
+    let usesTools: Bool
+    let reasoning: ChatReasoningChoice
 }
 
 struct ChatMetrics: Equatable, Sendable {
@@ -455,9 +457,26 @@ final class AppModel {
             UserDefaults.standard.set(nativeAgentEnabled, forKey: Self.nativeAgentEnabledDefaultsKey)
         }
     }
+    /// Offers the workspace/web/memory tools in ordinary (non-agent) chat.
+    /// Independent of both `nativeAgentEnabled` and the Go `tools.enabled`
+    /// YAML setting — see `NativeChatRuntimeOptions`.
+    var nativeToolsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(nativeToolsEnabled, forKey: Self.nativeToolsEnabledDefaultsKey)
+        }
+    }
+    /// The reasoning setting for the next message. Chat-local only — see
+    /// `ReasoningControl.swift`.
+    var nativeReasoningChoice: ChatReasoningChoice {
+        didSet {
+            UserDefaults.standard.set(nativeReasoningChoice.rawValue, forKey: Self.nativeReasoningChoiceDefaultsKey)
+        }
+    }
     var queuedMessages: [QueuedMessage] = []
     private static let maxQueuedMessages = 10
     private static let nativeAgentEnabledDefaultsKey = "nativeChatAgentEnabled"
+    private static let nativeToolsEnabledDefaultsKey = "nativeChatToolsEnabled"
+    private static let nativeReasoningChoiceDefaultsKey = "nativeChatReasoningChoice"
     private var generationID: UUID?
 
     /// A rough, live estimate of how much of the model's context window the
@@ -468,6 +487,18 @@ final class AppModel {
         let historyTokens = OpenAICompatibleChatService.estimatedTokens(for: messages)
         let draftTokens = (draftMessage.count + configuration.systemPrompt.count) / 4
         return (used: historyTokens + draftTokens, total: total)
+    }
+
+    /// What the currently selected model actually accepts for reasoning
+    /// control, derived from its name (GPT-OSS family) and — when it's been
+    /// fetched from the Model Profiles screen — the provider's own reported
+    /// capability. Purely derived from other observed properties, so it
+    /// updates automatically when the provider/model selection changes.
+    var chatReasoningCapability: ReasoningCapability {
+        ReasoningCapabilityDetector.capability(
+            modelID: configuration.provider.model,
+            metadata: discoveredProfileMetadata[configuration.provider.model]
+        )
     }
 
     let configurationStore = LLMTUIConfigurationStore()
@@ -484,6 +515,9 @@ final class AppModel {
         self.diagnostics = diagnostics ?? DiagnosticsLogger.shared
         self.nativeAgentEnabled = nativeAgentEnabled
             ?? UserDefaults.standard.bool(forKey: Self.nativeAgentEnabledDefaultsKey)
+        self.nativeToolsEnabled = UserDefaults.standard.bool(forKey: Self.nativeToolsEnabledDefaultsKey)
+        self.nativeReasoningChoice = UserDefaults.standard.string(forKey: Self.nativeReasoningChoiceDefaultsKey)
+            .flatMap(ChatReasoningChoice.init(rawValue:)) ?? .automatic
         // A workspace path saved under the old hardcoded "~/Documents"
         // default (from before `toolWorkspacePath`'s default changed to the
         // app bundle's folder) was never actually chosen by the user — it's
@@ -956,6 +990,8 @@ final class AppModel {
 
         let attachments = draftAttachments
         let usesNativeAgent = nativeAgentEnabled
+        let usesTools = nativeToolsEnabled
+        let reasoning = nativeReasoningChoice
         draftMessage = ""
         draftAttachments = []
 
@@ -969,12 +1005,14 @@ final class AppModel {
             queuedMessages.append(QueuedMessage(
                 text: text,
                 attachments: attachments,
-                usesNativeAgent: usesNativeAgent
+                usesNativeAgent: usesNativeAgent,
+                usesTools: usesTools,
+                reasoning: reasoning
             ))
             return
         }
 
-        dispatch(text: text, attachments: attachments, usesNativeAgent: usesNativeAgent)
+        dispatch(text: text, attachments: attachments, usesNativeAgent: usesNativeAgent, usesTools: usesTools, reasoning: reasoning)
     }
 
     func removeQueuedMessage(_ message: QueuedMessage) {
@@ -988,16 +1026,27 @@ final class AppModel {
         draftMessage = message.text
         draftAttachments = message.attachments
         nativeAgentEnabled = message.usesNativeAgent
+        nativeToolsEnabled = message.usesTools
+        nativeReasoningChoice = message.reasoning
     }
 
     /// Produces request-scoped runtime options for the native Swift chat.
     /// These never borrow from or mutate the YAML configuration edited for
     /// the separate Go LLMTUI application.
-    func chatRuntimeOptions(usesNativeAgent: Bool) -> NativeChatRuntimeOptions {
-        NativeChatRuntimeOptions(agentEnabled: usesNativeAgent)
+    func chatRuntimeOptions(
+        usesNativeAgent: Bool,
+        usesTools: Bool = false,
+        reasoning: ChatReasoningChoice = .automatic
+    ) -> NativeChatRuntimeOptions {
+        NativeChatRuntimeOptions(
+            agentEnabled: usesNativeAgent,
+            toolsEnabled: usesTools,
+            reasoningChoice: reasoning,
+            reasoningCapability: chatReasoningCapability
+        )
     }
 
-    private func dispatch(text: String, attachments: [ChatAttachment], usesNativeAgent: Bool) {
+    private func dispatch(text: String, attachments: [ChatAttachment], usesNativeAgent: Bool, usesTools: Bool, reasoning: ChatReasoningChoice) {
         messages.append(ChatMessage(role: .user, text: text, attachments: attachments))
         isGenerating = true
         let requestID = UUID()
@@ -1018,7 +1067,7 @@ final class AppModel {
             ]
         )
 
-        let runtimeOptions = chatRuntimeOptions(usesNativeAgent: usesNativeAgent)
+        let runtimeOptions = chatRuntimeOptions(usesNativeAgent: usesNativeAgent, usesTools: usesTools, reasoning: reasoning)
         Task {
             do {
                 var response = ""
@@ -1108,7 +1157,9 @@ final class AppModel {
         dispatch(
             text: next.text,
             attachments: next.attachments,
-            usesNativeAgent: next.usesNativeAgent
+            usesNativeAgent: next.usesNativeAgent,
+            usesTools: next.usesTools,
+            reasoning: next.reasoning
         )
     }
 
