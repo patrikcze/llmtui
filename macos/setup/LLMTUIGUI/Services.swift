@@ -224,9 +224,10 @@ enum LLMTUIDocumentationContext {
         if names.contains("read_file") || names.contains("write_file") || names.contains("edit_file") || names.contains("edit_lines") {
             lines.append("")
             lines.append("File edits:")
-            lines.append("- Always call read_file before editing an existing file. Its result numbers each line 'N| text' for reference only — never include that prefix in old_text or new_text.")
+            lines.append("- Always call read_file before editing an existing file, in this same turn — edit_file and edit_lines are both refused otherwise. Its result (and write_file's) numbers each line 'N| text' for reference only — never include that prefix in old_text or new_text.")
+            lines.append("- old_text must be copied character-for-character from that most recent read_file/write_file result for this exact file. Never type old_text from memory of what the file should contain, including a file you just wrote yourself in this same turn — a paraphrase that differs by even one word or punctuation mark will fail to match, and the tool has no way to tell 'close enough' from 'wrong file'.")
             if names.contains("edit_file") {
-                lines.append("- Use edit_file to replace exact existing text with new text. Pass an 'edits' array to make several replacements in one file atomically. If old_text matches more than once, either make it longer and more specific or pass replace_all: true.")
+                lines.append("- Use edit_file to replace exact existing text with new text. Pass an 'edits' array to make several replacements in one file atomically. If old_text matches more than once, either make it longer and more specific or pass replace_all: true. If it fails to match, re-read the error's suggested location (or call read_file again) before retrying — don't just retry the same guess.")
             }
             if names.contains("edit_lines") {
                 lines.append("- Use edit_lines when you know the exact line numbers to replace, insert after, or delete — it must be called in the same turn as the read_file that reported those line numbers, and is refused if the file changed since.")

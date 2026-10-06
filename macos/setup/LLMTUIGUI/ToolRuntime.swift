@@ -180,7 +180,7 @@ struct ToolRegistry: Sendable {
             ),
             Self.definition(
                 "edit_file",
-                "Update an existing UTF-8 text file by replacing old_text with new_text. Provide either a single old_text/new_text pair, or a non-empty 'edits' array to apply several replacements to the same file as one atomic edit (if any one fails to match, none are applied). Each old_text must match exactly once in the file unless replace_all is true. Read the file first with read_file.",
+                "Update an existing UTF-8 text file by replacing old_text with new_text. Provide either a single old_text/new_text pair, or a non-empty 'edits' array to apply several replacements to the same file as one atomic edit (if any one fails to match, none are applied). Each old_text must match exactly once in the file unless replace_all is true. The file must have been read this same turn — call read_file (or write_file, which echoes what it wrote) first, then copy old_text character-for-character from that result. Never type old_text from memory of what the file should contain, even a file you just wrote yourself — small wording differences are a common cause of this tool failing.",
                 [
                     "path": Self.stringParam("Workspace-relative path to the existing file to edit."),
                     "old_text": Self.stringParam("The exact existing text to replace. Omit this and new_text when using 'edits' instead."),
@@ -559,9 +559,22 @@ private enum FileToolRuntime {
         }
         await context.fileReadTracker.recordWrite(path: path, content: verified)
 
-        let lineCount = TextDocument(verified).lineCount
-        let lineWord = "\(lineCount) line\(lineCount == 1 ? "" : "s")"
-        return existed ? "Overwrote \(path) (\(lineWord))." : "Created \(path) (\(lineWord))."
+        let document = TextDocument(verified)
+        let lineWord = "\(document.lineCount) line\(document.lineCount == 1 ? "" : "s")"
+        let header = existed ? "Overwrote \(path) (\(lineWord))." : "Created \(path) (\(lineWord))."
+        // Echo the content actually on disk, numbered exactly like
+        // read_file, rather than just a line count. Without this, a model
+        // editing the file it just wrote has nothing but its own memory of
+        // what it intended to write — which a weaker model will sometimes
+        // get wrong — to build old_text from, and a mismatched guess at
+        // old_text is the single most common way edit_file fails. Bounded
+        // the same way read_file is, so writing a large file doesn't blow
+        // up the turn's context on its own.
+        guard document.lineCount > 0, document.lineCount <= 200 else {
+            return header + " Call read_file before editing it further — do not guess at its exact content from memory."
+        }
+        let body = document.lines.enumerated().map { "\($0.offset + 1)| \($0.element)" }.joined(separator: "\n")
+        return header + " Current content (copy old_text from here exactly, without the 'N| ' prefix, when editing):\n" + body
     }
 
     /// `oldText`/`newText` are the single-pair form; `edits` (when non-nil
@@ -578,8 +591,17 @@ private enum FileToolRuntime {
         let url = try WorkspacePath.resolve(path, context: context)
         let source = try String(contentsOf: url, encoding: .utf8)
 
-        if await context.fileReadTracker.verify(path: path, currentContent: source) == .stale {
-            throw FileEditingError.staleRead(path: path)
+        // Requiring a read in this same turn — not just rejecting a stale
+        // one — is what actually stops a model from guessing at old_text
+        // from memory of content it (or an earlier write_file call) is
+        // *assumed* to contain, rather than copying it from the tool's own
+        // echo of the real, current file. A mismatched guess used to only
+        // surface as a failed match after the fact; this catches it before
+        // the model even tries one.
+        switch await context.fileReadTracker.verify(path: path, currentContent: source) {
+        case .notRead: throw FileEditingError.notReadThisTurn(path: path)
+        case .stale: throw FileEditingError.staleRead(path: path)
+        case .upToDate: break
         }
 
         let resolvedEdits: [StringEdit]

@@ -917,6 +917,72 @@ struct LLMTUIGUITests {
         }
     }
 
+    @Test func nearbyContextFindsAFuzzyMatchWhenOldTextIsAParaphrase() {
+        // Reproduces the real failure this was added for: a model's old_text
+        // is a slightly reworded memory of a paragraph, not a literal copy
+        // of it, and the real paragraph is nowhere near the top of the file.
+        let source = """
+        ### Unrelated heading
+        some other line
+        another unrelated line
+        The day was clear with sunny periods, reaching an estimated high of 22 degrees earlier today.
+        trailing line
+        """
+        let paraphrase = "The day has been mostly clear with sunny periods, reaching an estimated high of 22 degrees earlier today."
+        let context = TextEditApplier.nearbyContext(for: paraphrase, in: source)
+        #expect(context.contains("most similar existing line is line 4"))
+        #expect(context.contains("The day was clear with sunny periods"))
+    }
+
+    @Test func editFileRefusesWithoutAReadInTheSameTurn() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "one\ntwo\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+
+        // Neither read_file nor write_file has touched this path in this
+        // context/turn — edit_file must refuse rather than let old_text be
+        // checked against content the model never actually saw.
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        let result = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","old_text":"one","new_text":"ONE"}"#.utf8),
+            context: context,
+            toolCallID: "edit-unread"
+        )
+        #expect(result.isError)
+        #expect(result.content.contains("hasn't been read"))
+    }
+
+    @Test func writeFileEchoesContentSoAFollowUpEditCanCopyItExactly() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let writeResult = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"first line\nsecond line\n"}"#.utf8),
+            context: context,
+            toolCallID: "write-1"
+        )
+        #expect(!writeResult.isError)
+        #expect(writeResult.content.contains("1| first line"))
+        #expect(writeResult.content.contains("2| second line"))
+
+        // write_file's own record satisfies edit_file's same-turn-read
+        // requirement, so a model can go straight from write_file to
+        // edit_file on the same path without an extra read_file round trip.
+        let editResult = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","old_text":"second line","new_text":"SECOND LINE"}"#.utf8),
+            context: context,
+            toolCallID: "edit-1"
+        )
+        #expect(!editResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "first line\nSECOND LINE\n")
+    }
+
     @Test func editLinesRequiresAReadInTheSameTurnAndDetectsStaleContent() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

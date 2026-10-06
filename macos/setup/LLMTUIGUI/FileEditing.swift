@@ -188,7 +188,8 @@ enum TextEditApplier {
     /// verbatim (ignoring surrounding whitespace) in `source`, and shows a
     /// small window of context around it — giving the model something
     /// concrete to adjust `old_text` against instead of a bare "no match".
-    /// Falls back to the start of the file when nothing lines up at all.
+    /// Falls back to a word-overlap fuzzy match, and then to the start of
+    /// the file, when nothing lines up exactly.
     static func nearbyContext(for oldText: String, in source: String) -> String {
         let sourceLines = source.components(separatedBy: "\n")
         let candidateLines = oldText.components(separatedBy: "\n")
@@ -198,10 +199,19 @@ enum TextEditApplier {
 
         for candidate in candidateLines {
             guard let matchIndex = sourceLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == candidate }) else { continue }
-            let start = max(0, matchIndex - 2)
-            let end = min(sourceLines.count - 1, matchIndex + 2)
-            let window = (start...end).map { "\($0 + 1)| \(sourceLines[$0])" }.joined(separator: "\n")
-            return "Closest matching line is line \(matchIndex + 1):\n\(window)"
+            return windowDescription(around: matchIndex, in: sourceLines, label: "Closest matching line is line \(matchIndex + 1)")
+        }
+
+        // Nothing lines up exactly. A model's old_text is often a paraphrase
+        // reconstructed from memory rather than a literal copy of the file
+        // (e.g. it forgot the exact wording of something it itself wrote a
+        // moment earlier) — the source line sharing the most distinctive
+        // words with old_text's longest line is far more useful to show
+        // than an arbitrary "file starts with" dump when the real target is
+        // somewhere in the middle of a long file.
+        if let longestCandidate = candidateLines.first,
+           let bestIndex = bestFuzzyMatchLine(for: longestCandidate, in: sourceLines) {
+            return windowDescription(around: bestIndex, in: sourceLines, label: "No exact match. The most similar existing line is line \(bestIndex + 1)")
         }
 
         guard !sourceLines.isEmpty, !(sourceLines.count == 1 && sourceLines[0].isEmpty) else {
@@ -210,6 +220,35 @@ enum TextEditApplier {
         let headCount = min(5, sourceLines.count)
         let head = (0..<headCount).map { "\($0 + 1)| \(sourceLines[$0])" }.joined(separator: "\n")
         return "No similar line was found. The file starts with:\n\(head)"
+    }
+
+    private static func windowDescription(around index: Int, in lines: [String], label: String) -> String {
+        let start = max(0, index - 2)
+        let end = min(lines.count - 1, index + 2)
+        let window = (start...end).map { "\($0 + 1)| \(lines[$0])" }.joined(separator: "\n")
+        return "\(label):\n\(window)"
+    }
+
+    private static func bestFuzzyMatchLine(for candidate: String, in lines: [String]) -> Int? {
+        let candidateWords = wordSet(candidate)
+        guard !candidateWords.isEmpty else { return nil }
+        var bestIndex: Int?
+        var bestScore = 0
+        for (index, line) in lines.enumerated() {
+            let score = wordSet(line).intersection(candidateWords).count
+            if score > bestScore {
+                bestScore = score
+                bestIndex = index
+            }
+        }
+        // Require a few shared distinctive (3+ letter) words so an
+        // unrelated line isn't offered as if it were meaningfully similar.
+        guard bestScore >= 3 else { return nil }
+        return bestIndex
+    }
+
+    private static func wordSet(_ text: String) -> Set<String> {
+        Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
     }
 }
 
