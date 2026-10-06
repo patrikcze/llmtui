@@ -813,11 +813,277 @@ struct LLMTUIGUITests {
         )
 
         #expect(!writeResult.isError)
-        #expect(readResult.content.contains("2: second"))
+        #expect(writeResult.content.contains("Created"))
+        #expect(readResult.content.contains("2| second"))
         #expect(!editResult.isError)
         #expect(try String(contentsOf: root.appending(path: "notes/test.txt"), encoding: .utf8) == "first\nupdated")
         #expect(escapeResult.isError)
         #expect(escapeResult.content.contains("outside the configured workspace"))
+    }
+
+    @Test func textDocumentPreservesCRLFLineCountAndRoundTrips() {
+        let withoutTrailingNewline = TextDocument("a\r\nb\r\nc")
+        #expect(withoutTrailingNewline.lineCount == 3)
+        #expect(withoutTrailingNewline.lines == ["a", "b", "c"])
+        #expect(withoutTrailingNewline.lineEnding == .crlf)
+        #expect(withoutTrailingNewline.text == "a\r\nb\r\nc")
+
+        let withTrailingNewline = TextDocument("a\r\nb\r\n")
+        #expect(withTrailingNewline.lineCount == 2)
+        #expect(withTrailingNewline.text == "a\r\nb\r\n")
+
+        let lfDocument = TextDocument("x\ny\n")
+        #expect(lfDocument.lineEnding == .lf)
+        #expect(lfDocument.text == "x\ny\n")
+
+        let empty = TextDocument("")
+        #expect(empty.lineCount == 0)
+        #expect(empty.text == "")
+    }
+
+    @Test func textDocumentLineOperationsReplaceInsertAndDelete() throws {
+        var document = TextDocument("1\n2\n3\n")
+        try document.replaceLines(start: 2, end: 2, with: ["X", "Y"])
+        #expect(document.lines == ["1", "X", "Y", "3"])
+
+        try document.insertLines(after: 0, newLines: ["top"])
+        #expect(document.lines == ["top", "1", "X", "Y", "3"])
+
+        try document.deleteLines(start: 2, end: 3)
+        #expect(document.lines == ["top", "Y", "3"])
+    }
+
+    @Test func textDocumentLineOperationsRejectOutOfRangeRequests() {
+        var document = TextDocument("1\n2\n")
+        #expect(throws: FileEditingError.self) {
+            try document.replaceLines(start: 1, end: 5, with: ["x"])
+        }
+        #expect(throws: FileEditingError.self) {
+            try document.insertLines(after: 10, newLines: ["x"])
+        }
+        #expect(throws: FileEditingError.self) {
+            try document.deleteLines(start: 0, end: 1)
+        }
+    }
+
+    @Test func textEditApplierAppliesMultipleEditsAtomically() throws {
+        let updated = try TextEditApplier.apply(
+            [
+                StringEdit(oldText: "a", newText: "A", replaceAll: false),
+                StringEdit(oldText: "c", newText: "C", replaceAll: false)
+            ],
+            to: "a\nb\nc",
+            path: "f.txt"
+        )
+        #expect(updated == "A\nb\nC")
+    }
+
+    @Test func textEditApplierFailsWithoutApplyingAnyEditWhenOneFails() {
+        #expect(throws: FileEditingError.self) {
+            _ = try TextEditApplier.apply(
+                [
+                    StringEdit(oldText: "a", newText: "A", replaceAll: false),
+                    StringEdit(oldText: "does-not-exist", newText: "Z", replaceAll: false)
+                ],
+                to: "a\nb\nc",
+                path: "f.txt"
+            )
+        }
+    }
+
+    @Test func textEditApplierReplaceAllReplacesEveryOccurrence() throws {
+        let updated = try TextEditApplier.apply(
+            [StringEdit(oldText: "x", newText: "y", replaceAll: true)],
+            to: "x-x-x",
+            path: "f.txt"
+        )
+        #expect(updated == "y-y-y")
+    }
+
+    @Test func textEditApplierReportsLineNumbersForZeroAndMultipleMatches() {
+        do {
+            _ = try TextEditApplier.apply([StringEdit(oldText: "missing", newText: "z", replaceAll: false)], to: "one\ntwo\n", path: "f.txt")
+            Issue.record("expected a no-match error")
+        } catch {
+            #expect(error.localizedDescription.contains("did not match"))
+        }
+
+        do {
+            _ = try TextEditApplier.apply([StringEdit(oldText: "dup", newText: "z", replaceAll: false)], to: "dup\nother\ndup\n", path: "f.txt")
+            Issue.record("expected a multiple-match error")
+        } catch {
+            #expect(error.localizedDescription.contains("matched 2 times"))
+            #expect(error.localizedDescription.contains("1, 3"))
+        }
+    }
+
+    @Test func editLinesRequiresAReadInTheSameTurnAndDetectsStaleContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "one\ntwo\nthree\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+
+        // The file exists on disk, but this turn never read or wrote it
+        // through a tool call — edit_lines must refuse outright.
+        let unreadContext = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        let unreadResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":2,"new_text":"TWO"}"#.utf8),
+            context: unreadContext,
+            toolCallID: "edit-unread"
+        )
+        #expect(unreadResult.isError)
+        #expect(unreadResult.content.contains("hasn't been read"))
+
+        // Read it through a tracked context, then change it on disk outside
+        // that tracker — the next edit_lines call must see it as stale.
+        let trackedContext = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+        _ = await ToolRegistry.shared.execute(
+            name: "read_file",
+            arguments: Data(#"{"path":"a.txt"}"#.utf8),
+            context: trackedContext,
+            toolCallID: "r"
+        )
+        try "changed\nexternally\n".write(to: root.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+        let staleResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":1,"new_text":"X"}"#.utf8),
+            context: trackedContext,
+            toolCallID: "edit-stale"
+        )
+        #expect(staleResult.isError)
+        #expect(staleResult.content.contains("changed on disk"))
+    }
+
+    @Test func editLinesReplacesInsertsAndDeletesByLineNumber() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        _ = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"one\ntwo\nthree\n"}"#.utf8),
+            context: context,
+            toolCallID: "w"
+        )
+        _ = await ToolRegistry.shared.execute(
+            name: "read_file",
+            arguments: Data(#"{"path":"a.txt"}"#.utf8),
+            context: context,
+            toolCallID: "r"
+        )
+
+        let replaceResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"replace","start_line":2,"new_text":"TWO"}"#.utf8),
+            context: context,
+            toolCallID: "edit-replace"
+        )
+        #expect(!replaceResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "one\nTWO\nthree\n")
+
+        let insertResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"insert","start_line":0,"new_text":"ZERO"}"#.utf8),
+            context: context,
+            toolCallID: "edit-insert"
+        )
+        #expect(!insertResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ZERO\none\nTWO\nthree\n")
+
+        let deleteResult = await ToolRegistry.shared.execute(
+            name: "edit_lines",
+            arguments: Data(#"{"path":"a.txt","operation":"delete","start_line":1,"end_line":1}"#.utf8),
+            context: context,
+            toolCallID: "edit-delete"
+        )
+        #expect(!deleteResult.isError)
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "one\nTWO\nthree\n")
+    }
+
+    @Test func editFileAppliesMultipleEditsAsOneAtomicToolCall() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        _ = await ToolRegistry.shared.execute(
+            name: "write_file",
+            arguments: Data(#"{"path":"a.txt","content":"alpha\nbeta\ngamma\n"}"#.utf8),
+            context: context,
+            toolCallID: "w"
+        )
+
+        let result = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","edits":[{"old_text":"alpha","new_text":"ALPHA"},{"old_text":"gamma","new_text":"GAMMA"}]}"#.utf8),
+            context: context,
+            toolCallID: "edit-multi"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("2 edits applied"))
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ALPHA\nbeta\nGAMMA\n")
+
+        let atomicFailure = await ToolRegistry.shared.execute(
+            name: "edit_file",
+            arguments: Data(#"{"path":"a.txt","edits":[{"old_text":"beta","new_text":"BETA"},{"old_text":"not-there","new_text":"Z"}]}"#.utf8),
+            context: context,
+            toolCallID: "edit-multi-fail"
+        )
+        #expect(atomicFailure.isError)
+        // Neither edit from the failed call took effect.
+        #expect(try String(contentsOf: root.appending(path: "a.txt"), encoding: .utf8) == "ALPHA\nbeta\nGAMMA\n")
+    }
+
+    @Test func globMatchesTopLevelFilesWithDoubleStarPattern() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appending(path: "dir"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "top".write(to: root.appending(path: "a.swift"), atomically: true, encoding: .utf8)
+        try "nested".write(to: root.appending(path: "dir/b.swift"), atomically: true, encoding: .utf8)
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let result = await ToolRegistry.shared.execute(
+            name: "glob",
+            arguments: Data(#"{"pattern":"**/*.swift"}"#.utf8),
+            context: context,
+            toolCallID: "glob-1"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("a.swift"))
+        #expect(result.content.contains("dir/b.swift"))
+    }
+
+    @Test func grepOutputUsesPathColonLineFormat() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "first\nneedle here\nlast\n".write(to: root.appending(path: "notes.txt"), atomically: true, encoding: .utf8)
+        let context = ToolExecutionContext(workspaceURL: root, timeout: .seconds(2))
+
+        let result = await ToolRegistry.shared.execute(
+            name: "grep",
+            arguments: Data(#"{"pattern":"needle"}"#.utf8),
+            context: context,
+            toolCallID: "grep-1"
+        )
+        #expect(!result.isError)
+        #expect(result.content.contains("notes.txt:2: needle here"))
+    }
+
+    @Test func toolRegistryTreatsEmptyArgumentsAsNoArguments() async {
+        let context = ToolExecutionContext(
+            workspaceURL: FileManager.default.temporaryDirectory,
+            timeout: .seconds(1)
+        )
+        let result = await ToolRegistry.shared.execute(
+            name: "local_context",
+            arguments: Data("".utf8),
+            context: context,
+            toolCallID: "empty-args"
+        )
+        #expect(!result.isError)
     }
 
     @Test func toolRegistryReturnsStructuredErrorsForBadCalls() async {

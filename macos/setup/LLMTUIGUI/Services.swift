@@ -120,8 +120,8 @@ enum LLMTUIDocumentationContext {
 
     Tools, MCP, RAG, and safety:
     - Tools are disabled by default and must be enabled in configuration. Read-only and mutating operations are governed by approval and guardrails.
-    - For an existing file, always call read_file first. Use edit_file for a targeted line or block change; it requires exactly one match and preserves unrelated content. Use write_file only to create a new file or when the user explicitly requests a complete rewrite.
-    - Never claim a file was updated unless the corresponding edit_file or write_file tool call succeeded and returned a verified result.
+    - For an existing file, always call read_file first. Use edit_file for a targeted text replacement (it requires exactly one match per old_text unless replace_all is set, and can apply several replacements atomically via an 'edits' array) and edit_lines for a change by exact line number; both preserve unrelated content. Use write_file only to create a new file or when the user explicitly requests a complete rewrite.
+    - Never claim a file was updated unless the corresponding edit_file, edit_lines, or write_file tool call succeeded and returned a verified result.
     - MCP servers are configured in llmtui's MCP settings and are off unless enabled. MCP tools still pass through llmtui's approval flow.
     - RAG is local retrieval/indexing and is off unless configured. It augments the prompt with retrieved local context; it is not automatically live web search.
     - Web access, personal Mail/Calendar tools, filesystem access, and commands are bounded by configuration and approval policy.
@@ -221,10 +221,17 @@ enum LLMTUIDocumentationContext {
             lines.append("- If the request is already unambiguous, answer directly instead of asking. Call ask_user at most once per turn and not together with any other tool.")
         }
 
-        if names.contains("read_file") || names.contains("write_file") || names.contains("edit_file") {
+        if names.contains("read_file") || names.contains("write_file") || names.contains("edit_file") || names.contains("edit_lines") {
             lines.append("")
             lines.append("File edits:")
-            lines.append("- Always call read_file before editing an existing file. Use edit_file for a targeted change; use write_file only to create a new file or fully rewrite one at the user's request.")
+            lines.append("- Always call read_file before editing an existing file. Its result numbers each line 'N| text' for reference only — never include that prefix in old_text or new_text.")
+            if names.contains("edit_file") {
+                lines.append("- Use edit_file to replace exact existing text with new text. Pass an 'edits' array to make several replacements in one file atomically. If old_text matches more than once, either make it longer and more specific or pass replace_all: true.")
+            }
+            if names.contains("edit_lines") {
+                lines.append("- Use edit_lines when you know the exact line numbers to replace, insert after, or delete — it must be called in the same turn as the read_file that reported those line numbers, and is refused if the file changed since.")
+            }
+            lines.append("- Use write_file only to create a new file or fully rewrite one at the user's explicit request.")
         }
 
         if names.contains("mail_search") || names.contains("calendar_events") {
@@ -411,6 +418,12 @@ struct OpenAICompatibleChatService: ChatService {
                     var outputText = ""
                     let workspace = URL(fileURLWithPath: configuration.toolWorkspacePath)
                         .standardizedFileURL
+                    // Scoped to this one turn: edit_lines' staleness check
+                    // should only ever compare against what *this* turn has
+                    // itself read or written, so a fresh tracker is created
+                    // per `send()` call and reused across every tool call in
+                    // the loop below rather than per tool call.
+                    let fileReadTracker = FileReadTracker()
                     let personalApps = PersonalAppsRuntime.shared
                     try personalApps.validateHistoryProvider(configuration)
                     let budgetedHistory = Self.fitHistoryToBudget(history, contextWindow: Self.contextWindow(for: configuration))
@@ -764,7 +777,7 @@ struct OpenAICompatibleChatService: ChatService {
                                     result = await ToolRegistry.shared.execute(
                                         name: call.function.name,
                                         arguments: Data(call.function.arguments.utf8),
-                                        context: ToolExecutionContext(workspaceURL: workspace, timeout: .seconds(30)),
+                                        context: ToolExecutionContext(workspaceURL: workspace, timeout: .seconds(30), fileReadTracker: fileReadTracker),
                                         toolCallID: call.id
                                     )
                                 }
