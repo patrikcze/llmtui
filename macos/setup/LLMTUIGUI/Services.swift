@@ -205,6 +205,17 @@ enum LLMTUIDocumentationContext {
             "The tools below can be called in this chat session through function calling — never by writing JSON or a tool name in your reply text. They belong to LLMTUIGUI's native chat runtime and are separate from the llmtui configuration edited by this app.",
             "Available now: \(names.sorted().joined(separator: ", "))."
         ]
+        lines.append(contentsOf: categoryGuidance(for: names))
+        return lines.joined(separator: "\n")
+    }
+
+    /// Per-tool-category usage guidance (web research, file edits, memory,
+    /// Personal Apps, …) — how and when to use each tool, which is the same
+    /// regardless of *how* a call is written. Shared between the native
+    /// function-calling instructions above and the text-mode convention in
+    /// `TextToolCallParser.instructions`, which only differs in the latter.
+    static func categoryGuidance(for names: Set<String>) -> [String] {
+        var lines: [String] = []
 
         if names.contains("web_search") || names.contains("web_fetch") {
             lines.append("")
@@ -258,7 +269,7 @@ enum LLMTUIDocumentationContext {
             lines.append("- GUI Personal Apps mutations are unavailable unless the host advertises dedicated prepare/apply tools; never fabricate a change.")
         }
 
-        return lines.joined(separator: "\n")
+        return lines
     }
 }
 
@@ -461,11 +472,23 @@ struct OpenAICompatibleChatService: ChatService {
                         includeWorkspaceTools: toolsRequested && !personalApps.privateSession
                     )
                     let availableTools = ordinaryTools + personalApps.advertisedDefinitions(configuration: configuration)
+                    let modelKey = "\(configuration.provider.baseURL)|\(configuration.provider.model)"
+                    // Decided once for the whole turn, from what's already
+                    // known about this model from an earlier turn — not
+                    // re-evaluated mid-turn, since the system prompt (which
+                    // has to commit to one convention or the other) is only
+                    // built once, right below.
+                    let modelRejectsNativeTools = await ToolSupportTracker.shared.isUnsupported(modelKey)
+                    let usingTextProtocol = modelRejectsNativeTools
+                        && !availableTools.isEmpty
+                        && !personalApps.privateSession
                     // The dynamic tool section sits right after the user's own system
                     // prompt and before the long llmtui reference, so it survives
                     // truncation on small context windows.
                     let systemPrompt = configuration.systemPrompt
-                        + LLMTUIDocumentationContext.toolInstructions(for: availableTools)
+                        + (usingTextProtocol
+                            ? TextToolCallParser.instructions(for: availableTools)
+                            : LLMTUIDocumentationContext.toolInstructions(for: availableTools))
                         + (isAgentRun ? LLMTUIDocumentationContext.nativeAgentInstructions : "")
                         + LLMTUIDocumentationContext.helpContext(for: message)
                     messages.insert(.init(role: "system", content: systemPrompt), at: 0)
@@ -491,15 +514,26 @@ struct OpenAICompatibleChatService: ChatService {
                     var totalToolCalls = 0
                     var consecutiveToolErrors = 0
                     var pendingAgentText = ""
-                    let modelKey = "\(configuration.provider.baseURL)|\(configuration.provider.model)"
+                    // The model's literal reply text in text-protocol mode,
+                    // including its <tool_call> tags — captured before
+                    // `response` is rewritten with the parsed-out call, so
+                    // the conversation history can replay what it actually
+                    // wrote rather than a stripped/synthesized version.
+                    var rawTextProtocolContent = ""
                     let onText: (String) -> Void = { chunk in
-                        if !chunk.isEmpty {
-                            if isAgentRun {
-                                pendingAgentText += chunk
-                            } else {
-                                outputText += chunk
-                                continuation.yield(.text(chunk))
-                            }
+                        guard !chunk.isEmpty else { return }
+                        if usingTextProtocol {
+                            // Buffered rather than streamed live: a chunk
+                            // could be in the middle of writing
+                            // <tool_call>…</tool_call>, and that markup must
+                            // never reach the chat transcript. The full text
+                            // is parsed once the response is complete.
+                            rawTextProtocolContent += chunk
+                        } else if isAgentRun {
+                            pendingAgentText += chunk
+                        } else {
+                            outputText += chunk
+                            continuation.yield(.text(chunk))
                         }
                     }
                     // Thinking models stream reasoning separately from the final
@@ -514,6 +548,7 @@ struct OpenAICompatibleChatService: ChatService {
                     for iteration in 0..<iterationLimit {
                         try Task.checkCancellation()
                         pendingAgentText = ""
+                        rawTextProtocolContent = ""
                         if isAgentRun {
                             guard agentBudget.beginCycle() else { break }
                             if let reason = agentBudget.stopReason(elapsed: Date().timeIntervalSince(startedAt)) {
@@ -572,7 +607,7 @@ struct OpenAICompatibleChatService: ChatService {
                             )
                         }
 
-                        let response: OpenAIChatResponse
+                        var response: OpenAIChatResponse
                         do {
                             response = try await performRequest(tools: toolsForRequest, reasoningBody: reasoningBodyForRequest)
                         } catch OpenAIRequestError.http(400, _) where !reasoningBodyForRequest.isEmpty {
@@ -598,6 +633,28 @@ struct OpenAICompatibleChatService: ChatService {
                             continuation.yield(.status("Model doesn't support tools — chatting without them."))
                             toolsForRequest = []
                             response = try await performRequest(tools: [], reasoningBody: reasoningBodyForRequest)
+                        }
+
+                        if usingTextProtocol {
+                            // Only the first call is acted on: the
+                            // instructions ask for one <tool_call> per
+                            // reply, and silently running every block a
+                            // model wrote anyway would reward ignoring that.
+                            let (parsedCalls, remainingText) = TextToolCallParser.extract(from: rawTextProtocolContent)
+                            if let first = parsedCalls.first {
+                                let synthesized = OpenAIToolCall(
+                                    id: "text_call_\(UUID().uuidString)",
+                                    type: "function",
+                                    function: .init(name: first.name, arguments: first.argumentsJSON)
+                                )
+                                response = OpenAIChatResponse(
+                                    content: remainingText.isEmpty ? nil : remainingText,
+                                    toolCalls: [synthesized],
+                                    finishReason: response.finishReason
+                                )
+                            } else {
+                                response = OpenAIChatResponse(content: rawTextProtocolContent, toolCalls: [], finishReason: response.finishReason)
+                            }
                         }
 
                         if isAgentRun {
@@ -665,6 +722,14 @@ struct OpenAICompatibleChatService: ChatService {
                             if isAgentRun, !pendingAgentText.isEmpty {
                                 outputText += pendingAgentText
                                 continuation.yield(.text(pendingAgentText))
+                            } else if usingTextProtocol, !isAgentRun, let content = response.content, !content.isEmpty {
+                                // Ordinary (non-agent) text-protocol replies
+                                // were buffered rather than streamed live —
+                                // now that parsing found no tool call, this
+                                // is the real final answer and has to be
+                                // flushed once, in full, here.
+                                outputText += content
+                                continuation.yield(.text(content))
                             }
                             continuation.yield(.transcript(Array(messages[turnStartIndex...])))
                             let duration = Date().timeIntervalSince(startedAt)
@@ -679,16 +744,44 @@ struct OpenAICompatibleChatService: ChatService {
                             return
                         }
 
-                        messages.append(.assistant(content: response.content, toolCalls: response.toolCalls))
+                        // Text-protocol tool replies go back as a labeled
+                        // user-role message instead of role:"tool" — a model
+                        // using this fallback has no native tools wired into
+                        // its chat template, so a "tool" role it has never
+                        // seen could itself be rejected the same way the
+                        // native `tools` field already was.
+                        // A closure, not a local func: a local func gets its
+                        // own, separately-inferred actor isolation rather
+                        // than inheriting this scope's, which warned on
+                        // every call into OpenAIMessage's (default
+                        // main-actor-isolated) initializers below.
+                        let appendToolReply: (String, String, String) -> Void = { content, toolCallID, toolName in
+                            if usingTextProtocol {
+                                messages.append(.init(role: "user", content: "<tool_result name=\"\(toolName)\">\n\(content)\n</tool_result>"))
+                            } else {
+                                messages.append(.tool(content: content, toolCallID: toolCallID))
+                            }
+                        }
+
+                        if usingTextProtocol {
+                            // The model's own literal <tool_call> text (not a
+                            // synthesized structured field it never wrote)
+                            // is what its own training actually expects to
+                            // see in its prior turns.
+                            messages.append(.init(role: "assistant", content: rawTextProtocolContent))
+                        } else {
+                            messages.append(.assistant(content: response.content, toolCalls: response.toolCalls))
+                        }
                         let preparesMutationInThisResponse = response.toolCalls.contains { $0.function.name == "change_prepare" }
                         for call in response.toolCalls {
                             totalToolCalls += 1
                             let withinAgentToolBudget = !isAgentRun || agentBudget.recordToolCall()
                             if totalToolCalls > toolCallLimit || !withinAgentToolBudget || consecutiveToolErrors >= repeatedFailureLimit {
-                                messages.append(.tool(
-                                    content: "Tool execution stopped because the bounded call/error budget was exhausted.",
-                                    toolCallID: call.id
-                                ))
+                                appendToolReply(
+                                    "Tool execution stopped because the bounded call/error budget was exhausted.",
+                                    call.id,
+                                    call.function.name
+                                )
                                 continue
                             }
                             guard let definition = ToolRegistry.shared.definition(for: call.function.name) else {
@@ -696,10 +789,11 @@ struct OpenAICompatibleChatService: ChatService {
                                 // reply makes the next provider request invalid. Reply
                                 // with an error instead so the conversation can continue.
                                 let availableNames = availableTools.map(\.function.name).joined(separator: ", ")
-                                messages.append(.tool(
-                                    content: "Unknown tool '\(call.function.name)'. Available tools: \(availableNames).",
-                                    toolCallID: call.id
-                                ))
+                                appendToolReply(
+                                    "Unknown tool '\(call.function.name)'. Available tools: \(availableNames).",
+                                    call.id,
+                                    call.function.name
+                                )
                                 continue
                             }
                             let request = ToolRequest(
@@ -710,10 +804,11 @@ struct OpenAICompatibleChatService: ChatService {
                             )
 
                             if request.name == "change_apply", preparesMutationInThisResponse {
-                                messages.append(.tool(
-                                    content: "A mutation plan cannot be prepared and applied in the same model response. Review the prepared result, then request change_apply in a later round.",
-                                    toolCallID: call.id
-                                ))
+                                appendToolReply(
+                                    "A mutation plan cannot be prepared and applied in the same model response. Review the prepared result, then request change_apply in a later round.",
+                                    call.id,
+                                    call.function.name
+                                )
                                 continue
                             }
 
@@ -749,7 +844,7 @@ struct OpenAICompatibleChatService: ChatService {
                                         )
                                     }
                                 }
-                                messages.append(.tool(content: result.content, toolCallID: call.id))
+                                appendToolReply(result.content, call.id, request.name)
                                 continue
                             }
 
@@ -762,10 +857,11 @@ struct OpenAICompatibleChatService: ChatService {
                             // with its keys in a different order.
                             let cacheKey = "\(request.name)\u{1}\(Self.canonicalJSON(request.arguments))"
                             if let cached = toolCallCache[cacheKey] {
-                                messages.append(.tool(
-                                    content: "You already called this tool with the same arguments earlier in this turn; reusing that result:\n\n\(cached.content)",
-                                    toolCallID: call.id
-                                ))
+                                appendToolReply(
+                                    "You already called this tool with the same arguments earlier in this turn; reusing that result:\n\n\(cached.content)",
+                                    call.id,
+                                    call.function.name
+                                )
                                 continuation.yield(.toolActivity(ToolActivity(
                                     id: request.id,
                                     name: request.name,
@@ -900,7 +996,7 @@ struct OpenAICompatibleChatService: ChatService {
                             let resultContent = (responseWasTruncated && isLastCall && result.isError)
                                 ? result.content + "\n(This may be because the response was cut off at the model's token limit rather than a genuinely malformed call — try again with shorter arguments.)"
                                 : result.content
-                            messages.append(.tool(content: resultContent, toolCallID: call.id))
+                            appendToolReply(resultContent, call.id, call.function.name)
                         }
 
                         if isAgentRun,
@@ -916,6 +1012,7 @@ struct OpenAICompatibleChatService: ChatService {
                     continuation.yield(.transcript(Array(messages[turnStartIndex...])))
                     continuation.yield(.status("Finishing up…"))
                     pendingAgentText = ""
+                    rawTextProtocolContent = ""
                     messages.append(.init(
                         role: "user",
                         content: isAgentRun
@@ -932,6 +1029,16 @@ struct OpenAICompatibleChatService: ChatService {
                     if isAgentRun, !pendingAgentText.isEmpty {
                         outputText += pendingAgentText
                         continuation.yield(.text(pendingAgentText))
+                    } else if usingTextProtocol, !isAgentRun, !rawTextProtocolContent.isEmpty {
+                        // Even here, where the model was told not to
+                        // request more tools, strip any <tool_call> it
+                        // wrote anyway before showing this as the answer —
+                        // it won't be acted on at this point regardless.
+                        let finalText = TextToolCallParser.extract(from: rawTextProtocolContent).remainingText
+                        if !finalText.isEmpty {
+                            outputText += finalText
+                            continuation.yield(.text(finalText))
+                        }
                     }
                     let duration = Date().timeIntervalSince(startedAt)
                     let tokens = max(outputText.count / 4, 1)

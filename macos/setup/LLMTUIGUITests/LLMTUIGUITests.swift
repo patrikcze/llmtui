@@ -1279,6 +1279,72 @@ struct LLMTUIGUITests {
         #expect(loaded.isEmpty)
     }
 
+    @Test func textToolCallParserExtractsAClosedBlockAndStripsItFromRemainingText() {
+        let text = #"""
+        Let me check that for you.
+        <tool_call>{"name": "web_search", "arguments": {"query": "swift concurrency"}}</tool_call>
+        """#
+        let (calls, remaining) = TextToolCallParser.extract(from: text)
+        #expect(calls.count == 1)
+        #expect(calls.first?.name == "web_search")
+        #expect(calls.first?.argumentsJSON.contains("swift concurrency") == true)
+        #expect(!remaining.contains("<tool_call>"))
+        #expect(remaining.contains("Let me check"))
+    }
+
+    @Test func textToolCallParserToleratesAJSONFenceInsideTheBlock() {
+        let text = #"""
+        <tool_call>
+        ```json
+        {"name": "read_file", "arguments": {"path": "a.txt"}}
+        ```
+        </tool_call>
+        """#
+        let (calls, _) = TextToolCallParser.extract(from: text)
+        #expect(calls.count == 1)
+        #expect(calls.first?.name == "read_file")
+    }
+
+    @Test func textToolCallParserHandlesADanglingOpenTagFromATruncatedResponse() {
+        let text = #"""
+        I'll look that up now.
+        <tool_call>{"name": "web_search", "arguments": {"query": "trunc
+        """#
+        let (calls, remaining) = TextToolCallParser.extract(from: text)
+        // The JSON itself is incomplete, so it can't be parsed — this just
+        // confirms the dangling-tag path doesn't crash or hang, and the
+        // ordinary closed-block path remains the common case.
+        #expect(calls.isEmpty)
+        #expect(remaining.contains("I'll look that up now") || remaining.contains("<tool_call>"))
+    }
+
+    @Test func textToolCallParserReturnsNoCallsForPlainProse() {
+        let (calls, remaining) = TextToolCallParser.extract(from: "Just a normal answer, no tool needed.")
+        #expect(calls.isEmpty)
+        #expect(remaining == "Just a normal answer, no tool needed.")
+    }
+
+    @Test func textToolCallParserRejectsABlockWithNoName() {
+        let (calls, _) = TextToolCallParser.extract(from: #"<tool_call>{"arguments": {}}</tool_call>"#)
+        #expect(calls.isEmpty)
+    }
+
+    @Test func textToolCallParserAcceptsAStringArgumentsValue() {
+        let (calls, _) = TextToolCallParser.extract(from: #"<tool_call>{"name": "memory_search", "arguments": "{\"query\":\"x\"}"}</tool_call>"#)
+        #expect(calls.first?.argumentsJSON == #"{"query":"x"}"#)
+    }
+
+    @Test func textToolCallParserInstructionsListEachToolWithItsParameters() {
+        let tool = ToolRegistry.shared.definitions.first { $0.function.name == "read_file" }!
+        let instructions = TextToolCallParser.instructions(for: [tool])
+        #expect(instructions.contains("<tool_call>"))
+        #expect(instructions.contains("read_file"))
+        #expect(instructions.contains("offset"))
+        // Shared category guidance (file edits) is included, not just the
+        // calling-convention section.
+        #expect(instructions.contains("File edits:"))
+    }
+
     @Test func memoryToolsRoundTripThroughToolRegistry() async throws {
         let path = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).yaml").path
         defer { try? FileManager.default.removeItem(atPath: path) }
