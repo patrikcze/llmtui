@@ -803,7 +803,13 @@ private enum CommandToolRuntime {
         process.standardError = error
 
         let collector = CommandOutputCollector()
-        let drain: (FileHandle) -> Void = { handle in
+        // readabilityHandler's declared type is `@Sendable (FileHandle) ->
+        // Void` (it runs on an internal dispatch queue) — the closure
+        // literal itself only captures an actor reference and is already
+        // safe, but it needs this annotated locally too, or assigning the
+        // same closure value to both handlers below triggers a
+        // "may introduce data races" warning at the point of conversion.
+        let drain: @Sendable (FileHandle) -> Void = { handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty else { return }
             Task { await collector.append(chunk) }

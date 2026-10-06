@@ -154,7 +154,7 @@ actor MemoryStore {
 /// accidental "remember my API key sk-..." doesn't get written to a plain
 /// local YAML file. Not a substitute for not pasting secrets into chat in
 /// the first place — just a last line of defense for this one tool.
-enum SecretHeuristics {
+nonisolated enum SecretHeuristics {
     private static let knownPrefixes = [
         "sk-", "pk-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_",
         "AKIA", "ASIA", "xox", "AIza", "glpat-", "npm_"
@@ -180,7 +180,7 @@ enum SecretHeuristics {
 /// array fields. Not a general YAML library — just enough to read back
 /// whatever Go's yaml.v3 (or this file's own `render`) wrote for a
 /// `[]memory.Snippet`, including quoted and block-scalar text values.
-enum MemoryYAML {
+nonisolated enum MemoryYAML {
     static func render(_ snippets: [MemorySnippet]) -> String {
         guard !snippets.isEmpty else { return "[]\n" }
         var lines: [String] = []
