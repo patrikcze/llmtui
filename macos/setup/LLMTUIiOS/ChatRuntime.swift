@@ -170,33 +170,52 @@ struct MobileChatRuntime: Sendable {
             required: ["question"]
         ),
         definition(
+            name: "web_research",
+            description: "Research a question on the public web: runs up to 3 searches, reads the best few pages from different sites, and returns numbered notes with only the relevant passages, to cite as [1], [2]. Prefer this over web_search + web_fetch for facts, current events, prices, schedules, or anything that may have changed.",
+            properties: [
+                "question": stringProperty("The question to answer, in full."),
+                "queries": stringArrayProperty("1-3 distinct search queries, for example different phrasings, the official source, or a recent-news angle. Defaults to the question."),
+                "max_sources": integerProperty("How many pages to read, 1-6. Defaults to 4.")
+            ],
+            required: ["question"]
+        ),
+        definition(
             name: "web_search",
-            description: "Search the public web for current information after user approval.",
+            description: "Search the public web and list result titles, URLs and snippets. Use it to find a specific page or site; for answering a question, use web_research.",
             properties: ["query": stringProperty("Search query.")],
             required: ["query"]
         ),
         definition(
             name: "web_fetch",
-            description: "Fetch bounded text from a public HTTP or HTTPS URL after user approval.",
-            properties: ["url": stringProperty("Public URL to fetch.")],
+            description: "Read text from one public HTTP or HTTPS URL. Give a focus to get only the passages about it instead of the start of the page.",
+            properties: [
+                "url": stringProperty("Public URL to fetch."),
+                "focus": stringProperty("Optional: what you are looking for on the page.")
+            ],
             required: ["url"]
         ),
         definition(
+            name: "memory_search",
+            description: "Search all saved memories by keywords and return matches with their ids. The system prompt shows only the newest memories; use this before asking the user or searching the web for something they may have told you before.",
+            properties: ["query": stringProperty("Keywords to look for.")],
+            required: ["query"]
+        ),
+        definition(
             name: "memory_list",
-            description: "List the saved memories with their ids. Their texts are already in the system prompt; call this only to get an id for memory_forget.",
+            description: "List every saved memory with its id. Prefer memory_search; use this to get an id for memory_forget.",
             properties: [:],
             required: []
         ),
         definition(
             name: "memory_remember",
-            description: "Save one short, durable fact or preference about the user for future chats, for example \"Prefers metric units\". Only call this when the user explicitly asks you to remember something. Never save secrets, passwords, API keys, or one-off task details. The user must approve it.",
+            description: "Save one short, durable fact or preference about the user for future chats, for example \"Prefers metric units\" or \"Lives in Prague\". Call it when the user asks you to remember something, and on your own when they share something that will matter in later chats. Never save secrets, passwords, API keys, health or financial details, or one-off task details. The user may be asked to approve it.",
             properties: ["text": stringProperty("One short fact, written in the third person.")],
             required: ["text"]
         ),
         definition(
             name: "memory_forget",
-            description: "Delete one saved memory when the user asks you to forget it. Use the id from memory_list. The user must approve it.",
-            properties: ["id": stringProperty("The memory id from memory_list.")],
+            description: "Delete one saved memory when the user asks you to forget it, or when it is clearly outdated. Use the id from memory_search or memory_list. The user may be asked to approve it.",
+            properties: ["id": stringProperty("The memory id from memory_search or memory_list.")],
             required: ["id"]
         ),
         definition(
@@ -239,5 +258,13 @@ struct MobileChatRuntime: Sendable {
 
     private static func stringProperty(_ description: String) -> [String: Any] {
         ["type": "string", "description": description]
+    }
+
+    private static func stringArrayProperty(_ description: String) -> [String: Any] {
+        ["type": "array", "items": ["type": "string"], "description": description]
+    }
+
+    private static func integerProperty(_ description: String) -> [String: Any] {
+        ["type": "integer", "description": description]
     }
 }

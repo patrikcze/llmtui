@@ -66,6 +66,31 @@ actor MobileMemoryStore {
         return "Memory removed."
     }
 
+    /// Memories matching the query's key words, best first, as "id: text"
+    /// lines.
+    func search(_ query: String, limit: Int = 8) -> String {
+        let matches = Self.rank(load(), query: query, limit: limit)
+        guard !matches.isEmpty else { return "No saved memory matches \"\(query)\"." }
+        return matches.map { "\($0.id.uuidString): \($0.text)" }.joined(separator: "\n")
+    }
+
+    /// Ranks entries by how many of the query's key words they contain;
+    /// newer entries win ties. Entries with no matching word are left out.
+    static func rank(_ entries: [Entry], query: String, limit: Int) -> [Entry] {
+        let terms = WebResearch.keyTerms(query)
+        guard !terms.isEmpty else { return [] }
+        var scored: [(order: Int, entry: Entry, matches: Int)] = []
+        for (order, entry) in entries.enumerated() {
+            let text = entry.text.lowercased()
+            let matches = terms.filter { text.contains($0) }.count
+            if matches > 0 { scored.append((order, entry, matches)) }
+        }
+        scored.sort { lhs, rhs in
+            lhs.matches == rhs.matches ? lhs.order > rhs.order : lhs.matches > rhs.matches
+        }
+        return scored.prefix(limit).map(\.entry)
+    }
+
     func delete(_ id: UUID) {
         save(load().filter { $0.id != id })
     }
@@ -95,7 +120,12 @@ actor MobileMemoryStore {
     /// Instructions for the memory tools, added to the system prompt whenever
     /// memory is on and tools are offered.
     static let toolInstructions = """
-    Memory: use the saved memories above when they are relevant, without mentioning them otherwise. Call memory_remember only when the user explicitly asks you to remember something, with one short, durable fact written in the third person (for example "Prefers metric units"). Never save secrets, passwords, API keys, or one-off task details. When the user asks you to forget something, call memory_list for its id, then memory_forget.
+    Memory: the saved memories are what you already know about the user from earlier chats.
+    - Look there first. Before asking the user something or searching the web, check the memories above, and call memory_search when the answer may be in a memory that is not shown.
+    - Save on your own initiative. When the user shares something that will matter in future chats (their name, where they live, languages or units they prefer, their work, ongoing projects, people, pets, or things they mention repeatedly), call the memory_remember tool with one short fact in the third person, one call per fact. Also save when the user asks you to remember something.
+    - Saving only happens through a memory_remember tool call. Writing that you saved something does not save it: only say a fact was saved after memory_remember returned "Saved memory".
+    - Never save secrets, passwords, API keys, health or financial details, or one-off task details, and do not save a fact that is already in memory.
+    - When the user asks you to forget something, or a memory is clearly outdated, find its id with memory_search, then call memory_forget.
     """
 
     static func looksLikeSecret(_ text: String) -> Bool {
@@ -223,6 +253,16 @@ enum SafeWebFetcher {
     private static let browserUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
     static func search(_ query: String) async throws -> String {
+        let results = try await searchResults(query)
+        guard !results.isEmpty else { return "No DuckDuckGo results found." }
+        return results.prefix(8).enumerated().map { index, result in
+            "\(index + 1). \(result.title)\n   \(result.url)\n   \(result.snippet)"
+        }.joined(separator: "\n\n")
+            + "\n\nNext step: call web_fetch on the 1-3 most relevant URLs before answering, or use web_research for a question that needs several sources."
+    }
+
+    /// One DuckDuckGo search, parsed into results.
+    static func searchResults(_ query: String) async throws -> [WebSearchResult] {
         let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty,
               var components = URLComponents(string: "https://html.duckduckgo.com/html/") else {
@@ -231,37 +271,53 @@ enum SafeWebFetcher {
         components.queryItems = [URLQueryItem(name: "q", value: cleaned)]
         guard let url = components.url else { throw MobileChatError.invalidResponse }
         let data = try await fetchData(url, browserHeaders: true)
-        let html = String(decoding: data, as: UTF8.self)
-        let titleRegex = try NSRegularExpression(
+        return parseSearchResults(html: String(decoding: data, as: UTF8.self))
+    }
+
+    /// Parses DuckDuckGo's HTML results page. Result links point at a
+    /// DuckDuckGo redirect, so the real target is taken from its `uddg`
+    /// parameter.
+    static func parseSearchResults(html: String) -> [WebSearchResult] {
+        guard let titleRegex = try? NSRegularExpression(
             pattern: #"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#,
             options: [.caseInsensitive, .dotMatchesLineSeparators]
-        )
-        let snippetRegex = try NSRegularExpression(
+        ), let snippetRegex = try? NSRegularExpression(
             pattern: #"<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>"#,
             options: [.caseInsensitive, .dotMatchesLineSeparators]
-        )
+        ) else { return [] }
         let range = NSRange(html.startIndex..., in: html)
         let titles = titleRegex.matches(in: html, range: range)
         let snippets = snippetRegex.matches(in: html, range: range)
-        var results: [String] = []
-        for (index, match) in titles.prefix(8).enumerated() {
+        var results: [WebSearchResult] = []
+        for (index, match) in titles.prefix(15).enumerated() {
             guard let titleRange = Range(match.range(at: 2), in: html),
                   let urlRange = Range(match.range(at: 1), in: html) else { continue }
-            let title = plainText(String(html[titleRange]))
-            let resultURL = resolvedSearchURL(decodeHTMLEntities(String(html[urlRange])))
             var snippet = ""
-            if index < snippets.count,
-               let snippetRange = Range(snippets[index].range(at: 1), in: html) {
+            if index < snippets.count, let snippetRange = Range(snippets[index].range(at: 1), in: html) {
                 snippet = plainText(String(html[snippetRange]))
             }
-            results.append("\(index + 1). \(title)\n   \(resultURL)\n   \(snippet)")
+            results.append(WebSearchResult(
+                title: plainText(String(html[titleRange])),
+                url: resolvedSearchURL(decodeHTMLEntities(String(html[urlRange]))),
+                snippet: snippet
+            ))
         }
-        guard !results.isEmpty else { return "No DuckDuckGo results found." }
-        return results.joined(separator: "\n\n")
-            + "\n\nNext step: call web_fetch on the 1-3 most relevant URLs before answering."
+        return results
     }
 
-    static func fetch(_ rawURL: String) async throws -> String {
+    /// Fetches a public page as plain text. With `focus`, returns only the
+    /// passages relevant to it instead of the start of the page.
+    static func fetch(_ rawURL: String, focus: String? = nil) async throws -> String {
+        let text = try await fetchText(rawURL)
+        if let focus, !focus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let passages = WebResearch.relevantPassages(in: text, terms: WebResearch.keyTerms(focus), limit: 8, budget: 6_000)
+            if !passages.isEmpty { return passages.joined(separator: "\n\n") }
+        }
+        return String(text.prefix(40_000))
+    }
+
+    /// The readable text of a public HTTP or HTTPS page.
+    static func fetchText(_ rawURL: String) async throws -> String {
         guard let url = URL(string: rawURL),
               let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
@@ -269,8 +325,7 @@ enum SafeWebFetcher {
               isPublicHost(host) else { throw MobileChatError.unsafeURL }
 
         let data = try await fetchData(url, browserHeaders: true)
-        let rawText = String(decoding: data, as: UTF8.self)
-        return String(plainText(rawText).prefix(40_000))
+        return plainText(String(decoding: data, as: UTF8.self))
     }
 
     static func isPublicHost(_ host: String) -> Bool {

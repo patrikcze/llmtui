@@ -399,6 +399,8 @@ final class MobileAppModel {
             systemInstructions += """
 
             Tools: work toward the user's goal with the available tools, inspect each result before continuing, ask with ask_user when an important choice is missing, and stop once the task is done. Never claim a tool ran unless its result is present.
+
+            Research: for facts you are not sure of, current events, prices, schedules, opening hours, or anything that may have changed, call web_research instead of answering from what you remember of training. Give it the full question and 2-3 distinct queries (different phrasings, the official source, a recent-news angle). Answer from its notes and cite sources as [1], [2]. If the notes are thin or disagree, research again with sharper queries (at most twice more), then say clearly what is still uncertain. Use local_context for the current date and time. Use web_search or web_fetch only for one specific page or site.
             """
         }
         let memoryEnabled = MobileMemoryStore.isEnabled
@@ -530,9 +532,30 @@ final class MobileAppModel {
             }
             pendingQuestion = String(question.prefix(1_000))
             return await withCheckedContinuation { questionContinuation = $0 }
+        case "memory_search":
+            guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
+            guard let query = arguments["query"] as? String else {
+                throw ValidationError("memory_search requires a query.")
+            }
+            return await MobileMemoryStore.shared.search(query)
         case "memory_list":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             return await MobileMemoryStore.shared.list()
+        case "web_research":
+            guard let question = arguments["question"] as? String else {
+                throw ValidationError("web_research requires a question.")
+            }
+            let queries = WebResearch.normalizedQueries(
+                (arguments["queries"] as? [Any])?.compactMap { $0 as? String } ?? [],
+                fallback: question
+            )
+            let maxSources = (arguments["max_sources"] as? NSNumber)?.intValue ?? WebResearch.defaultSources
+            let summary = "Search " + queries.map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")
+                + " and read up to \(min(max(maxSources, 1), WebResearch.maxSources)) pages."
+            guard await approveIfNeeded(call.name, summary: summary, activityID: activityID, assistantID: assistantID) else {
+                return Self.rejectedOutput
+            }
+            return try await WebResearch.run(question: question, queries: queries, maxSources: maxSources)
         case "web_search":
             guard let query = arguments["query"] as? String else {
                 throw ValidationError("web_search requires a query.")
@@ -548,7 +571,7 @@ final class MobileAppModel {
             guard await approveIfNeeded(call.name, summary: url, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
             }
-            return try await SafeWebFetcher.fetch(url)
+            return try await SafeWebFetcher.fetch(url, focus: arguments["focus"] as? String)
         case "memory_remember":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             guard let text = arguments["text"] as? String else {
@@ -577,12 +600,14 @@ final class MobileAppModel {
     private static let memoryOffOutput = "Memory is turned off in Settings."
 
     private func requiresApproval(_ name: String) -> Bool {
-        ["web_search", "web_fetch", "memory_remember", "memory_forget"].contains(name)
+        ["web_research", "web_search", "web_fetch", "memory_remember", "memory_forget"].contains(name)
             && MobileToolApprovalMode.current.requiresApproval(name)
     }
 
     private func toolDetail(name: String, arguments: [String: Any]) -> String {
         switch name {
+        case "web_research": arguments["question"] as? String ?? "Research"
+        case "memory_search": arguments["query"] as? String ?? "Memory"
         case "web_search": arguments["query"] as? String ?? "Search"
         case "web_fetch": arguments["url"] as? String ?? "URL"
         case "memory_remember": arguments["text"] as? String ?? "Memory"
