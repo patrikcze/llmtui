@@ -19,6 +19,7 @@ struct ContentView: View {
                 SettingsScreen(appearanceMode: $appearanceMode)
             }
         }
+        .tint(Theme.accent)
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -87,10 +88,12 @@ private struct SettingsScreen: View {
                 }
 
                 Section {
-                    Picker("Approval", selection: $approvalMode) {
+                    Picker(selection: $approvalMode) {
                         ForEach(MobileToolApprovalMode.allCases) { mode in
                             Text(mode.title).tag(mode.rawValue)
                         }
+                    } label: {
+                        Label { Text("Approval") } icon: { IconTile(systemName: "checkmark.shield.fill", tint: Theme.warning, size: 30) }
                     }
                 } header: {
                     Text("Tools")
@@ -99,11 +102,17 @@ private struct SettingsScreen: View {
                 }
 
                 Section {
-                    Toggle("Use Memory", isOn: $memoryEnabled)
+                    Toggle(isOn: $memoryEnabled) {
+                        Label { Text("Use Memory") } icon: { IconTile(systemName: "brain.head.profile", tint: Theme.accent, size: 30) }
+                    }
                     NavigationLink {
                         MemoryListScreen()
                     } label: {
-                        LabeledContent("Saved Memories", value: "\(memoryCount)")
+                        LabeledContent {
+                            Text("\(memoryCount)")
+                        } label: {
+                            Label { Text("Saved Memories") } icon: { IconTile(systemName: "tray.full.fill", tint: Theme.success, size: 30) }
+                        }
                     }
                 } header: {
                     Text("Memory")
@@ -111,6 +120,7 @@ private struct SettingsScreen: View {
                     Text("When on, every chat sees your saved memories, and the assistant can offer to save or forget one. When off, nothing is shared or saved. Memories stay on this device.")
                 }
             }
+            .themedBackground()
             .navigationTitle("Settings")
             .task { memoryCount = await MobileMemoryStore.shared.entries().count }
             .onAppear {
@@ -163,6 +173,7 @@ private struct MemoryListScreen: View {
                 }
             }
         }
+        .themedBackground()
         .navigationTitle("Saved Memories")
         .toolbar {
             Button("Delete All", role: .destructive) { confirmDeleteAll = true }
@@ -199,7 +210,8 @@ private struct ChatListScreen: View {
                     } description: {
                         Text("Add a provider before starting a conversation.")
                     } actions: {
-                        Button("Create Provider") { _ = model.addProfile() }
+                        Button("Create Provider", systemImage: "plus") { _ = model.addProfile() }
+                            .buttonStyle(AccentButtonStyle())
                     }
                 } else if sortedConversations.isEmpty {
                     ContentUnavailableView {
@@ -207,25 +219,29 @@ private struct ChatListScreen: View {
                     } description: {
                         Text("Chats and tool activity stay on this device.")
                     } actions: {
-                        Button("New Chat", action: startNewChat)
-                            .buttonStyle(.borderedProminent)
+                        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+                            .buttonStyle(AccentButtonStyle())
                     }
                 } else {
                     List {
                         ForEach(sortedConversations) { conversation in
-                            NavigationLink(value: conversation.id) {
-                                ConversationRow(
-                                    conversation: conversation,
-                                    providerName: model.profile(for: conversation)?.name,
-                                    isGenerating: model.generatingConversationID == conversation.id
-                                )
-                            }
+                            ConversationRow(
+                                conversation: conversation,
+                                provider: model.profile(for: conversation),
+                                isGenerating: model.generatingConversationID == conversation.id
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { path = [conversation.id] }
+                            .accessibilityAddTraits(.isButton)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                             .swipeActions {
                                 Button("Delete", systemImage: "trash", role: .destructive) {
                                     deleting = conversation.id
                                 }
                                 Button("Rename", systemImage: "pencil") { renaming = conversation.id }
-                                    .tint(.orange)
+                                    .tint(Theme.warning)
                             }
                             .contextMenu {
                                 Button("Rename", systemImage: "pencil") { renaming = conversation.id }
@@ -235,8 +251,10 @@ private struct ChatListScreen: View {
                             }
                         }
                     }
+                    .listStyle(.plain)
                 }
             }
+            .themedBackground()
             .navigationTitle("Chats")
             .chatsSubtitle()
             .toolbar {
@@ -279,39 +297,49 @@ private struct ChatListScreen: View {
 
 private struct ConversationRow: View {
     let conversation: MobileConversation
-    let providerName: String?
+    let provider: MobileProviderProfile?
     let isGenerating: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(conversation.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer()
-                if isGenerating {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Text(conversation.updatedAt, format: .relative(presentation: .named))
-                        .font(.caption)
+        HStack(alignment: .top, spacing: 12) {
+            IconTile(
+                systemName: provider.map { Theme.systemImage(for: $0.type) } ?? "bubble.left",
+                tint: provider.map { Theme.tint(for: $0.type) } ?? Theme.accent,
+                size: 40
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(conversation.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    if isGenerating {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Theme.accent)
+                    } else {
+                        Text(conversation.updatedAt, format: .relative(presentation: .named))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !conversation.preview.isEmpty {
+                    Text(conversation.preview)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let provider {
+                    Text(provider.name)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.tint(for: provider.type))
+                        .lineLimit(1)
                 }
             }
-            if !conversation.preview.isEmpty {
-                Text(conversation.preview)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            if let providerName {
-                Label(providerName, systemImage: "server.rack")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
         }
-        .padding(.vertical, 2)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .themedCard()
     }
 }
 
@@ -327,7 +355,6 @@ private struct ChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             ChatTranscript(model: model, conversationID: conversationID) { composerFocused = false }
-            Divider()
             if let question = model.pendingQuestion, model.generatingConversationID == conversationID {
                 UserQuestionView(question: question, model: model)
             }
@@ -346,6 +373,7 @@ private struct ChatScreen: View {
             }
             ChatComposer(model: model, isFocused: $composerFocused)
         }
+        .background(Theme.background.ignoresSafeArea())
         // Citation links (llmtui-cite://document/chunk) open the cited
         // passage here; other links open normally.
         .environment(\.openURL, OpenURLAction { url in
@@ -634,13 +662,14 @@ private struct MessageBubble: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(message.role == .user ? "You" : "Assistant")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(message.role == .user ? AnyShapeStyle(.white.opacity(0.8)) : AnyShapeStyle(Theme.accent))
                 if message.role == .assistant {
                     MobileRichMessageView(
                         source: message.text.isEmpty && message.isStreaming ? "Thinking…" : displayText
                     )
                 } else {
                     Text(message.text)
+                        .foregroundStyle(.white)
                         .textSelection(.enabled)
                 }
                 if !message.attachments.isEmpty {
@@ -669,14 +698,30 @@ private struct MessageBubble: View {
                     .padding(.top, 4)
                 }
             }
-            .padding(12)
-            .background(
-                message.role == .user ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.1),
-                in: RoundedRectangle(cornerRadius: 16)
-            )
-            if message.role != .user { Spacer(minLength: 40) }
+            .padding(14)
+            .background {
+                if message.role == .user {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: Theme.cardRadius, bottomLeadingRadius: Theme.cardRadius,
+                        bottomTrailingRadius: 6, topTrailingRadius: Theme.cardRadius, style: .continuous
+                    )
+                    .fill(Theme.accentGradient)
+                    .shadow(color: Theme.accent.opacity(0.25), radius: 10, x: 0, y: 4)
+                }
+            }
+            .modifier(AssistantCard(isAssistant: message.role != .user))
+            if message.role != .user { Spacer(minLength: 24) }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The assistant's reply sits on a card; your messages use the accent fill.
+private struct AssistantCard: ViewModifier {
+    let isAssistant: Bool
+
+    func body(content: Content) -> some View {
+        if isAssistant { content.themedCard() } else { content }
     }
 }
 
@@ -699,15 +744,15 @@ private struct ToolActivityView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .foregroundStyle(statusColor)
+            HStack(spacing: 10) {
+                IconTile(systemName: icon, tint: statusColor, size: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(displayName)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                     Text(statusText)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(statusColor)
                 }
                 Spacer()
                 if activity.status == .running || activity.status == .waitingForApproval {
@@ -717,11 +762,9 @@ private struct ToolActivityView: View {
             }
         }
         .padding(10)
-        .background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.separator.opacity(0.5), lineWidth: 0.5)
-        }
+        .background(Theme.raisedSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // Neutral title and chevron: the accent is kept for actions and links.
+        .tint(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(displayName), \(statusText)")
     }
@@ -755,9 +798,10 @@ private struct ToolActivityView: View {
 
     private var statusColor: Color {
         switch activity.status {
-        case .waitingForApproval, .running: .accentColor
-        case .completed: .green
-        case .failed: .red
+        case .waitingForApproval: Theme.warning
+        case .running: Theme.accent
+        case .completed: Theme.success
+        case .failed: Theme.danger
         case .rejected: .secondary
         }
     }
@@ -841,26 +885,21 @@ private struct ChatComposer: View {
                 TextField("Message", text: Bindable(model).draft, axis: .vertical)
                     .lineLimit(2...8)
                     .textFieldStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                        RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                            .strokeBorder(isFocused.wrappedValue ? Theme.accent.opacity(0.6) : Theme.hairline, lineWidth: 1)
                     }
                     .submitLabel(.return)
                     .focused(isFocused)
                 // While a reply is generating, Send queues the message instead.
-                Button(
-                    model.isGenerating ? "Queue message" : "Send",
-                    systemImage: model.isGenerating ? "text.badge.plus" : "arrow.up.circle.fill"
+                SendButton(
+                    isQueueing: model.isGenerating,
+                    isEnabled: !(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && model.draftAttachments.isEmpty)
                 ) { model.send() }
-                    .labelStyle(.iconOnly)
-                    .font(.title)
-                    .disabled(
-                        model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            && model.draftAttachments.isEmpty
-                    )
             }
         }
         .padding()
@@ -899,6 +938,34 @@ private struct ChatComposer: View {
                 selectedPhotos = []
             }
         }
+    }
+}
+
+/// A round Send button filled with the accent gradient; grey while empty.
+private struct SendButton: View {
+    let isQueueing: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isQueueing ? "text.badge.plus" : "arrow.up")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(isEnabled ? Color.white : Color.secondary)
+                .frame(width: 44, height: 44)
+                .background {
+                    if isEnabled {
+                        Circle().fill(Theme.accentGradient)
+                            .shadow(color: Theme.accent.opacity(0.35), radius: 8, x: 0, y: 3)
+                    } else {
+                        Circle().fill(Theme.raisedSurface)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(isQueueing ? "Queue message" : "Send")
+        .animation(.snappy(duration: 0.2), value: isEnabled)
     }
 }
 
@@ -941,7 +1008,7 @@ private struct QueuedMessagesPanel: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
-                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
             }
@@ -962,9 +1029,9 @@ private struct ComposerIcon: View {
     var body: some View {
         Image(systemName: systemName)
             .font(.title3)
-            .foregroundStyle(active ? Color.accentColor : Color.secondary)
-            .frame(width: 32, height: 32)
-            .background(active ? Color.accentColor.opacity(0.14) : Color.clear, in: Circle())
+            .foregroundStyle(active ? Theme.accent : Color.secondary)
+            .frame(width: 36, height: 36)
+            .background(active ? Theme.accent.opacity(0.16) : Theme.raisedSurface.opacity(0.6), in: Circle())
             .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -1029,12 +1096,12 @@ private struct UserQuestionView: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(model.submitQuestion)
                 Button("Answer") { model.submitQuestion() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(AccentButtonStyle())
                     .disabled(model.questionAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding()
-        .background(Color.accentColor.opacity(0.08))
+        .background(Theme.accent.opacity(0.10))
     }
 }
 
@@ -1045,8 +1112,11 @@ private struct ToolApprovalView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Label("Tool approval required", systemImage: "checkmark.shield")
-                    .font(.title2.weight(.semibold))
+                HStack(spacing: 12) {
+                    IconTile(systemName: "checkmark.shield.fill", tint: Theme.warning, size: 40)
+                    Text("Approval required")
+                        .font(.title2.weight(.semibold))
+                }
                 LabeledContent("Tool", value: approval.name)
                 Text(approval.summary)
                     .font(.callout)
@@ -1057,7 +1127,7 @@ private struct ToolApprovalView: View {
                         .buttonStyle(.bordered)
                     Spacer()
                     Button(approval.allowTitle) { model.resolveApproval(true) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(AccentButtonStyle())
                 }
             }
             .padding()
@@ -1088,11 +1158,16 @@ private struct ProviderListScreen: View {
                         ProviderRow(profile: profile, isActive: profile.id == model.activeProfileID)
                     }
                     .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     .swipeActions {
                         Button("Delete", role: .destructive) { model.deleteProfile(profile) }
                     }
                 }
             }
+            .listStyle(.plain)
+            .themedBackground()
             .navigationTitle("Providers")
             .toolbar {
                 Button("Add Provider", systemImage: "plus") {
@@ -1111,24 +1186,31 @@ private struct ProviderRow: View {
     let isActive: Bool
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 12) {
+            IconTile(systemName: Theme.systemImage(for: profile.type), tint: Theme.tint(for: profile.type), size: 44)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(profile.name).font(.headline)
                 Text(profile.model.isEmpty ? "No model selected" : profile.model)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text(profile.baseURL)
+                    .lineLimit(1)
+                Text("\(profile.type.title) \u{00B7} \(profile.baseURL)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
             Spacer()
             if isActive {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.tint)
-                    .accessibilityLabel("Active")
+                Text("Active")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Theme.accentGradient, in: Capsule())
             }
         }
+        .padding(14)
+        .themedCard()
         .contentShape(Rectangle())
     }
 }
@@ -1198,6 +1280,7 @@ private struct ProviderEditor: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .themedBackground()
             .navigationTitle("Provider")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
