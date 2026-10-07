@@ -141,6 +141,59 @@ enum MobileReasoning: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// When tools ask before running. Stored in Settings; `.always` is the default.
+enum MobileToolApprovalMode: String, CaseIterable, Identifiable, Sendable {
+    /// Web and memory tools ask every time.
+    case always
+    /// Web tools run without asking; saving or forgetting a memory still asks.
+    case memoryChanges
+    /// Nothing asks.
+    case never
+
+    static let storageKey = "iosToolApprovalMode"
+
+    static var current: MobileToolApprovalMode {
+        UserDefaults.standard.string(forKey: storageKey).flatMap(MobileToolApprovalMode.init(rawValue:)) ?? .always
+    }
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .always: "Ask every time"
+        case .memoryChanges: "Ask for memory changes"
+        case .never: "Never ask"
+        }
+    }
+
+    /// Whether running `tool` needs the user's approval in this mode. Tools
+    /// that are always safe (`local_context`, `memory_list`, `ask_user`) never
+    /// reach this check.
+    func requiresApproval(_ tool: String) -> Bool {
+        switch self {
+        case .always: true
+        case .memoryChanges: tool.hasPrefix("memory_")
+        case .never: false
+        }
+    }
+}
+
+/// The chat choices one reply runs with, captured when it is sent or queued.
+struct MobileTurnOptions: Equatable, Sendable {
+    var toolsEnabled: Bool
+    var agentEnabled: Bool
+    var reasoning: MobileReasoning
+}
+
+/// A message typed while a reply is still generating. Sent automatically, in
+/// order, once that reply finishes.
+struct MobileQueuedMessage: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let attachments: [MobileAttachment]
+    let options: MobileTurnOptions
+}
+
 struct ToolCall: Sendable, Equatable {
     let id: String
     let name: String

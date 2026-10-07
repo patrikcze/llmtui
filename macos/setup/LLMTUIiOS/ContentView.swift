@@ -64,6 +64,9 @@ private enum MobileAppearanceMode: String, CaseIterable, Identifiable {
 
 private struct SettingsScreen: View {
     @Binding var appearanceMode: String
+    @AppStorage(MobileToolApprovalMode.storageKey) private var approvalMode = MobileToolApprovalMode.always.rawValue
+    @AppStorage(MobileMemoryStore.enabledKey) private var memoryEnabled = true
+    @State private var memoryCount = 0
 
     var body: some View {
         NavigationStack {
@@ -81,14 +84,108 @@ private struct SettingsScreen: View {
                 } footer: {
                     Text("System follows the appearance selected in iOS Settings.")
                 }
+
+                Section {
+                    Picker("Approval", selection: $approvalMode) {
+                        ForEach(MobileToolApprovalMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                } header: {
+                    Text("Tools")
+                } footer: {
+                    Text(approvalFooter)
+                }
+
+                Section {
+                    Toggle("Use Memory", isOn: $memoryEnabled)
+                    NavigationLink {
+                        MemoryListScreen()
+                    } label: {
+                        LabeledContent("Saved Memories", value: "\(memoryCount)")
+                    }
+                } header: {
+                    Text("Memory")
+                } footer: {
+                    Text("When on, every chat sees your saved memories, and the assistant can offer to save or forget one. When off, nothing is shared or saved. Memories stay on this device.")
+                }
             }
             .navigationTitle("Settings")
+            .task { memoryCount = await MobileMemoryStore.shared.entries().count }
+            .onAppear {
+                Task { memoryCount = await MobileMemoryStore.shared.entries().count }
+            }
         }
+    }
+
+    private var approvalFooter: String {
+        switch MobileToolApprovalMode(rawValue: approvalMode) ?? .always {
+        case .always:
+            "Web search, web fetch, and memory changes ask before running."
+        case .memoryChanges:
+            "Web search and fetch run without asking. Saving or forgetting a memory still asks."
+        case .never:
+            "Nothing asks. A web page the model reads could steer it into fetching a URL that carries your chat or memories elsewhere, so use this only with sources you trust."
+        }
+    }
+}
+
+private struct MemoryListScreen: View {
+    @State private var entries: [MobileMemoryStore.Entry] = []
+    @State private var confirmDeleteAll = false
+
+    var body: some View {
+        List {
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "No Memories",
+                    systemImage: "brain",
+                    description: Text("Ask the assistant to remember something, for example \u{201C}Remember that I prefer metric units.\u{201D}")
+                )
+            }
+            ForEach(entries.reversed()) { entry in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.text)
+                    if let createdAt = entry.createdAt {
+                        Text(createdAt, format: .dateTime.day().month().year())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .swipeActions {
+                    Button("Delete", role: .destructive) {
+                        Task {
+                            await MobileMemoryStore.shared.delete(entry.id)
+                            await reload()
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Saved Memories")
+        .toolbar {
+            Button("Delete All", role: .destructive) { confirmDeleteAll = true }
+                .disabled(entries.isEmpty)
+        }
+        .confirmationDialog("Delete all saved memories?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("Delete All", role: .destructive) {
+                Task {
+                    await MobileMemoryStore.shared.deleteAll()
+                    await reload()
+                }
+            }
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        entries = await MobileMemoryStore.shared.entries()
     }
 }
 
 private struct ChatScreen: View {
     let model: MobileAppModel
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -102,12 +199,15 @@ private struct ChatScreen: View {
                         Button("Create Provider") { _ = model.addProfile() }
                     }
                 } else {
-                    ChatTranscript(model: model)
+                    ChatTranscript(model: model) { composerFocused = false }
                     Divider()
                     if let question = model.pendingQuestion {
                         UserQuestionView(question: question, model: model)
                     }
-                    ChatComposer(model: model)
+                    if !model.queuedMessages.isEmpty {
+                        QueuedMessagesPanel(model: model)
+                    }
+                    ChatComposer(model: model, isFocused: $composerFocused)
                 }
             }
             .navigationTitle("Chat - Development")
@@ -231,6 +331,9 @@ private struct ProviderMenu: View {
 
 private struct ChatTranscript: View {
     let model: MobileAppModel
+    /// Hides the keyboard. Tapping anywhere in the conversation calls it, in
+    /// addition to swiping the conversation down.
+    let dismissKeyboard: () -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -252,6 +355,9 @@ private struct ChatTranscript: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
+            // Simultaneous, so links, text selection and tool disclosure
+            // groups in the transcript keep working.
+            .simultaneousGesture(TapGesture().onEnded(dismissKeyboard))
             .onChange(of: model.messages.last?.text) {
                 guard let id = model.messages.last?.id else { return }
                 proxy.scrollTo(id, anchor: .bottom)
@@ -397,8 +503,8 @@ private struct ToolActivityView: View {
 
 private struct ChatComposer: View {
     let model: MobileAppModel
+    var isFocused: FocusState<Bool>.Binding
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @FocusState private var isDraftFocused: Bool
 
     var body: some View {
         let hasAttachments = !model.draftAttachments.isEmpty
@@ -428,7 +534,7 @@ private struct ChatComposer: View {
                         accessibilityLabel: "Attach images"
                     )
                 }
-                .disabled(model.isGenerating || model.draftAttachments.count >= 4)
+                .disabled(model.draftAttachments.count >= 4)
                 Button {
                     model.toolsEnabled.toggle()
                 } label: {
@@ -455,8 +561,23 @@ private struct ChatComposer: View {
                 Text(model.agentEnabled ? "Agent" : (model.toolsEnabled ? "Tools" : "Chat"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if isFocused.wrappedValue {
+                    // Lives in this row, above the message field, so it never
+                    // covers the text or the Send button.
+                    Button {
+                        isFocused.wrappedValue = false
+                    } label: {
+                        ComposerIcon(
+                            systemName: "keyboard.chevron.compact.down",
+                            active: false,
+                            accessibilityLabel: "Hide keyboard"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                }
             }
-            .disabled(model.isGenerating)
+            .animation(.default, value: isFocused.wrappedValue)
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Message", text: Bindable(model).draft, axis: .vertical)
                     .lineLimit(2...8)
@@ -469,30 +590,22 @@ private struct ChatComposer: View {
                             .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
                     }
                     .submitLabel(.return)
-                    .focused($isDraftFocused)
-                Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
+                    .focused(isFocused)
+                // While a reply is generating, Send queues the message instead.
+                Button(
+                    model.isGenerating ? "Queue message" : "Send",
+                    systemImage: model.isGenerating ? "text.badge.plus" : "arrow.up.circle.fill"
+                ) { model.send() }
                     .labelStyle(.iconOnly)
                     .font(.title)
                     .disabled(
                         model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             && model.draftAttachments.isEmpty
-                            || model.isGenerating
                     )
             }
         }
         .padding()
         .background(.bar)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Button {
-                    isDraftFocused = false
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                }
-                .accessibilityLabel("Dismiss keyboard")
-                Spacer()
-            }
-        }
         .onChange(of: selectedPhotos) { _, items in
             Task {
                 for item in items {
@@ -503,6 +616,58 @@ private struct ChatComposer: View {
                 selectedPhotos = []
             }
         }
+    }
+}
+
+private struct QueuedMessagesPanel: View {
+    let model: MobileAppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Up next \u{00B7} \(model.queuedMessages.count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(model.queuedMessages) { queued in
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button {
+                                model.editQueuedMessage(queued)
+                            } label: {
+                                Text(queued.text.isEmpty ? "Image" : queued.text)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Moves this message back into the composer to edit it")
+                            if !queued.attachments.isEmpty {
+                                Label("\(queued.attachments.count)", systemImage: "photo")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Button("Remove queued message", systemImage: "xmark.circle.fill") {
+                                model.removeQueuedMessage(queued)
+                            }
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+            .frame(maxHeight: 120)
+            .fixedSize(horizontal: false, vertical: model.queuedMessages.count < 3)
+        }
+        .padding(.horizontal)
+        .padding(.top, 10)
+        .background(.bar)
     }
 }
 

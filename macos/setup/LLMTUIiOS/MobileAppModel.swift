@@ -19,9 +19,11 @@ final class MobileAppModel {
     var pendingToolApproval: PendingToolApproval?
     var pendingQuestion: String?
     var questionAnswer = ""
+    var queuedMessages: [MobileQueuedMessage] = []
     var errorMessage: String?
     var hasRuntimeProblem = false
 
+    private static let maxQueuedMessages = 10
     private let providerStore = MobileProviderStore()
     private let credentialStore = KeychainCredentialStore()
     private let runtime = MobileChatRuntime()
@@ -139,9 +141,47 @@ final class MobileAppModel {
         draftAttachments.removeAll { $0.id == attachment.id }
     }
 
+    /// Sends the draft, or queues it while a reply is still generating. A
+    /// queued message keeps the tools, agent and reasoning choices it was
+    /// written with and sends automatically, in order, once the current
+    /// reply finishes (the same behavior as the macOS app).
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !draftAttachments.isEmpty, !isGenerating else { return }
+        guard !text.isEmpty || !draftAttachments.isEmpty else { return }
+        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, agentEnabled: agentEnabled, reasoning: reasoning)
+
+        guard !isGenerating else {
+            guard queuedMessages.count < Self.maxQueuedMessages else {
+                errorMessage = "You can queue up to \(Self.maxQueuedMessages) messages."
+                return
+            }
+            queuedMessages.append(MobileQueuedMessage(text: text, attachments: draftAttachments, options: options))
+            draft = ""
+            draftAttachments = []
+            return
+        }
+
+        let attachments = draftAttachments
+        draft = ""
+        draftAttachments = []
+        dispatch(text: text, attachments: attachments, options: options)
+    }
+
+    func removeQueuedMessage(_ queued: MobileQueuedMessage) {
+        queuedMessages.removeAll { $0.id == queued.id }
+    }
+
+    /// Takes a queued message back into the composer for editing.
+    func editQueuedMessage(_ queued: MobileQueuedMessage) {
+        queuedMessages.removeAll { $0.id == queued.id }
+        draft = queued.text
+        draftAttachments = queued.attachments
+        toolsEnabled = queued.options.toolsEnabled
+        agentEnabled = queued.options.agentEnabled
+        reasoning = queued.options.reasoning
+    }
+
+    private func dispatch(text: String, attachments: [MobileAttachment], options: MobileTurnOptions) {
         guard let profile = activeProfile else {
             errorMessage = MobileChatError.noProvider.localizedDescription
             return
@@ -151,29 +191,22 @@ final class MobileAppModel {
             return
         }
 
-        let attachments = draftAttachments
-        draft = ""
-        draftAttachments = []
         messages.append(MobileChatMessage(role: .user, text: text, attachments: attachments))
         let assistantID = UUID()
         messages.append(MobileChatMessage(id: assistantID, role: .assistant, text: "", isStreaming: true))
         isGenerating = true
         hasRuntimeProblem = false
+        separateNextRound = false
 
         let history = messages.filter { $0.id != assistantID }
         generationTask = Task {
-            defer {
-                isGenerating = false
-                markStreamingFinished(id: assistantID)
-                pendingToolApproval = nil
-                pendingQuestion = nil
-            }
             do {
                 try await runToolLoop(
                     profile: profile,
                     apiKey: apiKey(for: profile),
                     initialHistory: history,
-                    assistantID: assistantID
+                    assistantID: assistantID,
+                    options: options
                 )
                 hasRuntimeProblem = false
             } catch is CancellationError {
@@ -185,7 +218,20 @@ final class MobileAppModel {
                 }
                 errorMessage = error.localizedDescription
             }
+            isGenerating = false
+            markStreamingFinished(id: assistantID)
+            pendingToolApproval = nil
+            pendingQuestion = nil
+            // Started from inside the finished task, after its state is
+            // reset, so the next reply never races the previous one.
+            dequeueNextIfNeeded()
         }
+    }
+
+    private func dequeueNextIfNeeded() {
+        guard !queuedMessages.isEmpty else { return }
+        let next = queuedMessages.removeFirst()
+        dispatch(text: next.text, attachments: next.attachments, options: next.options)
     }
 
     func stop() {
@@ -198,6 +244,7 @@ final class MobileAppModel {
     }
 
     func clearChat() {
+        queuedMessages.removeAll()
         stop()
         messages.removeAll()
     }
@@ -221,29 +268,42 @@ final class MobileAppModel {
         profile: MobileProviderProfile,
         apiKey: String,
         initialHistory: [MobileChatMessage],
-        assistantID: UUID
+        assistantID: UUID,
+        options: MobileTurnOptions
     ) async throws {
         var wireMessages = initialHistory.map(wireMessage)
         var systemInstructions = """
         Format answers for a narrow mobile display using concise paragraphs and valid Markdown. Put blank lines between paragraphs, headings, and lists. Use fenced code blocks for code. For Mermaid, emit a fenced block beginning with ```mermaid and valid Mermaid syntax. Quote every human-readable node or edge label containing whitespace or punctuation, for example A["Validate Input (Required)"] and A -->|"Valid"| B. Mermaid comments must use %% on their own line. For mathematics, emit only KaTeX-compatible expressions using $...$ or \\(...\\) inline and $$...$$ or \\[...\\] for display math. Never emit a complete LaTeX document, preamble, or text-layout environment such as document, itemize, enumerate, verbatim, table, or figure.
         """
-        if agentEnabled {
+        if options.agentEnabled {
             systemInstructions += """
 
             You are in bounded agent mode. Work toward the user's goal using available tools, inspect tool results before continuing, ask when an important choice is missing, and stop after completing the task. Never claim a tool ran unless its result is present.
             """
         }
+        let memoryEnabled = MobileMemoryStore.isEnabled
+        let usesTools = options.toolsEnabled || options.agentEnabled
+        if memoryEnabled {
+            let memories = await MobileMemoryStore.shared.entries()
+            if let section = MobileMemoryStore.promptSection(for: memories) {
+                systemInstructions += "\n\n" + section
+            }
+            if usesTools {
+                systemInstructions += "\n\n" + MobileMemoryStore.toolInstructions
+            }
+        }
         wireMessages.insert(["role": "system", "content": systemInstructions], at: 0)
-        let maximumRounds = agentEnabled ? 10 : 4
+        let tools = usesTools ? MobileChatRuntime.toolDefinitions(memoryEnabled: memoryEnabled) : nil
+        let maximumRounds = options.agentEnabled ? 10 : 4
         for _ in 0..<maximumRounds {
             let result = try await runtime.streamTurn(
                 profile: profile,
                 apiKey: apiKey,
                 messages: wireMessages,
-                toolsEnabled: toolsEnabled || agentEnabled,
-                reasoning: reasoning
+                tools: tools,
+                reasoning: options.reasoning
             ) { [weak self] delta in
-                await self?.appendDelta(delta, to: assistantID)
+                await self?.appendRoundDelta(delta, to: assistantID)
             }
             if result.toolCalls.isEmpty { return }
 
@@ -266,12 +326,39 @@ final class MobileAppModel {
                     "content": output
                 ])
             }
+            separateNextRound = true
         }
-        appendDelta("\n\nAgent/tool round limit reached.", to: assistantID)
+
+        // Out of tool rounds: ask once more without tools, so the reply ends
+        // with an answer built from the results gathered so far rather than
+        // stopping right after a tool call.
+        wireMessages.append([
+            "role": "user",
+            "content": "[Tool round limit reached] Answer now using only the tool results above, without calling more tools. Say briefly what is still unknown."
+        ])
+        _ = try await runtime.streamTurn(
+            profile: profile,
+            apiKey: apiKey,
+            messages: wireMessages,
+            tools: nil,
+            reasoning: options.reasoning
+        ) { [weak self] delta in
+            await self?.appendRoundDelta(delta, to: assistantID)
+        }
     }
 
+    /// Runs one tool call. A failure is returned to the model as the tool's
+    /// result, so it can recover or explain, instead of ending the whole
+    /// reply; only cancellation (Stop) propagates.
     private func execute(_ call: ToolCall, assistantID: UUID) async throws -> String {
-        let arguments = try decodeArguments(call.arguments)
+        let arguments: [String: Any]
+        do {
+            arguments = try decodeArguments(call.arguments)
+        } catch {
+            let activityID = appendToolActivity(to: assistantID, name: call.name, detail: call.name, status: .failed)
+            updateToolActivity(activityID, in: assistantID, status: .failed, result: error.localizedDescription)
+            return "Error: \(error.localizedDescription) Send the arguments as a JSON object."
+        }
         let detail = toolDetail(name: call.name, arguments: arguments)
         let activityID = appendToolActivity(
             to: assistantID,
@@ -281,14 +368,35 @@ final class MobileAppModel {
         )
         do {
             let output = try await executeApproved(call, arguments: arguments, activityID: activityID, assistantID: assistantID)
-            if output != "User rejected the tool." {
+            if output != Self.rejectedOutput {
                 updateToolActivity(activityID, in: assistantID, status: .completed, result: output)
             }
             return output
         } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             updateToolActivity(activityID, in: assistantID, status: .failed, result: error.localizedDescription)
-            throw error
+            return "Error: \(error.localizedDescription)"
         }
+    }
+
+    private static let rejectedOutput = "User rejected the tool."
+
+    /// Asks for approval when the Settings mode requires it for this tool.
+    /// Returns false (and marks the activity rejected) when the user declines.
+    private func approveIfNeeded(
+        _ name: String,
+        summary: String,
+        activityID: UUID,
+        assistantID: UUID
+    ) async -> Bool {
+        if requiresApproval(name) {
+            guard await requestApproval(name: name, summary: summary) else {
+                updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
+                return false
+            }
+        }
+        updateToolActivity(activityID, in: assistantID, status: .running, result: nil)
+        return true
     }
 
     private func executeApproved(
@@ -305,46 +413,41 @@ final class MobileAppModel {
             pendingQuestion = String(question.prefix(1_000))
             return await withCheckedContinuation { questionContinuation = $0 }
         case "memory_list":
+            guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             return await MobileMemoryStore.shared.list()
         case "web_search":
             guard let query = arguments["query"] as? String else {
                 throw ValidationError("web_search requires a query.")
             }
-            guard await requestApproval(name: call.name, summary: query) else {
-                updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
-                return "User rejected the tool."
+            guard await approveIfNeeded(call.name, summary: query, activityID: activityID, assistantID: assistantID) else {
+                return Self.rejectedOutput
             }
-            updateToolActivity(activityID, in: assistantID, status: .running, result: nil)
             return try await SafeWebFetcher.search(query)
         case "web_fetch":
             guard let url = arguments["url"] as? String else {
                 throw ValidationError("web_fetch requires a URL.")
             }
-            guard await requestApproval(name: call.name, summary: url) else {
-                updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
-                return "User rejected the tool."
+            guard await approveIfNeeded(call.name, summary: url, activityID: activityID, assistantID: assistantID) else {
+                return Self.rejectedOutput
             }
-            updateToolActivity(activityID, in: assistantID, status: .running, result: nil)
             return try await SafeWebFetcher.fetch(url)
         case "memory_remember":
+            guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             guard let text = arguments["text"] as? String else {
                 throw ValidationError("memory_remember requires text.")
             }
-            guard await requestApproval(name: call.name, summary: String(text.prefix(180))) else {
-                updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
-                return "User rejected the tool."
+            guard await approveIfNeeded(call.name, summary: String(text.prefix(180)), activityID: activityID, assistantID: assistantID) else {
+                return Self.rejectedOutput
             }
-            updateToolActivity(activityID, in: assistantID, status: .running, result: nil)
             return try await MobileMemoryStore.shared.remember(text)
         case "memory_forget":
+            guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             guard let id = arguments["id"] as? String else {
                 throw ValidationError("memory_forget requires an identifier.")
             }
-            guard await requestApproval(name: call.name, summary: id) else {
-                updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
-                return "User rejected the tool."
+            guard await approveIfNeeded(call.name, summary: id, activityID: activityID, assistantID: assistantID) else {
+                return Self.rejectedOutput
             }
-            updateToolActivity(activityID, in: assistantID, status: .running, result: nil)
             return await MobileMemoryStore.shared.forget(id)
         case "local_context":
             return MobileLocalContext.value()
@@ -353,8 +456,11 @@ final class MobileAppModel {
         }
     }
 
+    private static let memoryOffOutput = "Memory is turned off in Settings."
+
     private func requiresApproval(_ name: String) -> Bool {
         ["web_search", "web_fetch", "memory_remember", "memory_forget"].contains(name)
+            && MobileToolApprovalMode.current.requiresApproval(name)
     }
 
     private func toolDetail(name: String, arguments: [String: Any]) -> String {
@@ -421,6 +527,20 @@ final class MobileAppModel {
             ]
         })
         return ["role": message.role.rawValue, "content": content]
+    }
+
+    /// Set after a tool round, so the next round's text starts on a new
+    /// paragraph instead of running into the previous round's last sentence.
+    private var separateNextRound = false
+
+    private func appendRoundDelta(_ delta: String, to id: UUID) {
+        if separateNextRound {
+            separateNextRound = false
+            if message(id: id)?.text.isEmpty == false {
+                appendDelta("\n\n", to: id)
+            }
+        }
+        appendDelta(delta, to: id)
     }
 
     private func appendDelta(_ delta: String, to id: UUID) {

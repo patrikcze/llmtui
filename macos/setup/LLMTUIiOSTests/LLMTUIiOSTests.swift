@@ -68,4 +68,61 @@ struct LLMTUIiOSTests {
         #expect(!context.contains("username:"))
         #expect(!context.contains("hostname:"))
     }
+
+    @Test func memoryStoreRemembersForgetsByPrefixAndRejectsSecrets() async throws {
+        let suiteName = "LLMTUIiOSTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = MobileMemoryStore(defaults: defaults)
+
+        _ = try await store.remember("Prefers metric units")
+        let saved = try #require(await store.entries().first)
+        #expect(saved.text == "Prefers metric units")
+        #expect(saved.createdAt != nil)
+
+        await #expect(throws: MobileMemoryStore.MemoryError.self) {
+            try await store.remember("my key is sk-abc123def456ghi789")
+        }
+        #expect(await store.forget("ABC") == "Memory not found. Call memory_list for the exact id.")
+        let prefix = String(saved.id.uuidString.prefix(8)).lowercased()
+        #expect(await store.forget(prefix) == "Memory removed.")
+        #expect(await store.entries().isEmpty)
+    }
+
+    @Test func memoryStoreReadsEntriesSavedWithoutDates() async throws {
+        let suiteName = "LLMTUIiOSTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let id = UUID()
+        defaults.set(Data(#"[{"id":"\#(id.uuidString)","text":"Lives in Prague"}]"#.utf8), forKey: "iosChatMemories")
+
+        let entries = await MobileMemoryStore(defaults: defaults).entries()
+        #expect(entries == [MobileMemoryStore.Entry(id: id, text: "Lives in Prague", createdAt: nil)])
+    }
+
+    @Test func memoryPromptSectionIsNewestFirstAndBounded() throws {
+        let entries = (1...5).map { MobileMemoryStore.Entry(id: UUID(), text: "fact \($0)", createdAt: nil) }
+        let section = try #require(MobileMemoryStore.promptSection(for: entries, maxEntries: 2))
+        #expect(section.contains("- fact 5\n- fact 4"))
+        #expect(!section.contains("fact 3"))
+        #expect(MobileMemoryStore.promptSection(for: []) == nil)
+    }
+
+    @Test func memoryToolsAreOfferedOnlyWhileMemoryIsOn() {
+        func names(_ definitions: [[String: Any]]) -> [String] {
+            definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        }
+        #expect(names(MobileChatRuntime.toolDefinitions(memoryEnabled: true)).contains("memory_remember"))
+        let withoutMemory = names(MobileChatRuntime.toolDefinitions(memoryEnabled: false))
+        #expect(!withoutMemory.contains { $0.hasPrefix("memory_") })
+        #expect(withoutMemory.contains("web_search"))
+    }
+
+    @Test func approvalModesDecideWhichToolsAsk() {
+        #expect(MobileToolApprovalMode.always.requiresApproval("web_fetch"))
+        #expect(MobileToolApprovalMode.always.requiresApproval("memory_remember"))
+        #expect(!MobileToolApprovalMode.memoryChanges.requiresApproval("web_fetch"))
+        #expect(MobileToolApprovalMode.memoryChanges.requiresApproval("memory_forget"))
+        #expect(!MobileToolApprovalMode.never.requiresApproval("memory_remember"))
+    }
 }

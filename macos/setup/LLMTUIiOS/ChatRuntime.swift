@@ -60,7 +60,7 @@ struct MobileChatRuntime: Sendable {
         profile: MobileProviderProfile,
         apiKey: String,
         messages: [[String: Any]],
-        toolsEnabled: Bool,
+        tools: [[String: Any]]?,
         reasoning: MobileReasoning,
         onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> ChatTurnResult {
@@ -70,8 +70,8 @@ struct MobileChatRuntime: Sendable {
             "messages": messages,
             "stream": true
         ]
-        if toolsEnabled {
-            body["tools"] = Self.toolDefinitions
+        if let tools, !tools.isEmpty {
+            body["tools"] = tools
             body["tool_choice"] = "auto"
         }
         if reasoning != .automatic {
@@ -183,20 +183,20 @@ struct MobileChatRuntime: Sendable {
         ),
         definition(
             name: "memory_list",
-            description: "List memories stored locally in this iOS app.",
+            description: "List the saved memories with their ids. Their texts are already in the system prompt; call this only to get an id for memory_forget.",
             properties: [:],
             required: []
         ),
         definition(
             name: "memory_remember",
-            description: "Save a short memory locally in this iOS app after user approval.",
-            properties: ["text": stringProperty("Text to remember.")],
+            description: "Save one short, durable fact or preference about the user for future chats, for example \"Prefers metric units\". Only call this when the user explicitly asks you to remember something. Never save secrets, passwords, API keys, or one-off task details. The user must approve it.",
+            properties: ["text": stringProperty("One short fact, written in the third person.")],
             required: ["text"]
         ),
         definition(
             name: "memory_forget",
-            description: "Delete one local memory by its identifier after user approval.",
-            properties: ["id": stringProperty("Memory identifier.")],
+            description: "Delete one saved memory when the user asks you to forget it. Use the id from memory_list. The user must approve it.",
+            properties: ["id": stringProperty("The memory id from memory_list.")],
             required: ["id"]
         ),
         definition(
@@ -206,6 +206,15 @@ struct MobileChatRuntime: Sendable {
             required: []
         )
     ]
+
+    /// The tools offered to the model; the memory tools only while memory is on.
+    static func toolDefinitions(memoryEnabled: Bool) -> [[String: Any]] {
+        guard !memoryEnabled else { return toolDefinitions }
+        return toolDefinitions.filter { definition in
+            let name = (definition["function"] as? [String: Any])?["name"] as? String ?? ""
+            return !name.hasPrefix("memory_")
+        }
+    }
 
     private static func definition(
         name: String,
