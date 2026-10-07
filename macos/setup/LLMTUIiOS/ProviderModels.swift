@@ -61,6 +61,9 @@ struct MobileChatMessage: Codable, Identifiable, Equatable, Sendable {
     var isStreaming: Bool
     var attachments: [MobileAttachment]
     var toolActivities: [MobileToolActivity]
+    /// Attachment passages ("documentID:chunkID") a document tool returned
+    /// while this reply was generated; only these may be cited in it.
+    var sourceRefs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -210,6 +213,7 @@ struct PendingToolApproval: Identifiable, Equatable {
     let id: UUID
     let name: String
     let summary: String
+    var allowTitle = "Allow Once"
 }
 
 enum MobileChatError: LocalizedError {

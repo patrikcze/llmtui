@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var model = MobileAppModel()
@@ -267,7 +268,7 @@ private struct ChatListScreen: View {
 
     private var sortedConversations: [MobileConversation] {
         model.conversations
-            .filter { !$0.messages.isEmpty }
+            .filter { model.hasContent($0) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -321,10 +322,11 @@ private struct ChatScreen: View {
     @FocusState private var composerFocused: Bool
     @State private var renaming: UUID?
     @State private var deleting: UUID?
+    @State private var openSource: DocumentSourceSelection?
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatTranscript(model: model) { composerFocused = false }
+            ChatTranscript(model: model, conversationID: conversationID) { composerFocused = false }
             Divider()
             if let question = model.pendingQuestion, model.generatingConversationID == conversationID {
                 UserQuestionView(question: question, model: model)
@@ -332,7 +334,29 @@ private struct ChatScreen: View {
             if !model.currentQueuedMessages.isEmpty {
                 QueuedMessagesPanel(model: model)
             }
+            if !model.currentDocuments.isEmpty {
+                DocumentsPanel(model: model) { document in
+                    openSource = DocumentSourceSelection(
+                        document: document, chunk: nil, fileURL: model.documents.originalURL(for: document)
+                    )
+                }
+            }
             ChatComposer(model: model, isFocused: $composerFocused)
+        }
+        // Citation links (llmtui-cite://document/chunk) open the cited
+        // passage here; other links open normally.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let ref = DocumentCitations.ref(from: url) else { return .systemAction }
+            if let source = model.source(for: ref, in: conversationID) {
+                openSource = DocumentSourceSelection(
+                    document: source.document, chunk: source.chunk,
+                    fileURL: model.documents.originalURL(for: source.document)
+                )
+            }
+            return .handled
+        })
+        .sheet(item: $openSource) { selection in
+            DocumentSourceView(selection: selection)
         }
         .navigationTitle(model.currentConversation?.title ?? MobileConversation.defaultTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -533,6 +557,7 @@ private struct ProviderMenu: View {
 
 private struct ChatTranscript: View {
     let model: MobileAppModel
+    let conversationID: UUID
     /// Hides the keyboard. Tapping anywhere in the conversation calls it, in
     /// addition to swiping the conversation down.
     let dismissKeyboard: () -> Void
@@ -550,7 +575,7 @@ private struct ChatTranscript: View {
                         .padding(.top, 60)
                     }
                     ForEach(model.messages) { message in
-                        MessageBubble(message: message)
+                        MessageBubble(message: message, displayText: displayText(for: message))
                             .id(message.id)
                     }
                 }
@@ -568,8 +593,21 @@ private struct ChatTranscript: View {
     }
 }
 
+extension ChatTranscript {
+    /// The assistant text with attachment citations resolved: a citation of
+    /// a passage returned in this reply becomes a link to it; anything else
+    /// is marked unverified.
+    func displayText(for message: MobileChatMessage) -> String {
+        guard message.role == .assistant else { return message.text }
+        return DocumentCitations.render(message.text, returned: Set(message.sourceRefs ?? [])) { ref in
+            model.citationLabel(ref, in: conversationID)
+        }
+    }
+}
+
 private struct MessageBubble: View {
     let message: MobileChatMessage
+    let displayText: String
 
     var body: some View {
         HStack {
@@ -580,7 +618,7 @@ private struct MessageBubble: View {
                     .foregroundStyle(.secondary)
                 if message.role == .assistant {
                     MobileRichMessageView(
-                        source: message.text.isEmpty && message.isStreaming ? "Thinking…" : message.text
+                        source: message.text.isEmpty && message.isStreaming ? "Thinking…" : displayText
                     )
                 } else {
                     Text(message.text)
@@ -676,6 +714,7 @@ private struct ToolActivityView: View {
     private var icon: String {
         switch activity.name {
         case "web_research": "doc.text.magnifyingglass"
+        case "document_list", "document_search", "document_read": "doc.text"
         case "memory_search", "memory_list", "memory_remember", "memory_forget": "brain"
         case "web_search": "magnifyingglass"
         case "web_fetch": "globe"
@@ -709,9 +748,17 @@ private struct ChatComposer: View {
     let model: MobileAppModel
     var isFocused: FocusState<Bool>.Binding
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var readingPhotos: [PhotosPickerItem] = []
+    @State private var showVisionPicker = false
+    @State private var showReadingPicker = false
+    @State private var showFileImporter = false
+
+    private static let documentTypes: [UTType] = [
+        .pdf, .plainText, .utf8PlainText, .text, UTType("net.daringfireball.markdown")
+    ].compactMap { $0 }
 
     var body: some View {
-        let hasAttachments = !model.draftAttachments.isEmpty
+        let hasAttachments = !model.draftAttachments.isEmpty || !model.currentDocuments.isEmpty
         VStack(spacing: 8) {
             if !model.draftAttachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -727,18 +774,18 @@ private struct ChatComposer: View {
             }
             HStack(spacing: 18) {
                 ReasoningMenu(model: model)
-                PhotosPicker(
-                    selection: $selectedPhotos,
-                    maxSelectionCount: max(0, 4 - model.draftAttachments.count),
-                    matching: .images
-                ) {
+                Menu {
+                    Button("PDF, Text or Markdown File", systemImage: "doc") { showFileImporter = true }
+                    Button("Read Text from Screenshot or Image", systemImage: "text.viewfinder") { showReadingPicker = true }
+                    Button("Photo for the Model to See", systemImage: "photo") { showVisionPicker = true }
+                        .disabled(model.draftAttachments.count >= 4)
+                } label: {
                     ComposerIcon(
                         systemName: "paperclip",
                         active: hasAttachments,
-                        accessibilityLabel: "Attach images"
+                        accessibilityLabel: "Attach"
                     )
                 }
-                .disabled(model.draftAttachments.count >= 4)
                 Button {
                     model.toolsEnabled.toggle()
                 } label: {
@@ -799,6 +846,30 @@ private struct ChatComposer: View {
         }
         .padding()
         .background(.bar)
+        .photosPicker(
+            isPresented: $showVisionPicker,
+            selection: $selectedPhotos,
+            maxSelectionCount: max(1, 4 - model.draftAttachments.count),
+            matching: .images
+        )
+        .photosPicker(isPresented: $showReadingPicker, selection: $readingPhotos, maxSelectionCount: 5, matching: .images)
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: Self.documentTypes, allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): model.attachFiles(urls)
+            case .failure(let error): model.errorMessage = error.localizedDescription
+            }
+        }
+        .onChange(of: readingPhotos) { _, items in
+            guard !items.isEmpty else { return }
+            Task {
+                var images: [Data] = []
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self) { images.append(data) }
+                }
+                readingPhotos = []
+                if !images.isEmpty { model.attachImagesForReading(images) }
+            }
+        }
         .onChange(of: selectedPhotos) { _, items in
             Task {
                 for item in items {
@@ -966,12 +1037,12 @@ private struct ToolApprovalView: View {
                     Button("Reject", role: .cancel) { model.resolveApproval(false) }
                         .buttonStyle(.bordered)
                     Spacer()
-                    Button("Allow Once") { model.resolveApproval(true) }
+                    Button(approval.allowTitle) { model.resolveApproval(true) }
                         .buttonStyle(.borderedProminent)
                 }
             }
             .padding()
-            .navigationTitle("Safe Tool")
+            .navigationTitle("Approval")
             .navigationBarTitleDisplayMode(.inline)
         }
     }

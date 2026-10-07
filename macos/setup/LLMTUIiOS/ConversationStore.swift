@@ -15,6 +15,9 @@ struct MobileConversation: Codable, Identifiable, Equatable, Sendable {
     var messages: [MobileChatMessage]
     var createdAt: Date
     var updatedAt: Date
+    /// Providers the user allowed to receive excerpts from this chat's
+    /// attachments. Absent in chats saved before attachments existed.
+    var documentConsentProfileIDs: [UUID]?
 
     init(id: UUID = UUID(), profileID: UUID?, now: Date = .now) {
         self.id = id

@@ -292,7 +292,9 @@ private struct MobileMarkdownDocument {
                 content[run.range].font = .system(.body, design: .monospaced)
                 content[run.range].backgroundColor = Color.secondary.opacity(0.14)
             }
-            if let link = run.link, !["http", "https"].contains(link.scheme?.lowercased() ?? "") {
+            // Only web links and the app's own validated citation links
+            // (created by DocumentCitations.render) stay tappable.
+            if let link = run.link, !["http", "https", DocumentCitations.scheme].contains(link.scheme?.lowercased() ?? "") {
                 content[run.range].link = nil
             }
         }
