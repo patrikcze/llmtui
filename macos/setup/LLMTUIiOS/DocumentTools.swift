@@ -323,6 +323,16 @@ nonisolated enum DocumentCitations {
         return result
     }
 
+    /// Rendered text with citation links turned into plain labels, for
+    /// copying: "[Plan.pdf, page 2](llmtui-cite://…)" becomes "(Plan.pdf, page 2)".
+    static func plainText(_ rendered: String) -> String {
+        rendered.replacingOccurrences(
+            of: #"\[([^\]]+)\]\(\#(scheme)://[^)]*\)"#,
+            with: "($1)",
+            options: .regularExpression
+        )
+    }
+
     static func url(for ref: DocumentSourceRef) -> URL {
         URL(string: "\(scheme)://\(ref.documentID)/\(ref.chunkID)")!
     }

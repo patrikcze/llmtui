@@ -404,6 +404,36 @@ struct DocumentToolsTests {
         #expect(library.documents(in: conversation).first?.status == .failed("The file was not imported. Remove it and attach it again."))
     }
 
+    @Test func copiedReplyTextTurnsCitationLinksIntoLabels() {
+        let rendered = "Keys rotate [Plan.pdf, page 2](llmtui-cite://ab12cd/c2) and [unverified citation]."
+        #expect(DocumentCitations.plainText(rendered) == "Keys rotate (Plan.pdf, page 2) and [unverified citation].")
+    }
+
+    @Test func remoteImagesAreWebOnlyAndWaitAfterOutsideContent() {
+        #expect(RemoteImagePolicy.url(from: "https://cdn.example.com/a.jpg") != nil)
+        #expect(RemoteImagePolicy.url(from: "file:///etc/passwd") == nil)
+        #expect(RemoteImagePolicy.url(from: "data:image/png;base64,AAAA") == nil)
+        #expect(RemoteImagePolicy.url(from: "javascript:alert(1)") == nil)
+        let web = MobileToolActivity(name: "web_fetch", detail: "", status: .completed)
+        let document = MobileToolActivity(name: "document_read", detail: "", status: .completed)
+        let local = MobileToolActivity(name: "local_context", detail: "", status: .completed)
+        #expect(RemoteImagePolicy.readsUntrustedContent([web]))
+        #expect(RemoteImagePolicy.readsUntrustedContent([document]))
+        #expect(!RemoteImagePolicy.readsUntrustedContent([local]))
+    }
+
+    @Test func mermaidPDFIsRasterizedWithBackground() throws {
+        let pdf = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 200, height: 100)).pdfData { context in
+            context.beginPage()
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 50, height: 50))
+        }
+        let image = try #require(MermaidExport.image(fromPDF: pdf, background: .white))
+        #expect(image.size == CGSize(width: 200, height: 100))
+        #expect(image.scale == 3)
+        #expect(MermaidExport.image(fromPDF: Data("not a pdf".utf8), background: .white) == nil)
+    }
+
     // MARK: - Fixtures
 
     private static func runner() -> DocumentToolRunner {
