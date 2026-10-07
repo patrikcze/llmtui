@@ -62,8 +62,7 @@ private struct DocumentChip: View {
             Button("Remove", systemImage: "trash", role: .destructive, action: remove)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: document.kind.systemImage)
-                    .foregroundStyle(.secondary)
+                IconTile(systemName: document.kind.systemImage, tint: Theme.tint(for: document.kind), size: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(document.displayName)
                         .font(.caption.weight(.semibold))
@@ -84,8 +83,11 @@ private struct DocumentChip: View {
             .frame(maxWidth: 220, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .foregroundStyle(.primary)
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
         }
+        .tint(.primary)
         .accessibilityLabel("\(document.displayName), \(statusText)")
     }
 
@@ -111,9 +113,9 @@ private struct DocumentChip: View {
 
     private var statusColor: Color {
         switch document.status {
-        case .ready: document.warnings.isEmpty ? .green : .orange
-        case .partial, .interrupted: .orange
-        case .failed: .red
+        case .ready: document.warnings.isEmpty ? Theme.success : Theme.warning
+        case .partial, .interrupted: Theme.warning
+        case .failed: Theme.danger
         case .importing, .extracting: .secondary
         }
     }
