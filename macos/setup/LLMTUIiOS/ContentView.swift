@@ -110,7 +110,7 @@ private struct ChatScreen: View {
                     ChatComposer(model: model)
                 }
             }
-            .navigationTitle("Chat")
+            .navigationTitle("Chat - Development")
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
@@ -120,7 +120,7 @@ private struct ChatScreen: View {
                                 || model.activeProfile == nil
                                 || model.activeProfile?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
                         )
-                        Text("Chat")
+                        Text("Chat - Development")
                             .font(.headline)
                     }
                 }
@@ -252,7 +252,7 @@ private struct ChatTranscript: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: model.messages.last?.id) {
+            .onChange(of: model.messages.last?.text) {
                 guard let id = model.messages.last?.id else { return }
                 proxy.scrollTo(id, anchor: .bottom)
             }
@@ -484,13 +484,13 @@ private struct ChatComposer: View {
         .background(.bar)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
                 Button {
                     isDraftFocused = false
                 } label: {
                     Image(systemName: "keyboard.chevron.compact.down")
                 }
                 .accessibilityLabel("Dismiss keyboard")
+                Spacer()
             }
         }
         .onChange(of: selectedPhotos) { _, items in
