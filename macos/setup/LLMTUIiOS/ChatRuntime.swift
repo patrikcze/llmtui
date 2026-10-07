@@ -226,6 +226,39 @@ struct MobileChatRuntime: Sendable {
         )
     ]
 
+    /// Tools over the current chat's attachments, offered only when it has any.
+    /// Arguments are opaque ids from document_list and document_search, never
+    /// paths or URLs.
+    static let documentToolDefinitions: [[String: Any]] = [
+        definition(
+            name: "document_list",
+            description: "List the files attached to this chat: id, name, type, pages or lines, extraction status and warnings.",
+            properties: [:],
+            required: []
+        ),
+        definition(
+            name: "document_search",
+            description: "Search the extracted text of the attached files and return the best matching passages with their document_id, chunk_id and page or lines. Search before reading. Omit document_id to search every attachment. The result says how much of each file was searched.",
+            properties: [
+                "query": stringProperty("Words to look for, for example \"authentication token expiry\"."),
+                "document_id": stringProperty("Optional: one attachment id from document_list, like \"d4k9x2\"."),
+                "limit": integerProperty("How many matches to return, 1-10. Defaults to 5.")
+            ],
+            required: ["query"]
+        ),
+        definition(
+            name: "document_read",
+            description: "Read the text of one passage (chunk) found by document_search. Text is paged by character offset: offset 0 is the start of the chunk, at most limit characters are returned, and a truncated result gives the next offset to continue from.",
+            properties: [
+                "document_id": stringProperty("The attachment id, like \"d4k9x2\"."),
+                "chunk_id": stringProperty("The chunk id from document_search, like \"c7\"."),
+                "offset": integerProperty("Character offset in the chunk, starting at 0. Defaults to 0."),
+                "limit": integerProperty("Characters to return, 1-4000. Defaults to 1500.")
+            ],
+            required: ["document_id", "chunk_id"]
+        )
+    ]
+
     /// The tools offered to the model; the memory tools only while memory is on.
     static func toolDefinitions(memoryEnabled: Bool) -> [[String: Any]] {
         guard !memoryEnabled else { return toolDefinitions }
