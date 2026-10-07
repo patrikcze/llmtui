@@ -1,0 +1,243 @@
+import Foundation
+
+struct MobileChatRuntime: Sendable {
+    private struct StreamChoice: Decodable {
+        struct Delta: Decodable {
+            struct StreamToolCall: Decodable {
+                struct Function: Decodable {
+                    let name: String?
+                    let arguments: String?
+                }
+
+                let index: Int
+                let id: String?
+                let function: Function?
+            }
+
+            let content: String?
+            let toolCalls: [StreamToolCall]?
+
+            enum CodingKeys: String, CodingKey {
+                case content
+                case toolCalls = "tool_calls"
+            }
+        }
+
+        let delta: Delta
+    }
+
+    private struct StreamChunk: Decodable {
+        let choices: [StreamChoice]
+    }
+
+    private struct ToolAccumulator {
+        var id = ""
+        var name = ""
+        var arguments = ""
+    }
+
+    func discoverModels(profile: MobileProviderProfile, apiKey: String) async throws -> [String] {
+        let endpoint = try endpointURL(profile: profile, path: "models")
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 15
+        applyAuthorization(apiKey, to: &request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+
+        let object = try JSONSerialization.jsonObject(with: data)
+        if let dictionary = object as? [String: Any],
+           let items = dictionary["data"] as? [[String: Any]] {
+            return items.compactMap { $0["id"] as? String }.sorted()
+        }
+        if let dictionary = object as? [String: Any],
+           let items = dictionary["models"] as? [[String: Any]] {
+            return items.compactMap { ($0["name"] as? String) ?? ($0["model"] as? String) }.sorted()
+        }
+        throw MobileChatError.invalidResponse
+    }
+
+    func streamTurn(
+        profile: MobileProviderProfile,
+        apiKey: String,
+        messages: [[String: Any]],
+        tools: [[String: Any]]?,
+        reasoning: MobileReasoning,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> ChatTurnResult {
+        let endpoint = try endpointURL(profile: profile, path: "chat/completions")
+        var body: [String: Any] = [
+            "model": profile.model,
+            "messages": messages,
+            "stream": true
+        ]
+        if let tools, !tools.isEmpty {
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        }
+        if reasoning != .automatic {
+            body["reasoning_effort"] = reasoning.rawValue
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAuthorization(apiKey, to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw MobileChatError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes.prefix(32_000) { errorData.append(byte) }
+            throw MobileChatError.server(http.statusCode, String(decoding: errorData, as: UTF8.self))
+        }
+
+        var fullText = ""
+        var accumulators: [Int: ToolAccumulator] = [:]
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else { continue }
+            for choice in chunk.choices {
+                if let content = choice.delta.content, !content.isEmpty {
+                    fullText += content
+                    await onDelta(content)
+                }
+                for call in choice.delta.toolCalls ?? [] {
+                    var value = accumulators[call.index] ?? ToolAccumulator()
+                    if let id = call.id { value.id += id }
+                    if let name = call.function?.name { value.name += name }
+                    if let arguments = call.function?.arguments { value.arguments += arguments }
+                    accumulators[call.index] = value
+                }
+            }
+        }
+
+        let calls = accumulators.keys.sorted().compactMap { index -> ToolCall? in
+            guard let value = accumulators[index], !value.name.isEmpty else { return nil }
+            return ToolCall(
+                id: value.id.isEmpty ? UUID().uuidString : value.id,
+                name: value.name,
+                arguments: value.arguments.isEmpty ? "{}" : value.arguments
+            )
+        }
+        return ChatTurnResult(text: fullText, toolCalls: calls)
+    }
+
+    private func endpointURL(profile: MobileProviderProfile, path: String) throws -> URL {
+        guard var url = URL(string: profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else { throw MobileChatError.invalidBaseURL }
+
+        if profile.type == .ollama {
+            if path == "models" {
+                url.append(path: "api/tags")
+            } else {
+                url.append(path: "v1")
+                url.append(path: path)
+            }
+        } else {
+            let normalizedPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !normalizedPath.hasSuffix("v1") { url.append(path: "v1") }
+            url.append(path: path)
+        }
+        return url
+    }
+
+    private func applyAuthorization(_ apiKey: String, to request: inout URLRequest) {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            request.setValue("Bearer \(trimmed)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    private func validate(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else { throw MobileChatError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            throw MobileChatError.server(http.statusCode, String(decoding: data.prefix(32_000), as: UTF8.self))
+        }
+    }
+
+    static let toolDefinitions: [[String: Any]] = [
+        definition(
+            name: "ask_user",
+            description: "Ask the user one concise clarifying question.",
+            properties: ["question": stringProperty("Question to show the user.")],
+            required: ["question"]
+        ),
+        definition(
+            name: "web_search",
+            description: "Search the public web for current information after user approval.",
+            properties: ["query": stringProperty("Search query.")],
+            required: ["query"]
+        ),
+        definition(
+            name: "web_fetch",
+            description: "Fetch bounded text from a public HTTP or HTTPS URL after user approval.",
+            properties: ["url": stringProperty("Public URL to fetch.")],
+            required: ["url"]
+        ),
+        definition(
+            name: "memory_list",
+            description: "List the saved memories with their ids. Their texts are already in the system prompt; call this only to get an id for memory_forget.",
+            properties: [:],
+            required: []
+        ),
+        definition(
+            name: "memory_remember",
+            description: "Save one short, durable fact or preference about the user for future chats, for example \"Prefers metric units\". Only call this when the user explicitly asks you to remember something. Never save secrets, passwords, API keys, or one-off task details. The user must approve it.",
+            properties: ["text": stringProperty("One short fact, written in the third person.")],
+            required: ["text"]
+        ),
+        definition(
+            name: "memory_forget",
+            description: "Delete one saved memory when the user asks you to forget it. Use the id from memory_list. The user must approve it.",
+            properties: ["id": stringProperty("The memory id from memory_list.")],
+            required: ["id"]
+        ),
+        definition(
+            name: "local_context",
+            description: "Return non-sensitive local iPhone or iPad context: current local and UTC date/time, timezone, locale, OS, device class, architecture, processor count, memory, storage, uptime, thermal state, and Low Power Mode. Use this before answering questions about the current date, time, timezone, or device capabilities.",
+            properties: [:],
+            required: []
+        )
+    ]
+
+    /// The tools offered to the model; the memory tools only while memory is on.
+    static func toolDefinitions(memoryEnabled: Bool) -> [[String: Any]] {
+        guard !memoryEnabled else { return toolDefinitions }
+        return toolDefinitions.filter { definition in
+            let name = (definition["function"] as? [String: Any])?["name"] as? String ?? ""
+            return !name.hasPrefix("memory_")
+        }
+    }
+
+    private static func definition(
+        name: String,
+        description: String,
+        properties: [String: Any],
+        required: [String]
+    ) -> [String: Any] {
+        [
+            "type": "function",
+            "function": [
+                "name": name,
+                "description": description,
+                "parameters": [
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": false
+                ] as [String: Any]
+            ] as [String: Any]
+        ]
+    }
+
+    private static func stringProperty(_ description: String) -> [String: Any] {
+        ["type": "string", "description": description]
+    }
+}

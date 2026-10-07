@@ -14,12 +14,29 @@
 			remoteGlobalIDString = 000000000000000100000000;
 			remoteInfo = LLMTUIGUI;
 		};
+		E0E3F99630759CB700573805 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E0E3F98830759CB600573805;
+			remoteInfo = LLMTUIiOS;
+		};
+		E0E3F9A030759CB700573805 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E0E3F98830759CB600573805;
+			remoteInfo = LLMTUIiOS;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		0000000000000000000000C1 /* Config/Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 		000000000000000000000120 /* LLMTUIGUI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LLMTUIGUI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0628E27306EC28F00D1CAC0 /* LLMTUIGUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LLMTUIGUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E0E3F98930759CB600573805 /* LLMTUIiOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LLMTUIiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E0E3F99530759CB700573805 /* LLMTUIiOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LLMTUIiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E0E3F99F30759CB700573805 /* LLMTUIiOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LLMTUIiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -46,6 +63,21 @@
 			path = LLMTUIGUITests;
 			sourceTree = "<group>";
 		};
+		E0E3F98A30759CB600573805 /* LLMTUIiOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LLMTUIiOS;
+			sourceTree = "<group>";
+		};
+		E0E3F99830759CB700573805 /* LLMTUIiOSTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LLMTUIiOSTests;
+			sourceTree = "<group>";
+		};
+		E0E3F9A230759CB700573805 /* LLMTUIiOSUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LLMTUIiOSUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,6 +91,21 @@
 			files = (
 			);
 		};
+		E0E3F98630759CB600573805 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99230759CB700573805 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99C30759CB700573805 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -67,6 +114,9 @@
 			children = (
 				000000000000000000000010 /* LLMTUIGUI */,
 				E0628E28306EC28F00D1CAC0 /* LLMTUIGUITests */,
+				E0E3F98A30759CB600573805 /* LLMTUIiOS */,
+				E0E3F99830759CB700573805 /* LLMTUIiOSTests */,
+				E0E3F9A230759CB700573805 /* LLMTUIiOSUITests */,
 				000000000000000000000020 /* Products */,
 				0000000000000000000000C1 /* Config/Signing.xcconfig */,
 			);
@@ -77,6 +127,9 @@
 			children = (
 				000000000000000000000120 /* LLMTUIGUI.app */,
 				E0628E27306EC28F00D1CAC0 /* LLMTUIGUITests.xctest */,
+				E0E3F98930759CB600573805 /* LLMTUIiOS.app */,
+				E0E3F99530759CB700573805 /* LLMTUIiOSTests.xctest */,
+				E0E3F99F30759CB700573805 /* LLMTUIiOSUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -123,6 +176,66 @@
 			productReference = E0628E27306EC28F00D1CAC0 /* LLMTUIGUITests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		E0E3F98830759CB600573805 /* LLMTUIiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E0E3F9A530759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOS" */;
+			buildPhases = (
+				E0E3F98530759CB600573805 /* Sources */,
+				E0E3F98630759CB600573805 /* Frameworks */,
+				E0E3F98730759CB600573805 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				E0E3F98A30759CB600573805 /* LLMTUIiOS */,
+			);
+			name = LLMTUIiOS;
+			productName = LLMTUIiOS;
+			productReference = E0E3F98930759CB600573805 /* LLMTUIiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E0E3F99430759CB700573805 /* LLMTUIiOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E0E3F9A830759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOSTests" */;
+			buildPhases = (
+				E0E3F99130759CB700573805 /* Sources */,
+				E0E3F99230759CB700573805 /* Frameworks */,
+				E0E3F99330759CB700573805 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E0E3F99730759CB700573805 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E0E3F99830759CB700573805 /* LLMTUIiOSTests */,
+			);
+			name = LLMTUIiOSTests;
+			productName = LLMTUIiOSTests;
+			productReference = E0E3F99530759CB700573805 /* LLMTUIiOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E0E3F99E30759CB700573805 /* LLMTUIiOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E0E3F9AB30759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOSUITests" */;
+			buildPhases = (
+				E0E3F99B30759CB700573805 /* Sources */,
+				E0E3F99C30759CB700573805 /* Frameworks */,
+				E0E3F99D30759CB700573805 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E0E3F9A130759CB700573805 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E0E3F9A230759CB700573805 /* LLMTUIiOSUITests */,
+			);
+			name = LLMTUIiOSUITests;
+			productName = LLMTUIiOSUITests;
+			productReference = E0E3F99F30759CB700573805 /* LLMTUIiOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -138,6 +251,17 @@
 					};
 					E0628E26306EC28F00D1CAC0 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					E0E3F98830759CB600573805 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					E0E3F99430759CB700573805 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = E0E3F98830759CB600573805;
+					};
+					E0E3F99E30759CB700573805 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = E0E3F98830759CB600573805;
 					};
 				};
 			};
@@ -157,6 +281,9 @@
 			targets = (
 				000000000000000100000000 /* LLMTUIGUI */,
 				E0628E26306EC28F00D1CAC0 /* LLMTUIGUITests */,
+				E0E3F98830759CB600573805 /* LLMTUIiOS */,
+				E0E3F99430759CB700573805 /* LLMTUIiOSTests */,
+				E0E3F99E30759CB700573805 /* LLMTUIiOSUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -168,6 +295,21 @@
 			);
 		};
 		E0628E25306EC28F00D1CAC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		E0E3F98730759CB600573805 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99330759CB700573805 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99D30759CB700573805 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -185,6 +327,21 @@
 			files = (
 			);
 		};
+		E0E3F98530759CB600573805 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99130759CB700573805 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		E0E3F99B30759CB700573805 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -192,6 +349,16 @@
 			isa = PBXTargetDependency;
 			target = 000000000000000100000000 /* LLMTUIGUI */;
 			targetProxy = E0628E2E306EC5F400D1CAC0 /* PBXContainerItemProxy */;
+		};
+		E0E3F99730759CB700573805 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E0E3F98830759CB600573805 /* LLMTUIiOS */;
+			targetProxy = E0E3F99630759CB700573805 /* PBXContainerItemProxy */;
+		};
+		E0E3F9A130759CB700573805 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E0E3F98830759CB600573805 /* LLMTUIiOS */;
+			targetProxy = E0E3F9A030759CB700573805 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -337,9 +504,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = YES;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
@@ -402,9 +568,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = YES;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
@@ -501,6 +666,198 @@
 			};
 			name = Release;
 		};
+		E0E3F9A630759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOS" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers such as Ollama and LM Studio on your local network.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		E0E3F9A730759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOS" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers such as Ollama and LM Studio on your local network.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
+		E0E3F9A930759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOSTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOSTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LLMTUIiOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LLMTUIiOS";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		E0E3F9AA30759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOSTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOSTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LLMTUIiOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LLMTUIiOS";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
+		E0E3F9AC30759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOSUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOSUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = LLMTUIiOS;
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		E0E3F9AD30759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOSUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.patriknakladalpersonalteam.LLMTUIiOSUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = LLMTUIiOS;
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -525,6 +882,30 @@
 			buildConfigurations = (
 				E0628E2C306EC28F00D1CAC0 /* Debug configuration for PBXNativeTarget "LLMTUIGUITests" */,
 				E0628E2D306EC28F00D1CAC0 /* Release configuration for PBXNativeTarget "LLMTUIGUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		E0E3F9A530759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E0E3F9A630759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOS" */,
+				E0E3F9A730759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOS" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		E0E3F9A830759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E0E3F9A930759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOSTests" */,
+				E0E3F9AA30759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOSTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		E0E3F9AB30759CB700573805 /* Build configuration list for PBXNativeTarget "LLMTUIiOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E0E3F9AC30759CB700573805 /* Debug configuration for PBXNativeTarget "LLMTUIiOSUITests" */,
+				E0E3F9AD30759CB700573805 /* Release configuration for PBXNativeTarget "LLMTUIiOSUITests" */,
 			);
 			defaultConfigurationName = Release;
 		};

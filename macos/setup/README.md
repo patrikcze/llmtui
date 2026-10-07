@@ -49,7 +49,11 @@ To run that check on every commit, install it as a pre-commit hook:
 ln -s ../../macos/setup/scripts/check-no-signing-identity.sh .git/hooks/pre-commit
 ```
 
-If it fails, delete the `DEVELOPMENT_TEAM = …;` lines from `project.pbxproj`.
+If it fails, delete every `DEVELOPMENT_TEAM = …;` line from `project.pbxproj`,
+including empty ones (`DEVELOPMENT_TEAM = "";`). An empty value hides the team
+from your local xcconfig, so Xcode asks for a team again and writes it into a
+target. When adding a new target in Xcode, leave its Team set to **None**; it
+inherits your team from the xcconfig.
 
 ## Build and test from the command line
 
