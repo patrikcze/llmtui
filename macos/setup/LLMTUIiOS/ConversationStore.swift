@@ -53,7 +53,10 @@ struct MobileConversation: Codable, Identifiable, Equatable, Sendable {
 struct MobileConversationStore: Sendable {
     let directory: URL
 
-    init(directory: URL? = nil) {
+    /// Nonisolated because `MobileAppModel.init` creates the store in a
+    /// default argument, which is evaluated outside the main actor; it only
+    /// builds a URL.
+    nonisolated init(directory: URL? = nil) {
         self.directory = directory
             ?? URL.applicationSupportDirectory.appending(path: "Conversations", directoryHint: .isDirectory)
     }

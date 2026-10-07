@@ -237,7 +237,7 @@ private struct ChatListScreen: View {
                 }
             }
             .navigationTitle("Chats")
-            .developmentSubtitle()
+            .chatsSubtitle()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
@@ -380,11 +380,11 @@ private struct ChatScreen: View {
 }
 
 private extension View {
-    /// Shows "Development" under a navigation title on iOS 26 and later.
+    /// Shows "with Local LLMs" under the Chats title on iOS 26 and later.
     @ViewBuilder
-    func developmentSubtitle() -> some View {
+    func chatsSubtitle() -> some View {
         if #available(iOS 26.0, *) {
-            navigationSubtitle("Development")
+            navigationSubtitle("with Local LLMs")
         } else {
             self
         }
