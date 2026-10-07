@@ -251,6 +251,7 @@ private struct ChatTranscript: View {
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.messages.last?.id) {
                 guard let id = model.messages.last?.id else { return }
                 proxy.scrollTo(id, anchor: .bottom)
@@ -397,6 +398,7 @@ private struct ToolActivityView: View {
 private struct ChatComposer: View {
     let model: MobileAppModel
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @FocusState private var isDraftFocused: Bool
 
     var body: some View {
         let hasAttachments = !model.draftAttachments.isEmpty
@@ -467,6 +469,7 @@ private struct ChatComposer: View {
                             .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
                     }
                     .submitLabel(.return)
+                    .focused($isDraftFocused)
                 Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
                     .labelStyle(.iconOnly)
                     .font(.title)
@@ -479,6 +482,17 @@ private struct ChatComposer: View {
         }
         .padding()
         .background(.bar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    isDraftFocused = false
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                }
+                .accessibilityLabel("Dismiss keyboard")
+            }
+        }
         .onChange(of: selectedPhotos) { _, items in
             Task {
                 for item in items {
