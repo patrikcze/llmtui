@@ -8,8 +8,8 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            Tab("Chat", systemImage: "bubble.left.and.bubble.right") {
-                ChatScreen(model: model)
+            Tab("Chats", systemImage: "bubble.left.and.bubble.right") {
+                ChatListScreen(model: model)
             }
             Tab("Providers", systemImage: "server.rack") {
                 ProviderListScreen(model: model)
@@ -183,14 +183,16 @@ private struct MemoryListScreen: View {
     }
 }
 
-private struct ChatScreen: View {
+private struct ChatListScreen: View {
     let model: MobileAppModel
-    @FocusState private var composerFocused: Bool
+    @State private var path: [UUID] = []
+    @State private var renaming: UUID?
+    @State private var deleting: UUID?
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if model.activeProfile == nil {
+        NavigationStack(path: $path) {
+            Group {
+                if model.profiles.isEmpty {
                     ContentUnavailableView {
                         Label("No Provider", systemImage: "server.rack")
                     } description: {
@@ -198,43 +200,60 @@ private struct ChatScreen: View {
                     } actions: {
                         Button("Create Provider") { _ = model.addProfile() }
                     }
+                } else if sortedConversations.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Chats", systemImage: "bubble.left.and.bubble.right")
+                    } description: {
+                        Text("Chats and tool activity stay on this device.")
+                    } actions: {
+                        Button("New Chat", action: startNewChat)
+                            .buttonStyle(.borderedProminent)
+                    }
                 } else {
-                    ChatTranscript(model: model) { composerFocused = false }
-                    Divider()
-                    if let question = model.pendingQuestion {
-                        UserQuestionView(question: question, model: model)
+                    List {
+                        ForEach(sortedConversations) { conversation in
+                            NavigationLink(value: conversation.id) {
+                                ConversationRow(
+                                    conversation: conversation,
+                                    providerName: model.profile(for: conversation)?.name,
+                                    isGenerating: model.generatingConversationID == conversation.id
+                                )
+                            }
+                            .swipeActions {
+                                Button("Delete", systemImage: "trash", role: .destructive) {
+                                    deleting = conversation.id
+                                }
+                                Button("Rename", systemImage: "pencil") { renaming = conversation.id }
+                                    .tint(.orange)
+                            }
+                            .contextMenu {
+                                Button("Rename", systemImage: "pencil") { renaming = conversation.id }
+                                Button("Delete", systemImage: "trash", role: .destructive) {
+                                    deleting = conversation.id
+                                }
+                            }
+                        }
                     }
-                    if !model.queuedMessages.isEmpty {
-                        QueuedMessagesPanel(model: model)
-                    }
-                    ChatComposer(model: model, isFocused: $composerFocused)
                 }
             }
-            .navigationTitle("Chat - Development")
+            .navigationTitle("Chats")
+            .chatsSubtitle()
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        AssistantStatusView(
-                            isWorking: model.isGenerating || model.isDiscoveringModels,
-                            hasProblem: model.hasRuntimeProblem
-                                || model.activeProfile == nil
-                                || model.activeProfile?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-                        )
-                        Text("Chat - Development")
-                            .font(.headline)
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    ProviderMenu(model: model)
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("Clear", systemImage: "trash") { model.clearChat() }
-                        .disabled(model.messages.isEmpty)
-                    if model.isGenerating {
-                        Button("Stop", systemImage: "stop.fill") { model.stop() }
-                    }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+                        .disabled(model.profiles.isEmpty)
                 }
             }
+            .navigationDestination(for: UUID.self) { id in
+                ChatScreen(model: model, conversationID: id) {
+                    path.removeAll { $0 == id }
+                }
+            }
+            .onChange(of: path) { _, newPath in
+                if newPath.isEmpty { model.discardEmptyConversations() }
+            }
+            .renameConversationAlert(model: model, conversationID: $renaming)
+            .deleteConversationConfirmation(model: model, conversationID: $deleting)
             .sheet(item: Binding(
                 get: { model.pendingToolApproval },
                 set: { if $0 == nil { model.resolveApproval(false) } }
@@ -244,6 +263,189 @@ private struct ChatScreen: View {
                     .interactiveDismissDisabled()
             }
         }
+    }
+
+    private var sortedConversations: [MobileConversation] {
+        model.conversations
+            .filter { !$0.messages.isEmpty }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func startNewChat() {
+        path = [model.newConversation()]
+    }
+}
+
+private struct ConversationRow: View {
+    let conversation: MobileConversation
+    let providerName: String?
+    let isGenerating: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(conversation.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                if isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text(conversation.updatedAt, format: .relative(presentation: .named))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !conversation.preview.isEmpty {
+                Text(conversation.preview)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            if let providerName {
+                Label(providerName, systemImage: "server.rack")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct ChatScreen: View {
+    let model: MobileAppModel
+    let conversationID: UUID
+    let close: () -> Void
+    @FocusState private var composerFocused: Bool
+    @State private var renaming: UUID?
+    @State private var deleting: UUID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ChatTranscript(model: model) { composerFocused = false }
+            Divider()
+            if let question = model.pendingQuestion, model.generatingConversationID == conversationID {
+                UserQuestionView(question: question, model: model)
+            }
+            if !model.currentQueuedMessages.isEmpty {
+                QueuedMessagesPanel(model: model)
+            }
+            ChatComposer(model: model, isFocused: $composerFocused)
+        }
+        .navigationTitle(model.currentConversation?.title ?? MobileConversation.defaultTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button {
+                    renaming = conversationID
+                } label: {
+                    HStack(spacing: 8) {
+                        AssistantStatusView(
+                            isWorking: model.isGenerating || model.isDiscoveringModels,
+                            hasProblem: model.hasRuntimeProblem
+                                || model.activeProfile == nil
+                                || model.activeProfile?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+                        )
+                        Text(model.currentConversation?.title ?? MobileConversation.defaultTitle)
+                            .font(.headline)
+                            .lineLimit(1)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Renames this chat")
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                ProviderMenu(model: model)
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if model.isGenerating {
+                    Button("Stop", systemImage: "stop.fill") { model.stop() }
+                }
+                Menu("Chat Options", systemImage: "ellipsis") {
+                    Button("Rename", systemImage: "pencil") { renaming = conversationID }
+                    Button("Clear Messages", systemImage: "eraser") { model.clearChat() }
+                        .disabled(model.messages.isEmpty)
+                    Divider()
+                    Button("Delete Chat", systemImage: "trash", role: .destructive) { deleting = conversationID }
+                }
+            }
+        }
+        .renameConversationAlert(model: model, conversationID: $renaming)
+        .deleteConversationConfirmation(model: model, conversationID: $deleting, onDelete: close)
+        .onAppear { model.openConversation(conversationID) }
+    }
+}
+
+private extension View {
+    /// Shows "with Local LLMs" under the Chats title on iOS 26 and later.
+    @ViewBuilder
+    func chatsSubtitle() -> some View {
+        if #available(iOS 26.0, *) {
+            navigationSubtitle("with Local LLMs")
+        } else {
+            self
+        }
+    }
+
+    func renameConversationAlert(model: MobileAppModel, conversationID: Binding<UUID?>) -> some View {
+        modifier(RenameConversationAlert(model: model, conversationID: conversationID))
+    }
+
+    func deleteConversationConfirmation(
+        model: MobileAppModel,
+        conversationID: Binding<UUID?>,
+        onDelete: @escaping () -> Void = {}
+    ) -> some View {
+        confirmationDialog(
+            "Delete this chat?",
+            isPresented: Binding(
+                get: { conversationID.wrappedValue != nil },
+                set: { if !$0 { conversationID.wrappedValue = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Chat", role: .destructive) {
+                if let id = conversationID.wrappedValue {
+                    model.deleteConversation(id)
+                    onDelete()
+                }
+                conversationID.wrappedValue = nil
+            }
+        } message: {
+            Text("Its messages are removed from this device.")
+        }
+    }
+}
+
+private struct RenameConversationAlert: ViewModifier {
+    let model: MobileAppModel
+    @Binding var conversationID: UUID?
+    @State private var title = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Rename Chat",
+                isPresented: Binding(
+                    get: { conversationID != nil },
+                    set: { if !$0 { conversationID = nil } }
+                )
+            ) {
+                TextField("Title", text: $title)
+                Button("Save") {
+                    if let id = conversationID { model.renameConversation(id, to: title) }
+                    conversationID = nil
+                }
+                Button("Cancel", role: .cancel) { conversationID = nil }
+            } message: {
+                Text("Leave it empty to name the chat after its first message.")
+            }
+            .onChange(of: conversationID) { _, id in
+                title = id.flatMap { id in model.conversations.first { $0.id == id }?.title } ?? ""
+            }
     }
 }
 
@@ -541,24 +743,13 @@ private struct ChatComposer: View {
                     ComposerIcon(
                         systemName: "wrench.and.screwdriver",
                         active: model.toolsEnabled,
-                        accessibilityLabel: "Safe tools"
+                        accessibilityLabel: "Tools: web search, fetch, memory and device context"
                     )
                 }
                 .buttonStyle(.plain)
                 .accessibilityValue(model.toolsEnabled ? "Enabled" : "Disabled")
-                Button {
-                    model.agentEnabled.toggle()
-                } label: {
-                    ComposerIcon(
-                        systemName: "infinity",
-                        active: model.agentEnabled,
-                        accessibilityLabel: "Bounded agent loop"
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(model.agentEnabled ? "Enabled" : "Disabled")
                 Spacer()
-                Text(model.agentEnabled ? "Agent" : (model.toolsEnabled ? "Tools" : "Chat"))
+                Text(model.toolsEnabled ? "Tools" : "Chat")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if isFocused.wrappedValue {
@@ -624,12 +815,12 @@ private struct QueuedMessagesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Up next \u{00B7} \(model.queuedMessages.count)")
+            Text("Up next \u{00B7} \(model.currentQueuedMessages.count)")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             ScrollView {
                 VStack(spacing: 6) {
-                    ForEach(model.queuedMessages) { queued in
+                    ForEach(model.currentQueuedMessages) { queued in
                         HStack(spacing: 8) {
                             Image(systemName: "clock")
                                 .font(.caption)
@@ -663,7 +854,7 @@ private struct QueuedMessagesPanel: View {
                 }
             }
             .frame(maxHeight: 120)
-            .fixedSize(horizontal: false, vertical: model.queuedMessages.count < 3)
+            .fixedSize(horizontal: false, vertical: model.currentQueuedMessages.count < 3)
         }
         .padding(.horizontal)
         .padding(.top, 10)

@@ -181,7 +181,6 @@ enum MobileToolApprovalMode: String, CaseIterable, Identifiable, Sendable {
 /// The chat choices one reply runs with, captured when it is sent or queued.
 struct MobileTurnOptions: Equatable, Sendable {
     var toolsEnabled: Bool
-    var agentEnabled: Bool
     var reasoning: MobileReasoning
 }
 
@@ -189,6 +188,8 @@ struct MobileTurnOptions: Equatable, Sendable {
 /// order, once that reply finishes.
 struct MobileQueuedMessage: Identifiable, Equatable {
     let id = UUID()
+    /// The chat it was written in; it is sent there even if another chat is open.
+    let conversationID: UUID
     let text: String
     let attachments: [MobileAttachment]
     let options: MobileTurnOptions
