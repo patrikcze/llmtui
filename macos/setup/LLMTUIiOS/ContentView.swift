@@ -121,9 +121,9 @@ private struct SettingsScreen: View {
     private var approvalFooter: String {
         switch MobileToolApprovalMode(rawValue: approvalMode) ?? .always {
         case .always:
-            "Web search, web fetch, and memory changes ask before running."
+            "Web research, search and fetch, and memory changes ask before running."
         case .memoryChanges:
-            "Web search and fetch run without asking. Saving or forgetting a memory still asks."
+            "Web research, search and fetch run without asking. Saving or forgetting a memory still asks."
         case .never:
             "Nothing asks. A web page the model reads could steer it into fetching a URL that carries your chat or memories elsewhere, so use this only with sources you trust."
         }
@@ -675,6 +675,8 @@ private struct ToolActivityView: View {
 
     private var icon: String {
         switch activity.name {
+        case "web_research": "doc.text.magnifyingglass"
+        case "memory_search", "memory_list", "memory_remember", "memory_forget": "brain"
         case "web_search": "magnifyingglass"
         case "web_fetch": "globe"
         case "local_context": "location"
