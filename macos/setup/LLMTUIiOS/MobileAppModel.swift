@@ -7,10 +7,13 @@ import UIKit
 final class MobileAppModel {
     var profiles: [MobileProviderProfile] = []
     var activeProfileID: UUID?
-    var messages: [MobileChatMessage] = []
+    /// Every chat, in no particular order; the chat list sorts by date.
+    var conversations: [MobileConversation] = []
+    var currentConversationID: UUID?
     var draft = ""
+    /// Tools on runs the bounded tool loop (search, fetch, memory, local
+    /// context, ask); off is a plain chat.
     var toolsEnabled = true
-    var agentEnabled = false
     var reasoning: MobileReasoning = .automatic
     var draftAttachments: [MobileAttachment] = []
     var isGenerating = false
@@ -24,14 +27,21 @@ final class MobileAppModel {
     var hasRuntimeProblem = false
 
     private static let maxQueuedMessages = 10
+    private static let maximumToolRounds = 8
     private let providerStore = MobileProviderStore()
+    private let conversationStore: MobileConversationStore
+    /// The chat the in-flight reply belongs to; it keeps streaming there even
+    /// if the user opens another chat.
+    private(set) var generatingConversationID: UUID?
     private let credentialStore = KeychainCredentialStore()
     private let runtime = MobileChatRuntime()
     private var generationTask: Task<Void, Never>?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var questionContinuation: CheckedContinuation<String, Never>?
 
-    init() {
+    init(conversationStore: MobileConversationStore = MobileConversationStore()) {
+        self.conversationStore = conversationStore
+        conversations = conversationStore.loadAll()
         profiles = providerStore.loadProfiles()
         activeProfileID = providerStore.loadActiveID()
         if activeProfileID == nil || !profiles.contains(where: { $0.id == activeProfileID }) {
@@ -41,6 +51,85 @@ final class MobileAppModel {
 
     var activeProfile: MobileProviderProfile? {
         profiles.first { $0.id == activeProfileID }
+    }
+
+    var currentConversation: MobileConversation? {
+        conversations.first { $0.id == currentConversationID }
+    }
+
+    /// The open chat's messages.
+    var messages: [MobileChatMessage] {
+        currentConversation?.messages ?? []
+    }
+
+    /// Messages queued for the open chat.
+    var currentQueuedMessages: [MobileQueuedMessage] {
+        queuedMessages.filter { $0.conversationID == currentConversationID }
+    }
+
+    // MARK: - Chats
+
+    /// Opens a new, empty chat on the active provider. An empty chat is not
+    /// saved until its first message, and an existing empty chat is reused.
+    @discardableResult
+    func newConversation() -> UUID {
+        if let index = conversations.firstIndex(where: { $0.messages.isEmpty && $0.id != generatingConversationID }) {
+            conversations[index].profileID = activeProfileID
+            currentConversationID = conversations[index].id
+            return conversations[index].id
+        }
+        let conversation = MobileConversation(profileID: activeProfileID)
+        conversations.append(conversation)
+        currentConversationID = conversation.id
+        return conversation.id
+    }
+
+    /// Makes `id` the open chat and switches the active provider to the one
+    /// that chat uses, when it still exists.
+    func openConversation(_ id: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        currentConversationID = id
+        if let profileID = conversation.profileID, profiles.contains(where: { $0.id == profileID }) {
+            activeProfileID = profileID
+            providerStore.saveActiveID(profileID)
+        }
+        hasRuntimeProblem = false
+    }
+
+    /// Renames a chat. An empty name goes back to the automatic title.
+    func renameConversation(_ id: UUID, to title: String) {
+        guard let index = conversationIndex(id) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            conversations[index].hasCustomTitle = false
+            conversations[index].title = MobileConversation.automaticTitle(for: conversations[index].messages)
+        } else {
+            conversations[index].hasCustomTitle = true
+            conversations[index].title = String(trimmed.prefix(80))
+        }
+        persistConversation(id)
+    }
+
+    func deleteConversation(_ id: UUID) {
+        queuedMessages.removeAll { $0.conversationID == id }
+        if generatingConversationID == id { stop() }
+        conversations.removeAll { $0.id == id }
+        conversationStore.delete(id)
+        if currentConversationID == id { currentConversationID = nil }
+    }
+
+    /// Drops chats that never got a message, so leaving a new chat unused
+    /// does not leave an empty row behind.
+    func discardEmptyConversations() {
+        conversations.removeAll { $0.messages.isEmpty && $0.id != generatingConversationID }
+        if let id = currentConversationID, conversationIndex(id) == nil {
+            currentConversationID = nil
+        }
+    }
+
+    /// The provider a chat uses: its own, else the active one.
+    func profile(for conversation: MobileConversation) -> MobileProviderProfile? {
+        conversation.profileID.flatMap { id in profiles.first { $0.id == id } } ?? activeProfile
     }
 
     func addProfile() -> MobileProviderProfile {
@@ -91,6 +180,10 @@ final class MobileAppModel {
         hasRuntimeProblem = false
         providerStore.saveActiveID(id)
         discoveredModels = []
+        if let conversationID = currentConversationID, let index = conversationIndex(conversationID) {
+            conversations[index].profileID = id
+            persistConversation(conversationID)
+        }
     }
 
     func discoverModels() {
@@ -148,14 +241,20 @@ final class MobileAppModel {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftAttachments.isEmpty else { return }
-        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, agentEnabled: agentEnabled, reasoning: reasoning)
+        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning)
+        let conversationID = currentConversationID ?? newConversation()
 
         guard !isGenerating else {
             guard queuedMessages.count < Self.maxQueuedMessages else {
                 errorMessage = "You can queue up to \(Self.maxQueuedMessages) messages."
                 return
             }
-            queuedMessages.append(MobileQueuedMessage(text: text, attachments: draftAttachments, options: options))
+            queuedMessages.append(MobileQueuedMessage(
+                conversationID: conversationID,
+                text: text,
+                attachments: draftAttachments,
+                options: options
+            ))
             draft = ""
             draftAttachments = []
             return
@@ -164,7 +263,7 @@ final class MobileAppModel {
         let attachments = draftAttachments
         draft = ""
         draftAttachments = []
-        dispatch(text: text, attachments: attachments, options: options)
+        dispatch(text: text, attachments: attachments, options: options, conversationID: conversationID)
     }
 
     func removeQueuedMessage(_ queued: MobileQueuedMessage) {
@@ -177,12 +276,17 @@ final class MobileAppModel {
         draft = queued.text
         draftAttachments = queued.attachments
         toolsEnabled = queued.options.toolsEnabled
-        agentEnabled = queued.options.agentEnabled
         reasoning = queued.options.reasoning
     }
 
-    private func dispatch(text: String, attachments: [MobileAttachment], options: MobileTurnOptions) {
-        guard let profile = activeProfile else {
+    private func dispatch(
+        text: String,
+        attachments: [MobileAttachment],
+        options: MobileTurnOptions,
+        conversationID: UUID
+    ) {
+        guard let index = conversationIndex(conversationID) else { return }
+        guard let profile = profile(for: conversations[index]) else {
             errorMessage = MobileChatError.noProvider.localizedDescription
             return
         }
@@ -191,14 +295,20 @@ final class MobileAppModel {
             return
         }
 
-        messages.append(MobileChatMessage(role: .user, text: text, attachments: attachments))
+        conversations[index].messages.append(MobileChatMessage(role: .user, text: text, attachments: attachments))
+        let history = conversations[index].messages
         let assistantID = UUID()
-        messages.append(MobileChatMessage(id: assistantID, role: .assistant, text: "", isStreaming: true))
+        conversations[index].messages.append(MobileChatMessage(id: assistantID, role: .assistant, text: "", isStreaming: true))
+        if !conversations[index].hasCustomTitle {
+            conversations[index].title = MobileConversation.automaticTitle(for: conversations[index].messages)
+        }
+        conversations[index].profileID = profile.id
         isGenerating = true
+        generatingConversationID = conversationID
         hasRuntimeProblem = false
         separateNextRound = false
+        persistConversation(conversationID)
 
-        let history = messages.filter { $0.id != assistantID }
         generationTask = Task {
             do {
                 try await runToolLoop(
@@ -219,9 +329,11 @@ final class MobileAppModel {
                 errorMessage = error.localizedDescription
             }
             isGenerating = false
+            generatingConversationID = nil
             markStreamingFinished(id: assistantID)
             pendingToolApproval = nil
             pendingQuestion = nil
+            persistConversation(conversationID)
             // Started from inside the finished task, after its state is
             // reset, so the next reply never races the previous one.
             dequeueNextIfNeeded()
@@ -229,9 +341,10 @@ final class MobileAppModel {
     }
 
     private func dequeueNextIfNeeded() {
+        queuedMessages.removeAll { queued in !conversations.contains { $0.id == queued.conversationID } }
         guard !queuedMessages.isEmpty else { return }
         let next = queuedMessages.removeFirst()
-        dispatch(text: next.text, attachments: next.attachments, options: next.options)
+        dispatch(text: next.text, attachments: next.attachments, options: next.options, conversationID: next.conversationID)
     }
 
     func stop() {
@@ -243,10 +356,16 @@ final class MobileAppModel {
         questionContinuation = nil
     }
 
+    /// Clears the open chat's messages but keeps the chat.
     func clearChat() {
-        queuedMessages.removeAll()
-        stop()
-        messages.removeAll()
+        guard let id = currentConversationID, let index = conversationIndex(id) else { return }
+        queuedMessages.removeAll { $0.conversationID == id }
+        if generatingConversationID == id { stop() }
+        conversations[index].messages.removeAll()
+        if !conversations[index].hasCustomTitle {
+            conversations[index].title = MobileConversation.defaultTitle
+        }
+        persistConversation(id)
     }
 
     func resolveApproval(_ approved: Bool) {
@@ -275,14 +394,14 @@ final class MobileAppModel {
         var systemInstructions = """
         Format answers for a narrow mobile display using concise paragraphs and valid Markdown. Put blank lines between paragraphs, headings, and lists. Use fenced code blocks for code. For Mermaid, emit a fenced block beginning with ```mermaid and valid Mermaid syntax. Quote every human-readable node or edge label containing whitespace or punctuation, for example A["Validate Input (Required)"] and A -->|"Valid"| B. Mermaid comments must use %% on their own line. For mathematics, emit only KaTeX-compatible expressions using $...$ or \\(...\\) inline and $$...$$ or \\[...\\] for display math. Never emit a complete LaTeX document, preamble, or text-layout environment such as document, itemize, enumerate, verbatim, table, or figure.
         """
-        if options.agentEnabled {
+        let usesTools = options.toolsEnabled
+        if usesTools {
             systemInstructions += """
 
-            You are in bounded agent mode. Work toward the user's goal using available tools, inspect tool results before continuing, ask when an important choice is missing, and stop after completing the task. Never claim a tool ran unless its result is present.
+            Tools: work toward the user's goal with the available tools, inspect each result before continuing, ask with ask_user when an important choice is missing, and stop once the task is done. Never claim a tool ran unless its result is present.
             """
         }
         let memoryEnabled = MobileMemoryStore.isEnabled
-        let usesTools = options.toolsEnabled || options.agentEnabled
         if memoryEnabled {
             let memories = await MobileMemoryStore.shared.entries()
             if let section = MobileMemoryStore.promptSection(for: memories) {
@@ -294,8 +413,7 @@ final class MobileAppModel {
         }
         wireMessages.insert(["role": "system", "content": systemInstructions], at: 0)
         let tools = usesTools ? MobileChatRuntime.toolDefinitions(memoryEnabled: memoryEnabled) : nil
-        let maximumRounds = options.agentEnabled ? 10 : 4
-        for _ in 0..<maximumRounds {
+        for _ in 0..<Self.maximumToolRounds {
             let result = try await runtime.streamTurn(
                 profile: profile,
                 apiKey: apiKey,
@@ -480,8 +598,8 @@ final class MobileAppModel {
         status: MobileToolActivityStatus
     ) -> UUID {
         let activity = MobileToolActivity(name: name, detail: String(detail.prefix(500)), status: status)
-        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return activity.id }
-        messages[index].toolActivities.append(activity)
+        guard let (c, m) = location(of: messageID) else { return activity.id }
+        conversations[c].messages[m].toolActivities.append(activity)
         return activity.id
     }
 
@@ -491,10 +609,10 @@ final class MobileAppModel {
         status: MobileToolActivityStatus,
         result: String?
     ) {
-        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
-              let activityIndex = messages[messageIndex].toolActivities.firstIndex(where: { $0.id == activityID }) else { return }
-        messages[messageIndex].toolActivities[activityIndex].status = status
-        messages[messageIndex].toolActivities[activityIndex].resultPreview = result.map { String($0.prefix(500)) }
+        guard let (c, m) = location(of: messageID),
+              let a = conversations[c].messages[m].toolActivities.firstIndex(where: { $0.id == activityID }) else { return }
+        conversations[c].messages[m].toolActivities[a].status = status
+        conversations[c].messages[m].toolActivities[a].resultPreview = result.map { String($0.prefix(500)) }
     }
 
     private func requestApproval(name: String, summary: String) async -> Bool {
@@ -544,21 +662,55 @@ final class MobileAppModel {
     }
 
     private func appendDelta(_ delta: String, to id: UUID) {
-        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
-        messages[index].text += delta
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages[m].text += delta
     }
 
     private func markStreamingFinished(id: UUID) {
-        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
-        messages[index].isStreaming = false
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages[m].isStreaming = false
     }
 
     private func message(id: UUID) -> MobileChatMessage? {
-        messages.first { $0.id == id }
+        location(of: id).map { conversations[$0.0].messages[$0.1] }
     }
 
     private func removeMessage(id: UUID) {
-        messages.removeAll { $0.id == id }
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages.remove(at: m)
+    }
+
+    /// Finds a message in whichever chat holds it. Message ids are unique, so
+    /// a reply keeps streaming into its own chat while another one is open.
+    private func location(of messageID: UUID) -> (Int, Int)? {
+        if let id = generatingConversationID, let c = conversationIndex(id),
+           let m = conversations[c].messages.lastIndex(where: { $0.id == messageID }) {
+            return (c, m)
+        }
+        for (c, conversation) in conversations.enumerated() {
+            if let m = conversation.messages.firstIndex(where: { $0.id == messageID }) { return (c, m) }
+        }
+        return nil
+    }
+
+    private func conversationIndex(_ id: UUID) -> Int? {
+        conversations.firstIndex { $0.id == id }
+    }
+
+    /// Saves a chat with messages. An empty chat is not written; one that
+    /// became empty (cleared) is removed from disk.
+    private func persistConversation(_ id: UUID) {
+        guard let index = conversationIndex(id) else { return }
+        conversations[index].updatedAt = .now
+        guard !conversations[index].messages.isEmpty else {
+            conversationStore.delete(id)
+            return
+        }
+        do {
+            try conversationStore.save(conversations[index])
+        } catch {
+            errorMessage = "The chat could not be saved: \(error.localizedDescription)"
+        }
     }
 
     private func persistProfiles() {

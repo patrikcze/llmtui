@@ -125,4 +125,74 @@ struct LLMTUIiOSTests {
         #expect(MobileToolApprovalMode.memoryChanges.requiresApproval("memory_forget"))
         #expect(!MobileToolApprovalMode.never.requiresApproval("memory_remember"))
     }
+
+    @Test func conversationsPersistNewestFirstAndFinishInterruptedReplies() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "LLMTUIiOSTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MobileConversationStore(directory: directory)
+
+        var older = MobileConversation(profileID: nil, now: Date(timeIntervalSince1970: 100))
+        older.messages = [MobileChatMessage(role: .user, text: "First")]
+        var newer = MobileConversation(profileID: UUID(), now: Date(timeIntervalSince1970: 200))
+        newer.messages = [
+            MobileChatMessage(role: .user, text: "Second"),
+            MobileChatMessage(role: .assistant, text: "Half a repl", isStreaming: true)
+        ]
+        try store.save(older)
+        try store.save(newer)
+
+        let loaded = store.loadAll()
+        #expect(loaded.map(\.id) == [newer.id, older.id])
+        #expect(loaded[0].profileID == newer.profileID)
+        #expect(loaded[0].messages.allSatisfy { !$0.isStreaming })
+
+        store.delete(older.id)
+        #expect(store.loadAll().map(\.id) == [newer.id])
+    }
+
+    @Test func automaticTitleUsesTheFirstLineOfTheFirstUserMessage() {
+        #expect(MobileConversation.automaticTitle(for: []) == MobileConversation.defaultTitle)
+        let short = [MobileChatMessage(role: .user, text: "Plan a trip\nto Prague in May")]
+        #expect(MobileConversation.automaticTitle(for: short) == "Plan a trip")
+        let long = [MobileChatMessage(role: .user, text: String(repeating: "a", count: 60))]
+        #expect(MobileConversation.automaticTitle(for: long).count == 40)
+        #expect(MobileConversation.automaticTitle(for: long).hasSuffix("\u{2026}"))
+        let image = [MobileChatMessage(role: .user, text: "", attachments: [MobileAttachment(data: Data([1]))])]
+        #expect(MobileConversation.automaticTitle(for: image) == "Image")
+    }
+
+    @Test func renamingAndDeletingChatsUpdatesTheStore() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "LLMTUIiOSTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MobileConversationStore(directory: directory)
+        var conversation = MobileConversation(profileID: nil)
+        conversation.messages = [MobileChatMessage(role: .user, text: "Hello there")]
+        conversation.title = MobileConversation.automaticTitle(for: conversation.messages)
+        try store.save(conversation)
+
+        let model = MobileAppModel(conversationStore: store)
+        model.renameConversation(conversation.id, to: "  Trip ideas  ")
+        #expect(store.loadAll().first?.title == "Trip ideas")
+        #expect(store.loadAll().first?.hasCustomTitle == true)
+
+        model.renameConversation(conversation.id, to: "")
+        #expect(store.loadAll().first?.title == "Hello there")
+
+        model.deleteConversation(conversation.id)
+        #expect(store.loadAll().isEmpty)
+        #expect(model.conversations.isEmpty)
+    }
+
+    @Test func newChatIsReusedWhileEmptyAndDiscardedWhenLeft() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "LLMTUIiOSTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = MobileAppModel(conversationStore: MobileConversationStore(directory: directory))
+
+        let first = model.newConversation()
+        #expect(model.newConversation() == first)
+        #expect(model.conversations.count == 1)
+        model.discardEmptyConversations()
+        #expect(model.conversations.isEmpty)
+        #expect(model.currentConversationID == nil)
+    }
 }
