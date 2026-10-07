@@ -12,6 +12,7 @@ nonisolated struct DocumentExtractionUpdate: Sendable {
     var lineCount: Int?
     var processedPages: Int
     var warnings: [String]
+    var notes: [String] = []
     var status: ChatDocumentStatus
 }
 
@@ -77,9 +78,12 @@ nonisolated enum DocumentExtractor {
                 lineCount: nil,
                 processedPages: processed,
                 warnings: pdfWarnings(
-                    total: total, limit: limit, ocrPages: ocrPages, lowConfidencePages: lowConfidencePages,
+                    total: total, limit: limit, lowConfidencePages: lowConfidencePages,
                     skippedOCRPages: skippedOCRPages, languageNote: languageNote
                 ),
+                notes: ocrPages.isEmpty ? [] : [
+                    "\(pagesHave(ocrPages)) no text layer and were read with OCR, which reads printed text only, not pictures or diagrams."
+                ],
                 status: status
             )
         }
@@ -112,17 +116,18 @@ nonisolated enum DocumentExtractor {
                 }
             }
 
-            if characters < DocumentLimits.maxIndexedCharacters {
-                for piece in split(text, maxLength: DocumentLimits.chunkCharacters) {
-                    chunks.append(DocumentChunk(
-                        id: "c\(nextNumber)", page: pageNumber, lineStart: nil, lineEnd: nil,
-                        method: method, lowConfidence: lowConfidence, text: piece
-                    ))
-                    nextNumber += 1
-                    characters += piece.count
-                }
+            for piece in split(text, maxLength: DocumentLimits.chunkCharacters) {
+                chunks.append(DocumentChunk(
+                    id: "c\(nextNumber)", page: pageNumber, lineStart: nil, lineEnd: nil,
+                    method: method, lowConfidence: lowConfidence, text: piece
+                ))
+                nextNumber += 1
+                characters += piece.count
             }
             processed = pageNumber
+            // Past the indexing limit there is no point reading (or OCR'ing)
+            // further pages; the result is reported as partial.
+            if characters >= DocumentLimits.maxIndexedCharacters { break }
             if processed % DocumentLimits.checkpointPages == 0, processed < limit {
                 await checkpoint(update(.extracting(processed: processed, total: total)))
             }
@@ -136,24 +141,20 @@ nonisolated enum DocumentExtractor {
             )
         }
         var reasons: [String] = []
+        if processed < limit { reasons.append("only the first \(processed) of \(total) pages were indexed (text size limit)") }
         if total > limit { reasons.append("only the first \(limit) of \(total) pages were processed") }
         if !skippedOCRPages.isEmpty { reasons.append("\(skippedOCRPages.count) scanned pages exceeded the OCR limit") }
-        if characters >= DocumentLimits.maxIndexedCharacters { reasons.append("the text exceeded the indexing limit") }
         return update(reasons.isEmpty ? .ready : .partial(reasons.joined(separator: "; ").capitalizedFirst + "."))
     }
 
     private static func pdfWarnings(
         total: Int,
         limit: Int,
-        ocrPages: Set<Int>,
         lowConfidencePages: Set<Int>,
         skippedOCRPages: [Int],
         languageNote: String?
     ) -> [String] {
         var warnings: [String] = []
-        if !ocrPages.isEmpty {
-            warnings.append("\(pagesHave(ocrPages)) no text layer and were read with OCR; OCR reads printed text only, not pictures or diagrams.")
-        }
         if !lowConfidencePages.isEmpty {
             warnings.append("OCR confidence is low on \(lowConfidencePages.count == 1 ? "page" : "pages") \(ranges(lowConfidencePages)); quote those passages with care.")
         }
@@ -246,9 +247,9 @@ nonisolated enum DocumentExtractor {
         guard !recognition.lines.isEmpty else {
             return failed("No text was found in this image. Image reading uses OCR: it finds printed text, not pictures, charts or diagrams.")
         }
-        var warnings = ["Read with OCR: only the printed text is available, not pictures, charts or layout."]
+        var warnings: [String] = []
         if recognition.confidence < 0.5 {
-            warnings.append("OCR confidence is low; quote this text with care.")
+            warnings.append("OCR confidence is low (blurry, small, skewed or handwritten text); quote this text with care.")
         }
         if let note = recognition.languageNote { warnings.append(note) }
         return DocumentExtractionUpdate(
@@ -257,6 +258,7 @@ nonisolated enum DocumentExtractor {
             lineCount: recognition.lines.count,
             processedPages: 0,
             warnings: warnings,
+            notes: ["Read with OCR: only the printed text is available, not pictures, charts or layout."],
             status: .ready
         )
     }

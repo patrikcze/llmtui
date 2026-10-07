@@ -337,7 +337,10 @@ private struct ChatScreen: View {
             if !model.currentDocuments.isEmpty {
                 DocumentsPanel(model: model) { document in
                     openSource = DocumentSourceSelection(
-                        document: document, chunk: nil, fileURL: model.documents.originalURL(for: document)
+                        document: document, chunk: nil, fileURL: model.documents.originalURL(for: document),
+                        fullText: document.kind == .image
+                            ? model.documents.chunks(for: document).map(\.text).joined(separator: "\n")
+                            : nil
                     )
                 }
             }
@@ -556,8 +559,10 @@ private struct ProviderMenu: View {
 }
 
 private struct ChatTranscript: View {
+    private static let bottomID = "transcript-bottom"
     let model: MobileAppModel
     let conversationID: UUID
+    @State private var isNearBottom = true
     /// Hides the keyboard. Tapping anywhere in the conversation calls it, in
     /// addition to swiping the conversation down.
     let dismissKeyboard: () -> Void
@@ -578,6 +583,9 @@ private struct ChatTranscript: View {
                         MessageBubble(message: message, displayText: displayText(for: message))
                             .id(message.id)
                     }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomID)
                 }
                 .padding()
             }
@@ -585,9 +593,20 @@ private struct ChatTranscript: View {
             // Simultaneous, so links, text selection and tool disclosure
             // groups in the transcript keep working.
             .simultaneousGesture(TapGesture().onEnded(dismissKeyboard))
+            // Follow a streaming reply only while the reader is at the
+            // bottom; scrolling up to read stops the auto-scroll.
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 120
+            } action: { _, nearBottom in
+                isNearBottom = nearBottom
+            }
             .onChange(of: model.messages.last?.text) {
-                guard let id = model.messages.last?.id else { return }
-                proxy.scrollTo(id, anchor: .bottom)
+                guard isNearBottom else { return }
+                proxy.scrollTo(Self.bottomID, anchor: .bottom)
+            }
+            .onChange(of: model.messages.count) {
+                // A new message (yours, or the reply starting) always shows.
+                proxy.scrollTo(Self.bottomID, anchor: .bottom)
             }
         }
     }
@@ -754,7 +773,7 @@ private struct ChatComposer: View {
     @State private var showFileImporter = false
 
     private static let documentTypes: [UTType] = [
-        .pdf, .plainText, .utf8PlainText, .text, UTType("net.daringfireball.markdown")
+        .pdf, .plainText, .utf8PlainText, UTType("net.daringfireball.markdown")
     ].compactMap { $0 }
 
     var body: some View {
