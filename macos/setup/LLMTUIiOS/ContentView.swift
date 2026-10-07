@@ -1,0 +1,758 @@
+import SwiftUI
+import PhotosUI
+import UIKit
+
+struct ContentView: View {
+    @State private var model = MobileAppModel()
+    @AppStorage("iosAppearanceMode") private var appearanceMode = MobileAppearanceMode.system.rawValue
+
+    var body: some View {
+        TabView {
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right") {
+                ChatScreen(model: model)
+            }
+            Tab("Providers", systemImage: "server.rack") {
+                ProviderListScreen(model: model)
+            }
+            Tab("Settings", systemImage: "gearshape") {
+                SettingsScreen(appearanceMode: $appearanceMode)
+            }
+        }
+        .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
+        .alert("Something went wrong", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.errorMessage = nil } }
+        )) {
+            Button("OK") { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+}
+
+private enum MobileAppearanceMode: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max"
+        case .dark: "moon"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+private struct SettingsScreen: View {
+    @Binding var appearanceMode: String
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Appearance", selection: $appearanceMode) {
+                        ForEach(MobileAppearanceMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.icon)
+                                .tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("System follows the appearance selected in iOS Settings.")
+                }
+            }
+            .navigationTitle("Settings")
+        }
+    }
+}
+
+private struct ChatScreen: View {
+    let model: MobileAppModel
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if model.activeProfile == nil {
+                    ContentUnavailableView {
+                        Label("No Provider", systemImage: "server.rack")
+                    } description: {
+                        Text("Add a provider before starting a conversation.")
+                    } actions: {
+                        Button("Create Provider") { _ = model.addProfile() }
+                    }
+                } else {
+                    ChatTranscript(model: model)
+                    Divider()
+                    if let question = model.pendingQuestion {
+                        UserQuestionView(question: question, model: model)
+                    }
+                    ChatComposer(model: model)
+                }
+            }
+            .navigationTitle("Chat")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        AssistantStatusView(
+                            isWorking: model.isGenerating || model.isDiscoveringModels,
+                            hasProblem: model.hasRuntimeProblem
+                                || model.activeProfile == nil
+                                || model.activeProfile?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+                        )
+                        Text("Chat")
+                            .font(.headline)
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    ProviderMenu(model: model)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Clear", systemImage: "trash") { model.clearChat() }
+                        .disabled(model.messages.isEmpty)
+                    if model.isGenerating {
+                        Button("Stop", systemImage: "stop.fill") { model.stop() }
+                    }
+                }
+            }
+            .sheet(item: Binding(
+                get: { model.pendingToolApproval },
+                set: { if $0 == nil { model.resolveApproval(false) } }
+            )) { approval in
+                ToolApprovalView(approval: approval, model: model)
+                    .presentationDetents([.medium])
+                    .interactiveDismissDisabled()
+            }
+        }
+    }
+}
+
+private struct AssistantStatusView: View {
+    let isWorking: Bool
+    let hasProblem: Bool
+
+    private let frames = [
+        "ThinkingMascotFrame1",
+        "ThinkingMascotFrame2",
+        "ThinkingMascotFrame3",
+        "ThinkingMascotFrame4"
+    ]
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if isWorking {
+                TimelineView(.periodic(from: .now, by: 0.22)) { context in
+                    mascot(frameName(at: context.date))
+                }
+            } else {
+                mascot(frames[0])
+            }
+
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+                .overlay {
+                    Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2)
+                }
+                .shadow(radius: 1)
+        }
+        .frame(width: 34, height: 34)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func mascot(_ name: String) -> some View {
+        Image(name)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 32, height: 32)
+    }
+
+    private func frameName(at date: Date) -> String {
+        let index = Int(date.timeIntervalSinceReferenceDate / 0.22) % frames.count
+        return frames[index]
+    }
+
+    private var statusColor: Color {
+        if isWorking { return .orange }
+        return hasProblem ? .red : .green
+    }
+
+    private var accessibilityLabel: String {
+        if isWorking { return "Assistant is working" }
+        return hasProblem ? "Assistant unavailable" : "Assistant ready"
+    }
+}
+
+private struct ProviderMenu: View {
+    let model: MobileAppModel
+
+    var body: some View {
+        Menu {
+            ForEach(model.profiles) { profile in
+                Button {
+                    model.selectProfile(profile.id)
+                } label: {
+                    if profile.id == model.activeProfileID {
+                        Label(profile.name, systemImage: "checkmark")
+                    } else {
+                        Text(profile.name)
+                    }
+                }
+            }
+        } label: {
+            Label(model.activeProfile?.name ?? "Provider", systemImage: "server.rack")
+                .lineLimit(1)
+        }
+        .accessibilityLabel("Active provider")
+        .disabled(model.profiles.isEmpty || model.isGenerating)
+    }
+}
+
+private struct ChatTranscript: View {
+    let model: MobileAppModel
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    if model.messages.isEmpty {
+                        ContentUnavailableView(
+                            "Start a Conversation",
+                            systemImage: "sparkles",
+                            description: Text("Messages and tool activity stay on this device.")
+                        )
+                        .padding(.top, 60)
+                    }
+                    ForEach(model.messages) { message in
+                        MessageBubble(message: message)
+                            .id(message.id)
+                    }
+                }
+                .padding()
+            }
+            .onChange(of: model.messages.last?.id) {
+                guard let id = model.messages.last?.id else { return }
+                proxy.scrollTo(id, anchor: .bottom)
+            }
+        }
+    }
+}
+
+private struct MessageBubble: View {
+    let message: MobileChatMessage
+
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 40) }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message.role == .user ? "You" : "Assistant")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if message.role == .assistant {
+                    MobileRichMessageView(
+                        source: message.text.isEmpty && message.isStreaming ? "Thinking…" : message.text
+                    )
+                } else {
+                    Text(message.text)
+                        .textSelection(.enabled)
+                }
+                if !message.attachments.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack {
+                            ForEach(message.attachments) { attachment in
+                                if let image = UIImage(data: attachment.data) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 120, height: 90)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .accessibilityLabel("Attached image")
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+                if !message.toolActivities.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(message.toolActivities) { activity in
+                            ToolActivityView(activity: activity)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .padding(12)
+            .background(
+                message.role == .user ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.1),
+                in: RoundedRectangle(cornerRadius: 16)
+            )
+            if message.role != .user { Spacer(minLength: 40) }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ToolActivityView: View {
+    let activity: MobileToolActivity
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(activity.detail)
+                    .foregroundStyle(.secondary)
+                if let preview = activity.resultPreview, !preview.isEmpty {
+                    Divider()
+                    Text(preview)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .foregroundStyle(statusColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(displayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if activity.status == .running || activity.status == .waitingForApproval {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(10)
+        .background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(displayName), \(statusText)")
+    }
+
+    private var displayName: String {
+        activity.name.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private var icon: String {
+        switch activity.name {
+        case "web_search": "magnifyingglass"
+        case "web_fetch": "globe"
+        case "local_context": "location"
+        case "ask_user": "questionmark.bubble"
+        default: "wrench.and.screwdriver"
+        }
+    }
+
+    private var statusText: String {
+        switch activity.status {
+        case .waitingForApproval: "Waiting for approval"
+        case .running: "Running"
+        case .completed: "Completed"
+        case .failed: "Failed"
+        case .rejected: "Rejected"
+        }
+    }
+
+    private var statusColor: Color {
+        switch activity.status {
+        case .waitingForApproval, .running: .accentColor
+        case .completed: .green
+        case .failed: .red
+        case .rejected: .secondary
+        }
+    }
+}
+
+private struct ChatComposer: View {
+    let model: MobileAppModel
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+
+    var body: some View {
+        let hasAttachments = !model.draftAttachments.isEmpty
+        VStack(spacing: 8) {
+            if !model.draftAttachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(model.draftAttachments) { attachment in
+                            AttachmentThumbnail(attachment: attachment) {
+                                model.removeAttachment(attachment)
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+            HStack(spacing: 18) {
+                ReasoningMenu(model: model)
+                PhotosPicker(
+                    selection: $selectedPhotos,
+                    maxSelectionCount: max(0, 4 - model.draftAttachments.count),
+                    matching: .images
+                ) {
+                    ComposerIcon(
+                        systemName: "paperclip",
+                        active: hasAttachments,
+                        accessibilityLabel: "Attach images"
+                    )
+                }
+                .disabled(model.isGenerating || model.draftAttachments.count >= 4)
+                Button {
+                    model.toolsEnabled.toggle()
+                } label: {
+                    ComposerIcon(
+                        systemName: "wrench.and.screwdriver",
+                        active: model.toolsEnabled,
+                        accessibilityLabel: "Safe tools"
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(model.toolsEnabled ? "Enabled" : "Disabled")
+                Button {
+                    model.agentEnabled.toggle()
+                } label: {
+                    ComposerIcon(
+                        systemName: "infinity",
+                        active: model.agentEnabled,
+                        accessibilityLabel: "Bounded agent loop"
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(model.agentEnabled ? "Enabled" : "Disabled")
+                Spacer()
+                Text(model.agentEnabled ? "Agent" : (model.toolsEnabled ? "Tools" : "Chat"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(model.isGenerating)
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("Message", text: Bindable(model).draft, axis: .vertical)
+                    .lineLimit(2...8)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                    }
+                    .submitLabel(.return)
+                Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
+                    .labelStyle(.iconOnly)
+                    .font(.title)
+                    .disabled(
+                        model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && model.draftAttachments.isEmpty
+                            || model.isGenerating
+                    )
+            }
+        }
+        .padding()
+        .background(.bar)
+        .onChange(of: selectedPhotos) { _, items in
+            Task {
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        model.addAttachment(data: data)
+                    }
+                }
+                selectedPhotos = []
+            }
+        }
+    }
+}
+
+private struct ComposerIcon: View {
+    let systemName: String
+    let active: Bool
+    let accessibilityLabel: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.title3)
+            .foregroundStyle(active ? Color.accentColor : Color.secondary)
+            .frame(width: 32, height: 32)
+            .background(active ? Color.accentColor.opacity(0.14) : Color.clear, in: Circle())
+            .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct ReasoningMenu: View {
+    let model: MobileAppModel
+
+    var body: some View {
+        Menu {
+            ForEach(MobileReasoning.allCases) { choice in
+                Button {
+                    model.reasoning = choice
+                } label: {
+                    if model.reasoning == choice {
+                        Label(choice.title, systemImage: "checkmark")
+                    } else {
+                        Text(choice.title)
+                    }
+                }
+            }
+        } label: {
+            ComposerIcon(
+                systemName: "brain",
+                active: model.reasoning != .automatic,
+                accessibilityLabel: "Reasoning"
+            )
+        }
+        .accessibilityValue(model.reasoning.title)
+    }
+}
+
+private struct AttachmentThumbnail: View {
+    let attachment: MobileAttachment
+    let remove: () -> Void
+
+    var body: some View {
+        if let image = UIImage(data: attachment.data) {
+            ZStack(alignment: .topTrailing) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 76, height: 58)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Button("Remove attachment", systemImage: "xmark.circle.fill", action: remove)
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.white, .black.opacity(0.65))
+                    .offset(x: 5, y: -5)
+            }
+        }
+    }
+}
+
+private struct UserQuestionView: View {
+    let question: String
+    let model: MobileAppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(question).font(.headline)
+            HStack {
+                TextField("Your answer", text: Bindable(model).questionAnswer)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(model.submitQuestion)
+                Button("Answer") { model.submitQuestion() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.questionAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding()
+        .background(Color.accentColor.opacity(0.08))
+    }
+}
+
+private struct ToolApprovalView: View {
+    let approval: PendingToolApproval
+    let model: MobileAppModel
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Label("Tool approval required", systemImage: "checkmark.shield")
+                    .font(.title2.weight(.semibold))
+                LabeledContent("Tool", value: approval.name)
+                Text(approval.summary)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                Spacer()
+                HStack {
+                    Button("Reject", role: .cancel) { model.resolveApproval(false) }
+                        .buttonStyle(.bordered)
+                    Spacer()
+                    Button("Allow Once") { model.resolveApproval(true) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .navigationTitle("Safe Tool")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct ProviderListScreen: View {
+    let model: MobileAppModel
+    @State private var editingProfile: MobileProviderProfile?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if model.profiles.isEmpty {
+                    ContentUnavailableView(
+                        "No Providers",
+                        systemImage: "server.rack",
+                        description: Text("Add Ollama, LM Studio, or another OpenAI-compatible server.")
+                    )
+                }
+                ForEach(model.profiles) { profile in
+                    Button {
+                        editingProfile = profile
+                    } label: {
+                        ProviderRow(profile: profile, isActive: profile.id == model.activeProfileID)
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button("Delete", role: .destructive) { model.deleteProfile(profile) }
+                    }
+                }
+            }
+            .navigationTitle("Providers")
+            .toolbar {
+                Button("Add Provider", systemImage: "plus") {
+                    editingProfile = model.addProfile()
+                }
+            }
+            .sheet(item: $editingProfile) { profile in
+                ProviderEditor(model: model, profile: profile)
+            }
+        }
+    }
+}
+
+private struct ProviderRow: View {
+    let profile: MobileProviderProfile
+    let isActive: Bool
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(profile.name).font(.headline)
+                Text(profile.model.isEmpty ? "No model selected" : profile.model)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(profile.baseURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if isActive {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Active")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct ProviderEditor: View {
+    let model: MobileAppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var profile: MobileProviderProfile
+    @State private var apiKey: String
+
+    init(model: MobileAppModel, profile: MobileProviderProfile) {
+        self.model = model
+        _profile = State(initialValue: profile)
+        _apiKey = State(initialValue: model.apiKey(for: profile))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Provider") {
+                    TextField("Name", text: $profile.name)
+                    Picker("Type", selection: $profile.type) {
+                        ForEach(MobileProviderType.allCases) { type in
+                            Text(type.title).tag(type)
+                        }
+                    }
+                    .onChange(of: profile.type) { oldType, newType in
+                        if profile.baseURL == oldType.defaultBaseURL || profile.baseURL.isEmpty {
+                            profile.baseURL = newType.defaultBaseURL
+                        }
+                    }
+                    TextField("Base URL", text: $profile.baseURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                    SecureField("API key (optional)", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Section("Model") {
+                    TextField("Model ID", text: $profile.model)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        model.saveProfile(profile, apiKey: apiKey)
+                        model.discoverModels()
+                    } label: {
+                        if model.isDiscoveringModels {
+                            ProgressView()
+                        } else {
+                            Label("Discover Models", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    .disabled(model.isDiscoveringModels)
+                    ForEach(model.discoveredModels, id: \.self) { discovered in
+                        Button(discovered) {
+                            profile.model = discovered
+                            model.useModel(discovered)
+                        }
+                    }
+                }
+
+                Section {
+                    Text("On iPhone, localhost points to the phone. For a provider on your Mac, use its Wi-Fi address and allow the server to listen on your local network.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Provider")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        model.saveProfile(profile, apiKey: apiKey)
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
