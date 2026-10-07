@@ -48,6 +48,12 @@ private struct DocumentChip: View {
 
     var body: some View {
         Menu {
+            if !document.warnings.isEmpty || !(document.notes ?? []).isEmpty {
+                Section {
+                    ForEach(document.warnings, id: \.self) { Label($0, systemImage: "exclamationmark.triangle") }
+                    ForEach(document.notes ?? [], id: \.self) { Label($0, systemImage: "info.circle") }
+                }
+            }
             Button("Open", systemImage: "doc.viewfinder", action: open)
                 .disabled(document.status == .importing)
             if document.status.canRetry {
@@ -87,7 +93,7 @@ private struct DocumentChip: View {
         switch document.status {
         case .importing: "Importing…"
         case .extracting(let processed, let total): total > 0 ? "Extracting \(processed)/\(total)" : "Extracting…"
-        case .ready: document.warnings.isEmpty ? document.sizeDescription : "\(document.sizeDescription) · see notes"
+        case .ready: document.warnings.isEmpty ? document.sizeDescription : "\(document.sizeDescription) · check warnings"
         case .partial: "Partial · \(document.sizeDescription)"
         case .failed(let reason): reason
         case .interrupted: "Interrupted · tap to retry"
@@ -118,6 +124,8 @@ struct DocumentSourceSelection: Identifiable {
     let document: ChatDocument
     let chunk: DocumentChunk?
     let fileURL: URL
+    /// All extracted text, shown for an image opened without a citation.
+    var fullText: String?
 
     var id: String { "\(document.id):\(chunk?.id ?? "-")" }
 }
@@ -158,7 +166,8 @@ struct DocumentSourceView: View {
         if let chunk = selection.chunk {
             parts.append("Cited: \(chunk.location) (\(chunk.method.rawValue)\(chunk.lowConfidence ? ", low OCR confidence" : ""))")
         }
-        parts.append(contentsOf: selection.document.warnings)
+        parts.append(contentsOf: selection.document.warnings.map { "Warning: \($0)" })
+        parts.append(contentsOf: selection.document.notes ?? [])
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
@@ -170,7 +179,7 @@ struct DocumentSourceView: View {
         case .text, .markdown:
             TextSourceView(url: selection.fileURL, lineStart: selection.chunk?.lineStart, lineEnd: selection.chunk?.lineEnd)
         case .image:
-            ImageSourceView(url: selection.fileURL, text: selection.chunk?.text)
+            ImageSourceView(url: selection.fileURL, text: selection.chunk?.text ?? selection.fullText)
         }
     }
 }

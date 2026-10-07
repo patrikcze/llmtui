@@ -391,14 +391,17 @@ final class MobileAppModel {
                 )
                 hasRuntimeProblem = false
             } catch is CancellationError {
+                flushStreamedText()
                 appendDelta("\n\nStopped.", to: assistantID)
             } catch {
+                flushStreamedText()
                 hasRuntimeProblem = true
                 if message(id: assistantID)?.text.isEmpty == true {
                     removeMessage(id: assistantID)
                 }
                 errorMessage = error.localizedDescription
             }
+            flushStreamedText()
             isGenerating = false
             generatingConversationID = nil
             activeTurn = nil
@@ -848,11 +851,32 @@ final class MobileAppModel {
     private func appendRoundDelta(_ delta: String, to id: UUID) {
         if separateNextRound {
             separateNextRound = false
+            flushStreamedText()
             if message(id: id)?.text.isEmpty == false {
                 appendDelta("\n\n", to: id)
             }
         }
-        appendDelta(delta, to: id)
+        streamedText[id, default: ""] += delta
+        guard streamFlush == nil else { return }
+        streamFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            self?.flushStreamedText()
+        }
+    }
+
+    /// Streamed text waiting to be shown. Tokens are applied to the message
+    /// in batches (about 12 times a second) instead of one by one, so the
+    /// reply is re-rendered and the transcript re-scrolled far less often,
+    /// which keeps long answers from flickering while they stream.
+    private var streamedText: [UUID: String] = [:]
+    private var streamFlush: Task<Void, Never>?
+
+    private func flushStreamedText() {
+        streamFlush?.cancel()
+        streamFlush = nil
+        let pending = streamedText
+        streamedText.removeAll()
+        for (id, text) in pending { appendDelta(text, to: id) }
     }
 
     private func appendDelta(_ delta: String, to id: UUID) {

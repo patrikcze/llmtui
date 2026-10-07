@@ -209,7 +209,10 @@ struct DocumentToolsTests {
             let text = library.chunks(for: document).map(\.text).joined(separator: " ")
             #expect(text.contains("4471"))
             #expect(library.chunks(for: document).allSatisfy { $0.method == .ocr })
-            #expect(document.warnings.contains { $0.contains("OCR") })
+            #expect((document.notes ?? []).contains { $0.contains("OCR") })
+            // "Read with OCR" is information, not a warning: a clean scan
+            // shows as ready without a warning mark.
+            #expect(!document.warnings.contains { $0.contains("read with OCR") || $0.contains("Read with OCR") })
         }
     }
 
@@ -357,6 +360,48 @@ struct DocumentToolsTests {
         #expect(note?.contains("does not support") == true)
         let (none, _) = TextRecognizer.languages(supported: supported, preferred: ["ja-JP"])
         #expect(none.isEmpty)
+    }
+
+    @Test func importsAcceptOnlyPlainTextMarkdownPDFAndImages() throws {
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.md")) == .markdown)
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.txt")) == .text)
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.pdf")) == .pdf)
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.heic")) == .image)
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.rtf")) == nil)
+        #expect(DocumentImporter.kind(for: URL(fileURLWithPath: "/tmp/a.html")) == nil)
+    }
+
+    @Test func symbolicLinksAreNotImported() async throws {
+        let (library, root) = Self.library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = try Self.file("target.txt", "secret")
+        let link = target.deletingLastPathComponent().appending(path: "link.txt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let conversation = UUID()
+        library.importFiles([link], into: conversation)
+        await library.waitUntilIdle()
+        // Refused up front (a link has no document type) or when copying;
+        // either way nothing readable is imported.
+        let documents = library.documents(in: conversation)
+        if documents.isEmpty {
+            #expect(library.lastError != nil)
+        } else {
+            #expect(documents.allSatisfy { $0.status == .failed(DocumentImportError.unreadable.localizedDescription) })
+        }
+        #expect(documents.allSatisfy { library.chunks(for: $0).isEmpty })
+    }
+
+    @Test func retryingAFailedImportAsksToAttachAgain() async throws {
+        let (library, root) = Self.library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let conversation = UUID()
+        let missing = FileManager.default.temporaryDirectory.appending(path: "missing-\(UUID().uuidString).txt")
+        library.importFiles([missing], into: conversation)
+        await library.waitUntilIdle()
+        let document = try #require(library.documents(in: conversation).first)
+        library.retry(document)
+        await library.waitUntilIdle()
+        #expect(library.documents(in: conversation).first?.status == .failed("The file was not imported. Remove it and attach it again."))
     }
 
     // MARK: - Fixtures

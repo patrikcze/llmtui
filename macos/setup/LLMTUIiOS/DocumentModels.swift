@@ -126,7 +126,12 @@ nonisolated struct ChatDocument: Codable, Identifiable, Equatable, Sendable {
     var lineCount: Int?
     /// PDF pages processed so far; extraction resumes after them.
     var processedPages: Int
+    /// Problems worth the user's attention (low OCR confidence, pages left
+    /// unread). Shown with a warning mark.
     var warnings: [String]
+    /// Plain information, such as "read with OCR". Absent in attachments
+    /// saved before notes existed.
+    var notes: [String]?
 
     init(
         id: String,

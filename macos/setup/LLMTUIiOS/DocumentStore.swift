@@ -142,7 +142,8 @@ nonisolated enum DocumentImporter {
         if let markdown = UTType("net.daringfireball.markdown"), type.conforms(to: markdown) { return .markdown }
         if ["md", "markdown"].contains(url.pathExtension.lowercased()) { return .markdown }
         if type.conforms(to: .image) { return .image }
-        if type.conforms(to: .plainText) || type.conforms(to: .text) { return .text }
+        // Plain text only: RTF, HTML and other rich text are not supported.
+        if type.conforms(to: .plainText) { return .text }
         return nil
     }
 
@@ -178,8 +179,10 @@ nonisolated enum DocumentImporter {
     }
 
     private static func copyChecked(_ source: URL, to destination: URL, kind: ChatDocumentKind, maxBytes: Int) throws -> Int {
-        let values = try? source.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values?.isRegularFile != false else { throw DocumentImportError.unreadable }
+        let values = try? source.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+        // Only a regular file is copied; a symbolic link would make the
+        // "copy" point back outside the app.
+        guard values?.isRegularFile != false, values?.isSymbolicLink != true else { throw DocumentImportError.unreadable }
         if let size = values?.fileSize, size > maxBytes { throw DocumentImportError.tooLarge(kind) }
         try Task.checkCancellation()
 

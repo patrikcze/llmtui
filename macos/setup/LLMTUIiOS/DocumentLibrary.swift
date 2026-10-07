@@ -95,8 +95,10 @@ final class DocumentLibrary {
 
     /// Imports images (screenshots, photos) to be read with OCR.
     func importImages(_ images: [Data], into conversationID: UUID) {
+        // Distinct names, so the model and the user can tell images apart.
+        let stamp = Date.now.formatted(date: .omitted, time: .standard)
         for (index, data) in images.enumerated() {
-            let name = images.count == 1 ? "Image" : "Image \(index + 1)"
+            let name = images.count == 1 ? "Image \(stamp)" : "Image \(stamp) (\(index + 1))"
             guard data.count <= DocumentLimits.maxImageBytes else {
                 lastError = DocumentImportError.tooLarge(.image).localizedDescription
                 continue
@@ -116,11 +118,18 @@ final class DocumentLibrary {
 
     func retry(_ document: ChatDocument) {
         guard let current = self.document(document.id, in: document.conversationID), current.status.canRetry else { return }
+        // A failed import left no copy to extract from; only attaching the
+        // file again can fix that.
+        guard FileManager.default.fileExists(atPath: store.originalURL(for: current).path) else {
+            update(current) { $0.status = .failed("The file was not imported. Remove it and attach it again.") }
+            return
+        }
         if case .failed = current.status {
             // A failed extraction starts over; the cached text is discarded.
             update(current) {
                 $0.processedPages = 0
                 $0.warnings = []
+                $0.notes = nil
             }
             chunkCache[Self.key(current)] = nil
             try? store.saveChunks([], for: current)
@@ -257,6 +266,7 @@ final class DocumentLibrary {
             $0.lineCount = update.lineCount
             $0.processedPages = update.processedPages
             $0.warnings = update.warnings
+            $0.notes = update.notes
         }
     }
 

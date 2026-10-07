@@ -79,6 +79,7 @@ nonisolated struct DocumentToolRunner: Sendable {
             default:
                 break
             }
+            lines.append(contentsOf: (document.notes ?? []).map { "  note: \($0)" })
             lines.append(contentsOf: document.warnings.map { "  warning: \($0)" })
         }
         if documents.count > DocumentLimits.listMaxDocuments {
