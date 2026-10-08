@@ -165,8 +165,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   CODE_SIGNING_ALLOWED=NO test
 ```
 
-CI (`macos-setup.yml`) builds and tests only the macOS scheme. Run the iOS
-tests locally before merging iOS changes.
+On pull requests that touch `macos/**`, CI (`macos-setup.yml`) runs these
+unit tests (`-only-testing:LLMTUIiOSTests`, unsigned) on the newest iPhone
+simulator of the runner. The job runs in parallel with the macOS tests and
+reports the test counts in the job summary. The UI-test target and device
+builds are not run in CI.
 
 See [`Documentation/iOS-Architecture.md`](Documentation/iOS-Architecture.md)
 for how the app is built.
@@ -175,9 +178,9 @@ for how the app is built.
 
 - macOS app: macOS 26 or later (`MACOSX_DEPLOYMENT_TARGET = 26.0`).
 - iOS app: iOS or iPadOS 18 or later (`IPHONEOS_DEPLOYMENT_TARGET = 18.0`).
-- The project is maintained with Xcode 27. CI builds and tests the macOS app
-  on a `macos-26` runner with the newest Xcode installed there; the iOS
-  targets are only built locally.
+- The project is maintained with Xcode 27. CI builds and tests both apps
+  (the iOS app on a simulator) on a `macos-26` runner with the newest Xcode
+  installed there.
 
 ## Signing (local only)
 

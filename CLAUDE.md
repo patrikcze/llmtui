@@ -230,8 +230,10 @@ two apps. See `macos/setup/README.md`.
     Simulator,name=<iPhone>' CODE_SIGNING_ALLOWED=NO test` (no Makefile
     target).
   - Neither `make check` nor `go test ./...` touches them.
-    `.github/workflows/macos-setup.yml` builds and tests only the macOS
-    scheme, so run the iOS tests locally before merging iOS changes.
+    On pull requests that touch `macos/**`,
+    `.github/workflows/macos-setup.yml` runs the macOS tests and the iOS
+    unit tests (`LLMTUIiOSTests` on a simulator). It does not run the UI-test
+    target or device builds.
 - **Xcode location:** `xcode-select` may point at the Command Line Tools. The
   targets and `scripts/package-app.sh` default `DEVELOPER_DIR` to
   `/Applications/Xcode.app`. For a raw `xcodebuild`, set it yourself.

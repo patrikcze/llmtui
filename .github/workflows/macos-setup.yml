@@ -51,6 +51,78 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             test
 
+  ios-test:
+    name: iOS app unit tests (simulator)
+    if: github.event_name == 'pull_request'
+    needs: guard
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Select newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$xcode/Contents/Developer" xcodebuild -version
+
+      - name: Pick an iPhone simulator
+        run: |
+          # The newest available iOS runtime's first iPhone, by UDID, so the
+          # job does not depend on which device names the runner image ships.
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((r for r in devices if ".iOS-" in r),
+                       key=lambda r: [int(p) for p in r.rsplit(".iOS-", 1)[1].split("-")])
+          for runtime in reversed(ios):
+              phones = [d for d in devices[runtime] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"]); break
+          ')
+          if [ -z "$udid" ]; then
+            echo "::error::no available iPhone simulator on this runner" >&2
+            exit 1
+          fi
+          xcrun simctl list devices available | grep "$udid"
+          echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        # Unit tests only (LLMTUIiOSTests): they compile the app for the
+        # simulator without signing and cover the chat model, tools,
+        # document extraction (PDFKit, Vision), citations and retention. The
+        # UI-test target only launches the app and is left out to keep the
+        # job short.
+        run: |
+          xcodebuild -quiet \
+            -project macos/setup/LLMTUIGUI.xcodeproj \
+            -scheme LLMTUIiOS \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
+            -only-testing:LLMTUIiOSTests \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Test summary
+        if: always()
+        run: |
+          # -quiet hides per-test output; report the counts from the result
+          # bundle so a run that silently tested nothing is visible.
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || { echo "no result bundle (the build failed before testing)"; exit 0; }
+          xcrun xcresulttool get test-results summary --path "$bundle" | python3 -c '
+          import json, os, sys
+          d = json.load(sys.stdin)
+          line = "%s: %s passed, %s failed, %s skipped of %s" % (
+              d.get("result"), d.get("passedTests"), d.get("failedTests"),
+              d.get("skippedTests"), d.get("totalTestCount"))
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### iOS unit tests\n" + line + "\n")
+          '
+
   release:
     name: Package and attach to release
     if: startsWith(github.ref, 'refs/tags/v')
