@@ -198,3 +198,10 @@ Before distributing the feature, use a signed physical-device build to verify:
 The simulator tests use local fixtures, not production accounts. Physical LAN,
 interactive OAuth against a deployed authorization server, and signed-device
 Keychain behavior are not established by an unsigned simulator pass.
+
+Implementation validation on 2026-10-08: the iOS suite reported 97 tests passing
+with the signed-host Keychain test skipped; the focused MCP Settings UI test
+passed. Both simulator architectures and an unsigned generic iOS device build
+compiled. The shared project's existing 110 macOS tests passed. Repository
+`make check` passed formatting, vet, lint (zero issues) and race tests; the
+signing-identity guard passed. These checks do not replace the device checklist.
