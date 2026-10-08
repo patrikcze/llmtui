@@ -697,6 +697,10 @@ private struct MessageBubble: View {
                     }
                     .padding(.top, 4)
                 }
+                if message.role == .assistant, !message.isStreaming, !message.text.isEmpty {
+                    ReplyActions(text: DocumentCitations.plainText(displayText))
+                        .padding(.top, 2)
+                }
             }
             .padding(14)
             .background {
@@ -710,9 +714,12 @@ private struct MessageBubble: View {
                 }
             }
             .modifier(AssistantCard(isAssistant: message.role != .user))
+            .environment(\.autoloadRemoteImages, !RemoteImagePolicy.readsUntrustedContent(message.toolActivities))
             if message.role != .user { Spacer(minLength: 24) }
         }
-        .accessibilityElement(children: .combine)
+        // Contain, not combine: the Copy and Share buttons, citation links
+        // and images stay reachable with VoiceOver.
+        .accessibilityElement(children: .contain)
     }
 }
 

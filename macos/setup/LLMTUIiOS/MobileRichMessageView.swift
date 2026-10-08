@@ -14,7 +14,9 @@ struct MobileRichMessageView: View {
                 case .code(let language, let text):
                     MobileCodeBlockView(language: language, source: text)
                 case .mermaid(let text):
-                    MobileWebRenderView(kind: .mermaid, source: text)
+                    MobileMermaidBlock(source: text)
+                case .image(let url, let alt):
+                    MobileMarkdownImageView(source: url, alt: alt)
                 case .math(let text):
                     if MobileRenderResources.isSupportedMath(text) {
                         MobileWebRenderView(
@@ -40,6 +42,7 @@ private struct MobileRichContentBlock: Identifiable {
         case mermaid(String)
         case math(String)
         case table(headers: [String], rows: [[String]])
+        case image(url: String, alt: String)
     }
 
     let id: Int
@@ -128,11 +131,56 @@ private enum MobileRichContentParser {
                 continue
             }
 
-            markdown.append(line)
+            // `![alt](url)` and `<img src>` are pulled out wherever they
+            // appear (often inline after a label in a list item), because
+            // the Markdown renderer has no image support and would drop them.
+            let images = inlineImages(in: line)
+            if images.isEmpty {
+                markdown.append(line)
+            } else {
+                var cursor = line.startIndex
+                for image in images {
+                    let before = String(line[cursor..<image.range.lowerBound])
+                    if !before.trimmingCharacters(in: .whitespaces).isEmpty { markdown.append(before) }
+                    appendMarkdown()
+                    result.append(MobileRichContentBlock(id: result.count, kind: .image(url: image.url, alt: image.alt)))
+                    cursor = image.range.upperBound
+                }
+                let after = String(line[cursor...])
+                if !after.trimmingCharacters(in: .whitespaces).isEmpty { markdown.append(after) }
+            }
             index += 1
         }
         appendMarkdown()
         return result
+    }
+
+    private static let markdownImage = try? NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#)
+    private static let htmlImage = try? NSRegularExpression(
+        pattern: #"<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>"#, options: [.caseInsensitive]
+    )
+    private static let htmlAlt = try? NSRegularExpression(pattern: #"\balt\s*=\s*["']([^"']*)["']"#, options: [.caseInsensitive])
+
+    /// Every `![alt](url)` and `<img src="…">` in a line, in order.
+    static func inlineImages(in line: String) -> [(range: Range<String.Index>, url: String, alt: String)] {
+        guard line.contains("![") || line.localizedCaseInsensitiveContains("<img") else { return [] }
+        let full = NSRange(line.startIndex..., in: line)
+        var found: [(range: Range<String.Index>, url: String, alt: String)] = []
+        for match in markdownImage?.matches(in: line, range: full) ?? [] {
+            guard let range = Range(match.range, in: line),
+                  let alt = Range(match.range(at: 1), in: line),
+                  let url = Range(match.range(at: 2), in: line) else { continue }
+            found.append((range, String(line[url]), String(line[alt])))
+        }
+        for match in htmlImage?.matches(in: line, range: full) ?? [] {
+            guard let range = Range(match.range, in: line),
+                  let src = Range(match.range(at: 1), in: line) else { continue }
+            let tag = String(line[range])
+            let alt = htmlAlt?.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag))
+                .flatMap { Range($0.range(at: 1), in: tag).map { String(tag[$0]) } } ?? ""
+            found.append((range, String(line[src]), alt))
+        }
+        return found.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     private static func isTableRow(_ line: String) -> Bool {
@@ -457,7 +505,7 @@ private struct MobileCodeBlockView: View {
     }
 }
 
-private struct MobileWebRenderView: UIViewRepresentable {
+struct MobileWebRenderView: UIViewRepresentable {
     enum Kind: Hashable {
         case mermaid
         case math
@@ -466,6 +514,8 @@ private struct MobileWebRenderView: UIViewRepresentable {
 
     let kind: Kind
     let source: String
+    /// Receives the web view, so a Mermaid diagram can be exported.
+    var handle: WebViewHandle?
     @State private var measuredHeight: CGFloat = 60
 
     func makeCoordinator() -> Coordinator {
@@ -484,6 +534,7 @@ private struct MobileWebRenderView: UIViewRepresentable {
         view.scrollView.backgroundColor = .clear
         view.scrollView.isScrollEnabled = kind == .mermaid
         view.navigationDelegate = context.coordinator
+        handle?.webView = view
         return view
     }
 
