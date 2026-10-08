@@ -179,7 +179,7 @@ func (c *StdioClient) handshake(ctx context.Context) error {
 	if _, err := c.call(ctx, "initialize", params); err != nil {
 		return fmt.Errorf("mcp: initialize: %w", err)
 	}
-	if err := c.notify("notifications/initialized", nil); err != nil {
+	if err := c.notify(ctx, "notifications/initialized", nil); err != nil {
 		return fmt.Errorf("mcp: initialized notification: %w", err)
 	}
 	return nil
@@ -276,6 +276,9 @@ func (c *StdioClient) Close() error {
 // call sends a request and waits for the correlated response, the context, or
 // connection close.
 func (c *StdioClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	c.nextID++
 	id := c.nextID
@@ -289,7 +292,7 @@ func (c *StdioClient) call(ctx context.Context, method string, params any) (json
 		c.mu.Unlock()
 	}()
 
-	if err := c.write(rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}); err != nil {
+	if err := c.write(ctx, rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}); err != nil {
 		return nil, err
 	}
 
@@ -310,18 +313,24 @@ func (c *StdioClient) call(ctx context.Context, method string, params any) (json
 }
 
 // notify sends a request with no id (a JSON-RPC notification).
-func (c *StdioClient) notify(method string, params any) error {
-	return c.write(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
+func (c *StdioClient) notify(ctx context.Context, method string, params any) error {
+	return c.write(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 }
 
 // write serializes one message as a single newline-delimited line.
-func (c *StdioClient) write(msg rpcRequest) error {
+func (c *StdioClient) write(ctx context.Context, msg rpcRequest) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// Cancellation can happen while encoding or waiting behind another write.
+	// Do not transmit a request that is already cancelled at admission. This
+	// check cannot interrupt a pipe write once it has started.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err := c.w.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("mcp: write: %w", err)
 	}
