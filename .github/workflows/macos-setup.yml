@@ -98,11 +98,30 @@ jobs:
           xcodebuild -quiet \
             -project macos/setup/LLMTUIGUI.xcodeproj \
             -scheme LLMTUIiOS \
-            -destination "id=$SIMULATOR_UDID" \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
             -only-testing:LLMTUIiOSTests \
             CODE_SIGNING_ALLOWED=NO \
             test
+
+      - name: Test summary
+        if: always()
+        run: |
+          # -quiet hides per-test output; report the counts from the result
+          # bundle so a run that silently tested nothing is visible.
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || { echo "no result bundle (the build failed before testing)"; exit 0; }
+          xcrun xcresulttool get test-results summary --path "$bundle" | python3 -c '
+          import json, os, sys
+          d = json.load(sys.stdin)
+          line = "%s: %s passed, %s failed, %s skipped of %s" % (
+              d.get("result"), d.get("passedTests"), d.get("failedTests"),
+              d.get("skippedTests"), d.get("totalTestCount"))
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### iOS unit tests\n" + line + "\n")
+          '
 
   release:
     name: Package and attach to release
