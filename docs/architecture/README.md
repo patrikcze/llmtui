@@ -17,8 +17,10 @@ comments, but this file is authoritative.
   records the commit/fixture binding, deterministic results, benchmark
   snapshot, and the local-model/platform gates that remain open.
 
-Current inventory: 40 internal Go packages plus `cmd/llmtui` (41 Go packages
-total), Go 1.27. Verify version-sensitive details (the embedded runtime pin,
+Current inventory: 41 internal Go packages plus `cmd/llmtui` (42 Go packages
+total), Go 1.27. Outside the Go module, `macos/setup` holds the SwiftUI macOS
+setup app (LLMTUIGUI) and iOS chat app (LLMTUIiOS); see
+`package-map.md` §8 and `macos/setup/README.md`. Verify version-sensitive details (the embedded runtime pin,
 dependency versions) against the source — `internal/runtime/pin.json`,
 `go.mod` — not this document. Refresh the package inventory with `go list ./...`.
 

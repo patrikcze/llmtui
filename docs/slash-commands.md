@@ -106,6 +106,40 @@ cycle owns context. They never stop work automatically.
 | `/tools` · `/tools status` | Workspace tools overlay: state, approval mode, workspace root, limits |
 | `/tools on` / `/tools off` | Let the model list/read/search/write files and run commands under the launch directory |
 | `/tools ask` / `/tools auto` | Require approval and revoke temporary scoped grants (default), or explicitly run workspace tools unprompted in a fully trusted workspace |
+| `/tools output` | Toggle between full tool output and one-line summaries in the transcript |
+| `/tools list` | List the available tools and their capabilities |
+| `/tools inspect <name>` | Show one tool's details |
+| `/tools check <cmd>` | Show how a command line would be classified, without running it |
+
+## Web
+| Command | Description |
+| --- | --- |
+| `/web` · `/web status` | Show whether the web tools are on |
+| `/web on` / `/web off` | Let the model use `web_search` (DuckDuckGo, runs without asking) and `web_fetch` (asks per URL), or turn them off |
+
+## RAG
+Optional local workspace retrieval, off by default. See [rag.md](rag.md).
+
+| Command | Description |
+| --- | --- |
+| `/rag` · `/rag status` | Show retrieval state and index size |
+| `/rag on` / `/rag off` | Let indexed snippets inform prompts, or stop retrieval |
+| `/rag index` | Build or rebuild the workspace index |
+| `/rag search <query>` | Search the index |
+| `/rag sources` | List the indexed source files |
+| `/rag clear` | Clear the index |
+
+## MCP
+Optional Model Context Protocol servers over stdio, off by default.
+Declaring a server starts nothing; only `connect` launches it. See [mcp.md](mcp.md).
+
+| Command | Description |
+| --- | --- |
+| `/mcp` · `/mcp status` · `/mcp list` | Configured servers and their state |
+| `/mcp tools` | Tools offered by connected servers |
+| `/mcp inspect <server>` | One server's configuration and state |
+| `/mcp enable <server>` / `/mcp disable <server>` | Allow a server to be connected, or disable it (disconnects it if running) |
+| `/mcp connect <server>` / `/mcp disconnect <server>` | Launch the server and connect, or stop it |
 
 ## Skills
 | Command | Description |
@@ -136,6 +170,7 @@ cycle owns context. They never stop work automatically.
 | `/personal-apps [status\|connect\|disconnect mail\|calendar]` | Mail/Calendar dialog: configuration, connection and scope per app; `Enter` connects or disconnects the highlighted app (your decision — the model can never do this) |
 | `/entities [status\|list\|inspect <id>]` | Runtime entity references; `list` opens a dialog where `Enter` shows the highlighted entity |
 | `/debug [on\|off\|last]` | Debug drawer for the last request (`last` opens a scrollable dialog; drag to copy text) |
+| `/debug tool-calls [test]` | Inspect native tool calls for the last request; `test` runs a tool-call conformance probe against the current model |
 | `/keys [raw]` | Interactive key inspector |
 | `/config [path\|show\|reload]` | Configuration (secrets redacted) |
 

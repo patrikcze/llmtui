@@ -142,6 +142,11 @@ These are not Go packages, so `go list ./...` and the Go gates do not cover them
   - It calls the `llmtui` binary as a subprocess. It finds it through `LLMTUI_EXECUTABLE`, then the bundled `Contents/Helpers/llmtui`, then the usual install paths.
   - It is built and tested by `make macos-setup` / `make macos-setup-test` and `.github/workflows/macos-setup.yml`.
   - See `macos/setup/README.md`.
+- `macos/setup/LLMTUIiOS/` — **LLMTUIiOS**, a SwiftUI chat app for iOS and iPadOS 18+, in the same Xcode project.
+  - It does not read `config.yaml` or call `llmtui`. Providers are stored in the app's preferences, and API keys in the Keychain.
+  - It has its own Swift tool loop, web research, memory, on-device attachment extraction (PDFKit, Vision) with document tools and citations, and a chat retention guardrail. None of this shares code with `internal/*`.
+  - It is tested with `xcodebuild -scheme LLMTUIiOS … test` on a simulator. CI does not build it.
+  - See `macos/setup/Documentation/iOS-Architecture.md`.
 
 ---
 

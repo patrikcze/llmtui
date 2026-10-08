@@ -209,22 +209,35 @@ them **and add a regression test for the specific case it touches**:
   known size hot-spots. Add to them reluctantly; extraction targets are listed
   at the end of `docs/architecture/package-map.md`.
 
-## macOS setup app (`macos/setup`)
+## Apple apps (`macos/setup`)
 
-**LLMTUIGUI** is a SwiftUI Xcode project, not Go. It edits
-`~/.config/llmtui/config.yaml` graphically, and it has its own Swift chat,
-agent and tool loop for LM Studio / Ollama. See `macos/setup/README.md`.
+`macos/setup/LLMTUIGUI.xcodeproj` is a SwiftUI Xcode project, not Go, with
+two apps. See `macos/setup/README.md`.
 
-- **Gates:** run `make macos-setup-test` (unit tests, Swift Testing) and
-  `make macos-setup` (Release build plus an ad-hoc signed zip in `dist/`).
-  Neither `make check` nor `go test ./...` touches it. CI runs it through
-  `.github/workflows/macos-setup.yml`.
+- **LLMTUIGUI** (macOS): edits `~/.config/llmtui/config.yaml` graphically,
+  and has its own Swift chat, agent and tool loop for LM Studio / Ollama.
+  Shipped as a zip on every `v*` tag.
+- **LLMTUIiOS** (iOS/iPadOS 18+): a standalone chat app that does not read
+  `config.yaml`. It has its own providers, a bounded tool loop, web research,
+  memory, PDF/text/OCR attachments with validated citations, and a chat
+  retention guardrail. Not part of any release; don't cut a release tag for
+  iOS-only changes. Architecture: `macos/setup/Documentation/iOS-Architecture.md`.
+
+- **Gates:**
+  - macOS app: `make macos-setup-test` (unit tests, Swift Testing) and
+    `make macos-setup` (Release build plus an ad-hoc signed zip in `dist/`).
+  - iOS app: `xcodebuild … -scheme LLMTUIiOS -destination 'platform=iOS
+    Simulator,name=<iPhone>' CODE_SIGNING_ALLOWED=NO test` (no Makefile
+    target).
+  - Neither `make check` nor `go test ./...` touches them.
+    `.github/workflows/macos-setup.yml` builds and tests only the macOS
+    scheme, so run the iOS tests locally before merging iOS changes.
 - **Xcode location:** `xcode-select` may point at the Command Line Tools. The
   targets and `scripts/package-app.sh` default `DEVELOPER_DIR` to
   `/Applications/Xcode.app`. For a raw `xcodebuild`, set it yourself.
 - **Source folders:** they are Xcode synchronized folders. A file added under
-  `LLMTUIGUI/` or `LLMTUIGUITests/` joins the target with no `project.pbxproj`
-  edit.
+  `LLMTUIGUI/`, `LLMTUIGUITests/`, `LLMTUIiOS/`, `LLMTUIiOSTests/` or
+  `LLMTUIiOSUITests/` joins its target with no `project.pbxproj` edit.
 - **Signing:** never commit a signing identity. `DEVELOPMENT_TEAM` comes only
   from the git-ignored `Config/Signing.local.xcconfig`. CI fails if
   `project.pbxproj` sets a team, or if `xcuserdata` or the local xcconfig is
@@ -232,15 +245,27 @@ agent and tool loop for LM Studio / Ollama. See `macos/setup/README.md`.
   sometimes writes the team into `project.pbxproj` on its own; strip those
   lines and never commit them. Release builds are ad-hoc signed (no Apple Developer account) and
   not notarized.
-- **Bundle ID:** keep `com.patriknakladalpersonalteam.LLMTUIGUI`. Changing it
-  resets users' macOS privacy grants (Automation, Calendars).
+- **Bundle IDs:** keep `com.patriknakladalpersonalteam.LLMTUIGUI` (changing
+  it resets users' macOS privacy grants for Automation and Calendars) and
+  `com.patriknakladalpersonalteam.LLMTUIiOS` (it is also the Keychain service
+  prefix for stored provider API keys).
 - **Embedded llmtui:** the bundled copy lives at `Contents/Helpers/llmtui`.
   The llama.cpp runtime is deliberately not bundled.
 - **Versioning:** the app's version is the llmtui version it is packaged with.
 - **Safety scope:** the Workspace Tool Safety Invariants above cover the Go
-  `internal/tools` / `internal/mcp`. The Swift tool loop is a separate
-  implementation that has not been audited against them. Do not assume parity,
-  and audit it before widening what its tools can do.
+  `internal/tools` / `internal/mcp`. The Swift tool loops are separate
+  implementations that have not been audited against them. Do not assume
+  parity, and audit them before widening what their tools can do.
+- **iOS invariants** (keep them, and add a test when you touch one):
+  - Attachment text never goes into the prompt; only the `document_*` tools
+    return it, after a per-chat, per-provider consent.
+  - Once a reply has read attachment text, web and memory tools always ask.
+  - A citation becomes a link only if a document tool returned that passage
+    in the same reply.
+  - Images in replies that read web or attachment content load only after a
+    tap.
+  - Chat retention never touches pinned, open, generating or queued chats,
+    and confirms settings changes that would act immediately.
 
 ## Out of scope — ask first
 

@@ -185,6 +185,20 @@ providers, profiles, tools and the agent. Each release attaches
 app is ad-hoc signed, not notarized, so open it the first time with
 right-click → **Open**. The source is in [`macos/setup`](macos/setup/README.md).
 
+The same Xcode project also contains **LLMTUIiOS**, a chat app for iPhone and
+iPad. It talks to LM Studio, Ollama or an OpenAI-compatible server on your
+network, with its own providers (it does not read `config.yaml`). It
+supports:
+- multiple chats;
+- web research, memory and local context tools;
+- PDF, text and screenshot attachments with on-device extraction and
+  tappable citations;
+- Mermaid PNG export;
+- a chat retention setting.
+
+It is not part of releases; run it from Xcode. See
+[`macos/setup/README.md`](macos/setup/README.md#llmtuiios--ios-chat-app).
+
 Release archives also include starter skills and plugins under
 `examples/skills` and `examples/plugins`. They remain inert by default: add
 those directories to `skills.paths` / `plugins.paths`, or copy individual
@@ -688,7 +702,7 @@ internal/procutil/        cross-platform process-group containment for run_comma
 internal/tui/             Bubble Tea chat screen
 internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme
-macos/setup/              LLMTUIGUI SwiftUI setup app (Xcode project, not Go)
+macos/setup/              Xcode project (not Go): LLMTUIGUI macOS setup app and LLMTUIiOS chat app
 native/                   Swift companions (EventKit Calendar helper)
 ```
 
