@@ -8,7 +8,7 @@ import Foundation
 /// 2. The copy bundled in the app at `Contents/Helpers/llmtui` (release builds).
 /// 3. The usual install locations: `~/.local/bin`, `~/go/bin`,
 ///    `/opt/homebrew/bin`, `/usr/local/bin`.
-enum LLMTUIExecutable {
+nonisolated enum LLMTUIExecutable {
     static let environmentKey = "LLMTUI_EXECUTABLE"
 
     /// The first existing executable in resolution order, or nil.

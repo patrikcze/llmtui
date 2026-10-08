@@ -1410,6 +1410,11 @@ struct ConfigurationLoadResult: Sendable {
 }
 
 struct LLMTUIConfigurationStore: Sendable {
+    /// llmtui's own schema, when the llmtui binary provides one. With it,
+    /// keys missing from the file read as llmtui's defaults, and Save writes
+    /// a missing key only when it differs from that default.
+    var schema: LLMTUIConfigSchema?
+
     static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: ".config")
         .appending(path: "llmtui")
@@ -1480,7 +1485,24 @@ struct LLMTUIConfigurationStore: Sendable {
         return issues
     }
 
+    /// The text Save would write for `configuration`: a patch of
+    /// `sourceText` that keeps everything this app does not edit, or a new
+    /// file when there is none.
+    func updatedText(for configuration: LLMTUIConfiguration, basedOn sourceText: String) -> String {
+        sourceText.isEmpty ? render(configuration) : patch(sourceText, with: configuration)
+    }
+
     func save(_ configuration: LLMTUIConfiguration, basedOn sourceText: String) throws -> String {
+        let updatedText = updatedText(for: configuration, basedOn: sourceText)
+        try write(updatedText, basedOn: sourceText)
+        return updatedText
+    }
+
+    /// Replaces config.yaml with `updatedText`, refusing if the file changed
+    /// since `sourceText` was read. The previous file is kept as
+    /// config.yaml.bak, and the replacement is atomic and never readable by
+    /// other users, not even briefly: the temporary file is created 0600.
+    func write(_ updatedText: String, basedOn sourceText: String) throws {
         let directory = Self.defaultURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -1495,9 +1517,6 @@ struct LLMTUIConfigurationStore: Sendable {
             )
         }
 
-        let updatedText = sourceText.isEmpty
-            ? render(configuration)
-            : patch(sourceText, with: configuration)
         let existingAttributes = try? FileManager.default.attributesOfItem(atPath: Self.defaultURL.path)
         let fileMode = (existingAttributes?[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o600
         let backupURL = Self.defaultURL.appendingPathExtension("bak")
@@ -1507,13 +1526,27 @@ struct LLMTUIConfigurationStore: Sendable {
         }
 
         let temporaryURL = directory.appendingPathComponent(".config.yaml.\(UUID().uuidString).tmp")
-        try updatedText.write(to: temporaryURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: fileMode)],
-            ofItemAtPath: temporaryURL.path
-        )
-        _ = try FileManager.default.replaceItemAt(Self.defaultURL, withItemAt: temporaryURL)
-        return updatedText
+        guard FileManager.default.createFile(
+            atPath: temporaryURL.path,
+            contents: Data(updatedText.utf8),
+            attributes: [.posixPermissions: NSNumber(value: 0o600)]
+        ) else {
+            throw NSError(
+                domain: "LLMTUIConfigurationStore",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "The new configuration could not be written."]
+            )
+        }
+        do {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: fileMode)],
+                ofItemAtPath: temporaryURL.path
+            )
+            _ = try FileManager.default.replaceItemAt(Self.defaultURL, withItemAt: temporaryURL)
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
     }
 
     func revertLastSave() throws -> ConfigurationLoadResult {
@@ -1532,8 +1565,12 @@ struct LLMTUIConfigurationStore: Sendable {
 
     func parse(_ text: String) -> LLMTUIConfiguration {
         var result = LLMTUIConfiguration()
-        let values = scalarValues(in: text)
-        result.rawSettings = values
+        let fileValues = scalarValues(in: text)
+        // Settings this app shows as fields read llmtui's default when the
+        // file does not set them, so the screens show what llmtui uses.
+        // rawSettings keeps only what the file contains.
+        let values = (schema?.scalarDefaults ?? [:]).merging(fileValues) { _, file in file }
+        result.rawSettings = fileValues
         result.listSettings = listValues(in: text)
         let providerNames = Set(values.keys.compactMap { key -> String? in
             let parts = key.split(separator: ".", omittingEmptySubsequences: true)
@@ -1675,10 +1712,10 @@ struct LLMTUIConfigurationStore: Sendable {
         return values
     }
 
-    func patch(_ source: String, with configuration: LLMTUIConfiguration) -> String {
+    /// The settings this app edits through its own fields, as (dotted key,
+    /// YAML value) pairs. Patch overwrites these from the draft.
+    private func managedUpdates(_ configuration: LLMTUIConfiguration) -> [(String, String)] {
         let p = configuration.provider
-        let defaultModel = configuration.providers.first { $0.name == configuration.defaultProviderName }?.model
-            ?? (configuration.defaultProviderName == p.name ? p.model : nil)
         let e = configuration.entities
         let a = configuration.agent
         let providerPath = "providers.\(p.name)"
@@ -1738,6 +1775,20 @@ struct LLMTUIConfigurationStore: Sendable {
             ("agent.yield.max_nudges_without_progress", String(a.yield.maxNudgesWithoutProgress))
         ]
 
+        return updates
+    }
+
+    /// Keys this app edits through dedicated fields (Chat Settings, Tools,
+    /// Agent & Runtime), not through the generic settings list.
+    var fieldKeys: Set<String> {
+        Set(managedUpdates(LLMTUIConfiguration()).map(\.0).filter { !$0.hasPrefix("providers.") })
+    }
+
+    func patch(_ source: String, with configuration: LLMTUIConfiguration) -> String {
+        let p = configuration.provider
+        let defaultModel = configuration.providers.first { $0.name == configuration.defaultProviderName }?.model
+            ?? (configuration.defaultProviderName == p.name ? p.model : nil)
+        var updates = managedUpdates(configuration)
         if let defaultModel {
             updates.append(("default_model", yamlValue(defaultModel)))
         }
@@ -1781,19 +1832,63 @@ struct LLMTUIConfigurationStore: Sendable {
         }
         existing = scalarValues(in: result)
 
-        for (path, value) in updates where existing[path] != nil {
+        // Secrets (API keys, MCP server environment values) are never
+        // written from here: whatever the file holds for them stays as is.
+        func writable(_ path: String) -> Bool {
+            !LLMTUIConfigSchema.looksSecret(path) && schema?.isSecret(path) != true
+        }
+
+        for path in configuration.resetSettings.sorted() where writable(path) {
+            result = removeKey(result, path: path)
+        }
+        existing = scalarValues(in: result)
+
+        for (path, value) in updates where existing[path] != nil && writable(path) {
             result = replaceScalar(result, path: path, value: value)
         }
 
         let managedPaths = Set(updates.map(\.0))
         for (path, value) in configuration.rawSettings
-        where existing[path] != nil && !managedPaths.contains(path) {
+        where existing[path] != nil && !managedPaths.contains(path) && writable(path) {
             result = replaceScalar(result, path: path, value: yamlPreserve(value))
         }
 
         for (path, values) in configuration.listSettings
-        where existingListPath(path, in: result) && (path.hasPrefix("personal_apps.") || path.hasPrefix("model_profiles.") || path.hasPrefix("providers.")) {
+        where existingListPath(path, in: result) && writable(path)
+            && (path.hasPrefix("personal_apps.") || path.hasPrefix("model_profiles.") || path.hasPrefix("providers.")
+                || schema?.field(for: path)?.kind == .list) {
             result = replaceList(result, path: path, values: values)
+        }
+
+        // Settings the file does not contain yet. A value equal to llmtui's
+        // default is left out, so the file only records real choices.
+        // Provider and model-profile blocks are written further down.
+        let defaults = insertionDefaults()
+        func isOwnBlock(_ path: String) -> Bool {
+            path.hasPrefix("providers.") || path.hasPrefix("model_profiles.") || path == "default_provider"
+        }
+        for (path, value) in updates.sorted(by: { $0.0 < $1.0 })
+        where existing[path] == nil && !isOwnBlock(path) && writable(path) && !configuration.resetSettings.contains(path) {
+            guard let defaultValue = defaults[path], unquoted(value) != unquoted(defaultValue) else { continue }
+            result = insertMissingScalar(result, path: path, value: value)
+        }
+        existing = scalarValues(in: result)
+        for (path, value) in configuration.rawSettings.sorted(by: { $0.key < $1.key })
+        where existing[path] == nil && !managedPaths.contains(path) && !isOwnBlock(path) && writable(path)
+            && !configuration.resetSettings.contains(path) {
+            if let schema {
+                guard let field = schema.field(for: path), field.kind != .list, field.kind != .map else { continue }
+                if let defaultValue = defaults[path], unquoted(value) == unquoted(defaultValue) { continue }
+            }
+            result = insertMissingScalar(result, path: path, value: yamlPreserve(value))
+        }
+        let listsOnDisk = listValues(in: result)
+        for (path, values) in configuration.listSettings.sorted(by: { $0.key < $1.key })
+        where listsOnDisk[path] == nil && !existingListPath(path, in: result) && !isOwnBlock(path) && writable(path)
+            && !configuration.resetSettings.contains(path) {
+            let known = path.hasPrefix("personal_apps.") || schema?.field(for: path)?.kind == .list
+            guard known, values != (schema?.field(for: path)?.listDefault ?? []) else { continue }
+            result = insertMissingList(result, path: path, values: values)
         }
 
         for name in configuration.removedModelProfiles {
@@ -1833,24 +1928,14 @@ struct LLMTUIConfigurationStore: Sendable {
         // point (either already on disk or just inserted above), so these
         // only need to create the *missing* nested map/leaf, not the block.
         for (path, value) in configuration.rawSettings
-        where path.hasPrefix("providers.") && !managedPaths.contains(path) && scalarValues(in: result)[path] == nil {
+        where path.hasPrefix("providers.") && !managedPaths.contains(path) && scalarValues(in: result)[path] == nil && writable(path) {
             result = insertMissingScalar(result, path: path, value: yamlPreserve(value))
         }
         for (path, values) in configuration.listSettings
-        where path.hasPrefix("providers.") && !values.isEmpty && listValues(in: result)[path] == nil {
+        where path.hasPrefix("providers.") && !values.isEmpty && listValues(in: result)[path] == nil && writable(path) {
             result = insertMissingList(result, path: path, values: values)
         }
 
-        if existing["agent.verifier.max_attempts"] == nil {
-            result = insertUnderMap(result, path: ["agent", "verifier"], block: "max_attempts: \(a.verifier.maxAttempts)")
-        }
-        if existing["agent.yield.enabled"] == nil {
-            result = insertUnderMap(
-                result,
-                path: ["agent"],
-                block: "yield:\n  enabled: \(eBool(a.yield.enabled))\n  max_episode_requests: \(a.yield.maxEpisodeRequests)\n  max_nudges_without_progress: \(a.yield.maxNudgesWithoutProgress)"
-            )
-        }
         return result.hasSuffix("\n") ? result : result + "\n"
     }
 
@@ -2084,7 +2169,9 @@ struct LLMTUIConfigurationStore: Sendable {
     private func nestedBlock(_ remaining: [String], leaf: String) -> String {
         guard let first = remaining.first else { return leaf }
         if remaining.count == 1 {
-            return leaf.contains("\n") ? "\(first):\n\(indentBlock(leaf))" : "\(first): \(leaf)"
+            // A list leaf ("- item" lines) always goes on its own lines, even
+            // with one item: "key: - item" is not valid YAML.
+            return leaf.contains("\n") || leaf.hasPrefix("- ") ? "\(first):\n\(indentBlock(leaf))" : "\(first): \(leaf)"
         }
         return "\(first):\n\(indentBlock(nestedBlock(Array(remaining.dropFirst()), leaf: leaf)))"
     }
@@ -2097,15 +2184,64 @@ struct LLMTUIConfigurationStore: Sendable {
     /// the caller doesn't need to know in advance which intermediate maps
     /// (e.g. `sampling:`) already exist.
     private func insertMissingPath(_ source: String, components: [String], leaf: String) -> String {
-        guard components.count > 1 else { return source }
-        for depth in stride(from: components.count - 1, through: 1, by: -1) {
-            let parentPath = Array(components[..<depth])
-            if mapExists(source, path: parentPath) {
-                let remaining = Array(components[depth...])
-                return insertUnderMap(source, path: parentPath, block: nestedBlock(remaining, leaf: leaf))
+        guard !components.isEmpty else { return source }
+        if components.count > 1 {
+            for depth in stride(from: components.count - 1, through: 1, by: -1) {
+                let parentPath = Array(components[..<depth])
+                if mapExists(source, path: parentPath) {
+                    let remaining = Array(components[depth...])
+                    return insertUnderMap(source, path: parentPath, block: nestedBlock(remaining, leaf: leaf))
+                }
             }
         }
+        // No part of the path exists yet (a section the file never had):
+        // append it as a new top-level block.
+        let block = nestedBlock(components, leaf: leaf)
+        let separator = source.isEmpty || source.hasSuffix("\n") ? "" : "\n"
+        return source + separator + block + "\n"
+    }
+
+    /// Removes a scalar or block key, with everything nested under it.
+    private func removeKey(_ source: String, path: String) -> String {
+        let components = path.split(separator: ".").map(String.init)
+        if let removed = removeFirstMap(source, path: components) {
+            return removed
+        }
+        var stack: [(indent: Int, key: String)] = []
+        var lines = source.components(separatedBy: .newlines)
+        for index in lines.indices {
+            let original = lines[index]
+            let trimmed = original.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("-") { continue }
+            let indent = original.prefix { $0 == " " }.count
+            guard let colon = trimmed.firstIndex(of: ":") else { continue }
+            let key = String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
+            let rawValue = String(trimmed[trimmed.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            while let last = stack.last, last.indent >= indent { stack.removeLast() }
+            if stack.map(\.key) + [key] == components, !rawValue.isEmpty {
+                lines.remove(at: index)
+                return lines.joined(separator: "\n")
+            }
+            if rawValue.isEmpty { stack.append((indent, key)) }
+        }
         return source
+    }
+
+    /// llmtui's defaults for the keys Save may add: from the schema when
+    /// llmtui provides one, otherwise this app's own defaults for the
+    /// settings it edits through fields.
+    private func insertionDefaults() -> [String: String] {
+        let baseline = Dictionary(managedUpdates(LLMTUIConfiguration()), uniquingKeysWith: { first, _ in first })
+            .mapValues(unquoted)
+        guard let schema else { return baseline }
+        return baseline.merging(schema.scalarDefaults) { _, fromSchema in fromSchema }
+    }
+
+    private func unquoted(_ value: String) -> String {
+        guard value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") else { return value }
+        return String(value.dropFirst().dropLast())
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\\\", with: "\\")
     }
 
     private func insertMissingScalar(_ source: String, path: String, value: String) -> String {

@@ -1,0 +1,1221 @@
+{
+  "fields": [
+    {
+      "key": "agent.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "agent.enforce_budgets_live",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "agent.max_cycles",
+      "type": "int",
+      "default": 8
+    },
+    {
+      "key": "agent.max_elapsed",
+      "type": "duration",
+      "default": "30m"
+    },
+    {
+      "key": "agent.max_memory_kb",
+      "type": "int",
+      "default": 64
+    },
+    {
+      "key": "agent.max_repeated_failures",
+      "type": "int",
+      "default": 3
+    },
+    {
+      "key": "agent.max_runs",
+      "type": "int",
+      "default": 32
+    },
+    {
+      "key": "agent.max_tokens",
+      "type": "int",
+      "default": 100000
+    },
+    {
+      "key": "agent.max_tool_calls",
+      "type": "int",
+      "default": 32
+    },
+    {
+      "key": "agent.path",
+      "type": "string",
+      "default": "~/.local/share/llmtui/agent-runs"
+    },
+    {
+      "key": "agent.persist",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "agent.skip_trivial_contract",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "agent.verifier.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "agent.verifier.max_attempts",
+      "type": "int",
+      "default": 2
+    },
+    {
+      "key": "agent.verifier.max_tokens",
+      "type": "int",
+      "default": 1024
+    },
+    {
+      "key": "agent.verifier.mode",
+      "type": "string",
+      "enum": [
+        "off",
+        "deterministic",
+        "adaptive",
+        "always"
+      ]
+    },
+    {
+      "key": "agent.verifier.model",
+      "type": "string"
+    },
+    {
+      "key": "agent.verifier.timeout",
+      "type": "duration",
+      "default": "120s"
+    },
+    {
+      "key": "agent.yield.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "agent.yield.max_episode_requests",
+      "type": "int",
+      "default": 64
+    },
+    {
+      "key": "agent.yield.max_nudges_without_progress",
+      "type": "int",
+      "default": 2
+    },
+    {
+      "key": "cache.cache_streamed_responses",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "cache.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "cache.max_size_mb",
+      "type": "int",
+      "default": 256
+    },
+    {
+      "key": "cache.path",
+      "type": "string",
+      "default": "~/.cache/llmtui/responses"
+    },
+    {
+      "key": "cache.ttl",
+      "type": "duration",
+      "default": "24h"
+    },
+    {
+      "key": "chat.force_vision",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "chat.history_dir",
+      "type": "string",
+      "default": "~/.local/share/llmtui/history"
+    },
+    {
+      "key": "chat.max_tokens",
+      "type": "int",
+      "default": 4096
+    },
+    {
+      "key": "chat.model_profile",
+      "type": "string"
+    },
+    {
+      "key": "chat.reasoning",
+      "type": "string",
+      "default": "auto",
+      "enum": [
+        "auto",
+        "on",
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "key": "chat.save_history",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "chat.stream",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "chat.strip_leaked_thinking",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "chat.system_prompt",
+      "type": "string",
+      "default": "You are a helpful local assistant."
+    },
+    {
+      "key": "chat.temperature",
+      "type": "float",
+      "default": 0.7
+    },
+    {
+      "key": "chat.top_p",
+      "type": "float",
+      "default": 0.9
+    },
+    {
+      "key": "context.keep_last_messages",
+      "type": "int",
+      "default": 8
+    },
+    {
+      "key": "context.max_context_tokens",
+      "type": "int",
+      "default": 0
+    },
+    {
+      "key": "context.reserve_response_tokens",
+      "type": "int",
+      "default": 4096
+    },
+    {
+      "key": "context.strategy",
+      "type": "string",
+      "default": "auto",
+      "enum": [
+        "auto",
+        "none",
+        "truncate",
+        "summarize"
+      ]
+    },
+    {
+      "key": "context.summarize_after_messages",
+      "type": "int",
+      "default": 12
+    },
+    {
+      "key": "context.summary_max_tokens",
+      "type": "int",
+      "default": 1200
+    },
+    {
+      "key": "context.timezone",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "decision_engine.laya.default_model",
+      "type": "string",
+      "default": "english"
+    },
+    {
+      "key": "decision_engine.laya.max_loaded",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "key": "decision_engine.laya.mlx_python",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.laya.model_dir",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.laya.models.*.path",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.laya.models.*.repo",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.laya.models.*.revision",
+      "type": "string"
+    },
+    {
+      "key": "decision_engine.laya.preload",
+      "type": "list"
+    },
+    {
+      "key": "decision_engine.mode",
+      "type": "string",
+      "default": "shadow",
+      "enum": [
+        "shadow",
+        "guarded_assist",
+        "criterion_shadow",
+        "criterion_assist"
+      ]
+    },
+    {
+      "key": "decision_engine.provider",
+      "type": "string",
+      "default": "laya"
+    },
+    {
+      "key": "decision_engine.yield_shadow",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "default_model",
+      "type": "string",
+      "default": "qwen3"
+    },
+    {
+      "key": "default_provider",
+      "type": "string",
+      "default": "ollama"
+    },
+    {
+      "key": "entities.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "entities.max_context_tokens",
+      "type": "int",
+      "default": 1200
+    },
+    {
+      "key": "entities.max_full_expansions",
+      "type": "int",
+      "default": 8
+    },
+    {
+      "key": "entities.max_output_bytes",
+      "type": "int",
+      "default": 4194304
+    },
+    {
+      "key": "entities.max_payload_bytes",
+      "type": "int",
+      "default": 65536
+    },
+    {
+      "key": "entities.max_session_entities",
+      "type": "int",
+      "default": 256
+    },
+    {
+      "key": "entities.max_total_output_bytes",
+      "type": "int",
+      "default": 16777216
+    },
+    {
+      "key": "entities.max_total_payload_bytes",
+      "type": "int",
+      "default": 4194304
+    },
+    {
+      "key": "entities.output_storage",
+      "type": "string",
+      "default": "memory",
+      "enum": [
+        "memory",
+        "disk",
+        "off"
+      ]
+    },
+    {
+      "key": "entities.output_storage_path",
+      "type": "string"
+    },
+    {
+      "key": "entities.vision_enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "entities.vision_max_tokens",
+      "type": "int",
+      "default": 800
+    },
+    {
+      "key": "mcp.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "mcp.servers.*.approve",
+      "type": "string",
+      "enum": [
+        "ask",
+        "auto"
+      ]
+    },
+    {
+      "key": "mcp.servers.*.args",
+      "type": "list"
+    },
+    {
+      "key": "mcp.servers.*.command",
+      "type": "string"
+    },
+    {
+      "key": "mcp.servers.*.enabled",
+      "type": "bool"
+    },
+    {
+      "key": "mcp.servers.*.env",
+      "type": "map",
+      "secret": true
+    },
+    {
+      "key": "mcp.servers.*.timeout",
+      "type": "duration"
+    },
+    {
+      "key": "mcp.servers.*.transport",
+      "type": "string",
+      "enum": [
+        "stdio"
+      ]
+    },
+    {
+      "key": "memory.auto_extract",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "memory.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "memory.episodic.capture",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "memory.max_snippets",
+      "type": "int",
+      "default": 100
+    },
+    {
+      "key": "memory.path",
+      "type": "string",
+      "default": "~/.local/share/llmtui/memory.yaml"
+    },
+    {
+      "key": "memory.retrieval.agent_tokens",
+      "type": "int",
+      "default": 512
+    },
+    {
+      "key": "memory.retrieval.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "memory.retrieval.episodic_tokens",
+      "type": "int",
+      "default": 384
+    },
+    {
+      "key": "memory.retrieval.max_context_tokens",
+      "type": "int",
+      "default": 1800
+    },
+    {
+      "key": "memory.retrieval.project_tokens",
+      "type": "int",
+      "default": 512
+    },
+    {
+      "key": "memory.retrieval.source_tokens",
+      "type": "int",
+      "default": 768
+    },
+    {
+      "key": "memory.retrieval.top_k",
+      "type": "int",
+      "default": 10
+    },
+    {
+      "key": "memory.retrieval.user_tokens",
+      "type": "int",
+      "default": 256
+    },
+    {
+      "key": "model_profiles.*.context_window",
+      "type": "int"
+    },
+    {
+      "key": "model_profiles.*.match",
+      "type": "list"
+    },
+    {
+      "key": "model_profiles.*.preferred_temperature",
+      "type": "float"
+    },
+    {
+      "key": "model_profiles.*.prompt_style",
+      "type": "string",
+      "enum": [
+        "direct",
+        "coding_assistant"
+      ]
+    },
+    {
+      "key": "model_profiles.*.reasoning_hint",
+      "type": "bool"
+    },
+    {
+      "key": "model_profiles.*.supports_json_mode",
+      "type": "bool"
+    },
+    {
+      "key": "network.connect_timeout",
+      "type": "duration",
+      "default": "10s"
+    },
+    {
+      "key": "network.retry.backoff",
+      "type": "duration",
+      "default": "750ms"
+    },
+    {
+      "key": "network.retry.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "network.retry.max_attempts",
+      "type": "int",
+      "default": 2
+    },
+    {
+      "key": "network.timeout",
+      "type": "duration",
+      "default": "120s"
+    },
+    {
+      "key": "personal_apps.calendar.allowed_calendars",
+      "type": "list"
+    },
+    {
+      "key": "personal_apps.calendar.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "personal_apps.calendar.helper_path",
+      "type": "string"
+    },
+    {
+      "key": "personal_apps.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "personal_apps.limits.max_body_bytes",
+      "type": "int",
+      "default": 32768
+    },
+    {
+      "key": "personal_apps.limits.max_calendar_days",
+      "type": "int",
+      "default": 31
+    },
+    {
+      "key": "personal_apps.limits.max_changes_per_plan",
+      "type": "int",
+      "default": 25
+    },
+    {
+      "key": "personal_apps.limits.max_messages_per_read",
+      "type": "int",
+      "default": 10
+    },
+    {
+      "key": "personal_apps.limits.max_page_size",
+      "type": "int",
+      "default": 100
+    },
+    {
+      "key": "personal_apps.limits.max_result_bytes",
+      "type": "int",
+      "default": 131072
+    },
+    {
+      "key": "personal_apps.limits.max_scan_candidates",
+      "type": "int",
+      "default": 1000
+    },
+    {
+      "key": "personal_apps.limits.mutation_timeout",
+      "type": "duration",
+      "default": "30s"
+    },
+    {
+      "key": "personal_apps.limits.page_size",
+      "type": "int",
+      "default": 25
+    },
+    {
+      "key": "personal_apps.limits.read_timeout",
+      "type": "duration",
+      "default": "15s"
+    },
+    {
+      "key": "personal_apps.mail.allowed_accounts",
+      "type": "list"
+    },
+    {
+      "key": "personal_apps.mail.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "personal_apps.mutations.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "personal_apps.mutations.ledger_path",
+      "type": "string"
+    },
+    {
+      "key": "plugins.enabled",
+      "type": "list"
+    },
+    {
+      "key": "plugins.paths",
+      "type": "list"
+    },
+    {
+      "key": "privacy.local_first",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "privacy.redact_api_keys_in_logs",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "privacy.store_prompts",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "prompt.fresh_runtime_context",
+      "type": "string",
+      "default": "auto",
+      "enum": [
+        "auto",
+        "message",
+        "system"
+      ]
+    },
+    {
+      "key": "prompt.helper_text",
+      "type": "string"
+    },
+    {
+      "key": "prompt.include_formatting_hints",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "prompt.include_local_memory",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "prompt.include_model_hints",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "prompt.include_session_summary",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "prompt.mode",
+      "type": "string",
+      "default": "balanced",
+      "enum": [
+        "minimal",
+        "balanced",
+        "coding",
+        "strict"
+      ]
+    },
+    {
+      "key": "providers.*.api_key",
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "providers.*.api_key_env",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.base_url",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.batch_size",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.capabilities.context_window_tokens",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.capabilities.native_tools",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.capabilities.parallel_tool_calls",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.capabilities.reasoning_events",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.capabilities.structured_output",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.chat_template",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.context_size",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.default_model",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.flash_attention",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.gpu_layers",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.kv_cache.offload",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.kv_cache.type_k",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.kv_cache.type_v",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.kv_cache_type",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.library_path",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.mmproj_path",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.model_path",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.reasoning.effort",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.reasoning.preserve",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.rope_freq_base",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.rope_freq_scale",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.rope_scaling_type",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.sampling.dry_allowed_length",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.sampling.dry_base",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.sampling.dry_multiplier",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.sampling.dry_penalty_last_n",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.sampling.dry_sequence_breakers",
+      "type": "list"
+    },
+    {
+      "key": "providers.*.sampling.min_p",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.sampling.presence_penalty",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.sampling.repeat_last_n",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.sampling.repeat_penalty",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.sampling.seed",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.sampling.stop",
+      "type": "list"
+    },
+    {
+      "key": "providers.*.sampling.top_k",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.speculative.draft_n_max",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.speculative.kv_cache.offload",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.speculative.kv_cache.type_k",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.speculative.kv_cache.type_v",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.speculative.type",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.swa_full",
+      "type": "bool"
+    },
+    {
+      "key": "providers.*.threads",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.threads_batch",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.tool_format",
+      "type": "string"
+    },
+    {
+      "key": "providers.*.type",
+      "type": "string",
+      "enum": [
+        "ollama",
+        "openai_compatible",
+        "embedded",
+        "mock"
+      ]
+    },
+    {
+      "key": "providers.*.ubatch_size",
+      "type": "int"
+    },
+    {
+      "key": "providers.*.yarn_attn_factor",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.yarn_beta_fast",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.yarn_beta_slow",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.yarn_ext_factor",
+      "type": "float"
+    },
+    {
+      "key": "providers.*.yarn_orig_ctx",
+      "type": "int"
+    },
+    {
+      "key": "rag.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "rag.index_path",
+      "type": "string",
+      "default": "~/.local/share/llmtui/rag"
+    },
+    {
+      "key": "rag.retrieval.max_context_tokens",
+      "type": "int",
+      "default": 3000
+    },
+    {
+      "key": "rag.retrieval.strategy",
+      "type": "string",
+      "default": "keyword"
+    },
+    {
+      "key": "rag.retrieval.top_k",
+      "type": "int",
+      "default": 6
+    },
+    {
+      "key": "rag.workspace.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "rag.workspace.exclude",
+      "type": "list",
+      "default": [
+        ".git/**",
+        "node_modules/**",
+        "vendor/**",
+        "dist/**",
+        "build/**",
+        "**/*.png",
+        "**/*.jpg",
+        "**/*.jpeg",
+        "**/*.pdf",
+        "**/*.zip"
+      ]
+    },
+    {
+      "key": "rag.workspace.include",
+      "type": "list",
+      "default": [
+        "**/*.go",
+        "**/*.md",
+        "**/*.txt",
+        "**/*.yaml",
+        "**/*.yml",
+        "**/*.json"
+      ]
+    },
+    {
+      "key": "rag.workspace.max_file_kb",
+      "type": "int",
+      "default": 512
+    },
+    {
+      "key": "rag.workspace.max_total_mb",
+      "type": "int",
+      "default": 256
+    },
+    {
+      "key": "rag.workspace.root",
+      "type": "string",
+      "default": "."
+    },
+    {
+      "key": "skills.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "skills.expose_catalog_to_model",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "skills.max_active",
+      "type": "int",
+      "default": 8
+    },
+    {
+      "key": "skills.max_skill_kb",
+      "type": "int",
+      "default": 64
+    },
+    {
+      "key": "skills.max_total_active_kb",
+      "type": "int",
+      "default": 256
+    },
+    {
+      "key": "skills.paths",
+      "type": "list"
+    },
+    {
+      "key": "templates.*.description",
+      "type": "string"
+    },
+    {
+      "key": "templates.*.prompt_mode",
+      "type": "string",
+      "enum": [
+        "minimal",
+        "balanced",
+        "coding",
+        "strict"
+      ]
+    },
+    {
+      "key": "templates.*.system_prompt",
+      "type": "string"
+    },
+    {
+      "key": "templates.*.temperature",
+      "type": "float"
+    },
+    {
+      "key": "tool_registry.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "tool_registry.listen",
+      "type": "string",
+      "default": "127.0.0.1:7834"
+    },
+    {
+      "key": "tool_registry.shutdown_timeout",
+      "type": "duration",
+      "default": "5s"
+    },
+    {
+      "key": "tool_registry.token_env",
+      "type": "string"
+    },
+    {
+      "key": "tools.approve",
+      "type": "string",
+      "default": "ask",
+      "enum": [
+        "ask",
+        "auto"
+      ]
+    },
+    {
+      "key": "tools.command_timeout",
+      "type": "duration",
+      "default": "30s"
+    },
+    {
+      "key": "tools.discovery.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.discovery.max_results",
+      "type": "int",
+      "default": 5
+    },
+    {
+      "key": "tools.discovery.threshold",
+      "type": "int",
+      "default": 16
+    },
+    {
+      "key": "tools.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "tools.guardrails.block_git_dir_writes",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.guardrails.block_symlink_escape",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.guardrails.protect_secret_files",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.guardrails.protect_shell_startup_files",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.guardrails.require_approval_for_secret_reads",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.max_file_kb",
+      "type": "int",
+      "default": 512
+    },
+    {
+      "key": "tools.max_iterations",
+      "type": "int",
+      "default": 10
+    },
+    {
+      "key": "tools.native",
+      "type": "string",
+      "default": "auto",
+      "enum": [
+        "auto",
+        "off"
+      ]
+    },
+    {
+      "key": "tools.no_progress.enabled",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tools.no_progress.threshold",
+      "type": "int",
+      "default": 3
+    },
+    {
+      "key": "tools.read.default_lines",
+      "type": "int",
+      "default": 200
+    },
+    {
+      "key": "tools.web.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "tools.web.max_page_kb",
+      "type": "int",
+      "default": 128
+    },
+    {
+      "key": "tools.web.max_results",
+      "type": "int",
+      "default": 5
+    },
+    {
+      "key": "tools.web.timeout",
+      "type": "duration",
+      "default": "20s"
+    },
+    {
+      "key": "ui.animations",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.compact_mode",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "ui.markdown",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.math.enabled",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "ui.provider_probe",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.show_reasoning",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.show_token_stats",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.show_usage_chart",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "ui.theme",
+      "type": "string",
+      "default": "claude_inspired",
+      "enum": [
+        "claude_inspired",
+        "midnight",
+        "forest"
+      ]
+    },
+    {
+      "key": "ui.use_nerd_font",
+      "type": "string",
+      "default": "auto"
+    }
+  ]
+}
