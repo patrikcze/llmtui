@@ -122,6 +122,18 @@ struct ProviderProfile: Identifiable, Equatable {
     var apiKeyEnvironment: String
 }
 
+extension ProviderConfiguration {
+    init(profile: ProviderProfile) {
+        self.init(
+            name: profile.name,
+            type: profile.type,
+            baseURL: profile.baseURL,
+            model: profile.model,
+            apiKeyEnvironment: profile.apiKeyEnvironment
+        )
+    }
+}
+
 struct MailAccountInfo: Codable, Identifiable, Equatable {
     let id: String
     let name: String
@@ -220,6 +232,14 @@ struct LLMTUIConfiguration: Equatable {
     var rawSettings: [String: String] = [:]
     var listSettings: [String: [String]] = [:]
     var removedModelProfiles: Set<String> = []
+    /// llmtui's `default_provider`: the profile the terminal app starts with.
+    /// Separate from `provider`, which is the profile this app's Chat uses and
+    /// the Providers screen edits, so chatting with another profile here does
+    /// not change what `llmtui` starts with.
+    var defaultProviderName = LLMTUIConfiguration.llmtuiDefaultProviderName
+    /// Provider profiles deleted since the last load or save; saving removes
+    /// their whole `providers.<name>` block.
+    var removedProviders: Set<String> = []
     var systemPrompt = "You are a helpful assistant."
     var temperature = 0.7
     var topP = 0.9
@@ -261,6 +281,42 @@ struct LLMTUIConfiguration: Equatable {
             return String(rest.dropLast(field.count + 1))
         }
         return nil
+    }
+
+    /// llmtui's `default_provider` when config.yaml does not set one
+    /// (`internal/config/config.go` setDefaults).
+    nonisolated static let llmtuiDefaultProviderName = "ollama"
+
+    /// The providers llmtui adds when config.yaml does not define them
+    /// (`internal/config/config.go` builtinProviders), so a `default_provider`
+    /// naming one of them is valid without a `providers:` block.
+    nonisolated static let llmtuiBuiltinProviders: [ProviderProfile] = [
+        ProviderProfile(name: "ollama", type: .ollama, baseURL: "http://localhost:11434", model: "qwen3", apiKeyEnvironment: ""),
+        ProviderProfile(name: "lmstudio", type: .openAICompatible, baseURL: "http://localhost:1234/v1", model: "local-model", apiKeyEnvironment: ""),
+        ProviderProfile(name: "openai_compatible", type: .openAICompatible, baseURL: "http://localhost:8080/v1", model: "local-model", apiKeyEnvironment: ""),
+        ProviderProfile(name: "mock", type: .mock, baseURL: "", model: "demo-model", apiKeyEnvironment: ""),
+        ProviderProfile(name: "embedded", type: .embedded, baseURL: "", model: "", apiKeyEnvironment: "")
+    ]
+
+    /// A provider name as llmtui stores it, or nil if it cannot be one.
+    /// llmtui's config loader lowercases map keys, so a profile saved as
+    /// "MLXServe" is only found as "mlxserve"; the name is also a dotted-path
+    /// segment here and a `/provider` argument in the terminal app, so it is
+    /// limited to lowercase letters, digits, "_" and "-".
+    nonisolated static func normalizedProviderName(_ name: String) -> String? {
+        let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lowered.isEmpty,
+              lowered.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "_" || $0 == "-" })
+        else { return nil }
+        return lowered
+    }
+
+    /// Whether `defaultProviderName` is a profile llmtui can start with: one
+    /// defined here or one of llmtui's built-in providers.
+    var defaultProviderIsDefined: Bool {
+        let name = defaultProviderName.lowercased()
+        return providers.contains { $0.name.lowercased() == name }
+            || Self.llmtuiBuiltinProviders.contains { $0.name == name }
     }
 }
 
@@ -567,6 +623,7 @@ final class AppModel {
         do {
             let loaded = try configurationStore.load()
             configuration = loaded.configuration
+            restoreChatProvider()
             personalAppsRuntime.applySavedConfiguration(loaded.configuration)
             configurationSourceText = loaded.sourceText
             configFilePath = loaded.fileURL.path
@@ -600,6 +657,7 @@ final class AppModel {
                 configuration,
                 basedOn: configurationSourceText
             )
+            configuration.removedProviders = []
             personalAppsRuntime.applySavedConfiguration(configuration)
             configurationIssues = LLMTUIConfigurationStore.validate(configurationSourceText)
             hasConfigurationBackup = true
@@ -617,30 +675,45 @@ final class AppModel {
         }
     }
 
+    /// UserDefaults key for the profile this app's Chat uses. It is kept out
+    /// of config.yaml so choosing a profile here never changes the provider
+    /// the terminal llmtui starts with (`default_provider`).
+    static let chatProviderKey = "chatProviderName"
+    /// Where the Chat's provider choice is kept; tests use their own suite.
+    @ObservationIgnored var preferences = UserDefaults.standard
+
+    /// Switches the profile the Chat uses and the Providers screen edits.
+    /// Unsaved edits to the previous profile are kept in the draft.
     func selectProvider(_ name: String) {
+        guard name != configuration.provider.name,
+              let selected = configuration.providers.first(where: { $0.name == name })
+        else { return }
         personalAppsRuntime.revokeRemoteDisclosure()
-        guard let selected = configuration.providers.first(where: { $0.name == name }) else { return }
-        configuration.provider = ProviderConfiguration(
-            name: selected.name,
-            type: selected.type,
-            baseURL: selected.baseURL,
-            model: selected.model,
-            apiKeyEnvironment: selected.apiKeyEnvironment
-        )
-        statusMessage = "Editing \(name)"
+        syncActiveProvider()
+        configuration.provider = ProviderConfiguration(profile: selected)
+        preferences.set(name, forKey: Self.chatProviderKey)
+        statusMessage = "Chat uses \(name)"
     }
 
-    func renameActiveProvider(to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Makes the selected profile the one llmtui starts with. Takes effect on
+    /// Save.
+    func makeSelectedProviderLLMTUIDefault() {
+        configuration.defaultProviderName = configuration.provider.name
+        statusMessage = "llmtui will start with \(configuration.provider.name) — save to apply"
+    }
+
+    /// Renames the selected profile. Returns false, leaving the draft
+    /// unchanged, when the name is empty, is not a valid llmtui provider name
+    /// (see `LLMTUIConfiguration.normalizedProviderName`), or is taken.
+    @discardableResult
+    func renameActiveProvider(to newName: String) -> Bool {
         let oldName = configuration.provider.name
-        guard !trimmed.isEmpty, trimmed != oldName else { return }
-        // Provider names are used as raw YAML map keys and as dotted path
-        // segments ("providers.<name>.type") throughout the config store, so
-        // "." would corrupt that scheme, and a duplicate name would collide
-        // with ProviderProfile.id (== name) and the picker's row identity.
-        guard !trimmed.contains("."), !configuration.providers.contains(where: { $0.name == trimmed }) else { return }
+        guard let name = LLMTUIConfiguration.normalizedProviderName(newName), name != oldName else { return false }
+        // A duplicate name would collide with ProviderProfile.id (== name)
+        // and the picker's row identity.
+        guard !configuration.providers.contains(where: { $0.name == name }) else { return false }
         if let index = configuration.providers.firstIndex(where: { $0.name == oldName }) {
-            configuration.providers[index].name = trimmed
+            configuration.providers[index].name = name
         }
         // Provider-specific fields this app doesn't model as struct fields
         // (an embedded provider's model_path/sampling/etc.) live keyed by
@@ -648,7 +721,7 @@ final class AppModel {
         // move them to the new name so edits survive the rename and so
         // saving finds them under the name actually on disk post-rename.
         let oldPrefix = "providers.\(oldName)."
-        let newPrefix = "providers.\(trimmed)."
+        let newPrefix = "providers.\(name)."
         for key in Array(configuration.rawSettings.keys) where key.hasPrefix(oldPrefix) {
             let value = configuration.rawSettings.removeValue(forKey: key)
             configuration.rawSettings[newPrefix + key.dropFirst(oldPrefix.count)] = value
@@ -657,10 +730,16 @@ final class AppModel {
             let value = configuration.listSettings.removeValue(forKey: key)
             configuration.listSettings[newPrefix + key.dropFirst(oldPrefix.count)] = value
         }
-        configuration.provider.name = trimmed
+        if configuration.defaultProviderName == oldName {
+            configuration.defaultProviderName = name
+        }
+        configuration.provider.name = name
+        preferences.set(name, forKey: Self.chatProviderKey)
+        return true
     }
 
     func createProviderProfile() {
+        syncActiveProvider()
         let baseName = "new_provider"
         var name = baseName
         var suffix = 2
@@ -676,14 +755,61 @@ final class AppModel {
             apiKeyEnvironment: ""
         )
         configuration.providers.append(profile)
-        configuration.provider = ProviderConfiguration(
-            name: profile.name,
-            type: profile.type,
-            baseURL: profile.baseURL,
-            model: profile.model,
-            apiKeyEnvironment: profile.apiKeyEnvironment
-        )
+        personalAppsRuntime.revokeRemoteDisclosure()
+        configuration.provider = ProviderConfiguration(profile: profile)
+        preferences.set(name, forKey: Self.chatProviderKey)
         statusMessage = "New provider draft created — save to add it"
+    }
+
+    /// Whether `deleteProviderProfile` would delete `name`. The last profile
+    /// stays, because the Chat and the Providers screen always need one.
+    func canDeleteProviderProfile(_ name: String) -> Bool {
+        configuration.providers.count > 1 && configuration.providers.contains { $0.name == name }
+    }
+
+    /// Deletes a provider profile from the draft; saving removes its whole
+    /// `providers.<name>` block from config.yaml. If it was the selected
+    /// profile, the Chat switches to llmtui's default (or the first remaining
+    /// profile). If it was llmtui's default, the default moves to that
+    /// profile too, so `default_provider` never names a deleted block.
+    @discardableResult
+    func deleteProviderProfile(_ name: String) -> Bool {
+        guard canDeleteProviderProfile(name) else { return false }
+        if name != configuration.provider.name { syncActiveProvider() }
+        configuration.providers.removeAll { $0.name == name }
+        let prefix = "providers.\(name)."
+        for key in Array(configuration.rawSettings.keys) where key.hasPrefix(prefix) {
+            configuration.rawSettings.removeValue(forKey: key)
+        }
+        for key in Array(configuration.listSettings.keys) where key.hasPrefix(prefix) {
+            configuration.listSettings.removeValue(forKey: key)
+        }
+        configuration.removedProviders.insert(name)
+
+        if configuration.provider.name == name {
+            let next = configuration.providers.first { $0.name == configuration.defaultProviderName }
+                ?? configuration.providers[0]
+            personalAppsRuntime.revokeRemoteDisclosure()
+            configuration.provider = ProviderConfiguration(profile: next)
+            preferences.set(next.name, forKey: Self.chatProviderKey)
+        }
+        var message = "Provider \(name) deleted"
+        if configuration.defaultProviderName == name {
+            configuration.defaultProviderName = configuration.provider.name
+            message += "; llmtui will start with \(configuration.provider.name)"
+        }
+        statusMessage = message + " — save to apply"
+        return true
+    }
+
+    /// After a load, puts the Chat back on the profile it used last, if that
+    /// profile still exists; otherwise it uses llmtui's default.
+    private func restoreChatProvider() {
+        guard let name = preferences.string(forKey: Self.chatProviderKey),
+              name != configuration.provider.name,
+              let profile = configuration.providers.first(where: { $0.name == name })
+        else { return }
+        configuration.provider = ProviderConfiguration(profile: profile)
     }
 
     /// Creates a model profile with every setting already filled in from the
@@ -781,6 +907,7 @@ final class AppModel {
         do {
             let loaded = try configurationStore.revertLastSave()
             configuration = loaded.configuration
+            restoreChatProvider()
             personalAppsRuntime.applySavedConfiguration(loaded.configuration)
             configurationSourceText = loaded.sourceText
             configFilePath = loaded.fileURL.path

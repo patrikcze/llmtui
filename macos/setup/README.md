@@ -43,6 +43,19 @@ its own agent and tool loop, with a separate verifier that checks the
 final answer against the tool results. It can also render images, Markdown,
 math and Mermaid diagrams (with PNG export), and copy replies.
 
+Provider profiles are the `providers:` entries of `config.yaml`, shared with
+the terminal app. On the **Providers** screen:
+- **Chat uses** picks the profile for this app's chat. The choice is kept in
+  the app's preferences, not in `config.yaml`, so it does not change what
+  `llmtui` starts with.
+- **llmtui starts with** shows `default_provider`; **Use <name>** changes it
+  on Save. A `default_provider` that names no defined or built-in provider is
+  flagged, because llmtui will not start with it.
+- **Delete** removes a profile's whole block on Save (the last profile
+  stays). Deleting llmtui's default moves the default to another profile.
+- Names are lowercase letters, digits, `_` and `-`, because llmtui reads
+  provider names in lowercase.
+
 Apart from sharing the config file and calling the `llmtui` binary for
 commands such as `config path` and `doctor`, the app is independent of the
 Go code. See [`Documentation/Architecture.md`](Documentation/Architecture.md).
