@@ -5,7 +5,7 @@ import WebKit
 // MARK: - Remote image policy
 
 /// Whether images in a reply load automatically. A reply that read
-/// attachment or web content gets `false`: text from a document or page
+/// attachment, web or MCP content gets `false`: text from a document or page
 /// could tell the model to write an image whose URL carries chat data to
 /// another server, and loading it would send that request without anyone
 /// choosing to. Such images wait for a tap that names the host first.
@@ -31,7 +31,7 @@ enum RemoteImagePolicy {
 
     /// Tools whose results bring outside text into a reply.
     static func readsUntrustedContent(_ activities: [MobileToolActivity]) -> Bool {
-        activities.contains { $0.name.hasPrefix("web_") || $0.name.hasPrefix("document_") }
+        activities.contains { $0.name.hasPrefix("web_") || $0.name.hasPrefix("document_") || $0.externalMCP == true }
     }
 }
 

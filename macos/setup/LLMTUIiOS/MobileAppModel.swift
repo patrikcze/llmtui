@@ -34,7 +34,11 @@ final class MobileAppModel {
     /// if the user opens another chat.
     private(set) var generatingConversationID: UUID?
     private let credentialStore = KeychainCredentialStore()
-    private let runtime = MobileChatRuntime()
+    private let runtime: MobileChatRuntime
+    let mcp: MobileMCPController
+    private var mcpBindings: [String: MobileMCPBinding] = [:]
+    private var mcpCalls = 0
+    private var remoteContentInTurn = false
     private var generationTask: Task<Void, Never>?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var questionContinuation: CheckedContinuation<String, Never>?
@@ -49,9 +53,13 @@ final class MobileAppModel {
 
     init(
         conversationStore: MobileConversationStore = MobileConversationStore(),
-        documentStore: DocumentStore = DocumentStore()
+        documentStore: DocumentStore = DocumentStore(),
+        mcp: MobileMCPController? = nil,
+        runtime: MobileChatRuntime? = nil
     ) {
         self.conversationStore = conversationStore
+        self.mcp = mcp ?? MobileMCPController()
+        self.runtime = runtime ?? MobileChatRuntime()
         conversations = conversationStore.loadAll()
         documents = DocumentLibrary(store: documentStore)
         documents.removeOrphans(keeping: Set(conversations.map(\.id)))
@@ -98,9 +106,15 @@ final class MobileAppModel {
             messages: messages,
             draft: draft,
             toolsEnabled: toolsEnabled,
-            memoryEnabled: MobileMemoryStore.isEnabled
+            memoryEnabled: MobileMemoryStore.isEnabled,
+            mcpDefinitions: mcpDefinitionsForContext
         )
         return (used, contextWindow)
+    }
+
+    private var mcpDefinitionsForContext: [MCPJSON] {
+        guard toolsEnabled, let bindings = try? mcp.bindings(for: selectedMCPServerIDs) else { return [] }
+        return bindings.values.map { $0.tool.providerDefinition(serverID: $0.serverID, serverName: $0.serverName) }
     }
 
     /// Asks the active provider's server for its model's context window once
@@ -132,6 +146,24 @@ final class MobileAppModel {
     /// Messages queued for the open chat.
     var currentQueuedMessages: [MobileQueuedMessage] {
         queuedMessages.filter { $0.conversationID == currentConversationID }
+    }
+
+    var selectedMCPServerIDs: [UUID] { currentConversation?.mcpServerIDs ?? [] }
+
+    func setMCPServer(_ id: UUID, selected: Bool) {
+        guard let conversationID = currentConversationID, let index = conversationIndex(conversationID) else { return }
+        var ids = conversations[index].mcpServerIDs ?? []
+        ids.removeAll { $0 == id }
+        if selected { ids.append(id) }
+        conversations[index].mcpServerIDs = ids
+        persistConversation(conversationID)
+    }
+
+    func suspendMCP() {
+        // Resumes approval waiters and cancels the active request before
+        // closing transports; a foreground transition never replays it.
+        if isGenerating && !mcpBindings.isEmpty { stop() }
+        mcp.suspend()
     }
 
     // MARK: - Chats
@@ -440,7 +472,7 @@ final class MobileAppModel {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftAttachments.isEmpty else { return }
-        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning)
+        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning, mcpServerIDs: selectedMCPServerIDs, mcpGenerations: mcp.connections.mapValues(\.generation))
         let conversationID = currentConversationID ?? newConversation()
 
         guard !isGenerating else {
@@ -506,6 +538,9 @@ final class MobileAppModel {
         generatingConversationID = conversationID
         activeTurn = (conversationID, profile)
         documentContentInTurn = false
+        remoteContentInTurn = false
+        mcpBindings = [:]
+        mcpCalls = 0
         hasRuntimeProblem = false
         separateNextRound = false
         persistConversation(conversationID)
@@ -536,6 +571,9 @@ final class MobileAppModel {
             generatingConversationID = nil
             activeTurn = nil
             documentContentInTurn = false
+            remoteContentInTurn = false
+            mcpBindings = [:]
+            mcpCalls = 0
             markStreamingFinished(id: assistantID)
             pendingToolApproval = nil
             pendingQuestion = nil
@@ -556,6 +594,7 @@ final class MobileAppModel {
     func stop() {
         generationTask?.cancel()
         generationTask = nil
+        pendingToolApproval = nil
         approvalContinuation?.resume(returning: false)
         approvalContinuation = nil
         questionContinuation?.resume(returning: "")
@@ -623,11 +662,20 @@ final class MobileAppModel {
         // their metadata goes into the prompt, never their text.
         let attachments = activeTurn.map { documents.documents(in: $0.conversationID) } ?? []
         var toolList = usesTools ? MobileChatRuntime.toolDefinitions(memoryEnabled: memoryEnabled) : []
+        mcpBindings = usesTools ? try mcp.bindings(for: options.mcpServerIDs) : [:]
+        guard mcpBindings.values.allSatisfy({ options.mcpGenerations[$0.serverID] == $0.generation }) else { throw MobileMCPError.changed }
+        for binding in mcpBindings.values.sorted(by: { $0.providerName < $1.providerName }) {
+            let definition = binding.tool.providerDefinition(serverID: binding.serverID, serverName: binding.serverName)
+            guard let wireDefinition = try JSONSerialization.jsonObject(with: definition.data()) as? [String: Any] else { throw MobileChatError.invalidResponse }
+            toolList.append(wireDefinition)
+        }
         if !attachments.isEmpty {
             toolList += MobileChatRuntime.documentToolDefinitions
             systemInstructions += "\n\n" + Self.documentInstructions(attachments)
         }
         wireMessages.insert(["role": "system", "content": systemInstructions], at: 0)
+        let offeredNames = Set(toolList.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        guard offeredNames.count == toolList.count else { throw MobileMCPError.message("Tool catalog contained a duplicate or invalid name.") }
         let tools = toolList.isEmpty ? nil : toolList
         for _ in 0..<Self.maximumToolRounds {
             let result = try await runtime.streamTurn(
@@ -653,7 +701,14 @@ final class MobileAppModel {
                 }
             ])
             for call in result.toolCalls {
-                let output = try await execute(call, assistantID: assistantID)
+                let output: String
+                if offeredNames.contains(call.name) {
+                    output = try await execute(call, assistantID: assistantID)
+                } else {
+                    output = "Error: This tool was not offered for the current reply."
+                    let activity = appendToolActivity(to: assistantID, name: call.name, detail: "Unadvertised tool", status: .failed)
+                    updateToolActivity(activity, in: assistantID, status: .failed, result: output)
+                }
                 wireMessages.append([
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -693,6 +748,9 @@ final class MobileAppModel {
             updateToolActivity(activityID, in: assistantID, status: .failed, result: error.localizedDescription)
             return "Error: \(error.localizedDescription) Send the arguments as a JSON object."
         }
+        if call.name.hasPrefix("mcp_") {
+            return try await executeMCP(call, arguments: arguments, assistantID: assistantID)
+        }
         let detail = toolDetail(name: call.name, arguments: arguments)
         let activityID = appendToolActivity(
             to: assistantID,
@@ -713,6 +771,50 @@ final class MobileAppModel {
         }
     }
 
+    #if DEBUG
+    func prepareMCPForTesting(bindings: [String: MobileMCPBinding], conversationID: UUID, profile: MobileProviderProfile) {
+        mcpBindings = bindings; activeTurn = (conversationID, profile)
+    }
+    func externalApprovalRequiredForTesting(_ name: String) -> Bool { requiresApproval(name) }
+    #endif
+
+    /// MCP approval is unconditional and scoped to the exact offered binding.
+    /// Neither a server annotation nor the global approval setting can waive it.
+    func executeMCP(_ call: ToolCall, arguments: [String: Any], assistantID: UUID) async throws -> String {
+        guard let binding = mcpBindings[call.name], let turn = activeTurn else {
+            return "Error: This MCP tool was not offered for the current reply."
+        }
+        let activity = appendToolActivity(to: assistantID, name: binding.serverName + " / " + binding.tool.name,
+                                          detail: "External MCP tool", status: .waitingForApproval, externalMCP: true)
+        do {
+            guard mcpCalls < MobileMCPLimits.calls else { throw MobileMCPError.message("The 16-call MCP limit was reached. No further external tools were sent.") }
+            let args = try MCPJSON.parse(JSONSerialization.data(withJSONObject: arguments))
+            let summary = "Server: \(binding.serverName)\nTool: \(binding.tool.name)\nArguments:\n" + String(decoding: try args.data(), as: UTF8.self)
+            guard await requestApproval(name: binding.serverName + " / " + binding.tool.name, summary: summary) else {
+                try Task.checkCancellation()
+                updateToolActivity(activity, in: assistantID, status: .rejected, result: nil)
+                return Self.rejectedOutput
+            }
+            try Task.checkCancellation()
+            guard activeTurn?.conversationID == turn.conversationID,
+                  conversations.first(where: { $0.id == turn.conversationID })?.mcpServerIDs?.contains(binding.serverID) == true,
+                  mcp.connections[binding.serverID]?.generation == binding.generation else { throw MobileMCPError.changed }
+            mcpCalls += 1
+            updateToolActivity(activity, in: assistantID, status: .running, result: nil)
+            let result = try await mcp.call(binding, arguments: args)
+            remoteContentInTurn = true
+            let output = try result.modelText()
+            updateToolActivity(activity, in: assistantID, status: result.isError ? .failed : .completed, result: output)
+            return output
+        } catch {
+            let cancelled = error is CancellationError || Task.isCancelled
+            updateToolActivity(activity, in: assistantID, status: .failed,
+                               result: cancelled ? "Interrupted. Effects may be unknown; no retry was made." : error.localizedDescription)
+            if cancelled { throw CancellationError() }
+            return "Error: " + error.localizedDescription
+        }
+    }
+
     private static let rejectedOutput = "User rejected the tool."
 
     /// Asks for approval when the Settings mode requires it for this tool.
@@ -724,8 +826,8 @@ final class MobileAppModel {
         assistantID: UUID
     ) async -> Bool {
         if requiresApproval(name) {
-            let shown = documentContentInTurn
-                ? "This request comes after the assistant read attachment text in this reply, so it needs your approval. \(summary)"
+            let shown = documentContentInTurn || remoteContentInTurn
+                ? "This request comes after the assistant read attachment or external MCP text in this reply, so it needs your approval. \(summary)"
                 : summary
             guard await requestApproval(name: name, summary: shown) else {
                 updateToolActivity(activityID, in: assistantID, status: .rejected, result: nil)
@@ -825,7 +927,7 @@ final class MobileAppModel {
         // Attachment text may contain instructions the user never gave, so
         // once it is in this reply, outbound and memory tools always ask,
         // whatever the approval setting.
-        if documentContentInTurn { return true }
+        if documentContentInTurn || remoteContentInTurn { return true }
         return MobileToolApprovalMode.current.requiresApproval(name)
     }
 
@@ -922,9 +1024,10 @@ final class MobileAppModel {
         to messageID: UUID,
         name: String,
         detail: String,
-        status: MobileToolActivityStatus
+        status: MobileToolActivityStatus,
+        externalMCP: Bool = false
     ) -> UUID {
-        let activity = MobileToolActivity(name: name, detail: String(detail.prefix(500)), status: status)
+        let activity = MobileToolActivity(name: name, detail: String(detail.prefix(500)), status: status, externalMCP: externalMCP ? true : nil)
         guard let (c, m) = location(of: messageID) else { return activity.id }
         conversations[c].messages[m].toolActivities.append(activity)
         return activity.id

@@ -25,6 +25,7 @@ struct ContentView: View {
         // it returns to the foreground (iOS gives no reliable background run).
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { model.applyRetention() }
+            if phase == .background { model.suspendMCP() }
         }
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(
@@ -83,6 +84,7 @@ private struct SettingsScreen: View {
         NavigationStack {
             Form {
                 Section {
+                    NavigationLink { MCPServerListScreen(controller: model.mcp) } label: { Label("MCP Servers", systemImage: "wrench.and.screwdriver") }
                     Picker("Appearance", selection: $appearanceMode) {
                         ForEach(MobileAppearanceMode.allCases) { mode in
                             Label(mode.title, systemImage: mode.icon)
@@ -656,6 +658,7 @@ private struct ChatScreen: View {
                     Button("Stop", systemImage: "stop.fill") { model.stop() }
                 }
                 Menu("Chat Options", systemImage: "ellipsis") {
+                    MCPChatServerPicker(model: model)
                     Button("Rename", systemImage: "pencil") { renaming = conversationID }
                     Button("Clear Messages", systemImage: "eraser") { model.clearChat() }
                         .disabled(model.messages.isEmpty)

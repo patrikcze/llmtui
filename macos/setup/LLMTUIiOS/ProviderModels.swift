@@ -103,19 +103,23 @@ struct MobileToolActivity: Codable, Identifiable, Equatable, Sendable {
     let detail: String
     var status: MobileToolActivityStatus
     var resultPreview: String?
+    /// External MCP content follows the same remote-image trust boundary.
+    var externalMCP: Bool?
 
     init(
         id: UUID = UUID(),
         name: String,
         detail: String,
         status: MobileToolActivityStatus,
-        resultPreview: String? = nil
+        resultPreview: String? = nil,
+        externalMCP: Bool? = nil
     ) {
         self.id = id
         self.name = name
         self.detail = detail
         self.status = status
         self.resultPreview = resultPreview
+        self.externalMCP = externalMCP
     }
 }
 
@@ -190,6 +194,8 @@ enum MobileToolApprovalMode: String, CaseIterable, Identifiable, Sendable {
 struct MobileTurnOptions: Equatable, Sendable {
     var toolsEnabled: Bool
     var reasoning: MobileReasoning
+    var mcpServerIDs: [UUID] = []
+    var mcpGenerations: [UUID: UUID] = [:]
 }
 
 /// A message typed while a reply is still generating. Sent automatically, in
