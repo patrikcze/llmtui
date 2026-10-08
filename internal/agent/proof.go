@@ -47,15 +47,30 @@ func requestNamesUnaddressedMutation(request string, criteria []Criterion) bool 
 	if len(criteria) != 1 {
 		return false
 	}
-	words := strings.FieldsFunc(strings.ToLower(request), func(r rune) bool { return !unicode.IsLetter(r) })
-	for _, word := range words {
+	words := strings.FieldsFunc(strings.ToLower(request), func(r rune) bool { return !unicode.IsLetter(r) && r != '\'' })
+	for i, word := range words {
 		for _, verb := range mutationVerbs {
-			if wordNamesVerb(word, verb) {
+			if wordNamesVerb(word, verb) && !directlyNegated(words, i) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// directlyNegated recognizes only an immediate, explicit prohibition. It is
+// not a general intent parser: another affirmative action in the request
+// still requires its normal receipt, even after a negative clause.
+func directlyNegated(words []string, index int) bool {
+	if index == 0 {
+		return false
+	}
+	switch words[index-1] {
+	case "not", "never", "without", "don't", "dont":
+		return true
+	default:
+		return false
+	}
 }
 
 // wordNamesVerb reports whether word is a form of verb. Matching is per
@@ -85,12 +100,12 @@ func MissingFileWriteReceipt(request string, execution ExecutionResult) bool {
 		return false
 	}
 	words := strings.FieldsFunc(lower, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_'
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_' && r != '\''
 	})
 	wantsWrite, namesFile := false, false
-	for _, word := range words {
+	for i, word := range words {
 		for _, verb := range []string{"write", "save", "create", "append", "update", "modify"} {
-			if wordNamesVerb(word, verb) {
+			if wordNamesVerb(word, verb) && !directlyNegated(words, i) {
 				wantsWrite = true
 			}
 		}

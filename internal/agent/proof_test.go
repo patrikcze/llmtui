@@ -22,6 +22,8 @@ func TestRequestNamesUnaddressedMutation(t *testing.T) {
 		{"prune is not run", "read the prune policy in docs.md", one, false},
 		{"brunch is not run", "read brunch.txt", one, false},
 		{"informational", "read report.md and give me its heading", one, false},
+		{"explicit read-only constraint", "read report.md; do not modify files", one, false},
+		{"negative then positive", "don't modify a.txt; write b.txt instead", one, true},
 		{"decomposed contract trusted", "read a.txt and write b.txt", []Criterion{{ID: "c1"}, {ID: "c2"}}, false},
 	}
 	for _, tt := range tests {
@@ -47,6 +49,9 @@ func TestMissingFileWriteReceipt(t *testing.T) {
 		{name: "confirmed edit", request: "Update the report.md", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "edit_file", Succeeded: true}}}},
 		{name: "informational", request: "Explain how to write a report file", want: false},
 		{name: "answer only", request: "Give me the weather report", want: false},
+		{name: "read-only constraint", request: "Read large.txt. Do not modify files.", want: false},
+		{name: "negative write", request: "Read report.md, but don't write any file.", want: false},
+		{name: "negative and positive actions", request: "Do not modify a.txt; write b.txt instead.", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := MissingFileWriteReceipt(tc.request, tc.execution); got != tc.want {
