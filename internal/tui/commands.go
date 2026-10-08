@@ -296,6 +296,7 @@ func (m *Model) switchProvider(name string) tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
+	name = m.cfg.ProviderName(name)
 	pc, ok := m.cfg.Providers[name]
 	if !ok {
 		m.errText = fmt.Sprintf("provider %q is not configured (see /providers)", name)

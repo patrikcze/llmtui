@@ -994,7 +994,28 @@ func Load(v *viper.Viper) (*Config, error) {
 			cfg.Providers[name] = pc
 		}
 	}
+	// Viper lowercases map keys, so a provider written as "MLXSERVE:" is
+	// loaded as "mlxserve". Resolve references to it the same way, or
+	// default_provider: "MLXSERVE" can never match.
+	cfg.DefaultProvider = cfg.ProviderName(cfg.DefaultProvider)
+	cfg.Provider = cfg.ProviderName(cfg.Provider)
 	return &cfg, nil
+}
+
+// ProviderName returns the configured key for a provider name typed by a
+// user or written in YAML. Keys are loaded lowercased (Viper folds map key
+// case), so a name that does not match exactly is retried in lowercase.
+// A name that matches neither is returned unchanged, so callers can still
+// report it as not configured.
+func (c *Config) ProviderName(name string) string {
+	if _, ok := c.Providers[name]; ok {
+		return name
+	}
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if _, ok := c.Providers[lower]; ok {
+		return lower
+	}
+	return name
 }
 
 func builtinProviders() map[string]ProviderConfig {

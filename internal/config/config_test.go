@@ -97,6 +97,53 @@ chat:
 	}
 }
 
+// A provider written with capitals is loaded under a lowercased key (Viper
+// folds map key case); references to it must resolve the same way instead
+// of failing with "provider is not configured".
+func TestUppercaseProviderNameResolves(t *testing.T) {
+	path := writeConfig(t, `
+default_provider: "MLXSERVE"
+providers:
+  MLXSERVE:
+    type: openai_compatible
+    base_url: http://127.0.0.1:9/v1/
+    default_model: local
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultProvider != "mlxserve" {
+		t.Errorf("DefaultProvider = %q, want mlxserve", cfg.DefaultProvider)
+	}
+	name, pc, ok := cfg.ActiveProvider()
+	if !ok || name != "mlxserve" || pc.DefaultModel != "local" {
+		t.Fatalf("ActiveProvider() = %q, %+v, %v; want the mlxserve provider", name, pc, ok)
+	}
+}
+
+func TestProviderNameLookup(t *testing.T) {
+	cfg := &Config{Providers: map[string]ProviderConfig{"mlxserve": {}, "lmstudio": {}}}
+	tests := []struct{ in, want string }{
+		{"mlxserve", "mlxserve"},
+		{"MLXSERVE", "mlxserve"},
+		{" LMStudio ", "lmstudio"},
+		{"unknown", "unknown"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := cfg.ProviderName(tt.in); got != tt.want {
+				t.Errorf("ProviderName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOutputStorageAcceptsDisk(t *testing.T) {
 	path := writeConfig(t, `
 entities:
