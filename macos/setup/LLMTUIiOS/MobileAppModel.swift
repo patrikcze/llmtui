@@ -66,6 +66,60 @@ final class MobileAppModel {
         profiles.first { $0.id == activeProfileID }
     }
 
+    // MARK: - Context usage
+
+    /// Context windows the servers reported, by provider, address and model.
+    private(set) var detectedContextWindows: [String: Int] = [:]
+    private var contextProbesInFlight: Set<String> = []
+    var contextWindowProbe = ContextWindowProbe()
+
+    private func contextKey(_ profile: MobileProviderProfile) -> String {
+        "\(profile.id.uuidString)|\(profile.baseURL)|\(profile.model)"
+    }
+
+    /// The active model's context window: the provider's own setting, what
+    /// its server reported, or 8192.
+    var contextWindow: Int {
+        guard let profile = activeProfile else { return ContextUsageEstimate.fallbackWindow }
+        if let configured = profile.contextWindow, configured > 0 { return configured }
+        return detectedContextWindows[contextKey(profile)] ?? ContextUsageEstimate.fallbackWindow
+    }
+
+    /// Whether `contextWindow` came from the provider setting or its server
+    /// rather than the 8192 fallback.
+    var contextWindowIsKnown: Bool {
+        guard let profile = activeProfile else { return false }
+        return (profile.contextWindow ?? 0) > 0 || detectedContextWindows[contextKey(profile)] != nil
+    }
+
+    /// The estimated tokens of the next request for the open chat.
+    var contextUsage: (used: Int, total: Int) {
+        let used = ContextUsageEstimate.tokens(
+            messages: messages,
+            draft: draft,
+            toolsEnabled: toolsEnabled,
+            memoryEnabled: MobileMemoryStore.isEnabled
+        )
+        return (used, contextWindow)
+    }
+
+    /// Asks the active provider's server for its model's context window once
+    /// per provider, address and model; does nothing when the provider sets
+    /// one itself.
+    func refreshContextWindow() {
+        guard let profile = activeProfile, profile.contextWindow == nil, !profile.model.isEmpty else { return }
+        let key = contextKey(profile)
+        guard detectedContextWindows[key] == nil, !contextProbesInFlight.contains(key) else { return }
+        contextProbesInFlight.insert(key)
+        let apiKey = apiKey(for: profile)
+        let probe = contextWindowProbe
+        Task {
+            let value = await probe.contextWindow(profile: profile, apiKey: apiKey)
+            contextProbesInFlight.remove(key)
+            if let value { detectedContextWindows[key] = value }
+        }
+    }
+
     var currentConversation: MobileConversation? {
         conversations.first { $0.id == currentConversationID }
     }

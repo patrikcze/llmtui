@@ -1137,12 +1137,34 @@ private struct ChatComposer: View {
                     }
                     .submitLabel(.return)
                     .focused(isFocused)
-                // While a reply is generating, Send queues the message instead.
-                SendButton(
-                    isQueueing: model.isGenerating,
-                    isEnabled: !(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        && model.draftAttachments.isEmpty)
-                ) { model.send() }
+                // While a reply is generating, Send queues the message
+                // instead (its icon changes); the ring around it shows the
+                // estimated context use and the badge the queued messages.
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        ContextUsageRing(usage: model.contextUsage, isKnown: model.contextWindowIsKnown)
+                            .frame(width: 54, height: 54)
+                        SendButton(
+                            isQueueing: model.isGenerating,
+                            isEnabled: !(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && model.draftAttachments.isEmpty)
+                        ) { model.send() }
+                    }
+                    if !model.currentQueuedMessages.isEmpty {
+                        Text("\(model.currentQueuedMessages.count)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(4)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Theme.accent, in: Circle())
+                            .offset(x: 4, y: -4)
+                            .allowsHitTesting(false)
+                            .accessibilityLabel("\(model.currentQueuedMessages.count) queued")
+                    }
+                }
+                .task(id: "\(model.activeProfile?.id.uuidString ?? "")|\(model.activeProfile?.model ?? "")") {
+                    model.refreshContextWindow()
+                }
             }
         }
         .padding()
@@ -1181,6 +1203,42 @@ private struct ChatComposer: View {
                 selectedPhotos = []
             }
         }
+    }
+}
+
+/// A thin ring around the Send button that fills as the next request uses
+/// more of the model's context window: green, then orange from 70% and red
+/// from 90%. It is a rough estimate, like the macOS app's.
+private struct ContextUsageRing: View {
+    let usage: (used: Int, total: Int)
+    let isKnown: Bool
+
+    private var fraction: Double {
+        guard usage.total > 0 else { return 0 }
+        return min(Double(usage.used) / Double(usage.total), 1)
+    }
+
+    private var tint: Color {
+        switch fraction {
+        case ..<0.7: Theme.success
+        case ..<0.9: Theme.warning
+        default: Theme.danger
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: max(fraction, 0.0001))
+                .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeOut(duration: 0.25), value: fraction)
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Context used")
+        .accessibilityValue("About \(Int(fraction * 100)) percent of \(usage.total) tokens\(isKnown ? "" : ", assumed size")")
     }
 }
 
@@ -1494,10 +1552,18 @@ private struct ProviderEditor: View {
                         .autocorrectionDisabled()
                 }
 
-                Section("Model") {
+                Section {
                     TextField("Model ID", text: $profile.model)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    TextField("Context size (tokens)", text: Binding(
+                        get: { profile.contextWindow.map(String.init) ?? "" },
+                        set: { text in
+                            let digits = text.filter(\.isNumber)
+                            profile.contextWindow = Int(digits).flatMap { $0 > 0 ? $0 : nil }
+                        }
+                    ), prompt: Text("Ask the server"))
+                    .keyboardType(.numberPad)
                     Button {
                         model.saveProfile(profile, apiKey: apiKey)
                         model.discoverModels()
@@ -1515,6 +1581,10 @@ private struct ProviderEditor: View {
                             model.useModel(discovered)
                         }
                     }
+                } header: {
+                    Text("Model")
+                } footer: {
+                    Text("Context size drives the ring around Send. Leave it empty to ask the server (LM Studio, Ollama, vLLM, llama.cpp); otherwise 8192 is assumed.")
                 }
 
                 Section {
