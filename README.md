@@ -246,6 +246,8 @@ llama.cpp release). See [docs/android.md](docs/android.md).
 ./llmtui config init    # write a starter config
 ./llmtui config path    # show where it lives
 ./llmtui config show    # print effective merged config (secrets redacted)
+./llmtui config validate # report a missing default provider, bad values, unknown keys
+./llmtui config schema   # every key with type, default and accepted values (JSON)
 ```
 
 Config lives at `~/.config/llmtui/config.yaml` (macOS/Linux) or

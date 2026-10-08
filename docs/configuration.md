@@ -11,7 +11,23 @@ features (tools, web, MCP, RAG, and agent mode) start disabled, and mutating
 tools default to `approve: ask`. The command refuses to overwrite an existing
 config and uses user-only permissions (`0600`) on Unix. `config path` shows
 where it lives, `config show` prints the effective merged config with secrets
-redacted. Inside the chat, `/config reload` re-reads the file and rebuilds the
+redacted.
+
+`config validate` loads the config like every command does and then reports
+what loading accepts but llmtui would fail on or ignore later:
+
+- errors: a `default_provider` with no provider block of that name, and a
+  provider `type` llmtui does not support;
+- warnings: a value outside a key's accepted set, a malformed duration, and
+  unknown keys (usually typos, which llmtui ignores).
+
+It exits non-zero only on errors; `--json` prints the findings as JSON.
+`config schema` prints every key a config file can set, as JSON, with its
+type, default, accepted values and whether it holds a secret (provider
+`api_key`, MCP server `env`). It does not read the config file. Both commands
+are meant for tools that edit the config, such as the macOS setup app.
+
+Inside the chat, `/config reload` re-reads the file and rebuilds the
 cache, memory store, profiles, and the active provider — CLI flag and env
 overrides survive the reload.
 
