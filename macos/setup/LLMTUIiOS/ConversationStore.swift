@@ -18,6 +18,12 @@ struct MobileConversation: Codable, Identifiable, Equatable, Sendable {
     /// Providers the user allowed to receive excerpts from this chat's
     /// attachments. Absent in chats saved before attachments existed.
     var documentConsentProfileIDs: [UUID]?
+    /// Set when retention (or the user) archived the chat. Archived chats are
+    /// hidden from the chat list until restored.
+    var archivedAt: Date?
+    /// A pinned chat stays at the top and is never archived or deleted by
+    /// retention.
+    var isPinned: Bool?
 
     init(id: UUID = UUID(), profileID: UUID?, now: Date = .now) {
         self.id = id

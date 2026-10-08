@@ -141,6 +141,82 @@ final class MobileAppModel {
         }
     }
 
+    // MARK: - Retention, archive and pinning
+
+    /// A one-line report of the last retention run, shown on the chat list.
+    var retentionNotice: String?
+
+    /// Chats in the main list: not archived, with content, pinned first,
+    /// then most recent.
+    var listedConversations: [MobileConversation] {
+        conversations
+            .filter { $0.archivedAt == nil && hasContent($0) }
+            .sorted { lhs, rhs in
+                let left = lhs.isPinned == true
+                let right = rhs.isPinned == true
+                return left == right ? lhs.updatedAt > rhs.updatedAt : left
+            }
+    }
+
+    var archivedConversations: [MobileConversation] {
+        conversations
+            .filter { $0.archivedAt != nil }
+            .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
+    }
+
+    /// Chats retention must never touch: the open one, the one replying, and
+    /// any with queued messages.
+    var retentionProtectedIDs: Set<UUID> {
+        var ids = Set(queuedMessages.map(\.conversationID))
+        if let currentConversationID { ids.insert(currentConversationID) }
+        if let generatingConversationID { ids.insert(generatingConversationID) }
+        return ids
+    }
+
+    /// What `policy` would archive or delete now, without changing anything.
+    func retentionPreview(_ policy: ChatRetentionPolicy, now: Date = .now) -> ChatRetentionDecision {
+        policy.evaluate(conversations.filter(hasContent), now: now, protected: retentionProtectedIDs)
+    }
+
+    /// Applies the retention guardrail and reports what it did. Runs at
+    /// launch, on returning to the foreground, and after a confirmed
+    /// settings change.
+    @discardableResult
+    func applyRetention(_ policy: ChatRetentionPolicy = .load(), now: Date = .now) -> ChatRetentionDecision {
+        let decision = retentionPreview(policy, now: now)
+        for id in decision.archive { archiveConversation(id, at: now) }
+        for id in decision.delete { deleteConversation(id) }
+        if let summary = decision.summary(days: policy.days) { retentionNotice = summary }
+        return decision
+    }
+
+    func archiveConversation(_ id: UUID, at date: Date = .now) {
+        guard let index = conversationIndex(id), conversations[index].archivedAt == nil else { return }
+        queuedMessages.removeAll { $0.conversationID == id }
+        if generatingConversationID == id { stop() }
+        conversations[index].archivedAt = date
+        if currentConversationID == id { currentConversationID = nil }
+        persistConversation(id, touch: false)
+    }
+
+    /// Restores an archived chat. Restoring counts as activity, so the chat
+    /// is not archived again at the next retention run.
+    func restoreConversation(_ id: UUID) {
+        guard let index = conversationIndex(id) else { return }
+        conversations[index].archivedAt = nil
+        persistConversation(id)
+    }
+
+    func setPinned(_ id: UUID, _ pinned: Bool) {
+        guard let index = conversationIndex(id) else { return }
+        conversations[index].isPinned = pinned ? true : nil
+        persistConversation(id, touch: false)
+    }
+
+    func deleteAllArchived() {
+        for conversation in archivedConversations { deleteConversation(conversation.id) }
+    }
+
     /// A chat with messages or attachments is kept and listed.
     func hasContent(_ conversation: MobileConversation) -> Bool {
         !conversation.messages.isEmpty || !documents.documents(in: conversation.id).isEmpty
@@ -917,9 +993,11 @@ final class MobileAppModel {
 
     /// Saves a chat with messages. An empty chat is not written; one that
     /// became empty (cleared) is removed from disk.
-    private func persistConversation(_ id: UUID) {
+    /// `touch: false` saves without counting as activity (pinning,
+    /// archiving), so retention still sees the real last-activity date.
+    private func persistConversation(_ id: UUID, touch: Bool = true) {
         guard let index = conversationIndex(id) else { return }
-        conversations[index].updatedAt = .now
+        if touch { conversations[index].updatedAt = .now }
         guard hasContent(conversations[index]) else {
             conversationStore.delete(id)
             return

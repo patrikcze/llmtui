@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var model = MobileAppModel()
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("iosAppearanceMode") private var appearanceMode = MobileAppearanceMode.system.rawValue
 
     var body: some View {
@@ -16,10 +17,15 @@ struct ContentView: View {
                 ProviderListScreen(model: model)
             }
             Tab("Settings", systemImage: "gearshape") {
-                SettingsScreen(appearanceMode: $appearanceMode)
+                SettingsScreen(model: model, appearanceMode: $appearanceMode)
             }
         }
         .tint(Theme.accent)
+        // The chat retention guardrail runs when the app opens and whenever
+        // it returns to the foreground (iOS gives no reliable background run).
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { model.applyRetention() }
+        }
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -65,7 +71,10 @@ private enum MobileAppearanceMode: String, CaseIterable, Identifiable {
 }
 
 private struct SettingsScreen: View {
+    let model: MobileAppModel
     @Binding var appearanceMode: String
+    @State private var retention = ChatRetentionPolicy.load()
+    @State private var pendingRetention: PendingRetentionChange?
     @AppStorage(MobileToolApprovalMode.storageKey) private var approvalMode = MobileToolApprovalMode.always.rawValue
     @AppStorage(MobileMemoryStore.enabledKey) private var memoryEnabled = true
     @State private var memoryCount = 0
@@ -102,6 +111,35 @@ private struct SettingsScreen: View {
                 }
 
                 Section {
+                    Picker(selection: retentionDays) {
+                        ForEach(ChatRetentionPolicy.dayOptions, id: \.self) { days in
+                            Text(ChatRetentionPolicy.periodTitle(days)).tag(days)
+                        }
+                    } label: {
+                        Label { Text("Keep Chats For") } icon: { IconTile(systemName: "clock.arrow.circlepath", tint: Theme.accent, size: 30) }
+                    }
+                    if retention.days != nil {
+                        Picker(selection: retentionAction) {
+                            ForEach(ChatRetentionPolicy.Action.allCases) { action in
+                                Text(action.title).tag(action)
+                            }
+                        } label: {
+                            Label { Text("Then") } icon: {
+                                IconTile(
+                                    systemName: retention.action == .delete ? "trash.fill" : "archivebox.fill",
+                                    tint: retention.action == .delete ? Theme.danger : Theme.warning,
+                                    size: 30
+                                )
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Chat Retention")
+                } footer: {
+                    Text(retentionFooter)
+                }
+
+                Section {
                     Toggle(isOn: $memoryEnabled) {
                         Label { Text("Use Memory") } icon: { IconTile(systemName: "brain.head.profile", tint: Theme.accent, size: 30) }
                     }
@@ -122,10 +160,71 @@ private struct SettingsScreen: View {
             }
             .themedBackground()
             .navigationTitle("Settings")
+            .confirmationDialog(
+                pendingRetention?.title ?? "",
+                isPresented: Binding(
+                    get: { pendingRetention != nil },
+                    set: { if !$0 { pendingRetention = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: pendingRetention
+            ) { change in
+                Button(change.confirmTitle, role: change.decision.delete.isEmpty ? nil : .destructive) {
+                    commit(change.policy)
+                    pendingRetention = nil
+                }
+                Button("Cancel", role: .cancel) { pendingRetention = nil }
+            } message: { change in
+                Text(change.message)
+            }
             .task { memoryCount = await MobileMemoryStore.shared.entries().count }
             .onAppear {
                 Task { memoryCount = await MobileMemoryStore.shared.entries().count }
             }
+        }
+    }
+
+    private var retentionDays: Binding<Int> {
+        Binding(
+            get: { retention.days ?? 0 },
+            set: { propose(ChatRetentionPolicy(days: $0 > 0 ? $0 : nil, action: retention.action)) }
+        )
+    }
+
+    private var retentionAction: Binding<ChatRetentionPolicy.Action> {
+        Binding(
+            get: { retention.action },
+            set: { propose(ChatRetentionPolicy(days: retention.days, action: $0)) }
+        )
+    }
+
+    /// Saves a new policy, but first asks when it would archive or delete
+    /// existing chats right away.
+    private func propose(_ policy: ChatRetentionPolicy) {
+        let preview = model.retentionPreview(policy)
+        if preview.isEmpty {
+            commit(policy)
+        } else {
+            pendingRetention = PendingRetentionChange(policy: policy, decision: preview)
+        }
+    }
+
+    private func commit(_ policy: ChatRetentionPolicy) {
+        retention = policy
+        policy.save()
+        model.applyRetention(policy)
+    }
+
+    private var retentionFooter: String {
+        guard let days = retention.days else {
+            return "Chats are kept until you delete them."
+        }
+        let period = ChatRetentionPolicy.periodTitle(days)
+        switch retention.action {
+        case .archive:
+            return "Chats with no activity for \(period) move to Archived (top left of Chats), where you can restore them. Pinned chats, the open chat and a chat that is replying are never touched. Checked when the app opens."
+        case .delete:
+            return "Chats with no activity for \(period) are permanently deleted, with their attachments and extracted text, including archived chats. Pinned chats, the open chat and a chat that is replying are never touched. Checked when the app opens."
         }
     }
 
@@ -213,7 +312,7 @@ private struct ChatListScreen: View {
                         Button("Create Provider", systemImage: "plus") { _ = model.addProfile() }
                             .buttonStyle(AccentButtonStyle())
                     }
-                } else if sortedConversations.isEmpty {
+                } else if model.listedConversations.isEmpty {
                     ContentUnavailableView {
                         Label("No Chats", systemImage: "bubble.left.and.bubble.right")
                     } description: {
@@ -224,7 +323,13 @@ private struct ChatListScreen: View {
                     }
                 } else {
                     List {
-                        ForEach(sortedConversations) { conversation in
+                        if let notice = model.retentionNotice {
+                            RetentionNoticeRow(text: notice) { model.retentionNotice = nil }
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        }
+                        ForEach(model.listedConversations) { conversation in
                             ConversationRow(
                                 conversation: conversation,
                                 provider: model.profile(for: conversation),
@@ -240,11 +345,25 @@ private struct ChatListScreen: View {
                                 Button("Delete", systemImage: "trash", role: .destructive) {
                                     deleting = conversation.id
                                 }
-                                Button("Rename", systemImage: "pencil") { renaming = conversation.id }
-                                    .tint(Theme.warning)
+                                Button("Archive", systemImage: "archivebox") {
+                                    model.archiveConversation(conversation.id)
+                                }
+                                .tint(Theme.warning)
+                            }
+                            .swipeActions(edge: .leading) {
+                                let pinned = conversation.isPinned == true
+                                Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+                                    model.setPinned(conversation.id, !pinned)
+                                }
+                                .tint(Theme.accent)
                             }
                             .contextMenu {
+                                let pinned = conversation.isPinned == true
+                                Button(pinned ? "Unpin" : "Pin (Never Archive)", systemImage: pinned ? "pin.slash" : "pin") {
+                                    model.setPinned(conversation.id, !pinned)
+                                }
                                 Button("Rename", systemImage: "pencil") { renaming = conversation.id }
+                                Button("Archive", systemImage: "archivebox") { model.archiveConversation(conversation.id) }
                                 Button("Delete", systemImage: "trash", role: .destructive) {
                                     deleting = conversation.id
                                 }
@@ -258,6 +377,15 @@ private struct ChatListScreen: View {
             .navigationTitle("Chats")
             .chatsSubtitle()
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if !model.archivedConversations.isEmpty {
+                        NavigationLink {
+                            ArchivedChatsScreen(model: model) { id in path = [id] }
+                        } label: {
+                            Label("Archived (\(model.archivedConversations.count))", systemImage: "archivebox")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
                         .disabled(model.profiles.isEmpty)
@@ -284,14 +412,116 @@ private struct ChatListScreen: View {
         }
     }
 
-    private var sortedConversations: [MobileConversation] {
-        model.conversations
-            .filter { model.hasContent($0) }
-            .sorted { $0.updatedAt > $1.updatedAt }
-    }
-
     private func startNewChat() {
         path = [model.newConversation()]
+    }
+}
+
+/// A settings change waiting for confirmation, with what it would do now.
+private struct PendingRetentionChange {
+    let policy: ChatRetentionPolicy
+    let decision: ChatRetentionDecision
+
+    private var count: Int { decision.archive.count + decision.delete.count }
+    private var chats: String { count == 1 ? "1 chat" : "\(count) chats" }
+
+    var title: String {
+        decision.delete.isEmpty ? "Archive \(chats) now?" : "Delete \(chats) now?"
+    }
+
+    var confirmTitle: String {
+        decision.delete.isEmpty ? "Archive \(chats)" : "Delete \(chats)"
+    }
+
+    var message: String {
+        let period = policy.days.map { ChatRetentionPolicy.periodTitle($0) } ?? ""
+        return decision.delete.isEmpty
+            ? "\(chats.capitalized) had no activity for \(period). You can restore archived chats from Archived."
+            : "\(chats.capitalized) had no activity for \(period). They are permanently deleted with their attachments. This cannot be undone."
+    }
+}
+
+/// The result of the last retention run, dismissible.
+private struct RetentionNoticeRow: View {
+    let text: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            IconTile(systemName: "clock.arrow.circlepath", tint: Theme.accent, size: 30)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button("Dismiss", systemImage: "xmark", action: dismiss)
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .buttonStyle(.borderless)
+        }
+        .padding(12)
+        .themedCard(radius: 16)
+    }
+}
+
+/// Archived chats: restore (which reopens the chat) or delete.
+private struct ArchivedChatsScreen: View {
+    let model: MobileAppModel
+    let open: (UUID) -> Void
+    @State private var confirmDeleteAll = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            if model.archivedConversations.isEmpty {
+                ContentUnavailableView("No Archived Chats", systemImage: "archivebox")
+                    .listRowBackground(Color.clear)
+            }
+            ForEach(model.archivedConversations) { conversation in
+                ConversationRow(conversation: conversation, provider: model.profile(for: conversation), isGenerating: false)
+                    .overlay(alignment: .bottomTrailing) {
+                        if let archivedAt = conversation.archivedAt {
+                            Text("Archived \(archivedAt.formatted(.relative(presentation: .named)))")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .padding(12)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        model.restoreConversation(conversation.id)
+                        open(conversation.id)
+                    }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Restores and opens this chat")
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .swipeActions {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            model.deleteConversation(conversation.id)
+                        }
+                        Button("Restore", systemImage: "arrow.uturn.backward") {
+                            model.restoreConversation(conversation.id)
+                        }
+                        .tint(Theme.success)
+                    }
+            }
+        }
+        .listStyle(.plain)
+        .themedBackground()
+        .navigationTitle("Archived")
+        .toolbar {
+            Button("Delete All", role: .destructive) { confirmDeleteAll = true }
+                .disabled(model.archivedConversations.isEmpty)
+        }
+        .confirmationDialog("Delete all archived chats?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("Delete All", role: .destructive) {
+                model.deleteAllArchived()
+                dismiss()
+            }
+        } message: {
+            Text("They are permanently deleted with their attachments. This cannot be undone.")
+        }
     }
 }
 
@@ -309,6 +539,12 @@ private struct ConversationRow: View {
             )
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
+                    if conversation.isPinned == true {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.accent)
+                            .accessibilityLabel("Pinned")
+                    }
                     Text(conversation.title)
                         .font(.headline)
                         .lineLimit(1)
