@@ -96,3 +96,105 @@ if it would act on existing chats.
   document tools, citations and the attachment lifecycle.
 - `ChatRetentionTests` covers the retention policy and the model behaviour.
 - `LLMTUIiOSUITests` has the UI tests.
+
+## MCP servers (Swift only)
+
+Settings → MCP Servers manages explicit Streamable HTTP connections. A chat's
+MCP Servers menu selects its servers; older chats select none. Tools must be
+on, and servers must already be connected. Creating a profile or opening a
+chat starts no connection. Every external tool call asks for approval showing
+its server, original tool name and complete arguments. The app keeps its
+existing eight-round loop and permits at most 16 MCP calls per reply.
+
+`MobileMCPService` owns connections behind the injectable `MobileMCPClient`
+actor interface. `MCPModernClient` implements `2026-07-28` using Foundation;
+`MCPLegacyClient` uses official Swift SDK 0.12.1 for the initialized
+`2025-03-26`, `2025-06-18`, and `2025-11-25` era. The SDK revision and all
+resolved packages are recorded in the Xcode workspace's `Package.resolved`.
+Only the iOS target links MCP. The legacy SDK uses an app-owned HTTP transport
+so both eras share bounded HTTP/SSE decoding, response-ID checking, ephemeral
+sessions, disabled logging and rejected redirects.
+
+Discovery starts with an observational modern request. Unrecognized legacy
+initialization failures select the SDK adapter; a modern unsupported-version
+error can explicitly advertise a compatible older version. Authentication,
+header/capability errors and unsupported modern versions are surfaced rather
+than blindly retried. Legacy session IDs stay in the legacy transport. The
+modern adapter sends per-request metadata, required method/name headers and
+validated `x-mcp-header` primitive arguments, using the specified Base64
+sentinel when needed. Resources, prompts, sampling, elicitation, roots, MCP
+Apps and asynchronous Tasks are not advertised. Unsupported input requests
+and media produce explicit errors/notices, never external fetches or replay.
+
+`MobileMCPController` provides observable metadata to the UI. Profiles use
+`iosMCPProfiles`, independent of provider settings; bearer and OAuth access/
+refresh credentials use a distinct Keychain service and never conversation
+or preference files. Known access-token echoes in tool definitions are
+excluded and in results redacted. OAuth uses `ASWebAuthenticationSession`,
+PKCE S256, validated state/issuer, protected-resource and OAuth/OIDC discovery,
+resource-bound refresh, scope accumulation, configured client IDs/metadata
+URLs, or supported dynamic registration. The callback is
+`llmtui-ios-mcp://oauth/callback`; an OAuth server must accept that native
+client registration. No confidential-client secret is embedded in the app.
+Additional scopes require explicit Sign in / update permissions; failed tool
+calls are never automatically resubmitted after authentication.
+
+HTTPS is the default. User-opted-in HTTP is restricted to explicitly
+configured local addresses/`.local` endpoints without credentials. The
+iOS-only plist permits local networking and registers the OAuth callback;
+it does not add a global arbitrary-loads exception or change macOS policy.
+The phone's `localhost` is the phone, not a desktop server. Desktop stdio
+servers need a separately hosted HTTP endpoint or bridge.
+
+The catalog keeps arbitrary nested input schemas and assigns deterministic
+provider names, mapping them to server identity and original names. Discovery
+and each offered catalog are limited to 64 tools and 256 KiB; each HTTP/SSE
+message and request is limited to 1 MiB; model-visible results including
+markers are limited to 32 KiB. Invalid header annotations are excluded with
+visible warnings. Oversized catalogs fail explicitly, and oversized results
+report truncation. MCP definitions contribute to the existing context ring.
+
+Each sent or queued turn captures selected server IDs and connection generations.
+Only advertised tools execute. Approvals are revalidated against the original
+chat's selection, connection generation and a refreshed tool schema immediately
+before transmission. Changes require a new reply/approval. MCP results remain
+untrusted tool messages; outbound web and memory actions subsequently always
+ask. Remote images in replies involving MCP also require a tap, matching the
+existing attachment/web rule. Existing document consent and citation ownership
+remain unchanged.
+
+Backgrounding cancels an MCP-enabled reply, connection/sign-in tasks and
+approval waiters, then closes transports. Foregrounding does not reconnect or
+resume tools. Interrupted calls can have unknown effects; their cards say so,
+and the app requires explicit reconnection. Editing/removing a server or
+changing credentials revokes its connections and pending bindings.
+
+### MCP validation and physical-device checklist
+
+`MCPTests`, `MCPChatTests`, `MCPOAuthCallbackTests`, `MCPWireTests`, and
+`MCPNetworkTests` cover both protocol eras,
+real Swift loopback HTTP/SSE sockets, independently counted approved calls,
+rejections, cancellation, changed schemas/profiles, scope discovery/PKCE/
+registration/refresh, provider completion, malformed framing, catalog limits,
+Unicode truncation, credential isolation and remote-image consent. The full
+provider → approval → MCP → correlated tool-result → provider path is tested.
+`MCPServerUITests` exercises the Settings entry, endpoint validation and Cancel.
+The real Keychain round trip is explicitly enabled with
+`LLMTUI_IOS_KEYCHAIN_TEST=1` on a signed host; unsigned simulator tests inject
+credential storage because Security.framework returns missing-entitlement
+error `-34018`.
+
+Before distributing the feature, use a signed physical-device build to verify:
+
+1. LAN permission, explicitly allowed unauthenticated HTTP, HTTPS and revoked
+   access; verify tool cards and actual server-side call counts after approval.
+2. Bearer Keychain persistence/deletion across relaunch with the signed-host
+   test enabled. Confirm no credentials enter preferences or conversations.
+3. Browser OAuth against a registered native client, user cancellation, refresh
+   and incremental scopes. Check wrong-state/issuer rejection without code exchange.
+4. Background during discovery, approval and a running tool; confirm no
+   foreground replay, honest interruption and explicit reconnection.
+
+The simulator tests use local fixtures, not production accounts. Physical LAN,
+interactive OAuth against a deployed authorization server, and signed-device
+Keychain behavior are not established by an unsigned simulator pass.

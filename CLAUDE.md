@@ -219,8 +219,8 @@ two apps. See `macos/setup/README.md`.
   Shipped as a zip on every `v*` tag.
 - **LLMTUIiOS** (iOS/iPadOS 18+): a standalone chat app that does not read
   `config.yaml`. It has its own providers, a bounded tool loop, web research,
-  memory, PDF/text/OCR attachments with validated citations, and a chat
-  retention guardrail. Not part of any release; don't cut a release tag for
+  memory, PDF/text/OCR attachments with validated citations, per-chat remote
+  MCP tooling with mandatory call approval, and a chat retention guardrail. Not part of any release; don't cut a release tag for
   iOS-only changes. Architecture: `macos/setup/Documentation/iOS-Architecture.md`.
 
 - **Gates:**
@@ -264,8 +264,11 @@ two apps. See `macos/setup/README.md`.
   - Once a reply has read attachment text, web and memory tools always ask.
   - A citation becomes a link only if a document tool returned that passage
     in the same reply.
-  - Images in replies that read web or attachment content load only after a
+  - Images in replies that read web, attachment or MCP content load only after a
     tap.
+  - MCP connections are explicit and per-chat; every external call asks, and
+    server/credential/schema changes revoke the offered binding. Foregrounding
+    never replays an interrupted external call.
   - Chat retention never touches pinned, open, generating or queued chats,
     and confirms settings changes that would act immediately.
 
