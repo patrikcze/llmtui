@@ -206,7 +206,7 @@ private struct MarkdownBlockView: View {
         case .blockQuote(let depth):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.accentColor.opacity(0.65))
+                    .fill(Theme.accent.opacity(0.65))
                     .frame(width: 3)
                 MathAwareText(content: block.content, foreground: .secondary)
                     .font(.body)

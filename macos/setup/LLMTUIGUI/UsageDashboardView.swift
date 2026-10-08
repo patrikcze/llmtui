@@ -99,7 +99,7 @@ struct UsageDashboardView: View {
             }
         }
         .padding(20)
-        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
+        .themedCard()
     }
 
     private func overviewTab(snapshot: UsageSnapshot) -> some View {
