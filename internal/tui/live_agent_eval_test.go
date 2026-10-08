@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -199,6 +200,71 @@ func confirmWritePostcondition(m *Model, run *agent.AgentRun, mutatedBeforeAppro
 	return result
 }
 
+// fullReadPostcondition checks actual delivered tool text against every
+// synthetic fixture line. It does not use the controller's coverage predicate
+// or the verifier verdict as its oracle, so a metadata-only success cannot pass.
+func fullReadPostcondition(m *Model, run *agent.AgentRun, _ bool) postconditionResult {
+	if hasMutation(run) {
+		return postconditionResult{unexpectedSideEffect: true}
+	}
+	ids := make(map[string]bool)
+	for _, call := range executedCalls(run, tools.ToolReadFile) {
+		if call.Detail == "large.txt" && call.Succeeded {
+			ids[call.ID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return postconditionResult{failure: "no_read_observed"}
+	}
+	var delivered strings.Builder
+	for _, msg := range m.session.Messages {
+		if (msg.Role == provider.RoleTool && ids[msg.ToolCallID]) ||
+			(msg.Role == provider.RoleUser && ids[""] && strings.HasPrefix(msg.Content, "[tool results]")) {
+			delivered.WriteString(msg.Content)
+			delivered.WriteByte('\n')
+		}
+	}
+	for line := 1; line <= 1500; line++ {
+		if !strings.Contains(delivered.String(), fmt.Sprintf("fixture-line-%04d\n", line)) {
+			return postconditionResult{failure: "answer_missing_evidence"}
+		}
+	}
+	if !strings.Contains(finalAnswer(m), "fixture-line-1500") {
+		return postconditionResult{failure: "answer_missing_evidence"}
+	}
+	return postconditionResult{passed: true}
+}
+
+func fullReadFixture() liveAgentCase {
+	var content strings.Builder
+	for line := 1; line <= 1500; line++ {
+		fmt.Fprintf(&content, "fixture-line-%04d\n", line)
+	}
+	return liveAgentCase{
+		id: "read_full_1500_lines", expectedAction: "TOOL_CALL",
+		request:       "Read all 1500 lines of large.txt, continuing until every line has been delivered. Then report the exact last line. Do not modify files.",
+		seedFiles:     map[string]string{"large.txt": content.String()},
+		postcondition: fullReadPostcondition,
+	}
+}
+
+func writeAndCheckPostcondition(m *Model, run *agent.AgentRun, mutatedBeforeApproval bool) postconditionResult {
+	result := confirmWritePostcondition(m, run, mutatedBeforeApproval)
+	if !result.passed {
+		return result
+	}
+	result.passed = false
+	result.failure = "answer_missing_evidence"
+	for _, call := range executedCalls(run, tools.ToolRunCommand) {
+		if call.Detail == "cat result.txt" && call.Succeeded && strings.Contains(finalAnswer(m), "approved") {
+			result.passed = true
+			result.failure = ""
+			break
+		}
+	}
+	return result
+}
+
 // TestLiveAgentMatrix runs the real bounded contract -> executor -> tool ->
 // verifier loop. It is deliberately skipped without an explicit endpoint and
 // model, and every mutation is confined to a fresh temporary directory.
@@ -234,6 +300,7 @@ func TestLiveAgentMatrix(t *testing.T) {
 		trials = parsed
 	}
 	cases := []liveAgentCase{
+		fullReadFixture(),
 		{
 			id: "read_known_file", expectedAction: "TOOL_CALL",
 			request:       "Read notes.txt and tell me its first line. The file path is exact; do not ask me for another path.",
@@ -251,6 +318,11 @@ func TestLiveAgentMatrix(t *testing.T) {
 			request:       "Create result.txt containing exactly approved. Ask for confirmation before writing it.",
 			approval:      "y",
 			postcondition: confirmWritePostcondition,
+		},
+		{
+			id: "write_and_check", expectedAction: "CONFIRM",
+			request:  "Create result.txt containing exactly approved. Ask for confirmation before writing it. Then independently check it with run_command using cat result.txt and report the observed result.",
+			approval: "y", postcondition: writeAndCheckPostcondition,
 		},
 	}
 
@@ -284,6 +356,17 @@ func TestLiveAgentMatrix(t *testing.T) {
 			m.cfg.Agent.MaxToolCalls = 8
 			m.cfg.Agent.MaxElapsed = "5m"
 			m.cfg.Agent.MaxTokens = 20000
+			// Mirror production defaults instead of newTestModel's small
+			// synthetic caps. Metadata.MaxTokens must describe real requests.
+			m.cfg.Chat.MaxTokens = metadata.MaxTokens
+			m.cfg.Context.ReserveResponseTokens = metadata.MaxTokens
+			m.cfg.Agent.Yield.Enabled = true
+			m.cfg.Agent.Yield.MaxEpisodeRequests = 64
+			m.cfg.Agent.Yield.MaxNudgesWithoutProgress = 2
+			if fixture.id == "read_full_1500_lines" {
+				m.cfg.Agent.MaxTokens = 100000
+				m.cfg.Agent.MaxToolCalls = 16
+			}
 			m.toolsOn = true
 			m.toolsNative = true
 			m.toolRunner = tools.NewRunner(t.TempDir(), 64)
@@ -300,7 +383,7 @@ func TestLiveAgentMatrix(t *testing.T) {
 			beforeRequests := counted.requestCount()
 			var mutatedBeforeApproval bool
 			var beforeApproval func()
-			if fixture.id == "confirm_write" {
+			if fixture.id == "confirm_write" || fixture.id == "write_and_check" {
 				beforeApproval = func() {
 					if _, err := os.Stat(filepath.Join(m.toolRunner.Root(), "result.txt")); err == nil {
 						mutatedBeforeApproval = true

@@ -125,8 +125,8 @@ func (m *Model) admitAgentEpisodeRequest() (cmd tea.Cmd, ok bool) {
 
 // noteAgentEpisodeRetries charges the extra provider attempts startRequest
 // made inside one admitted request — transport retries and the native-tool
-// fallback resend — so the episode counter reflects every attempt. An
-// overrun stops the episode at the next admission.
+// fallback resend — including terminal pre-stream failures. startRequest
+// snapshots and enforces the remaining allowance before each attempt.
 func (m *Model) noteAgentEpisodeRetries(retries int, fellBack bool) {
 	checkpoint := m.agentEpisodeCheckpoint()
 	if checkpoint == nil {

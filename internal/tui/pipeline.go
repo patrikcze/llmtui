@@ -1865,6 +1865,12 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 	prov := m.prov
 	netCfg := m.cfg.Network
 	baseURL := m.cfg.ActiveBaseURL()
+	// The caller has already charged the first attempt. Snapshot the remaining
+	// allowance on the UI goroutine; the command never reads mutable run state.
+	remainingAttempts := 0 // zero means this episode has no request ceiling
+	if checkpoint := m.agentEpisodeCheckpoint(); checkpoint != nil && m.cfg.Agent.Yield.MaxEpisodeRequests > 0 {
+		remainingAttempts = max(1, m.cfg.Agent.Yield.MaxEpisodeRequests-checkpoint.ExecutorRequests+1)
+	}
 
 	return func() tea.Msg {
 		attempts := 1
@@ -1872,8 +1878,20 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			attempts = netCfg.Retry.MaxAttempts
 		}
 		fellBack := false
+		pendingFallback := false
+		fallbackAttempts := 0
+		providerAttempts := 0
 		var lastErr error
 		for attempt := 1; attempt <= attempts; attempt++ {
+			if remainingAttempts > 0 && providerAttempts >= remainingAttempts {
+				return firstStreamMsg{ok: true, gen: gen, retries: providerAttempts - 1 - fallbackAttempts, toolsFellBack: fellBack, requestFailed: true, episodeBudgetExhausted: true}
+			}
+			if pendingFallback {
+				fellBack = true
+				fallbackAttempts++
+				pendingFallback = false
+			}
+			providerAttempts++
 			stream, err := prov.Chat(ctx, req)
 			if err == nil {
 				select {
@@ -1898,12 +1916,16 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			// the fenced-block protocol for the rest of the session).
 			if len(req.Tools) > 0 && ctx.Err() == nil && toolsRejectedError(err) {
 				req.Tools = nil
-				fellBack = true
+				pendingFallback = true
 				attempt--
 				continue
 			}
 			lastErr = err
 			if ctx.Err() != nil || !provider.RetryableError(err) {
+				break
+			}
+			// No backoff when no further attempt can be admitted.
+			if attempt == attempts || (remainingAttempts > 0 && providerAttempts >= remainingAttempts) {
 				break
 			}
 			select {
@@ -1912,7 +1934,8 @@ func (m *Model) startRequest(req provider.ChatRequest) tea.Cmd {
 			case <-time.After(app.RetryBackoff(netCfg)):
 			}
 		}
-		return streamEventMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true, gen: gen, requestFailed: true}
+		budgetExhausted := remainingAttempts > 0 && providerAttempts >= remainingAttempts && ctx.Err() == nil && provider.RetryableError(lastErr)
+		return firstStreamMsg{event: provider.ChatEvent{Type: provider.EventError, Err: friendlyError(lastErr, prov.Name(), baseURL)}, ok: true, gen: gen, retries: providerAttempts - 1 - fallbackAttempts, toolsFellBack: fellBack, requestFailed: true, episodeBudgetExhausted: budgetExhausted}
 	}
 }
 

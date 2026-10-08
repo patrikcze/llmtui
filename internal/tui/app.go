@@ -1145,7 +1145,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rejectNativeToolCapability()
 			m.notice = "⚒ model does not support native tool calls — using the prompt-based protocol"
 		}
-		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok, gen: msg.gen})
+		if msg.episodeBudgetExhausted {
+			m.thinking = false
+			m.complete(turnOutcomeExecutionFailure)
+			return m, m.terminateAgentModelRequestBudget(fmt.Sprintf("agent episode request budget exhausted (maximum %d)", m.cfg.Agent.Yield.MaxEpisodeRequests))
+		}
+		return m.handleStreamEvent(streamEventMsg{event: msg.event, ok: msg.ok, gen: msg.gen, requestFailed: msg.requestFailed})
 
 	case streamEventMsg:
 		return m.handleStreamEvent(msg)
@@ -2268,6 +2273,10 @@ type firstStreamMsg struct {
 	// toolsFellBack reports that the backend rejected native tool specs and
 	// the request was retried without them.
 	toolsFellBack bool
+	// Terminal pre-stream errors also return through this message so every
+	// attempted provider call is accounted for without replaying the request.
+	requestFailed          bool
+	episodeBudgetExhausted bool
 	// gen is Model.streamGen at dispatch time; a mismatch marks this as the
 	// first message of a request that was cancelled before it produced output.
 	gen int
