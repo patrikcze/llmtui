@@ -390,6 +390,10 @@ looping:
 | Nudges without new progress | `agent.yield.max_nudges_without_progress` | `2` | Episode stops as `no_progress`, same as the no-progress detection above |
 | Provider attempts per episode | `agent.yield.max_episode_requests` | `64` | Episode stops as `budget_exhausted` |
 
+The request ceiling is checked before every provider attempt, including
+transport retries and native-tool fallback resends. Failed pre-stream attempts
+are counted too; a retry cannot overrun the allowance inside one admitted round.
+
 "Progress" here means the set of outstanding obligations changed since the
 last continuation (a criterion was proven or dropped out), or an obligation's
 contiguous covered lines rose above the episode's best so far — an unrelated
@@ -406,8 +410,8 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 
 | Mode | Behavior |
 | --- | --- |
-| `off` | No evaluation at all. The run completes on the executor's answer, recorded as explicitly unverified. |
-| `deterministic` | Mechanical checks only, never a model request. With no deterministic failure a cycle passes with low confidence. |
+| `off` | No semantic evaluation. The executor answer is explicitly unverified; controller-required read coverage and write receipts still apply. |
+| `deterministic` | Mechanical checks only, never a model request. With no deterministic failure or missing required read coverage a cycle passes with low confidence. |
 | `adaptive` (default) | A conclusive mechanical failure (failed test, a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
@@ -424,7 +428,13 @@ and only the verifier resolves them — except an atomic "Read the file X"
 criterion, which delivered read coverage proves mechanically. (Earlier
 builds also defined test/command/file/user-input criterion kinds, but nothing
 in the contract-first flow could create them; they were removed, and a run
-saved with one loads it as a semantic criterion.) A semantic verifier's
+saved with one loads it as a semantic criterion.) Neither a semantic verdict
+nor a synthetic pass can satisfy or waive an unresolved atomic full-file read
+without complete delivered coverage. Missing totals, gaps and mixed source
+versions remain unresolved, including when yield continuation is disabled.
+Combined prose such as "Read report.md and report its heading" stays semantic;
+an atomic natural-language read of a path with spaces must quote the path.
+A semantic verifier's
 `passed` must report a status per criterion ID: a bare `passed` over several
 criteria is sent back once for per-ID statuses, and if it still has none, no
 criterion is satisfied implicitly — the unresolved ones drive the next cycle.

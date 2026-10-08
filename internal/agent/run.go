@@ -204,6 +204,9 @@ func (r *AgentRun) CompleteVerification(result VerificationResult, now time.Time
 	// apply only to pinned IDs, and both happen before the failure
 	// fingerprint so repeated-failure detection sees the updated set.
 	r.PinCriteria(result.ProposedCriteria)
+	if cycle.Execution != nil {
+		r.constrainRequiredReadVerification(&result, *cycle.Execution)
+	}
 	r.ApplyCriteriaUpdates(result.CriteriaUpdates, cycle.Number)
 	cycle.Verification = &result
 	r.AppendEvidence([]EvidenceItem{{

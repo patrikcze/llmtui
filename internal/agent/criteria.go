@@ -694,6 +694,10 @@ func ExactReadCriterionTarget(text string) (target string, ok bool) {
 	}
 	if len(text) >= 2 && ((text[0] == '`' && text[len(text)-1] == '`') || (text[0] == '"' && text[len(text)-1] == '"')) {
 		text = text[1 : len(text)-1]
+	} else if strings.ContainsAny(text, " \t\r\n") {
+		// Multi-step prose is not a file identity. Paths containing spaces
+		// must be quoted to distinguish them from additional requirements.
+		return "", false
 	}
 	if text = CanonicalTarget(text); text == "" {
 		return "", false
@@ -741,6 +745,36 @@ func (r *AgentRun) PendingExactReadObligations(execution ExecutionResult) []Exac
 		out = append(out, ExactReadObligation{CriterionID: criterion.ID, Target: target})
 	}
 	return out
+}
+
+// constrainRequiredReadVerification keeps the existing exact-read predicate
+// authoritative even when a semantic or synthetic verdict is optimistic.
+// Other semantic criteria remain the verifier's responsibility. Previously
+// resolved criteria retain their proof from the cycle that established it.
+func (r *AgentRun) constrainRequiredReadVerification(result *VerificationResult, execution ExecutionResult) {
+	obligations := r.PendingExactReadObligations(execution)
+	if len(obligations) == 0 {
+		return
+	}
+	for i := range result.CriteriaUpdates {
+		update := &result.CriteriaUpdates[i]
+		if update.Status != CriterionSatisfied && update.Status != CriterionNotApplicable {
+			continue
+		}
+		for _, obligation := range obligations {
+			if update.ID == obligation.CriterionID {
+				update.Status = CriterionPending
+				update.Note = "required full-file coverage has not been observed"
+				break
+			}
+		}
+	}
+	if result.Verdict == VerificationPassed {
+		result.Verdict = VerificationInconclusive
+		result.Summary = "required full-file coverage has not been observed"
+		result.Retryable = true
+		result.RecommendedNext = "Use the offered read_file tool to obtain the missing file coverage before claiming completion."
+	}
 }
 
 // CriterionFact is one controller-computed, mechanical observation about a

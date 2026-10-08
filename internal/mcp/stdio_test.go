@@ -132,6 +132,54 @@ func TestStdioCallAfterCloseFails(t *testing.T) {
 	}
 }
 
+type cancellationAdmissionWriter struct {
+	writes int
+}
+
+func (w *cancellationAdmissionWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
+
+func (*cancellationAdmissionWriter) Close() error { return nil }
+
+func TestStdioCancelledCallNeverTransmits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &cancellationAdmissionWriter{}
+	c := &StdioClient{w: w, pending: map[int]chan rpcResponse{}, closed: make(chan struct{})}
+	_, err := c.CallTool(ctx, "mutation", json.RawMessage(`{}`))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallTool error = %v, want context.Canceled", err)
+	}
+	if w.writes != 0 || len(c.pending) != 0 || c.nextID != 0 {
+		t.Fatalf("cancelled call admitted: writes=%d pending=%d nextID=%d", w.writes, len(c.pending), c.nextID)
+	}
+}
+
+type cancellingRPCParams struct {
+	cancel context.CancelFunc
+}
+
+func (p cancellingRPCParams) MarshalJSON() ([]byte, error) {
+	p.cancel()
+	return []byte(`{}`), nil
+}
+
+func TestStdioCancellationDuringEncodingNeverTransmits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &cancellationAdmissionWriter{}
+	c := &StdioClient{w: w, pending: map[int]chan rpcResponse{}, closed: make(chan struct{})}
+	_, err := c.call(ctx, "tools/call", cancellingRPCParams{cancel: cancel})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("call error = %v, want context.Canceled", err)
+	}
+	if w.writes != 0 || len(c.pending) != 0 {
+		t.Fatalf("cancelled encoded call transmitted: writes=%d pending=%d", w.writes, len(c.pending))
+	}
+}
+
 func TestStdioFactoryRejectsNonStdio(t *testing.T) {
 	f := StdioFactory()
 	if _, err := f(ServerConfig{Name: "x", Transport: "http", Command: "srv"}); err == nil {
