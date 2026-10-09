@@ -72,8 +72,12 @@ struct SidebarView: View {
 
     var body: some View {
         List(AppSection.allCases, selection: $selection) { section in
-            Label(section.title, systemImage: section.systemImage)
-                .tag(section)
+            Label {
+                Text(section.title)
+            } icon: {
+                IconTile(systemName: section.systemImage, tint: Theme.tint(for: section), size: 24)
+            }
+            .tag(section)
         }
         .navigationTitle("llmtui")
         .listStyle(.sidebar)
@@ -94,6 +98,7 @@ struct DetailContainer: View {
     let model: AppModel
 
     var body: some View {
+        Group {
         switch model.selectedSection {
         case .overview:
             ConfigurationOverviewView(model: model)
@@ -114,6 +119,9 @@ struct DetailContainer: View {
         case .personalApps:
             PersonalAppsSettingsView(model: model)
         }
+        }
+        .themedBackground()
+        .tint(Theme.accent)
     }
 }
 
@@ -171,10 +179,9 @@ struct ChatView: View {
                             }
                             .frame(height: queuedMessagesHeight)
                         }
-                        Divider()
                         ComposerView(model: model)
                     }
-                    .background(.background)
+                    .background(.bar)
                 }
         }
         .navigationTitle("Chat")
@@ -212,25 +219,41 @@ struct ChatHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(model.pendingUserQuestion != nil ? .blue : (model.isGenerating ? .orange : .green))
-                .frame(width: 9, height: 9)
-            Text(model.configuration.provider.name)
-                .font(.headline)
-            Text("•")
-                .foregroundStyle(.secondary)
-            Text(model.configuration.provider.model)
-                .foregroundStyle(.secondary)
+            IconTile(
+                systemName: Theme.systemImage(for: model.configuration.provider.type),
+                tint: Theme.tint(for: model.configuration.provider.type),
+                size: 32
+            )
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(model.pendingUserQuestion != nil ? Theme.info : (model.isGenerating ? Theme.warning : Theme.success))
+                    .frame(width: 9, height: 9)
+                    .overlay(Circle().strokeBorder(Theme.background, lineWidth: 1.5))
+                    .offset(x: 2, y: 2)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.configuration.provider.name)
+                    .font(.headline)
+                Text(model.configuration.provider.model)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if model.nativeAgentEnabled {
                 Label("Agent", systemImage: "infinity")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.accent.opacity(0.14), in: Capsule())
                     .help("Native bounded agent execution is enabled for new chat requests.")
             }
             if model.personalAppsRuntime.privateSession {
                 Label("Private", systemImage: "lock.shield.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.warning)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.warning.opacity(0.14), in: Capsule())
                     .help("Personal Apps data is present. General-purpose tools and unapproved provider changes are blocked until the conversation is cleared.")
             }
             Spacer()
@@ -242,7 +265,7 @@ struct ChatHeader: View {
             )
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
     }
 }
 
@@ -340,14 +363,22 @@ struct MessageRow: View {
     @State private var previewedAttachment: ChatAttachment?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: iconName)
-                .foregroundStyle(iconColor)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(roleTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 0) {
+            if message.role == .user { Spacer(minLength: 120) }
+            HuggingWidth(maxWidth: message.role == .user ? 560 : .infinity) {
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
+                if message.role != .user {
+                    HStack(spacing: 8) {
+                        IconTile(systemName: iconName, tint: iconColor, size: 22)
+                        Text(roleTitle)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if message.role == .assistant {
+                            CopyReplyButton(text: message.text)
+                        }
+                    }
+                }
                 if !message.attachments.isEmpty {
                     SentAttachmentGallery(
                         attachments: message.attachments,
@@ -369,27 +400,20 @@ struct MessageRow: View {
                             ToolActivityPanel(activities: message.toolActivities)
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .background(Theme.raisedSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                if message.role == .user {
+                    Text(message.createdAt, format: .dateTime.hour().minute())
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.75))
                 }
             }
-        }
-        .padding(.leading, message.role == .assistant ? 28 : 0)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(backgroundStyle, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(alignment: .topTrailing) {
-            if message.role == .user {
-                Text(message.createdAt, format: .dateTime.hour().minute())
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 10)
-                    .padding(.trailing, 12)
-            } else if message.role == .assistant {
-                CopyReplyButton(text: message.text)
-                    .padding(.top, 8)
-                    .padding(.trailing, 10)
+            .padding(14)
             }
+            .modifier(MessageBubble(role: message.role))
         }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
         .onAppear { scheduleActivityCollapse() }
         .onChange(of: message.toolActivities) { _, _ in
             scheduleActivityCollapse()
@@ -442,17 +466,62 @@ struct MessageRow: View {
 
     private var iconColor: Color {
         switch message.role {
-        case .user: .accentColor
-        case .assistant: .purple
-        case .tool: .orange
+        case .user: Theme.accent
+        case .assistant: Theme.accent
+        case .tool: Theme.orange
         }
     }
+}
 
-    private var backgroundStyle: AnyShapeStyle {
-        switch message.role {
-        case .user: AnyShapeStyle(Color.accentColor.opacity(0.10))
-        case .assistant: AnyShapeStyle(.thinMaterial)
-        case .tool: AnyShapeStyle(Color.orange.opacity(0.12))
+/// Sizes its content to the content's ideal width, capped at `maxWidth`, so
+/// a short message gets a short bubble even though the Markdown renderer
+/// itself fills whatever width it is offered.
+private struct HuggingWidth: Layout {
+    var maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        // Without a cap, the content takes the offered width as usual.
+        guard maxWidth.isFinite else { return content.sizeThatFits(proposal) }
+        let limit = min(maxWidth, proposal.width ?? maxWidth)
+        let width = min(content.sizeThatFits(.unspecified).width, limit)
+        let height = content.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
+/// Your messages use the accent gradient, like the iOS app; assistant
+/// replies sit on a card and tool messages on the raised surface. Inside the
+/// gradient the content renders in the dark color scheme, so the Markdown
+/// renderer's `.primary` text and code blocks stay readable on it.
+private struct MessageBubble: ViewModifier {
+    let role: ChatMessage.Role
+
+    func body(content: Content) -> some View {
+        switch role {
+        case .user:
+            content
+                .environment(\.colorScheme, .dark)
+                .background {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: Theme.cardRadius, bottomLeadingRadius: Theme.cardRadius,
+                        bottomTrailingRadius: 6, topTrailingRadius: Theme.cardRadius, style: .continuous
+                    )
+                    .fill(Theme.accentGradient)
+                    .shadow(color: Theme.accent.opacity(0.25), radius: 10, x: 0, y: 4)
+                }
+        case .assistant:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .themedCard()
+        case .tool:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.raisedSurface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
         }
     }
 }
@@ -995,7 +1064,7 @@ private struct PrintableMessageRow: View {
 
     private var backgroundStyle: Color {
         switch message.role {
-        case .user: Color.accentColor.opacity(0.08)
+        case .user: Theme.accent.opacity(0.08)
         case .assistant: Color.gray.opacity(0.08)
         case .tool: Color.orange.opacity(0.08)
         }
@@ -1107,7 +1176,7 @@ private struct PrintableMarkdownBlockView: View {
         case .blockQuote(let depth):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.accentColor.opacity(0.65))
+                    .fill(Theme.accent.opacity(0.65))
                     .frame(width: 3)
                 PrintableMathAwareText(content: block.content, foreground: .secondary)
                     .font(.body)
@@ -1539,8 +1608,8 @@ struct ReasoningMenuButton: View {
         } label: {
             Image(systemName: isActive ? "brain.fill" : "brain")
                 .frame(width: 24, height: 24)
-                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .background(isActive ? Color.accentColor.opacity(0.14) : Color.clear, in: Circle())
+                .foregroundStyle(isActive ? Theme.accent : Color.secondary)
+                .background(isActive ? Theme.accent.opacity(0.14) : Color.clear, in: Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1582,9 +1651,9 @@ struct ComposerView: View {
                     } label: {
                         Image(systemName: "infinity")
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(model.nativeAgentEnabled ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(model.nativeAgentEnabled ? Theme.accent : Color.secondary)
                             .background(
-                                model.nativeAgentEnabled ? Color.accentColor.opacity(0.14) : Color.clear,
+                                model.nativeAgentEnabled ? Theme.accent.opacity(0.16) : Color.clear,
                                 in: Circle()
                             )
                     }
@@ -1601,9 +1670,9 @@ struct ComposerView: View {
                     } label: {
                         Image(systemName: "wrench.and.screwdriver")
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(model.nativeToolsEnabled ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(model.nativeToolsEnabled ? Theme.accent : Color.secondary)
                             .background(
-                                model.nativeToolsEnabled ? Color.accentColor.opacity(0.14) : Color.clear,
+                                model.nativeToolsEnabled ? Theme.accent.opacity(0.16) : Color.clear,
                                 in: Circle()
                             )
                     }
@@ -1635,18 +1704,21 @@ struct ComposerView: View {
                 )
                 .frame(minHeight: 34, maxHeight: 120)
                 .padding(.horizontal, 12)
-                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.vertical, 4)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 1)
+                }
                 ZStack(alignment: .topTrailing) {
                     ZStack {
                         ContextUsageRing(usage: model.contextUsage)
-                            .frame(width: 36, height: 36)
-                        Button("Send", systemImage: "arrow.up.circle.fill") {
-                            model.sendDraft()
-                        }
-                        .labelStyle(.iconOnly)
-                        .font(.title)
-                        .buttonStyle(.plain)
-                        .disabled(model.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .frame(width: 40, height: 40)
+                        SendButton(
+                            isQueueing: model.isGenerating,
+                            isEnabled: !model.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            action: model.sendDraft
+                        )
                         .help(model.isGenerating
                             ? "Queue message — sends automatically once the current reply finishes"
                             : "Send")
@@ -1657,7 +1729,7 @@ struct ComposerView: View {
                             .foregroundStyle(.white)
                             .padding(4)
                             .frame(minWidth: 16, minHeight: 16)
-                            .background(Color.accentColor, in: Circle())
+                            .background(Theme.accent, in: Circle())
                             .offset(x: 4, y: -4)
                             .allowsHitTesting(false)
                     }
@@ -1677,6 +1749,35 @@ struct ComposerView: View {
                 model.addAttachment(from: url)
             }
         }
+    }
+}
+
+/// A round Send button filled with the accent gradient, like the iOS app;
+/// grey while there is nothing to send.
+private struct SendButton: View {
+    let isQueueing: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isQueueing ? "text.badge.plus" : "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(isEnabled ? Color.white : Color.secondary)
+                .frame(width: 32, height: 32)
+                .background {
+                    if isEnabled {
+                        Circle().fill(Theme.accentGradient)
+                            .shadow(color: Theme.accent.opacity(0.35), radius: 6, x: 0, y: 2)
+                    } else {
+                        Circle().fill(Theme.raisedSurface)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(isQueueing ? "Queue message" : "Send")
+        .animation(.snappy(duration: 0.2), value: isEnabled)
     }
 }
 
@@ -1887,10 +1988,10 @@ struct UserQuestionPanel: View {
             }
         }
         .padding(16)
-        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.accentColor.opacity(0.28), lineWidth: 1)
+                .stroke(Theme.accent.opacity(0.28), lineWidth: 1)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 10)
@@ -2409,7 +2510,7 @@ struct ProviderSettingsView: View {
                     Button("Save") {
                         model.saveConfiguration()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(AccentButtonStyle())
                 }
             }
         }
@@ -3814,7 +3915,7 @@ struct SettingsSaveRow: View {
                 Button("Save configuration") {
                     model.saveConfiguration()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(AccentButtonStyle())
             }
         }
     }
