@@ -163,7 +163,7 @@ final class MobileAppModel {
         // Resumes approval waiters and cancels the active request before
         // closing transports; a foreground transition never replays it.
         if isGenerating && !mcpBindings.isEmpty { stop() }
-        mcp.suspend()
+        mcp.enterBackground()
     }
 
     // MARK: - Chats

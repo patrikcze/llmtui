@@ -1019,8 +1019,11 @@ private struct ToolActivityView: View {
         .accessibilityLabel("\(displayName), \(statusText)")
     }
 
+    /// Built-in tools get a friendly title. An MCP call keeps the exact
+    /// server and tool names shown when it was approved.
     private var displayName: String {
-        activity.name.replacingOccurrences(of: "_", with: " ").capitalized
+        if activity.externalMCP == true { return activity.name }
+        return activity.name.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private var icon: String {

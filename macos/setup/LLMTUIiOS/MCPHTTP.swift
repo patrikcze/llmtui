@@ -19,8 +19,10 @@ nonisolated final class MCPHTTP: MCPHTTPFetching, @unchecked Sendable {
     init(configuration: URLSessionConfiguration = .ephemeral) {
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
+        // Listing tools answers quickly; a tool call may legitimately run for
+        // minutes (requests set their own idle timeout, see MCPLimits).
         configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 120
+        configuration.timeoutIntervalForResource = MobileMCPLimits.callTimeout + 30
         session = URLSession(configuration: configuration, delegate: MCPRedirectGuard(), delegateQueue: nil)
     }
     func invalidate() { session.invalidateAndCancel() }

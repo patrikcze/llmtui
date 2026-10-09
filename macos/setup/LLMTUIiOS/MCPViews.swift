@@ -24,7 +24,7 @@ struct MCPServerListScreen: View {
                     }
                 }
             } footer: {
-                Text("Connect explicitly, then select servers in each chat. Every external tool call asks for approval. Backgrounding disconnects servers; reconnect to use them again.")
+                Text("Connect explicitly, then select servers in each chat. Every external tool call asks for approval. Servers stay connected while the app is in the background; a reply that was using one stops and is not resumed.")
             }
             if controller.profiles.isEmpty { Text("Add a server with a Streamable HTTP endpoint.").foregroundStyle(.secondary) }
         }

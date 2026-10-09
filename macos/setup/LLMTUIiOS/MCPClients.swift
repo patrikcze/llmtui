@@ -76,7 +76,7 @@ actor MCPModernClient: MobileMCPClient {
         ])
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = method == "tools/call" ? MobileMCPLimits.callTimeout : 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(Self.version, forHTTPHeaderField: "MCP-Protocol-Version")
@@ -129,6 +129,7 @@ actor MCPLegacyTransport: Transport {
         let method = body["method"]?.string ?? ""
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"; request.httpBody = data
+        request.timeoutInterval = method == "tools/call" ? MobileMCPLimits.callTimeout : 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(version, forHTTPHeaderField: "MCP-Protocol-Version")
@@ -199,8 +200,17 @@ actor MCPLegacyClient: MobileMCPClient {
 
 actor MobileMCPService {
     typealias Factory = @Sendable (URL, String, Bool) -> any MobileMCPClient
+    private struct Entry {
+        let profile: MobileMCPProfile
+        var client: any MobileMCPClient
+        let info: MobileMCPConnection
+        /// Kept only to open a fresh session for the same server and protocol
+        /// era after the old one expired; the client already holds it.
+        let token: String
+        let modern: Bool
+    }
     private let factory: Factory
-    private var connections: [UUID: (MobileMCPProfile, any MobileMCPClient, MobileMCPConnection)] = [:]
+    private var connections: [UUID: Entry] = [:]
     private var epochs: [UUID: UUID] = [:]
     init(factory: @escaping Factory = { url, token, modern in
         if modern { return MCPModernClient(endpoint: url, token: token) }
@@ -212,6 +222,7 @@ actor MobileMCPService {
         let url = try profile.validatedURL()
         guard token.isEmpty || url.scheme == "https" else { throw MobileMCPError.authentication }
         var client = factory(url, token, true)
+        var modern = true
         do {
             let version: String
             do { version = try await client.connect() }
@@ -220,32 +231,71 @@ actor MobileMCPService {
                 try Task.checkCancellation()
                 guard epochs[profile.id] == epoch else { throw MobileMCPError.changed }
                 client = factory(url, token, false)
+                modern = false
                 version = try await client.connect()
             }
             let (tools, warnings) = try await client.listTools()
             try Task.checkCancellation()
             guard epochs[profile.id] == epoch else { throw MobileMCPError.changed }
             let info = MobileMCPConnection(generation: epoch, version: version, tools: tools, warnings: warnings)
-            connections[profile.id] = (profile, client, info)
+            connections[profile.id] = Entry(profile: profile, client: client, info: info, token: token, modern: modern)
             return info
         } catch { await client.disconnect(); throw error }
     }
     func disconnect(_ id: UUID) async {
         epochs[id] = UUID()
         let old = connections.removeValue(forKey: id)
-        await old?.1.disconnect()
+        await old?.client.disconnect()
     }
     func suspend() async { for id in Array(epochs.keys) { await disconnect(id) } }
     func call(_ binding: MobileMCPBinding, arguments: MCPJSON) async throws -> MobileMCPResult {
         try Task.checkCancellation()
-        guard let (profile, client, info) = connections[binding.serverID], info.generation == binding.generation,
-              info.tools.contains(binding.tool) else { throw MobileMCPError.changed }
+        guard var entry = connections[binding.serverID], entry.info.generation == binding.generation,
+              entry.info.tools.contains(binding.tool) else { throw MobileMCPError.changed }
         // Refresh before transmission: changed schemas never inherit an approval.
-        let (current, _) = try await client.listTools()
+        let current: [MobileMCPTool]
+        do {
+            (current, _) = try await entry.client.listTools()
+        } catch where Self.sessionMayHaveExpired(error) {
+            // Listing is read-only and nothing was sent yet, so a session that
+            // expired while idle (server restart, timeout, network change) is
+            // replaced once. The new session must offer exactly the catalog
+            // the approval was given against.
+            entry.client = try await reopen(entry)
+            (current, _) = try await entry.client.listTools()
+            guard current == entry.info.tools else { await disconnect(entry.profile.id); throw MobileMCPError.changed }
+        }
         try Task.checkCancellation()
-        guard connections[profile.id]?.2.generation == info.generation,
+        guard connections[entry.profile.id]?.info.generation == entry.info.generation,
               current.first(where: { $0.name == binding.tool.name }) == binding.tool else { throw MobileMCPError.changed }
-        do { return try await client.callTool(binding.tool, arguments: arguments) }
-        catch { await disconnect(profile.id); throw error }
+        // A sent call is never retried: its effects may already have happened.
+        do { return try await entry.client.callTool(binding.tool, arguments: arguments) }
+        catch { await disconnect(entry.profile.id); throw error }
+    }
+    /// Opens a fresh session for the same server, token and protocol era.
+    private func reopen(_ entry: Entry) async throws -> any MobileMCPClient {
+        let id = entry.profile.id
+        await entry.client.disconnect()
+        let client = factory(try entry.profile.validatedURL(), entry.token, entry.modern)
+        do {
+            _ = try await client.connect()
+            try Task.checkCancellation()
+            guard connections[id]?.info.generation == entry.info.generation else { throw MobileMCPError.changed }
+            connections[id]?.client = client
+            return client
+        } catch {
+            await client.disconnect()
+            await disconnect(id)
+            throw error
+        }
+    }
+    /// Errors after which a fresh session may work. Authentication, scope,
+    /// changed bindings and cancellation are surfaced instead.
+    static func sessionMayHaveExpired(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        switch error as? MobileMCPError {
+        case .authentication?, .scopeRequired?, .changed?, .legacyRequired?: return false
+        default: return true
+        }
     }
 }
