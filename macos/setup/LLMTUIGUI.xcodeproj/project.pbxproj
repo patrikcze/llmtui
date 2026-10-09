@@ -6,6 +6,10 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		ABC000000000000000000001 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = ABC000000000000000000002 /* MCP */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		E0628E2E306EC5F400D1CAC0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -47,6 +51,7 @@
 			);
 			target = 000000000000000100000000 /* LLMTUIGUI */;
 		};
+		ABC000000000000000000004 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Info.plist,); target = E0E3F98830759CB600573805; };
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -65,6 +70,7 @@
 		};
 		E0E3F98A30759CB600573805 /* LLMTUIiOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (ABC000000000000000000004,);
 			path = LLMTUIiOS;
 			sourceTree = "<group>";
 		};
@@ -94,6 +100,7 @@
 		E0E3F98630759CB600573805 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				ABC000000000000000000001 /* MCP in Frameworks */,
 			);
 		};
 		E0E3F99230759CB700573805 /* Frameworks */ = {
@@ -189,6 +196,7 @@
 			fileSystemSynchronizedGroups = (
 				E0E3F98A30759CB600573805 /* LLMTUIiOS */,
 			);
+			packageProductDependencies = (ABC000000000000000000002 /* MCP */,);
 			name = LLMTUIiOS;
 			productName = LLMTUIiOS;
 			productReference = E0E3F98930759CB600573805 /* LLMTUIiOS.app */;
@@ -276,6 +284,7 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
+			packageReferences = (ABC000000000000000000003 /* swift-sdk */,);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -361,6 +370,13 @@
 			targetProxy = E0E3F9A030759CB700573805 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		ABC000000000000000000003 /* swift-sdk */ = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git"; requirement = {kind = exactVersion; version = 0.12.1; }; };
+/* End XCRemoteSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		ABC000000000000000000002 /* MCP */ = {isa = XCSwiftPackageProductDependency; package = ABC000000000000000000003 /* swift-sdk */; productName = MCP; };
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "LLMTUIGUI" */ = {
@@ -677,7 +693,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers such as Ollama and LM Studio on your local network.";
+				INFOPLIST_FILE = LLMTUIiOS/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers and explicitly selected MCP servers on your local network.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "LLMTUI saves images and exported diagrams to your photo library when you choose Save Image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -725,7 +742,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers such as Ollama and LM Studio on your local network.";
+				INFOPLIST_FILE = LLMTUIiOS/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LLMTUI connects to model providers and explicitly selected MCP servers on your local network.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "LLMTUI saves images and exported diagrams to your photo library when you choose Save Image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;

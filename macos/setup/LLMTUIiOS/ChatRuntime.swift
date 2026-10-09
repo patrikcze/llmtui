@@ -1,6 +1,7 @@
 import Foundation
 
 struct MobileChatRuntime: Sendable {
+    var session: URLSession = .shared
     private struct StreamChoice: Decodable {
         struct Delta: Decodable {
             struct StreamToolCall: Decodable {
@@ -24,6 +25,8 @@ struct MobileChatRuntime: Sendable {
         }
 
         let delta: Delta
+        let finishReason: String?
+        enum CodingKeys: String, CodingKey { case delta; case finishReason = "finish_reason" }
     }
 
     private struct StreamChunk: Decodable {
@@ -41,7 +44,7 @@ struct MobileChatRuntime: Sendable {
         var request = URLRequest(url: endpoint)
         request.timeoutInterval = 15
         applyAuthorization(apiKey, to: &request)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
 
         let object = try JSONSerialization.jsonObject(with: data)
@@ -85,7 +88,7 @@ struct MobileChatRuntime: Sendable {
         applyAuthorization(apiKey, to: &request)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw MobileChatError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             var errorData = Data()
@@ -95,14 +98,17 @@ struct MobileChatRuntime: Sendable {
 
         var fullText = ""
         var accumulators: [Int: ToolAccumulator] = [:]
+        var finished = false
+        var finishReason: String?
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard line.hasPrefix("data:") else { continue }
             let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            if payload == "[DONE]" { break }
+            if payload == "[DONE]" { finished = true; break }
             guard let data = payload.data(using: .utf8),
-                  let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else { continue }
+                  let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else { throw MobileChatError.invalidResponse }
             for choice in chunk.choices {
+                if let reason = choice.finishReason { finishReason = reason }
                 if let content = choice.delta.content, !content.isEmpty {
                     fullText += content
                     await onDelta(content)
@@ -117,6 +123,20 @@ struct MobileChatRuntime: Sendable {
             }
         }
 
+        guard finished || finishReason != nil else { throw MobileChatError.invalidResponse }
+        if !accumulators.isEmpty {
+            guard ["tool_calls", "stop"].contains(finishReason ?? "") else { throw MobileChatError.invalidResponse }
+            // A call needs a name and complete JSON-object arguments. An empty
+            // arguments string is a call without arguments ("{}"), and a
+            // missing id is generated below: some servers send neither, and
+            // both are complete calls, unlike a truncated stream.
+            for call in accumulators.values {
+                let arguments = call.arguments.isEmpty ? "{}" : call.arguments
+                guard !call.name.isEmpty,
+                      let data = arguments.data(using: .utf8),
+                      (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else { throw MobileChatError.invalidResponse }
+            }
+        }
         let calls = accumulators.keys.sorted().compactMap { index -> ToolCall? in
             guard let value = accumulators[index], !value.name.isEmpty else { return nil }
             return ToolCall(

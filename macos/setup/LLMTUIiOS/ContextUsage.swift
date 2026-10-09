@@ -11,21 +11,22 @@ enum ContextUsageEstimate {
 
     /// Tokens for the open chat's history, the draft, and the system
     /// instructions and tool definitions sent with it.
-    static func tokens(messages: [MobileChatMessage], draft: String, toolsEnabled: Bool, memoryEnabled: Bool) -> Int {
+    static func tokens(messages: [MobileChatMessage], draft: String, toolsEnabled: Bool, memoryEnabled: Bool, mcpDefinitions: [MCPJSON] = []) -> Int {
         let history = messages.reduce(0) { total, message in
             let toolText = message.toolActivities.reduce(0) { $0 + ($1.resultPreview?.count ?? 0) }
             return total + (message.text.count + toolText) / 4 + 8
         }
-        return history + draft.count / 4 + overhead(toolsEnabled: toolsEnabled, memoryEnabled: memoryEnabled)
+        return history + draft.count / 4 + overhead(toolsEnabled: toolsEnabled, memoryEnabled: memoryEnabled, mcpDefinitions: mcpDefinitions)
     }
 
     /// The system instructions (about 300 tokens) plus, with tools on, the
     /// tool instructions and definitions.
-    static func overhead(toolsEnabled: Bool, memoryEnabled: Bool) -> Int {
+    static func overhead(toolsEnabled: Bool, memoryEnabled: Bool, mcpDefinitions: [MCPJSON] = []) -> Int {
         guard toolsEnabled else { return 300 }
         let definitions = MobileChatRuntime.toolDefinitions(memoryEnabled: memoryEnabled)
         let size = (try? JSONSerialization.data(withJSONObject: definitions).count) ?? 0
-        return 600 + size / 4
+        let mcpSize = (try? MCPJSON.array(mcpDefinitions).data().count) ?? 0
+        return 600 + size / 4 + (mcpDefinitions.isEmpty ? 0 : mcpSize / 4)
     }
 }
 

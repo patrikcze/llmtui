@@ -25,6 +25,7 @@ struct ContentView: View {
         // it returns to the foreground (iOS gives no reliable background run).
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { model.applyRetention() }
+            if phase == .background { model.suspendMCP() }
         }
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(
@@ -103,6 +104,11 @@ private struct SettingsScreen: View {
                         }
                     } label: {
                         Label { Text("Approval") } icon: { IconTile(systemName: "checkmark.shield.fill", tint: Theme.warning, size: 30) }
+                    }
+                    NavigationLink {
+                        MCPServerListScreen(controller: model.mcp)
+                    } label: {
+                        Label { Text("MCP Servers") } icon: { IconTile(systemName: "server.rack", tint: Theme.accent, size: 30) }
                     }
                 } header: {
                     Text("Tools")
@@ -656,6 +662,7 @@ private struct ChatScreen: View {
                     Button("Stop", systemImage: "stop.fill") { model.stop() }
                 }
                 Menu("Chat Options", systemImage: "ellipsis") {
+                    MCPChatServerPicker(model: model)
                     Button("Rename", systemImage: "pencil") { renaming = conversationID }
                     Button("Clear Messages", systemImage: "eraser") { model.clearChat() }
                         .disabled(model.messages.isEmpty)

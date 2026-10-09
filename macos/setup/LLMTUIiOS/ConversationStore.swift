@@ -18,6 +18,8 @@ struct MobileConversation: Codable, Identifiable, Equatable, Sendable {
     /// Providers the user allowed to receive excerpts from this chat's
     /// attachments. Absent in chats saved before attachments existed.
     var documentConsentProfileIDs: [UUID]?
+    /// Explicit per-chat MCP access; absent in older conversations.
+    var mcpServerIDs: [UUID]?
     /// Set when retention (or the user) archived the chat. Archived chats are
     /// hidden from the chat list until restored.
     var archivedAt: Date?
