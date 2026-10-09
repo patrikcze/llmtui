@@ -126,9 +126,14 @@ struct MobileChatRuntime: Sendable {
         guard finished || finishReason != nil else { throw MobileChatError.invalidResponse }
         if !accumulators.isEmpty {
             guard ["tool_calls", "stop"].contains(finishReason ?? "") else { throw MobileChatError.invalidResponse }
+            // A call needs a name and complete JSON-object arguments. An empty
+            // arguments string is a call without arguments ("{}"), and a
+            // missing id is generated below: some servers send neither, and
+            // both are complete calls, unlike a truncated stream.
             for call in accumulators.values {
-                guard !call.id.isEmpty, !call.name.isEmpty,
-                      let data = call.arguments.data(using: .utf8),
+                let arguments = call.arguments.isEmpty ? "{}" : call.arguments
+                guard !call.name.isEmpty,
+                      let data = arguments.data(using: .utf8),
                       (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else { throw MobileChatError.invalidResponse }
             }
         }

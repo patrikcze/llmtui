@@ -41,6 +41,15 @@ nonisolated final class MCPStreamURLProtocol: URLProtocol {
             #expect(try await turn(text).toolCalls.count == 1)
         }
     }
+    @Test func callsWithoutArgumentsOrIDAreAccepted() async throws {
+        // Some servers send a no-argument call with empty arguments, or no
+        // call id; both are complete calls the app handled before MCP.
+        let text = #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"local_context","arguments":""}}]},"finish_reason":"tool_calls"}]}"# + "\n\ndata: [DONE]\n\n"
+        let calls = try await turn(text).toolCalls
+        #expect(calls.count == 1)
+        #expect(calls.first?.arguments == "{}")
+        #expect(calls.first?.id.isEmpty == false)
+    }
     @Test func truncatedInterruptedAndMalformedCallsNeverReturnTools() async throws {
         let prefix = #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"mcp_tool","arguments":"{}"}}]}}]}"# + "\n\n"
         let length = prefix + #"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"# + "\n\ndata: [DONE]\n\n"
