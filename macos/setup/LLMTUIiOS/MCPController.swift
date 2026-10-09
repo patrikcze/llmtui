@@ -57,9 +57,20 @@ final class MobileMCPController {
         let prior = revocations[id]
         revocations[id] = Task { await prior?.value; await service.disconnect(id) }
     }
+    /// Closes every connection (sign-out of the session as a whole).
     func suspend() {
         browser.cancel()
         for id in profiles.map(\.id) { disconnect(id) }
+    }
+    /// The app moved to the background (screen lock, app switch). Work in
+    /// flight is cancelled — connection attempts and sign-ins; a running reply
+    /// and its approvals are stopped by the chat model — but established,
+    /// idle connections stay, so returning does not need a manual reconnect.
+    /// Nothing is resumed or replayed on return, and every tool call still
+    /// re-checks the server's tool schema before it is sent.
+    func enterBackground() {
+        browser.cancel()
+        for id in Array(tasks.keys) { disconnect(id) }
     }
     func signOut(_ id: UUID) {
         disconnect(id)

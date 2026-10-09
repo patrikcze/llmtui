@@ -100,6 +100,9 @@ nonisolated enum MobileMCPLimits {
     static let tools = 64
     static let result = 32_768
     static let calls = 16
+    /// How long one tools/call may stay silent; listing and handshakes keep
+    /// the 60-second default.
+    static let callTimeout: TimeInterval = 300
 }
 nonisolated enum MobileMCPError: LocalizedError, Sendable {
     case message(String), http(Int, String?), rpc(Int, MCPJSON?), legacyRequired, changed, authentication, scopeRequired(String)

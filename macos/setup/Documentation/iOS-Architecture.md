@@ -164,11 +164,19 @@ ask. Remote images in replies involving MCP also require a tap, matching the
 existing attachment/web rule. Existing document consent and citation ownership
 remain unchanged.
 
-Backgrounding cancels an MCP-enabled reply, connection/sign-in tasks and
-approval waiters, then closes transports. Foregrounding does not reconnect or
-resume tools. Interrupted calls can have unknown effects; their cards say so,
-and the app requires explicit reconnection. Editing/removing a server or
-changing credentials revokes its connections and pending bindings.
+Backgrounding (screen lock, app switch) cancels an MCP-enabled reply, its
+approval waiters, and connection/sign-in tasks. Established, idle connections
+stay, so returning to the app needs no manual reconnect, and nothing is
+resumed or replayed. A call interrupted while sent can have unknown effects;
+its card says so, and that server then requires explicit reconnection.
+
+Before each call, the tool list is fetched again (read-only). If that fails
+because the session expired or the network changed, the app opens one fresh
+session for the same server and protocol era and continues only if the new
+session offers exactly the catalog the approval was given against. A call
+that was sent is never retried. Tool calls may stay silent for up to five
+minutes; handshakes and listing keep a 60-second limit. Editing/removing a
+server or changing credentials revokes its connections and pending bindings.
 
 ### MCP validation and physical-device checklist
 
@@ -194,7 +202,9 @@ Before distributing the feature, use a signed physical-device build to verify:
 3. Browser OAuth against a registered native client, user cancellation, refresh
    and incremental scopes. Check wrong-state/issuer rejection without code exchange.
 4. Background during discovery, approval and a running tool; confirm no
-   foreground replay, honest interruption and explicit reconnection.
+   foreground replay and honest interruption. Background while idle and
+   return: the server stays connected. Restart the server while idle: the
+   next call opens a fresh session without a manual reconnect.
 
 The simulator tests use local fixtures, not production accounts. Physical LAN,
 interactive OAuth against a deployed authorization server, and signed-device
