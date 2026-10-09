@@ -30,19 +30,24 @@ struct MobileProviderProfile: Codable, Identifiable, Equatable, Sendable {
     var type: MobileProviderType
     var baseURL: String
     var model: String
+    /// The model's context window in tokens, for the composer's context
+    /// ring. Nil asks the server, falling back to 8192.
+    var contextWindow: Int?
 
     init(
         id: UUID = UUID(),
         name: String = "Local provider",
         type: MobileProviderType = .ollama,
         baseURL: String = MobileProviderType.ollama.defaultBaseURL,
-        model: String = ""
+        model: String = "",
+        contextWindow: Int? = nil
     ) {
         self.id = id
         self.name = name
         self.type = type
         self.baseURL = baseURL
         self.model = model
+        self.contextWindow = contextWindow
     }
 }
 

@@ -170,7 +170,9 @@ struct LLMTUIiOSTests {
         conversation.title = MobileConversation.automaticTitle(for: conversation.messages)
         try store.save(conversation)
 
-        let model = MobileAppModel(conversationStore: store)
+        // A temporary attachment store too: the default one is the app's real
+        // Attachments folder, which the model prunes against these chats.
+        let model = MobileAppModel(conversationStore: store, documentStore: DocumentStore(root: directory.appending(path: "Attachments")))
         model.renameConversation(conversation.id, to: "  Trip ideas  ")
         #expect(store.loadAll().first?.title == "Trip ideas")
         #expect(store.loadAll().first?.hasCustomTitle == true)
@@ -186,7 +188,10 @@ struct LLMTUIiOSTests {
     @Test func newChatIsReusedWhileEmptyAndDiscardedWhenLeft() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "LLMTUIiOSTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let model = MobileAppModel(conversationStore: MobileConversationStore(directory: directory))
+        let model = MobileAppModel(
+            conversationStore: MobileConversationStore(directory: directory),
+            documentStore: DocumentStore(root: directory.appending(path: "Attachments"))
+        )
 
         let first = model.newConversation()
         #expect(model.newConversation() == first)
