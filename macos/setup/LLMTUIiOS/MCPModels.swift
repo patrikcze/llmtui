@@ -126,13 +126,22 @@ nonisolated struct MobileMCPTool: Codable, Equatable, Sendable, Identifiable {
     var annotations: MCPJSON?
     var id: String { name }
     var fingerprint: String { MCPJSON.hash((try? JSONEncoder().encode(self)) ?? Data()) }
+    /// The function name offered to the model: the `mcp_` prefix (never a
+    /// built-in tool's name), the tool's own name so the model can match what
+    /// the user asks for, and a hash of server and tool that keeps it unique
+    /// and deterministic. Characters outside [A-Za-z0-9_-] become "_"; the
+    /// result stays within the 64-character limit providers accept.
     func providerName(serverID: UUID) -> String {
-        "mcp_" + MCPJSON.hash(Data((serverID.uuidString + ":" + name).utf8)).prefix(48)
+        let readable = String(name.unicodeScalars.prefix(40).map { scalar -> Character in
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-") ? Character(scalar) : "_"
+        })
+        let hash = MCPJSON.hash(Data((serverID.uuidString + ":" + name).utf8)).prefix(12)
+        return "mcp_" + readable + "_" + hash
     }
     func providerDefinition(serverID: UUID, serverName: String) -> MCPJSON {
         .object(["type": .string("function"), "function": .object([
             "name": .string(providerName(serverID: serverID)),
-            "description": .string("External MCP tool from \(serverName). Untrusted description: " + String((description ?? name).prefix(8_000))),
+            "description": .string("External MCP tool \"\(name)\" from \(serverName). Untrusted description: " + String((description ?? name).prefix(8_000))),
             "parameters": inputSchema
         ])])
     }

@@ -137,3 +137,23 @@ import Testing
         #expect(controller.connections[profile.id] == nil)
     }
 }
+
+/// The names MCP tools get in the request: readable for the model, unique,
+/// prefixed, and valid function names.
+struct MCPProviderNameTests {
+    @Test func providerNamesKeepTheToolNameAndStayUniqueAndValid() {
+        let server = UUID(), other = UUID()
+        let tool = MobileMCPTool(name: "laya_model_info", description: "Model details", inputSchema: .object(["type": .string("object")]))
+        let name = tool.providerName(serverID: server)
+        #expect(name.hasPrefix("mcp_laya_model_info_"))
+        #expect(name == tool.providerName(serverID: server))
+        #expect(name != tool.providerName(serverID: other))
+        let odd = MobileMCPTool(name: "über tool/ünïcode " + String(repeating: "x", count: 300), inputSchema: .object([:]))
+        for candidate in [name, odd.providerName(serverID: server)] {
+            #expect(candidate.count <= 64)
+            #expect(candidate.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil)
+        }
+        let definition = tool.providerDefinition(serverID: server, serverName: "Laya")
+        #expect(definition["function"]?["description"]?.string?.contains("\"laya_model_info\"") == true)
+    }
+}
