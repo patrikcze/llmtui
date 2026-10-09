@@ -84,7 +84,6 @@ private struct SettingsScreen: View {
         NavigationStack {
             Form {
                 Section {
-                    NavigationLink { MCPServerListScreen(controller: model.mcp) } label: { Label("MCP Servers", systemImage: "wrench.and.screwdriver") }
                     Picker("Appearance", selection: $appearanceMode) {
                         ForEach(MobileAppearanceMode.allCases) { mode in
                             Label(mode.title, systemImage: mode.icon)
@@ -105,6 +104,11 @@ private struct SettingsScreen: View {
                         }
                     } label: {
                         Label { Text("Approval") } icon: { IconTile(systemName: "checkmark.shield.fill", tint: Theme.warning, size: 30) }
+                    }
+                    NavigationLink {
+                        MCPServerListScreen(controller: model.mcp)
+                    } label: {
+                        Label { Text("MCP Servers") } icon: { IconTile(systemName: "server.rack", tint: Theme.accent, size: 30) }
                     }
                 } header: {
                     Text("Tools")

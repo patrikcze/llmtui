@@ -99,12 +99,13 @@ if it would act on existing chats.
 
 ## MCP servers (Swift only)
 
-Settings → MCP Servers manages explicit Streamable HTTP connections. A chat's
-MCP Servers menu selects its servers; older chats select none. Tools must be
-on, and servers must already be connected. Creating a profile or opening a
-chat starts no connection. Every external tool call asks for approval showing
-its server, original tool name and complete arguments. The app keeps its
-existing eight-round loop and permits at most 16 MCP calls per reply.
+Settings → Tools → MCP Servers manages explicit Streamable HTTP
+connections. A chat's MCP Servers menu selects its servers; older chats
+select none. Tools must be on, and servers must already be connected.
+Creating a profile or opening a chat starts no connection. Every external
+tool call asks for approval showing its server, original tool name and
+complete arguments. The app keeps its existing eight-round loop and
+permits at most 16 MCP calls per reply.
 
 `MobileMCPService` owns connections behind the injectable `MobileMCPClient`
 actor interface. `MCPModernClient` implements `2026-07-28` using Foundation;
