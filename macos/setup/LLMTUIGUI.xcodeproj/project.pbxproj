@@ -44,6 +44,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		ABC000000000000000000004 /* Exceptions for "LLMTUIiOS" folder in "LLMTUIiOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E0E3F98830759CB600573805 /* LLMTUIiOS */;
+		};
 		E0628E22306E994C00D1CAC0 /* Exceptions for "LLMTUIGUI" folder in "LLMTUIGUI" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -51,7 +58,6 @@
 			);
 			target = 000000000000000100000000 /* LLMTUIGUI */;
 		};
-		ABC000000000000000000004 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Info.plist,); target = E0E3F98830759CB600573805; };
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -70,7 +76,9 @@
 		};
 		E0E3F98A30759CB600573805 /* LLMTUIiOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (ABC000000000000000000004,);
+			exceptions = (
+				ABC000000000000000000004 /* Exceptions for "LLMTUIiOS" folder in "LLMTUIiOS" target */,
+			);
 			path = LLMTUIiOS;
 			sourceTree = "<group>";
 		};
@@ -196,8 +204,10 @@
 			fileSystemSynchronizedGroups = (
 				E0E3F98A30759CB600573805 /* LLMTUIiOS */,
 			);
-			packageProductDependencies = (ABC000000000000000000002 /* MCP */,);
 			name = LLMTUIiOS;
+			packageProductDependencies = (
+				ABC000000000000000000002 /* MCP */,
+			);
 			productName = LLMTUIiOS;
 			productReference = E0E3F98930759CB600573805 /* LLMTUIiOS.app */;
 			productType = "com.apple.product-type.application";
@@ -282,9 +292,11 @@
 			);
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ABC000000000000000000003 /* XCRemoteSwiftPackageReference "swift-sdk" */,
+			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
-			packageReferences = (ABC000000000000000000003 /* swift-sdk */,);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -370,13 +382,6 @@
 			targetProxy = E0E3F9A030759CB700573805 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		ABC000000000000000000003 /* swift-sdk */ = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git"; requirement = {kind = exactVersion; version = 0.12.1; }; };
-/* End XCRemoteSwiftPackageReference section */
-/* Begin XCSwiftPackageProductDependency section */
-		ABC000000000000000000002 /* MCP */ = {isa = XCSwiftPackageProductDependency; package = ABC000000000000000000003 /* swift-sdk */; productName = MCP; };
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "LLMTUIGUI" */ = {
@@ -930,6 +935,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		ABC000000000000000000003 /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.12.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		ABC000000000000000000002 /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ABC000000000000000000003 /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 000000000000000000000000 /* Project object */;
 }
