@@ -2299,27 +2299,56 @@ struct ResponseMetricsView: View {
 
 struct ProviderSettingsView: View {
     let model: AppModel
+    @State private var confirmingDelete = false
 
     var body: some View {
         @Bindable var model = model
+        let selected = model.configuration.provider.name
+        let llmtuiDefault = model.configuration.defaultProviderName
 
         Form {
-            Section("Active provider") {
+            Section {
                 if !model.configuration.providers.isEmpty {
-                    Picker("Configured profile", selection: Binding(
+                    Picker("Chat uses", selection: Binding(
                         get: { model.configuration.provider.name },
                         set: { model.selectProvider($0) }
                     )) {
                         ForEach(model.configuration.providers) { profile in
-                            Text(profile.name).tag(profile.name)
+                            Text(profile.name == llmtuiDefault ? "\(profile.name) (llmtui default)" : profile.name)
+                                .tag(profile.name)
+                        }
+                    }
+                    .help("The profile this app's Chat uses and this screen edits. Choosing one here does not change what llmtui starts with.")
+                }
+                LabeledContent("llmtui starts with") {
+                    HStack(spacing: 8) {
+                        Text(llmtuiDefault)
+                        if selected != llmtuiDefault {
+                            Button("Use \(selected)") {
+                                model.makeSelectedProviderLLMTUIDefault()
+                            }
+                            .help("Write \(selected) as default_provider in config.yaml on Save")
                         }
                     }
                 }
-                TextField("Active profile", text: Binding(
+                if !model.configuration.defaultProviderIsDefined {
+                    Label(
+                        "default_provider \"\(llmtuiDefault)\" is not defined, so llmtui will not start. Choose a profile and use it as the default.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                }
+            } header: {
+                Text("Profiles")
+            }
+
+            Section {
+                TextField("Name", text: Binding(
                     get: { model.configuration.provider.name },
                     set: { model.renameActiveProvider(to: $0) }
                 ))
-                    .help("The active profile is selected by default_provider in ~/.config/llmtui/config.yaml.")
+                    .help("Lowercase letters, digits, \"_\" and \"-\". llmtui reads provider names in lowercase, so other characters are not accepted.")
                 Picker("Type", selection: $model.configuration.provider.type) {
                     ForEach(ProviderType.allCases) { type in
                         Text(type.title).tag(type)
@@ -2330,12 +2359,37 @@ struct ProviderSettingsView: View {
                 ProviderModelDiscoveryRow(model: model)
                 TextField("API key environment variable", text: $model.configuration.provider.apiKeyEnvironment)
                     .help("Store the secret in the environment; the app never writes the API key to YAML.")
-                Button("Add provider profile", systemImage: "plus") {
-                    model.createProviderProfile()
+                HStack {
+                    Button("Add provider profile", systemImage: "plus") {
+                        model.createProviderProfile()
+                    }
+                    Spacer()
+                    Button("Delete \(selected)…", systemImage: "trash", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                    .disabled(!model.canDeleteProviderProfile(selected))
+                    .help(model.canDeleteProviderProfile(selected)
+                        ? "Remove this profile and its whole block from config.yaml on Save"
+                        : "The last profile can't be deleted")
                 }
                 Text("Profiles are stored under providers: in the same llmtui configuration file. Saving keeps every other provider and section intact.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } header: {
+                Text("Profile \(selected)")
+            }
+            .confirmationDialog(
+                "Delete provider \(selected)?",
+                isPresented: $confirmingDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    model.deleteProviderProfile(selected)
+                }
+            } message: {
+                Text(selected == llmtuiDefault
+                    ? "Its block is removed from config.yaml when you save. It is llmtui's default, so the default moves to another profile."
+                    : "Its block is removed from config.yaml when you save.")
             }
 
             if model.configuration.provider.type == .embedded {

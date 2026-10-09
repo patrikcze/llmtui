@@ -1530,19 +1530,11 @@ struct LLMTUIConfigurationStore: Sendable {
         return try load()
     }
 
-    private func parse(_ text: String) -> LLMTUIConfiguration {
+    func parse(_ text: String) -> LLMTUIConfiguration {
         var result = LLMTUIConfiguration()
         let values = scalarValues(in: text)
         result.rawSettings = values
         result.listSettings = listValues(in: text)
-        let selectedProvider = values["default_provider"] ?? result.provider.name
-        result.provider.name = selectedProvider
-        result.provider.model = values["default_model"] ?? result.provider.model
-        let prefix = "providers.\(selectedProvider)."
-        result.provider.type = ProviderType(rawValue: values[prefix + "type"] ?? "") ?? result.provider.type
-        result.provider.baseURL = values[prefix + "base_url"] ?? result.provider.baseURL
-        result.provider.model = values[prefix + "default_model"] ?? result.provider.model
-        result.provider.apiKeyEnvironment = values[prefix + "api_key_env"] ?? ""
         let providerNames = Set(values.keys.compactMap { key -> String? in
             let parts = key.split(separator: ".", omittingEmptySubsequences: true)
             guard parts.count >= 3, parts[0] == "providers" else { return nil }
@@ -1557,6 +1549,35 @@ struct LLMTUIConfigurationStore: Sendable {
                 model: values[profilePrefix + "default_model"] ?? "",
                 apiKeyEnvironment: values[profilePrefix + "api_key_env"] ?? ""
             )
+        }
+
+        // Resolve default_provider the way llmtui does: its loader lowercases
+        // provider keys, so "MLXServe" finds a "mlxserve" block (and the other
+        // way round); an unset key means "ollama"; and a built-in provider
+        // (ollama, lmstudio, …) is valid without a block of its own.
+        let configuredDefault = values["default_provider"] ?? LLMTUIConfiguration.llmtuiDefaultProviderName
+        let defaultProfile = result.providers.first { $0.name == configuredDefault }
+            ?? result.providers.first { $0.name.lowercased() == configuredDefault.lowercased() }
+        if let defaultProfile {
+            result.defaultProviderName = defaultProfile.name
+            result.provider = ProviderConfiguration(profile: defaultProfile)
+        } else if var builtin = LLMTUIConfiguration.llmtuiBuiltinProviders.first(where: { $0.name == configuredDefault.lowercased() }) {
+            // Shown with llmtui's built-in settings, and written as a block of
+            // its own only if it is edited and saved.
+            builtin.model = values["default_model"] ?? builtin.model
+            result.defaultProviderName = builtin.name
+            result.providers.append(builtin)
+            result.provider = ProviderConfiguration(profile: builtin)
+        } else {
+            // default_provider names a provider that does not exist, so llmtui
+            // will not start. Keep the name, so the Providers screen can say
+            // so, and let the Chat use the first defined profile.
+            result.defaultProviderName = configuredDefault
+            if let first = result.providers.first {
+                result.provider = ProviderConfiguration(profile: first)
+            } else {
+                result.provider.name = configuredDefault
+            }
         }
 
         result.systemPrompt = values["chat.system_prompt"] ?? result.systemPrompt
@@ -1654,8 +1675,10 @@ struct LLMTUIConfigurationStore: Sendable {
         return values
     }
 
-    private func patch(_ source: String, with configuration: LLMTUIConfiguration) -> String {
+    func patch(_ source: String, with configuration: LLMTUIConfiguration) -> String {
         let p = configuration.provider
+        let defaultModel = configuration.providers.first { $0.name == configuration.defaultProviderName }?.model
+            ?? (configuration.defaultProviderName == p.name ? p.model : nil)
         let e = configuration.entities
         let a = configuration.agent
         let providerPath = "providers.\(p.name)"
@@ -1669,8 +1692,7 @@ struct LLMTUIConfigurationStore: Sendable {
             ]
         }
         updates += [
-            ("default_provider", yamlValue(p.name)),
-            ("default_model", yamlValue(p.model)),
+            ("default_provider", yamlValue(configuration.defaultProviderName)),
             (providerPath + ".type", yamlValue(p.type.rawValue)),
             (providerPath + ".base_url", yamlValue(p.baseURL)),
             (providerPath + ".default_model", yamlValue(p.model)),
@@ -1716,8 +1738,25 @@ struct LLMTUIConfigurationStore: Sendable {
             ("agent.yield.max_nudges_without_progress", String(a.yield.maxNudgesWithoutProgress))
         ]
 
+        if let defaultModel {
+            updates.append(("default_model", yamlValue(defaultModel)))
+        }
+
         var result = source
-        var existing = scalarValues(in: source)
+        // Deleted profiles go first and always lose their whole block, so a
+        // delete and an add in the same save is never mistaken for a rename
+        // below (which would hand the deleted block's fields to the new one).
+        for name in configuration.removedProviders where !configuration.providers.contains(where: { $0.name == name }) {
+            result = removeMap(result, path: ["providers", name])
+        }
+        var existing = scalarValues(in: result)
+        if existing["default_provider"] == nil,
+           configuration.defaultProviderName != LLMTUIConfiguration.llmtuiDefaultProviderName {
+            // llmtui falls back to "ollama" without this key, so a different
+            // default has to be written out.
+            result = "default_provider: \(yamlValue(configuration.defaultProviderName))\n" + result
+            existing = scalarValues(in: result)
+        }
 
         let existingProviderNames = Set(existing.keys.compactMap { key -> String? in
             let parts = key.split(separator: ".")
@@ -2106,24 +2145,28 @@ struct LLMTUIConfigurationStore: Sendable {
         let e = configuration.entities
         let a = configuration.agent
         let prompt = configuration.systemPrompt.replacingOccurrences(of: "\"", with: "\\\"")
-        let apiKeyLine = p.apiKeyEnvironment.isEmpty
-            ? ""
-            : "    api_key_env: \"\(p.apiKeyEnvironment)\"\n"
+        // Every profile gets a block; the default is the chosen one when it is
+        // among them, otherwise the profile the app was set up with.
+        let profiles = configuration.providers.isEmpty ? [ProviderProfile(
+            name: p.name, type: p.type, baseURL: p.baseURL, model: p.model, apiKeyEnvironment: p.apiKeyEnvironment
+        )] : configuration.providers
+        let defaultProfile = profiles.first { $0.name == configuration.defaultProviderName }
+            ?? profiles.first { $0.name == p.name } ?? profiles[0]
+        let providerBlocks = profiles.map { profile in
+            "  \(profile.name):\n    type: \(profile.type.rawValue)\n    base_url: \"\(profile.baseURL)\"\n    default_model: \"\(profile.model)\"\n"
+                + (profile.apiKeyEnvironment.isEmpty ? "" : "    api_key_env: \"\(profile.apiKeyEnvironment)\"\n")
+        }.joined()
         let entityPathLine = e.outputStoragePath.isEmpty
             ? ""
             : "  output_storage_path: \"\(e.outputStoragePath)\"\n"
 
         return """
         # Generated by the llmtui companion app
-        default_provider: "\(p.name)"
-        default_model: "\(p.model)"
+        default_provider: "\(defaultProfile.name)"
+        default_model: "\(defaultProfile.model)"
 
         providers:
-          \(p.name):
-            type: \(p.type.rawValue)
-            base_url: "\(p.baseURL)"
-            default_model: "\(p.model)"
-        \(apiKeyLine)
+        \(providerBlocks)
         chat:
           system_prompt: "\(prompt)"
           temperature: \(pNumber(configuration.temperature))
