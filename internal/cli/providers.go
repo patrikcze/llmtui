@@ -58,7 +58,7 @@ func newProvidersCmd(r *Root) *cobra.Command {
 		Short: "Persist the default provider",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			name := r.cfg.ProviderName(args[0])
 			if _, ok := r.cfg.Providers[name]; !ok {
 				names := make([]string, 0, len(r.cfg.Providers))
 				for provider := range r.cfg.Providers {

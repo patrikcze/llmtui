@@ -578,7 +578,7 @@ func cmdDoctor(m *Model, args string) tea.Cmd {
 	}
 	name := m.prov.Name()
 	if sub == "provider" && rest != "" {
-		name = rest
+		name = m.cfg.ProviderName(rest)
 	}
 	prov := m.prov
 	ownedProvider := false
