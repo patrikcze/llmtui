@@ -46,8 +46,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 980, minHeight: 640)
         .task {
-            model.loadConfiguration()
             applyAppearance()
+            await model.loadConfigSchema()
+            model.loadConfiguration()
         }
         .onChange(of: appearanceModeRaw) {
             applyAppearance()
@@ -3758,37 +3759,47 @@ struct MoreSettingsView: View {
                     }
                 }
             }
-            ForEach(groups, id: \.1) { title, prefix, detail in
-                let keys = model.configuration.rawSettings.keys
-                    .filter { $0 == prefix || $0.hasPrefix(prefix + ".") }
-                    .sorted()
+            if let schema = model.configSchema {
+                AllSettingsSections(model: model, schema: schema)
+            } else {
                 Section {
-                    if keys.isEmpty {
-                        Text("Not present in the current YAML; llmtui defaults apply.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        // mcp.servers.<name>.* and templates.<name>.* hold
-                        // multiple sibling entries (e.g. two MCP servers)
-                        // whose settings otherwise interleave as identically
-                        // titled rows ("Timeout", "Timeout", …) with no way
-                        // to tell which entry each one belongs to.
-                        ForEach(subsections(for: keys, groupPrefix: prefix)) { subsection in
-                            if let label = subsection.label {
-                                Text(label)
-                                    .font(.headline.weight(.semibold))
-                                    .padding(.top, 6)
+                    Text("Only settings already in config.yaml are listed. Install or update llmtui (it provides `llmtui config schema`) to see and set every setting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(groups, id: \.1) { title, prefix, detail in
+                    let keys = model.configuration.rawSettings.keys
+                        .filter { $0 == prefix || $0.hasPrefix(prefix + ".") }
+                        .filter { !LLMTUIConfigSchema.looksSecret($0) }
+                        .sorted()
+                    Section {
+                        if keys.isEmpty {
+                            Text("Not present in the current YAML; llmtui defaults apply.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            // mcp.servers.<name>.* and templates.<name>.* hold
+                            // multiple sibling entries (e.g. two MCP servers)
+                            // whose settings otherwise interleave as identically
+                            // titled rows ("Timeout", "Timeout", …) with no way
+                            // to tell which entry each one belongs to.
+                            ForEach(subsections(for: keys, groupPrefix: prefix)) { subsection in
+                                if let label = subsection.label {
+                                    Text(label)
+                                        .font(.headline.weight(.semibold))
+                                        .padding(.top, 6)
                                     
-                            }
-                            ForEach(subsection.keys, id: \.self) { key in
-                                SettingEditor(model: model, path: key, title: prettyKey(key))
+                                }
+                                ForEach(subsection.keys, id: \.self) { key in
+                                    SettingEditor(model: model, path: key, title: prettyKey(key))
+                                }
                             }
                         }
+                    } header: {
+                        Text(title)
                     }
-                } header: {
-                    Text(title)
                 }
             }
             Section("Safe editing") {

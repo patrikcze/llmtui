@@ -43,6 +43,25 @@ its own agent and tool loop, with a separate verifier that checks the
 final answer against the tool results. It can also render images, Markdown,
 math and Mermaid diagrams (with PNG export), and copy replies.
 
+**More Settings** lists every llmtui setting, taken from the llmtui binary
+itself (`llmtui config schema`; see "How the app finds llmtui"), grouped by
+section and searchable. Settings with their own screen (providers, model
+profiles, chat, tools, agent, Personal Apps) stay there.
+- A setting shows llmtui's default until you change it, and only changed
+  settings are written; **Reset** removes one from the file again.
+- Switches, menus of the accepted values, and number and duration fields
+  are checked as you type. Lists take one entry per line.
+- MCP servers and templates can be added. A new MCP server starts disabled
+  and set to ask before each tool call.
+- Secrets are never shown or written: provider `api_key` values and MCP
+  server `env` values stay as they are in the file. Use `api_key_env`.
+- Before Save replaces `config.yaml`, llmtui checks the new text
+  (`llmtui config validate`, from a user-only temporary file next to it).
+  An error leaves the file untouched; warnings, such as unknown keys, are
+  shown. The saved file is checked again when loaded. With an llmtui that
+  is missing or too old for these commands, only the keys already in the
+  file are listed and Save says the file was not checked.
+
 Provider profiles are the `providers:` entries of `config.yaml`, shared with
 the terminal app. On the **Providers** screen:
 - **Chat uses** picks the profile for this app's chat. The choice is kept in

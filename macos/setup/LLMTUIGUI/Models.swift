@@ -240,7 +240,10 @@ struct LLMTUIConfiguration: Equatable {
     /// Provider profiles deleted since the last load or save; saving removes
     /// their whole `providers.<name>` block.
     var removedProviders: Set<String> = []
-    var systemPrompt = "You are a helpful assistant."
+    /// Keys reset to llmtui's default since the last load or save; saving
+    /// removes them from config.yaml.
+    var resetSettings: Set<String> = []
+    var systemPrompt = "You are a helpful local assistant."
     var temperature = 0.7
     var topP = 0.9
     var maxTokens = 4096
@@ -564,7 +567,13 @@ final class AppModel {
         )
     }
 
-    let configurationStore = LLMTUIConfigurationStore()
+    var configurationStore = LLMTUIConfigurationStore()
+    /// llmtui's schema (`llmtui config schema`), nil until loaded or when the
+    /// llmtui found is missing or too old to provide it.
+    var configSchema: LLMTUIConfigSchema?
+    /// llmtui's own check of the saved file (`llmtui config validate`).
+    var llmtuiCheck: LLMTUIConfigCommands.Outcome?
+    var isSavingConfiguration = false
     let personalAppsRuntime = PersonalAppsRuntime.shared
     let chatService: any ChatService
     let diagnostics: any DiagnosticsLogging
@@ -633,6 +642,7 @@ final class AppModel {
             )
             statusMessage = "Configuration loaded"
             lastError = nil
+            Task { await checkSavedConfiguration() }
             diagnose(
                 level: .info,
                 category: .configuration,
@@ -649,30 +659,141 @@ final class AppModel {
         }
     }
 
-    func saveConfiguration() {
-        do {
-            syncActiveProvider()
-            UserDefaults.standard.set(configuration.toolWorkspacePath, forKey: "chatToolWorkspacePath")
-            configurationSourceText = try configurationStore.save(
-                configuration,
-                basedOn: configurationSourceText
-            )
-            configuration.removedProviders = []
-            personalAppsRuntime.applySavedConfiguration(configuration)
-            configurationIssues = LLMTUIConfigurationStore.validate(configurationSourceText)
-            hasConfigurationBackup = true
-            statusMessage = "Configuration saved"
-            lastError = nil
-            diagnose(
-                level: .info,
-                category: .configuration,
-                event: "save_succeeded",
-                metadata: ["issue_count": .integer(configurationIssues.count)]
-            )
-        } catch {
-            lastError = error.localizedDescription
-            diagnose(level: .error, category: .configuration, event: "save_failed", error: error, operation: "configuration save")
+    /// Asks the llmtui binary for its configuration schema. Runs before the
+    /// first load so missing keys read as llmtui's defaults.
+    func loadConfigSchema() async {
+        let schema = await LLMTUIConfigCommands.loadSchema()
+        configSchema = schema
+        configurationStore.schema = schema
+        diagnose(
+            level: .info,
+            category: .configuration,
+            event: "schema_loaded",
+            metadata: ["field_count": .integer(schema?.fields.count ?? 0)]
+        )
+    }
+
+    /// Runs `llmtui config validate` on the file as it is on disk and keeps
+    /// the findings for the Overview and More Settings.
+    func checkSavedConfiguration() async {
+        guard FileManager.default.fileExists(atPath: LLMTUIConfigurationStore.defaultURL.path) else {
+            llmtuiCheck = nil
+            return
         }
+        llmtuiCheck = await LLMTUIConfigCommands.validate(file: LLMTUIConfigurationStore.defaultURL)
+    }
+
+    /// Saves the draft after llmtui itself has checked it: the new text is
+    /// validated with `llmtui config validate` first, and config.yaml is left
+    /// untouched if llmtui could not load it or reports an error. Warnings
+    /// are shown but do not block. Without a usable llmtui, Save proceeds
+    /// and says the file was not checked.
+    func saveConfiguration() {
+        guard !isSavingConfiguration else { return }
+        syncActiveProvider()
+        UserDefaults.standard.set(configuration.toolWorkspacePath, forKey: "chatToolWorkspacePath")
+        let draft = configuration
+        let baseText = configurationSourceText
+        let text = configurationStore.updatedText(for: draft, basedOn: baseText)
+        isSavingConfiguration = true
+        statusMessage = "Checking with llmtui…"
+        Task {
+            defer { isSavingConfiguration = false }
+            let outcome = await LLMTUIConfigCommands.validate(text: text, nextTo: LLMTUIConfigurationStore.defaultURL)
+            switch outcome {
+            case .failed(let message):
+                statusMessage = "Not saved"
+                lastError = "Not saved: llmtui could not load the new configuration. \(message)"
+                diagnose(level: .warning, category: .configuration, event: "save_rejected_by_llmtui")
+                return
+            case .checked(let problems) where problems.contains(where: \.isError):
+                let errors = problems.filter(\.isError).map { "• \($0.key): \($0.message)" }
+                statusMessage = "Not saved"
+                lastError = "Not saved: llmtui found errors in the new configuration.\n" + errors.joined(separator: "\n")
+                diagnose(level: .warning, category: .configuration, event: "save_rejected_by_llmtui", metadata: ["error_count": .integer(errors.count)])
+                return
+            default:
+                break
+            }
+            do {
+                try configurationStore.write(text, basedOn: baseText)
+                configurationSourceText = text
+                configuration.removedProviders.subtract(draft.removedProviders)
+                configuration.resetSettings.subtract(draft.resetSettings)
+                personalAppsRuntime.applySavedConfiguration(draft)
+                configurationIssues = LLMTUIConfigurationStore.validate(text)
+                hasConfigurationBackup = true
+                llmtuiCheck = outcome
+                if case .unavailable(let reason) = outcome {
+                    statusMessage = "Configuration saved (not checked: \(reason))"
+                } else {
+                    statusMessage = "Configuration saved and checked by llmtui"
+                }
+                lastError = nil
+                diagnose(
+                    level: .info,
+                    category: .configuration,
+                    event: "save_succeeded",
+                    metadata: ["issue_count": .integer(configurationIssues.count)]
+                )
+            } catch {
+                lastError = error.localizedDescription
+                diagnose(level: .error, category: .configuration, event: "save_failed", error: error, operation: "configuration save")
+            }
+        }
+    }
+
+    /// Sets a setting in the draft. An empty value means "not set": the key
+    /// is removed from config.yaml on Save and llmtui's default applies.
+    func setSetting(_ key: String, to value: String) {
+        guard !LLMTUIConfigSchema.looksSecret(key), configSchema?.isSecret(key) != true else { return }
+        if value.isEmpty {
+            resetSetting(key)
+        } else {
+            configuration.rawSettings[key] = value
+            configuration.resetSettings.remove(key)
+        }
+    }
+
+    func setListSetting(_ key: String, to values: [String]) {
+        guard !LLMTUIConfigSchema.looksSecret(key), configSchema?.isSecret(key) != true else { return }
+        configuration.listSettings[key] = values
+        configuration.resetSettings.remove(key)
+    }
+
+    /// Removes a setting from the draft; Save removes it from config.yaml so
+    /// llmtui's default applies again.
+    func resetSetting(_ key: String) {
+        configuration.rawSettings.removeValue(forKey: key)
+        configuration.listSettings.removeValue(forKey: key)
+        configuration.resetSettings.insert(key)
+    }
+
+    /// Adds an entry to a named collection. A new MCP server starts disabled,
+    /// asks before every tool call and uses stdio; nothing is launched until
+    /// it is enabled and connected in llmtui. Returns false for an invalid or
+    /// taken name.
+    @discardableResult
+    func addCollectionEntry(_ collection: String, name rawName: String) -> Bool {
+        guard let name = LLMTUIConfiguration.normalizedProviderName(rawName) else { return false }
+        let prefix = "\(collection).\(name)."
+        let taken = configuration.rawSettings.keys.contains { $0.hasPrefix(prefix) }
+            || configuration.listSettings.keys.contains { $0.hasPrefix(prefix) }
+        guard !taken else { return false }
+        switch collection {
+        case "mcp.servers":
+            configuration.rawSettings[prefix + "command"] = ""
+            configuration.rawSettings[prefix + "transport"] = "stdio"
+            configuration.rawSettings[prefix + "enabled"] = "false"
+            configuration.rawSettings[prefix + "approve"] = "ask"
+        case "templates":
+            configuration.rawSettings[prefix + "description"] = ""
+            configuration.rawSettings[prefix + "system_prompt"] = ""
+        default:
+            return false
+        }
+        statusMessage = "Added \(name) — save to apply"
+        return true
     }
 
     /// UserDefaults key for the profile this app's Chat uses. It is kept out
