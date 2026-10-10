@@ -149,3 +149,174 @@ struct AgentLoopTests {
         #expect(decoded == run)
     }
 }
+
+/// The loop end to end against a scripted model server: every request it
+/// sends, in order, and what it shows. No real network.
+@MainActor @Suite(.serialized)
+struct AgentLoopRunTests {
+    private static func stream(_ text: String) -> String {
+        let chunk = ["choices": [["delta": ["content": text], "finish_reason": "stop"]]]
+        let json = String(decoding: try! JSONSerialization.data(withJSONObject: chunk), as: UTF8.self)
+        return "data: \(json)\n\ndata: [DONE]\n\n"
+    }
+
+    private func run(_ replies: [String]) async throws -> (MobileAppModel, [URLRequest], URL) {
+        let base = FileManager.default.temporaryDirectory.appending(path: "AgentLoopRunTests-\(UUID().uuidString)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AgentStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let model = MobileAppModel(
+            conversationStore: MobileConversationStore(directory: base.appending(path: "Conversations")),
+            documentStore: DocumentStore(root: base.appending(path: "Attachments")),
+            runtime: MobileChatRuntime(session: session)
+        )
+        let provider = MobileProviderProfile(model: "test-model")
+        model.profiles = [provider]
+        model.activeProfileID = provider.id
+        model.toolsEnabled = false
+        let previous = UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey)
+        defer { UserDefaults.standard.set(previous, forKey: MobileAppModel.agentEnabledKey) }
+        model.agentEnabled = true
+
+        AgentStubProtocol.set(replies.map(Self.stream))
+        _ = model.newConversation()
+        model.draft = "Which motorcycle events are in Prague in 2027?"
+        model.send()
+        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(!model.isGenerating)
+        return (model, AgentStubProtocol.requests(), base)
+    }
+
+    private func body(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count)) }
+        }
+        return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func messages(_ request: URLRequest) throws -> [[String: Any]] {
+        try body(request)["messages"] as? [[String: Any]] ?? []
+    }
+
+    @Test func missingItemsAreFedBackUntilTheCheckPasses() async throws {
+        let plan = #"{"goal":"List 2027 motorcycle events in Prague","criteria":["Names an event","Gives its dates"],"steps":["Search","Answer"]}"#
+        let (model, requests, base) = try await run([
+            plan,
+            "Motocykl 2027 is the main show.",
+            #"{"complete":false,"met":[1],"missing":["No dates"],"feedback":"Add the dates."}"#,
+            "Motocykl 2027 runs 4-7 March 2027 at PVA EXPO.",
+            #"{"complete":true,"met":[1,2],"missing":[],"feedback":""}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: base) }
+        #expect(requests.count == 5)
+
+        // 1. The plan is asked for without tools.
+        #expect(try body(requests[0])["tools"] == nil)
+        #expect((try messages(requests[0]).last?["content"] as? String ?? "").contains("Do not answer it yet"))
+
+        // 2. The first pass carries the goal and the criteria.
+        let firstSystem = try messages(requests[1]).first?["content"] as? String ?? ""
+        #expect(firstSystem.contains("pass 1 of"))
+        #expect(firstSystem.contains("2. Gives its dates"))
+
+        // 3. The check sees only the plan, the evidence and the answer.
+        let check = try messages(requests[2])
+        #expect(check.count == 1)
+        #expect((check.first?["content"] as? String ?? "").contains("Motocykl 2027 is the main show."))
+
+        // 4. What was missing becomes the next pass's prompt.
+        let second = try messages(requests[3])
+        #expect((second.first?["content"] as? String ?? "").contains("pass 2 of"))
+        #expect((second.last?["content"] as? String ?? "").contains("- No dates"))
+
+        // The bubble holds the final answer; the card holds the run.
+        let reply = try #require(model.messages.last)
+        #expect(reply.text == "Motocykl 2027 runs 4-7 March 2027 at PVA EXPO.")
+        let agent = try #require(reply.agentRun)
+        #expect(agent.phase == .finished && agent.stopReason == .verified)
+        #expect(agent.checks.map(\.complete) == [false, true])
+        #expect(agent.met == [1, 2])
+        #expect(agent.plan?.criteria.count == 2)
+    }
+
+    @Test func anUnreadableCheckStopsHonestlyAfterOnePass() async throws {
+        let (model, requests, base) = try await run([
+            "no plan here",
+            "Here is my answer.",
+            "Looks fine to me!"
+        ])
+        defer { try? FileManager.default.removeItem(at: base) }
+        #expect(requests.count == 3)
+        let agent = try #require(model.messages.last?.agentRun)
+        #expect(agent.stopReason == .unverified)
+        #expect(agent.plan?.criteria == ["The answer fully addresses the request."])
+        #expect(model.messages.last?.text == "Here is my answer.")
+    }
+
+    @Test func plainToolsModeIsUnchangedWithoutAgentMode() async throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "AgentLoopRunTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AgentStubProtocol.self]
+        let model = MobileAppModel(
+            conversationStore: MobileConversationStore(directory: base.appending(path: "Conversations")),
+            documentStore: DocumentStore(root: base.appending(path: "Attachments")),
+            runtime: MobileChatRuntime(session: URLSession(configuration: configuration))
+        )
+        let provider = MobileProviderProfile(model: "test-model")
+        model.profiles = [provider]
+        model.activeProfileID = provider.id
+        model.toolsEnabled = false
+        let previous = UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey)
+        defer { UserDefaults.standard.set(previous, forKey: MobileAppModel.agentEnabledKey) }
+        model.agentEnabled = false
+        AgentStubProtocol.set([Self.stream("Just an answer.")])
+        _ = model.newConversation()
+        model.draft = "Hello"
+        model.send()
+        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(AgentStubProtocol.requests().count == 1)
+        #expect(model.messages.last?.text == "Just an answer.")
+        #expect(model.messages.last?.agentRun == nil)
+    }
+}
+
+/// A scripted model server private to these tests: replies are served in
+/// order, and every request is recorded. Not shared with other suites,
+/// which run in parallel.
+nonisolated final class AgentStubProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var replies: [Data] = []
+    nonisolated(unsafe) private static var captured: [URLRequest] = []
+
+    static func set(_ texts: [String]) {
+        lock.lock(); defer { lock.unlock() }
+        replies = texts.map { Data($0.utf8) }
+        captured = []
+    }
+
+    static func requests() -> [URLRequest] {
+        lock.lock(); defer { lock.unlock() }
+        return captured
+    }
+
+    private static func next(_ request: URLRequest) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        captured.append(request)
+        return replies.isEmpty ? Data() : replies.removeFirst()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let data = Self.next(request)
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}

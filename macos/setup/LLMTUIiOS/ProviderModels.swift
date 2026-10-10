@@ -69,6 +69,8 @@ struct MobileChatMessage: Codable, Identifiable, Equatable, Sendable {
     /// Attachment passages ("documentID:chunkID") a document tool returned
     /// while this reply was generated; only these may be cited in it.
     var sourceRefs: [String]?
+    /// The ∞ agent run behind this reply: plan, passes and checks.
+    var agentRun: MobileAgentRun?
 
     init(
         id: UUID = UUID(),
@@ -196,6 +198,8 @@ struct MobileTurnOptions: Equatable, Sendable {
     var reasoning: MobileReasoning
     var mcpServerIDs: [UUID] = []
     var mcpGenerations: [UUID: UUID] = [:]
+    /// Run the ∞ agent loop for this message.
+    var agentEnabled = false
 }
 
 /// A message typed while a reply is still generating. Sent automatically, in
