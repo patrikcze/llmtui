@@ -82,6 +82,7 @@ func (m *Model) endAgentRun() {
 	if m.agentRunActive() {
 		return
 	}
+	m.syncAgentRunCard()
 	if m.entities != nil && m.agentLoop != nil && m.agentLoop.run != nil {
 		m.entities.ReleaseScope(entity.ScopeAgentRun, m.agentLoop.run.ID)
 	}

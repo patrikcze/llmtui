@@ -178,6 +178,10 @@ type Model struct {
 	transcriptViewportLines      []string
 	transcriptViewportCacheKey   transcriptCacheKey
 	transcriptViewportCacheValid bool
+	// agentCards are display-only agent run cards (agent_run_card.go);
+	// agentCardRevision invalidates both transcript render caches.
+	agentCards        []agentRunCard
+	agentCardRevision int
 	// Click-drag text selection over the chat transcript (see selectionState).
 	sel         selectionState
 	notice      string
@@ -487,6 +491,7 @@ func New(opts Options) *Model {
 func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.SetMessages(s.Messages)
 	m.resetToolOutput()
+	m.resetAgentRunCards()
 	m.session.Stats = nil
 	m.session.TotalPromptTokens = s.Prompt
 	m.session.TotalCompletionTokens = s.Reply
@@ -1003,6 +1008,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+l":
 			m.session.Clear()
 			m.resetToolOutput()
+			m.resetAgentRunCards()
 			m.refreshViewport()
 			return m, nil
 		case "ctrl+u":
@@ -3283,6 +3289,7 @@ type transcriptCacheKey struct {
 	showReasoning      bool
 	toolsShowOutput    bool
 	toolOutputRevision int
+	agentCardRevision  int
 	demoMode           bool
 	toolsOn            bool
 	toolsRoot          string
@@ -3313,6 +3320,7 @@ func (m *Model) settledTranscriptKey() transcriptCacheKey {
 		showReasoning:      m.showReasoning,
 		toolsShowOutput:    m.toolsShowOutput,
 		toolOutputRevision: m.toolOutputRevision,
+		agentCardRevision:  m.agentCardRevision,
 		demoMode:           m.demoMode,
 		toolsOn:            toolsOn,
 		toolsRoot:          root,
@@ -3417,6 +3425,9 @@ func (m *Model) renderSettledTranscript() string {
 	errGlyph := lipgloss.NewStyle().Foreground(m.theme.Bad)
 
 	for i, msg := range m.session.Messages {
+		if i > 0 {
+			m.writeAgentRunCards(&b, i-1, false)
+		}
 		switch msg.Role {
 		case provider.RoleUser:
 			// The agent controller's own "continue" turn travels as a user
@@ -3496,6 +3507,7 @@ func (m *Model) renderSettledTranscript() string {
 			b.WriteString("\n")
 		}
 	}
+	m.writeAgentRunCards(&b, len(m.session.Messages)-1, true)
 
 	return b.String()
 }
