@@ -777,11 +777,24 @@ deduplicated by a stable retry instruction rather than a growing one, so
 `agent.max_repeated_failures` reliably stops the run instead of the objective
 text nesting a new "retry" prefix every cycle.
 
+## Run card
+
+Once a run's criteria are pinned, the transcript shows a run card right after
+the request that started it: the goal, a "Done when" list of the pinned
+criteria, which pass of the cycle limit the run is on, and how many criteria
+are met. Each criterion is ticked (`✓`), failed (`✗`), not applicable (`–`) or
+still open (`○`) as verification reports it, and a finished run adds one line
+saying why it stopped (verified, cancelled, budget, no progress, verifier
+unavailable, waiting for input, parked or failed). The card is display-only
+(`internal/tui/agent_run_card.go`): it is never added to the session, a prompt,
+the response cache or a saved conversation, and it is cleared with the
+conversation.
+
 ## Commands
 
 | Command | Effect |
 | --- | --- |
-| `/agent` or `/agent status` | Show mode plus current run/cycle/stage/status |
+| `/agent` or `/agent status` | Show mode plus current run/cycle/stage/status; with a run, open a dialog listing its goal, criteria and stop reason |
 | `/agent on` | Make the next user message start a verified run |
 | `/agent off` | Restore ordinary chat (requires no active run) |
 | `/agent cancel` | Cancel the active executor/tool/verifier and persist the terminal state |

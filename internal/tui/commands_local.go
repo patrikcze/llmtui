@@ -1271,6 +1271,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		}
 		m.session.Clear()
 		m.resetToolOutput()
+		m.resetAgentRunCards()
 		m.summary = ""
 		m.refreshViewport()
 		m.notice = "conversation cleared"
@@ -1445,6 +1446,7 @@ func cmdTools(m *Model, args string) tea.Cmd {
 	case "output":
 		m.toolsShowOutput = !m.toolsShowOutput
 		m.resetToolOutput()
+		m.resetAgentRunCards()
 		if m.toolsShowOutput {
 			m.notice = "⚒ showing full tool output (/tools output to collapse again)"
 		} else {

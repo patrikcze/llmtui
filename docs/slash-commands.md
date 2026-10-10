@@ -24,7 +24,7 @@ unavailable while a reply, tool batch, or verification is in progress — press
 
 | Command | Description |
 | --- | --- |
-| `/agent` · `/agent status` | Show mode and current run/cycle/stage/status |
+| `/agent` · `/agent status` | Show mode and current run/cycle/stage/status, plus a dialog with the run's goal, criteria and stop reason |
 | `/agent on` / `/agent off` | Enable bounded verified runs for new messages, or restore ordinary chat |
 | `/agent cancel` | Cancel the active task-contract request, executor, tool batch, or verifier |
 | `/agent resume [run-id]` | Resume the latest or selected resumable run with a fresh cycle (never replay incomplete work) |

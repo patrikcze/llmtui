@@ -286,6 +286,7 @@ func (m *Model) syncAgentDebug() {
 	if cycle := run.LatestCycle(); cycle != nil && cycle.Verification != nil {
 		m.lastDebug.AgentVerdict = string(cycle.Verification.Verdict)
 	}
+	m.syncAgentRunCard()
 }
 
 func (m *Model) agentVerifying() bool {
@@ -2049,6 +2050,7 @@ func cmdAgent(m *Model, args string) tea.Cmd {
 		if m.agentLoop != nil && m.agentLoop.run != nil {
 			run := m.agentLoop.run
 			m.notice = fmt.Sprintf("agent mode %s · run %s · cycle %d/%d · %s/%s", onOff(m.agentOn), shortRunID(run.ID), run.Cycle, run.Limits.MaxCycles, run.Stage, run.Status)
+			m.openModalOverlay("Agent", scrollHint, func() string { return m.agentCriteriaStatusOverlay() })
 		} else {
 			m.notice = "agent mode " + onOff(m.agentOn) + " · no run"
 		}
