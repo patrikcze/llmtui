@@ -110,9 +110,23 @@ permits at most 16 MCP calls per reply.
 `MobileMCPService` owns connections behind the injectable `MobileMCPClient`
 actor interface. `MCPModernClient` implements `2026-07-28` using Foundation;
 `MCPLegacyClient` uses official Swift SDK 0.12.1 for the initialized
-`2025-03-26`, `2025-06-18`, and `2025-11-25` era. The SDK revision and all
-resolved packages are recorded in the Xcode workspace's `Package.resolved`.
-Only the iOS target links MCP. The legacy SDK uses an app-owned HTTP transport
+`2025-03-26`, `2025-06-18`, and `2025-11-25` era. Only the iOS target links MCP.
+
+Swift package pins:
+- The project requires the SDK at exactly 0.12.1 (`exactVersion` in
+  `project.pbxproj`). Every resolved package, the SDK and its dependencies, is
+  recorded with its version and commit in the workspace's `Package.resolved`.
+- `make macos-setup-test`, CI (`macos-setup.yml`) and the release script
+  (`scripts/package-app.sh`) build with `-onlyUsePackageVersionsFromResolvedFile`,
+  so a build fails instead of resolving other versions when the pins and the
+  requirements disagree. To change a version, update it in Xcode and commit
+  both files.
+- Only `MCP` and what its library target needs (swift-log, EventSource,
+  swift-system) are compiled into the app. The app calls the SDK only from
+  `MCPClients.swift` (`MCPLegacyClient`, `MCPLegacyTransport`). swift-nio,
+  swift-atomics and swift-collections are resolved only for the SDK's
+  conformance-server executable and are not linked.
+ The legacy SDK uses an app-owned HTTP transport
 so both eras share bounded HTTP/SSE decoding, response-ID checking, ephemeral
 sessions, disabled logging and rejected redirects.
 

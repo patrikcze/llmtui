@@ -45,6 +45,7 @@ jobs:
       - name: Test
         run: |
           xcodebuild -quiet \
+            -onlyUsePackageVersionsFromResolvedFile \
             -project macos/setup/LLMTUIGUI.xcodeproj \
             -scheme LLMTUIGUI \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
@@ -96,6 +97,7 @@ jobs:
         # job short.
         run: |
           xcodebuild -quiet \
+            -onlyUsePackageVersionsFromResolvedFile \
             -project macos/setup/LLMTUIGUI.xcodeproj \
             -scheme LLMTUIiOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
