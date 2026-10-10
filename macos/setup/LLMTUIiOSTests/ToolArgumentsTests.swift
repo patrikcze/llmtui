@@ -75,7 +75,7 @@ struct ToolArgumentLoopTests {
         _ = model.newConversation()
         model.draft = "Find motorcycle events."
         model.send()
-        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(await waitUntil { !model.isGenerating })
         let requests = ToolArgumentStubProtocol.requests()
         try #require(requests.count == 2)
         let stream = try #require(requests[1].httpBodyStream ?? requests[1].httpBody.map { InputStream(data: $0) })
@@ -103,7 +103,7 @@ struct ToolArgumentLoopTests {
 }
 
 /// A scripted model server private to `ToolArgumentLoopTests`.
-nonisolated final class ToolArgumentStubProtocol: URLProtocol, @unchecked Sendable {
+nonisolated final class ToolArgumentStubProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var replies: [Data] = []
     nonisolated(unsafe) private static var captured: [URLRequest] = []
