@@ -92,6 +92,7 @@ func slashCommands() []slashCommand {
 			return m.copyLastReply()
 		}},
 		{name: "clear", usage: "/clear", desc: "clear the conversation", category: "Chat", blockWhileThinking: true, run: func(m *Model, _ string) tea.Cmd {
+			m.resetQueue()
 			m.session.Clear()
 			m.resetToolOutput()
 			m.resetAgentRunCards()
@@ -100,6 +101,7 @@ func slashCommands() []slashCommand {
 			m.refreshViewport()
 			return nil
 		}},
+		{name: "queue", usage: "/queue [list|edit <n>|drop <n>|clear|pause|resume]", desc: "show, edit, or drop messages queued while the model works", category: "Chat", run: cmdQueue},
 		{name: "retry", usage: "/retry", desc: "retry the last user message", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			return m.retryLast()
 		}},
@@ -504,7 +506,7 @@ func (m *Model) helpOverlay(topic string) string {
 	if topic == "" {
 		b.WriteString(m.theme.UserLabel.Render("keyboard") + "\n")
 		keys := [][2]string{
-			{"enter", "send message / run command"},
+			{"enter", "send message / run command · queues it while the model works"},
 			{"shift+↵", "newline (iTerm2, VS Code, WezTerm, Ghostty, …; check /keys)"},
 			{"\\ + ↵", "newline — trailing backslash continues the line"},
 			{"ctrl+j", "insert newline (works everywhere)"},
@@ -518,6 +520,7 @@ func (m *Model) helpOverlay(topic string) string {
 			{"esc", "stop generation · close this overlay"},
 			{"ctrl+l", "clear conversation"},
 			{"↑/↓", "recall submitted input (empty composer) · command suggestions · multiline cursor"},
+			{"↑", "on an empty composer with queued messages: edit the last queued one"},
 			{"tab", "complete selected command"},
 			{"ctrl+c", "press twice to quit (first stops/clears)"},
 		}

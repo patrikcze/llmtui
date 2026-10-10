@@ -1269,6 +1269,7 @@ func cmdHistory(m *Model, args string) tea.Cmd {
 		if m.thinking {
 			return m.fail("/history clear is unavailable while a reply is streaming — esc to stop it first")
 		}
+		m.resetQueue()
 		m.session.Clear()
 		m.resetToolOutput()
 		m.resetAgentRunCards()

@@ -2,7 +2,7 @@
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Send message / run command |
+| `Enter` | Send message / run command; while a reply, tool batch or agent run is working, queue the message instead (see [Queued messages](#queued-messages)) |
 | `Shift+Enter` | Newline — only on terminals with distinguishable modified keys (see below) |
 | `Alt/Option+Enter` | Newline — needs "Option as Meta" on macOS terminals |
 | `Ctrl+J` | Newline — works in **every** terminal |
@@ -18,6 +18,7 @@
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
 | `Esc` | Stop generation (keeps partial reply) · close overlay |
 | `↑` / `↓` | Choose an item in `/models`, `/providers`, `/skills list`, `/plugins list`, and other pickers; navigate command suggestions |
+| `↑` on an empty composer with queued messages | Pull the newest queued message back into the composer to edit it |
 | `↑` / `↓` in the composer | Recall previously submitted prompts and slash commands when the composer is empty; otherwise move the cursor between (soft-wrapped) input lines |
 | `Enter` in picker | Switch to the selected model/provider, or toggle enable/disable for a skill/plugin |
 
@@ -59,3 +60,32 @@ submissions, session-local, and never written to disk — it is unrelated to
 approval prompt, autocomplete popup, or overlay is active, or when the
 composer already holds a multi-line or soft-wrapped draft, `↑` / `↓` keep
 their usual meaning and do not trigger recall.
+
+## Queued messages
+
+Pressing `Enter` while the model is still working (streaming a reply, running
+a tool batch, verifying an agent run) no longer drops the message: it joins a
+queue and goes out automatically, one at a time and in order, as soon as the
+model is free. This mirrors the iOS app's queue. Slash commands are never
+queued; they run immediately as before.
+
+- A badge at the top of the composer shows how many messages are waiting
+  (`⧗ 2 queued`) and lists the first few, one line each.
+- `↑` on an empty composer pulls the newest queued message back for editing.
+  `/queue edit <n>` does the same for any message. `Enter` puts it back in the
+  same place in line; clearing the composer (`Ctrl+U`) drops it. While the
+  message that is next in line is open for editing, the queue waits for it.
+- `/queue` lists every queued message in full; `/queue drop <n>` removes one,
+  `/queue clear` removes all.
+- Stopping a reply (`Esc`, the stop button, `Ctrl+C`) or a failed reply
+  **pauses** the queue rather than sending the next message. `Enter` on an
+  empty composer or `/queue resume` continues it; a new message you send while
+  it is paused joins the back of the line so it never overtakes older ones.
+- The queue never answers on your behalf. It waits while a tool approval, an
+  `ask_user` question, an agent criteria review or any other agent input pause
+  is open.
+- Up to 10 messages can be queued. The queue is session-local, never written to
+  disk, and is dropped by `/clear`, `Ctrl+L`, `/history clear` and
+  `/history load`.
+- A queued message uses the provider, model and modes that are active when it
+  is sent, not when it was typed.

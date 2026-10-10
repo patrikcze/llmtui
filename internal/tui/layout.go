@@ -29,6 +29,7 @@ func (m *Model) layoutFor(width, height, statusLines int) layoutMetrics {
 	if len(m.attachments) > 0 {
 		attachmentRows = 1
 	}
+	attachmentRows += m.queuePanelRows(height, compact)
 	targetViewportRows := 4
 	if height < 12 {
 		targetViewportRows = 1
@@ -95,6 +96,7 @@ func (m *Model) viewportHeightFor(inputLines int) int {
 	if len(m.attachments) > 0 {
 		attachmentRows = 1
 	}
+	attachmentRows += m.queuePanelRows(m.height, m.layout.compact)
 	height := m.height - usageRows - m.layout.activityRows - m.layout.suggestionRows - attachmentRows - 2 - inputLines - m.layout.statusLines - 1
 	return max(1, height)
 }
