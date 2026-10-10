@@ -112,11 +112,14 @@ an in-flight streaming response. Calls that already finished keep their
 results; calls not yet started are reported to the model as not executed (see
 [Cancellation and safety](agent-loop.md#cancellation-and-safety)).
 
-Calls in a model-emitted batch execute sequentially in the order the model
+MCP calls in a model-emitted batch execute sequentially in the order the model
 provided. Some MCP servers serialize session state or explicitly disallow
 parallel calls, so parallel execution could violate their expectations. This
-is a deliberate correctness and compatibility tradeoff: model-inference
-latency generally dominates the small number of tool calls in a turn.
+is a deliberate correctness and compatibility tradeoff. Only consecutive
+built-in read-only calls (`read_file`, `grep`, `glob`, `list_dir`,
+`web_search`, `web_fetch`, `web_research`) run concurrently, at most four at a
+time; writes, edits, commands and MCP calls always run alone, and results
+always return in the model's order.
 
 MCP results are labeled as untrusted external data, enclosed in matching
 collision-checked begin/end markers, and share the workspace tools' output
