@@ -267,7 +267,7 @@ func TestWebFencedParsing(t *testing.T) {
 
 func TestWebSpecs(t *testing.T) {
 	specs := WebSpecs()
-	if len(specs) != 2 || specs[0].Name != ToolWebSearch || specs[1].Name != ToolWebFetch {
+	if len(specs) != 3 || specs[0].Name != ToolWebSearch || specs[1].Name != ToolWebFetch || specs[2].Name != ToolWebResearch {
 		t.Fatalf("specs: %+v", specs)
 	}
 }

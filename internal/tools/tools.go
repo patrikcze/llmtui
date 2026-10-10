@@ -208,8 +208,13 @@ type Call struct {
 	// never holds an argument value. The call executes with the coerced
 	// values. A string, not a slice, keeps Call comparable.
 	ArgumentNotes string
-	// Max caps web_search results (native max_results argument).
+	// Max caps web_search results (native max_results argument) and
+	// web_research's pages read (max_sources).
 	Max int
+	// WebQueries and WebQueryCount carry web_research's optional search
+	// queries. A fixed array keeps Call comparable.
+	WebQueries    [MaxWebResearchQueries]string
+	WebQueryCount int
 	// WebCacheMode and WebRefreshEpoch control web_fetch freshness admission.
 	// Empty mode is auto; refresh epochs are controller-owned opaque values.
 	WebCacheMode    string
@@ -349,6 +354,8 @@ func Parse(reply string) []Call {
 						decodeWriteFileBody(&call)
 					case ToolWebFetch:
 						decodeWebFetchBody(&call)
+					case ToolWebResearch:
+						decodeWebResearchBody(&call)
 					case ToolPersonalApps:
 						decodePersonalAppsBody(&call)
 					}
@@ -669,6 +676,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, res.Entities, res.Captures, meta, res.Err = r.webSearch(ctx, c)
 	case ToolWebFetch:
 		res.Output, res.Entities, res.Captures, meta, res.Err = r.webFetch(ctx, c)
+	case ToolWebResearch:
+		res.Output, res.Entities, res.Captures, meta, res.Err = r.webResearch(ctx, c)
 	case ToolSkillLoad:
 		res.Output, meta, res.Err = r.skillLoad(c)
 	case ToolAskUser:
@@ -685,8 +694,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	case ToolPersonalApps:
 		res.Output, meta, res.Err = r.personalApps(ctx, c)
 	default:
-		res.Err = withCode(fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch), "not_found", RetryCorrectInput)
+		res.Err = withCode(fmt.Errorf("%w %q (built-in: %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+			ErrUnknownTool, c.Tool, ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolWebSearch, ToolWebFetch, ToolWebResearch), "not_found", RetryCorrectInput)
 		meta.Effect = EffectNone
 	}
 	res.Meta = finalizeMeta(meta, res.Err)
@@ -1650,6 +1659,10 @@ func (r *Runner) NeedsApproval(c Call) bool {
 		return false
 	case ToolWebSearch:
 		return webSearchNeedsApproval(c.Body)
+	case ToolWebResearch:
+		// It fetches pages the model picked, which web_fetch asks for;
+		// one approval covers the whole bounded research request.
+		return true
 	case ToolReadFile, ToolGrep:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
 	case ToolRunCommand:
@@ -1881,6 +1894,8 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("web_search(%q)", strings.TrimSpace(c.Body))
 	case ToolWebFetch:
 		return "fetch " + c.Path
+	case ToolWebResearch:
+		return describeWebResearch(c)
 	case ToolGlob:
 		return fmt.Sprintf("glob %q in %s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), describePageOptions(c))
 	case ToolGrep:

@@ -334,6 +334,13 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			out = append(out, c)
 			continue
 		}
+		if tc.Name == ToolWebResearch {
+			// web_research has its own tolerant decoder (queries may be a
+			// single string) shared with the fenced JSON form.
+			decodeWebResearchArgs(&c, tc.Arguments)
+			out = append(out, c)
+			continue
+		}
 		if tc.Name == ToolGetEntityDetails {
 			if len(tc.Arguments) > MaxEntityDetailsPayloadBytes {
 				c.InputErr = fmt.Sprintf("get_entity_details arguments exceed the %d byte limit", MaxEntityDetailsPayloadBytes)
@@ -505,6 +512,20 @@ func WebSpecs() []provider.ToolSpec {
 					"refresh_epoch": {"type": "string", "description": "Controller-issued refresh identity; changing it opts into a new observation."}
 				},
 				"required": ["url"]
+			}`),
+		},
+		{
+			Name:        ToolWebResearch,
+			Description: "Research a question on the public web in one call: runs up to 3 searches, reads the best few pages from different sites, and returns numbered notes with only the relevant passages, to cite as [1], [2]. Prefer this over web_search + web_fetch for facts, current events, prices, versions, schedules, or anything that may have changed. Asks the user's approval once per request.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"question": {"type": "string", "description": "The question to answer, in full."},
+					"queries": {"type": "array", "items": {"type": "string"}, "maxItems": 3, "description": "1-3 distinct search queries, for example different phrasings, the official source, or a recent-news angle. Defaults to the question."},
+					"max_sources": {"type": "integer", "minimum": 1, "maximum": 6, "description": "How many pages to read, 1-6. Defaults to 4."},
+					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh poll is intentionally required."}
+				},
+				"required": ["question"]
 			}`),
 		},
 	}

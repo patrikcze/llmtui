@@ -532,7 +532,7 @@ type ToolsConfig struct {
 	// prompt protocol if the backend rejects them; "off" always uses the
 	// fenced-block protocol.
 	Native string `mapstructure:"native" yaml:"native"`
-	// Web enables the optional web tools (web_search, web_fetch).
+	// Web enables the optional web tools (web_search, web_fetch, web_research).
 	Web ToolsWebConfig `mapstructure:"web" yaml:"web"`
 	// Guardrails hardens the workspace tools (write blocks, command
 	// classification, secret-read approval). All protections default on.
@@ -1476,9 +1476,10 @@ tools:
   read:
     default_lines: 200 # bounded default read window; 0 preserves whole-file reads
   command_timeout: "30s"
-  # Web tools: web_search (DuckDuckGo, no API key) and web_fetch (page as
-  # Markdown). Off by default; fetches ask for approval per URL. Toggle per
-  # session with /web on.
+  # Web tools: web_search (DuckDuckGo, no API key), web_fetch (page as
+  # Markdown) and web_research (cited notes from several pages). Off by
+  # default; fetches ask for approval per URL, research once per request.
+  # Toggle per session with /web on.
   web:
     enabled: false
     max_results: 5 # search hits returned per web_search call

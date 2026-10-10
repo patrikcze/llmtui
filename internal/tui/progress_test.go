@@ -224,6 +224,19 @@ func TestProgressFingerprintIncludesStateChangingArguments(t *testing.T) {
 		t.Fatal("different web_search max_results collapsed to one fingerprint")
 	}
 
+	researchA := progressFingerprint(tools.Call{Tool: tools.ToolWebResearch, Body: "go release",
+		WebQueries: [tools.MaxWebResearchQueries]string{"go 1.27"}, WebQueryCount: 1})
+	researchB := progressFingerprint(tools.Call{Tool: tools.ToolWebResearch, Body: "go release",
+		WebQueries: [tools.MaxWebResearchQueries]string{"golang latest"}, WebQueryCount: 1})
+	researchSame := progressFingerprint(tools.Call{Tool: tools.ToolWebResearch, Body: "  Go release ",
+		WebQueries: [tools.MaxWebResearchQueries]string{"Go 1.27"}, WebQueryCount: 1})
+	if researchA == researchB {
+		t.Fatal("different web_research queries collapsed to one fingerprint")
+	}
+	if researchA != researchSame {
+		t.Fatal("web_research calls differing only in case and spacing were not recognized as a repeat")
+	}
+
 	mcpA := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"name":"CaseSensitive","page":1}`})
 	mcpB := progressFingerprint(tools.Call{MCPServer: "srv", MCPTool: "lookup", MCPArgs: `{"page":1,"name":"CaseSensitive"}`})
 	if mcpA != mcpB {

@@ -314,7 +314,11 @@ unwanted save and `/memory off` stops future ones.
     normally runs unprompted, but it asks when the query has a shape a real
     search never does — over 200 bytes, an embedded newline, or a single
     opaque token over 64 characters — since those are how workspace contents
-    or a credential would be smuggled out through it.
+    or a credential would be smuggled out through it. `web_research` always
+    asks, once per request: it sends up to three model-written queries and
+    then fetches the pages those searches returned, and the approval line
+    shows the question and every query. A grant covers only that exact
+    question, query set and page count.
   - **Bounded content** — response bodies are read up to 4 MB and reduced
     to readable Markdown capped at `tools.web.max_page_kb` (default 128 KB)
     before reaching the model; binary content types are refused.

@@ -471,6 +471,7 @@ func (m *Model) toolsOverlay() string {
 		{tools.ToolAskUser, "user", "ask a clarification with choices or text input (chat and agent)"},
 		{tools.ToolWebSearch, "auto", "search the web via DuckDuckGo (/web on)"},
 		{tools.ToolWebFetch, "approval", "fetch one page as Markdown (approval per URL)"},
+		{tools.ToolWebResearch, "approval", "answer a question from several web sources with cited notes (approval per request)"},
 	}
 	accessStyle := map[string]lipgloss.Style{
 		"auto":     lipgloss.NewStyle().Foreground(m.theme.Good),

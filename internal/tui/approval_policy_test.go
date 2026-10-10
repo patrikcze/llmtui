@@ -136,3 +136,29 @@ func TestCapabilityPolicyScopesMCPServerAndTool(t *testing.T) {
 		t.Fatal("MCP grant escaped its server/tool pair")
 	}
 }
+
+func TestCapabilityPolicyScopesWebResearchRequest(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	var policy capabilityPolicy
+	granted := tools.Call{Tool: tools.ToolWebResearch, Body: "latest go release", Max: 4,
+		WebQueries: [tools.MaxWebResearchQueries]string{"go 1.27"}, WebQueryCount: 1}
+	if got := policy.GrantCall(granted, now, time.Minute); got != "this exact web_research request" {
+		t.Fatalf("grant description = %q", got)
+	}
+	if !policy.Allows(granted, now) {
+		t.Fatal("the approved research request was not allowed")
+	}
+	for name, call := range map[string]tools.Call{
+		"other question": {Tool: tools.ToolWebResearch, Body: "something else", Max: 4,
+			WebQueries: [tools.MaxWebResearchQueries]string{"go 1.27"}, WebQueryCount: 1},
+		"extra query": {Tool: tools.ToolWebResearch, Body: "latest go release", Max: 4,
+			WebQueries: [tools.MaxWebResearchQueries]string{"go 1.27", "secret token"}, WebQueryCount: 2},
+		"more pages": {Tool: tools.ToolWebResearch, Body: "latest go release", Max: 6,
+			WebQueries: [tools.MaxWebResearchQueries]string{"go 1.27"}, WebQueryCount: 1},
+		"web_fetch": {Tool: tools.ToolWebFetch, Path: "https://go.dev/"},
+	} {
+		if policy.Allows(call, now) {
+			t.Errorf("%s: grant escaped the exact research request", name)
+		}
+	}
+}

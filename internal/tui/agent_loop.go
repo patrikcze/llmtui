@@ -667,7 +667,7 @@ func (m *Model) contractCapabilityCapsule() agentverify.CapabilityCapsule {
 	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob), "read_files", &capsule)
 	category(has(tools.ToolWriteFile, tools.ToolEditFile), "write_files", &capsule)
 	category(has(tools.ToolRunCommand), "run_commands", &capsule)
-	category(has(tools.ToolWebSearch, tools.ToolWebFetch), "web_access", &capsule)
+	category(has(tools.ToolWebSearch, tools.ToolWebFetch, tools.ToolWebResearch), "web_access", &capsule)
 	category(m.mcpRegistry != nil && len(mcpToolSpecs(m.mcpRegistry)) > 0, "mcp_tools", &capsule)
 	if has(tools.ToolAskUser) {
 		capsule.Available = append(capsule.Available, "ask_user")
@@ -1603,7 +1603,7 @@ func toolCallDetail(call tools.Call) string {
 			return call.Body + " in " + call.Path
 		}
 		return call.Body
-	case tools.ToolWebSearch:
+	case tools.ToolWebSearch, tools.ToolWebResearch:
 		return call.Body
 	case tools.ToolLocalContext:
 		return call.ContextKind
