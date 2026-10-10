@@ -65,6 +65,9 @@ type agentLoopState struct {
 	verifying       bool
 	verifyCancel    context.CancelFunc
 	verifyGen       int
+	// criteriaReview is a proposed contract waiting for the person to
+	// accept or edit it (agent.review_criteria); see agent_criteria_review.go.
+	criteriaReview *agentCriteriaReview
 	// shadow holds the generation counters of Laya's advisory, shadow-only
 	// observations, and assist the state of its two add-only assists. Both
 	// live beside, never inside, the authoritative cycle state above — see
@@ -335,7 +338,7 @@ func (m *Model) agentContractInputQuestion() string {
 		return ""
 	}
 	run := m.agentLoop.run
-	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract {
+	if run.Status != agent.DecisionNeedsUserInput || run.Stage != agent.StageContract || m.agentCriteriaReviewPending() {
 		return ""
 	}
 	return strings.TrimSpace(run.StopReason)
@@ -772,6 +775,9 @@ func (m *Model) handleAgentContract(msg agentContractMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, m.persistAgentRun()
 	}
+	if m.cfg.Agent.ReviewCriteria {
+		return m, m.beginAgentCriteriaReview(contract)
+	}
 	// Assessment metadata is optional and inert in the controller. Passing it
 	// through here keeps the existing contract owner authoritative while
 	// allowing evaluation-only callers to persist a validated attachment.
@@ -852,6 +858,9 @@ func snapshotAgentStartTurns(messages []provider.Message) []agent.ContextTurn {
 func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image) tea.Cmd {
 	if !m.agentNeedsUserInput() {
 		return m.startVerifiedRun(input, images)
+	}
+	if m.agentCriteriaReviewPending() {
+		return m.handleAgentCriteriaReviewInput(input, images)
 	}
 	run := m.agentLoop.run
 	if run.Stage == agent.StageContract {

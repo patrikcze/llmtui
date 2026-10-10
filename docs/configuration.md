@@ -270,6 +270,7 @@ cancellation, and local-model behavior.
 | `max_memory_kb` | `64` | Maximum serialized bytes per run record; an oversized record is compacted (older cycle detail first) rather than rejected |
 | `max_runs` | `32` | Number of newest records retained |
 | `skip_trivial_contract` | `false` | Experimental: for a short, single-sentence request with no attachment and no file/command/web/code intent, skip the task-contract model request and pin one criterion ("answer the user's request as stated") locally; the verifier still checks the answer. Saves one request (~2 s on Gemma 4 E4B). Off by default because no real-model trial has measured its effect on false completions |
+| `review_criteria` | `false` | Pause after the task contract proposes acceptance criteria so you can accept, edit, add, or drop criteria (or send feedback for a new proposal) before the executor starts. Off keeps runs fully automatic — see [agent-loop.md](agent-loop.md) |
 | `verifier.enabled` | `true` | Legacy toggle; when `verifier.mode` is empty, `true` derives `adaptive` and `false` derives `deterministic` |
 | `verifier.mode` | empty | Verification policy: `off`, `deterministic`, `adaptive` (deterministic evidence first, semantic evaluation only when it cannot decide), or `always` (semantic evaluation every cycle) |
 | `verifier.model` | empty | Optional evaluator model ID on the active provider; empty reuses the executor model |

@@ -358,6 +358,11 @@ type AgentConfig struct {
 	// semantic verifier still checks the answer. Off by default: no
 	// real-model trial has shown it leaves false completions unchanged.
 	SkipTrivialContract bool `mapstructure:"skip_trivial_contract" yaml:"skip_trivial_contract"`
+	// ReviewCriteria pauses a run after the task contract proposes its
+	// acceptance criteria so the person can accept, edit, or add criteria
+	// before the executor starts (internal/tui/agent_criteria_review.go).
+	// Off by default so runs stay fully automatic.
+	ReviewCriteria bool `mapstructure:"review_criteria" yaml:"review_criteria"`
 }
 
 // AgentYieldConfig gates the Phase 2 same-episode yield continuation (see
@@ -1127,6 +1132,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("agent.enabled", false)
 	v.SetDefault("agent.skip_trivial_contract", false)
+	v.SetDefault("agent.review_criteria", false)
 	v.SetDefault("agent.max_cycles", 8)
 	v.SetDefault("agent.max_tool_calls", 32)
 	v.SetDefault("agent.max_tokens", 100000)
@@ -1409,6 +1415,9 @@ agent:
   # with no file/command/web/code intent; one criterion is pinned locally and
   # the verifier still checks the answer. Experimental; off by default.
   skip_trivial_contract: false
+  # Pause after the task contract proposes acceptance criteria so you can
+  # accept, edit, or add criteria before the agent starts. Off by default.
+  review_criteria: false
   # Checks max_tool_calls/max_tokens on every tool round, not only when a
   # cycle completes. Set false to fall back to the cycle-boundary-only
   # check if this causes an unexpected early stop.

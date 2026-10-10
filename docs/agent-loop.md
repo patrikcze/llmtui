@@ -114,7 +114,15 @@ Each run establishes a contract, then follows the execution stages:
    input before execution. With the experimental `agent.skip_trivial_contract`,
    a short single-sentence request with no workspace, command, web, or code
    intent skips this request: one criterion ("answer the user's request as
-   stated") is pinned locally and verification is unchanged.
+   stated") is pinned locally and verification is unchanged. With
+   `agent.review_criteria: true` the run pauses after the contract proposes
+   its criteria and shows the goal and the numbered list above the composer.
+   Enter (or `ok`) accepts; `+ text` adds a criterion, `-N` drops one and
+   `N: text` replaces one; any other text goes back to the contract request as
+   feedback, and the revised list is shown again. Nothing is pinned until you
+   accept, and review time does not count against `max_elapsed`. The review
+   lives in memory only: a run resumed after a restart treats your next
+   message as contract input and proposes criteria again.
 3. **Rules load** — the existing prompt composer deterministically assembles the
    system prompt, template, active skills, bounded history, user memory, RAG,
    provider capabilities, tools, verified cycle memory, and current objective.
