@@ -1606,6 +1606,11 @@ func (m *Model) send() tea.Cmd {
 	}
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" && len(m.attachments) == 0 {
+		if m.agentOn && m.agentCriteriaReviewPending() {
+			// A bare Enter accepts the criteria under review.
+			m.exit.sentCount++
+			return m.resumeVerifiedRunWithInput("", nil)
+		}
 		return nil
 	}
 	// Record the submitted text for Up/Down recall before the box is cleared.
@@ -3551,6 +3556,8 @@ func (m *Model) renderLiveTail() string {
 		b.WriteString("\n")
 		b.WriteString(m.theme.UserLabel.Render(terminaltext.Sanitize(m.pendingAsk.call.Question)))
 		b.WriteString("\n\n")
+	} else if m.agentCriteriaReviewPending() && !m.overlayOpen {
+		b.WriteString(m.renderAgentCriteriaReview())
 	} else if question := m.agentContractInputQuestion(); question != "" && !m.overlayOpen {
 		b.WriteString(m.theme.Badge.Render("? agent needs your input"))
 		b.WriteString("\n")
