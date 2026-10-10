@@ -40,8 +40,10 @@ mkdir -p "$OUT_DIR"
 echo "==> building $APP_NAME $MARKETING_VERSION ($BUILD_NUMBER)"
 # Release product: no coverage instrumentation (the scheme enables it for
 # tests) and no testability.
+# Swift packages come only from the committed Package.resolved pins.
 xcodebuild \
   -quiet \
+  -onlyUsePackageVersionsFromResolvedFile \
   -project "$HERE/$APP_NAME.xcodeproj" \
   -scheme "$APP_NAME" \
   -configuration Release \

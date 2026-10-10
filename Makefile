@@ -116,7 +116,8 @@ macos-setup-guard:
 .PHONY: macos-setup-test
 macos-setup-test:
 	DEVELOPER_DIR=$(or $(DEVELOPER_DIR),/Applications/Xcode.app/Contents/Developer) \
-	xcodebuild -quiet -project macos/setup/LLMTUIGUI.xcodeproj -scheme LLMTUIGUI \
+	xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
+	  -project macos/setup/LLMTUIGUI.xcodeproj -scheme LLMTUIGUI \
 	  -derivedDataPath macos/setup/build/DerivedData CODE_SIGNING_ALLOWED=NO test
 
 ## fmt: format all Go sources
