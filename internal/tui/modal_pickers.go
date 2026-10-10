@@ -188,6 +188,7 @@ func (m *Model) loadHistorySession(name string) tea.Cmd {
 	if err != nil {
 		return m.fail(err.Error())
 	}
+	m.resetQueue()
 	m.adoptSession(name, s)
 	m.refreshViewport()
 	m.notice = fmt.Sprintf("loaded %s (%d messages, %s/%s)", name, len(s.Messages), s.Provider, s.Model)

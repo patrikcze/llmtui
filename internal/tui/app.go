@@ -210,6 +210,7 @@ type Model struct {
 	visionInfoByID  map[string]provider.ModelInfo
 	suggest         suggestState         // slash-command autocomplete dropdown
 	composerHistory composerHistoryState // Up/Down recall of submitted input (see composerHistoryState)
+	queue           messageQueueState    // messages sent while busy (see message_queue.go)
 	historyDir      string
 	sessionName     string
 	operationLog    *history.OperationLog
@@ -844,6 +845,21 @@ func waitForEvent(stream <-chan provider.ChatEvent, gen int) tea.Cmd {
 
 // Update handles all Bubble Tea messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(queueDrainMsg); ok {
+		return m, m.drainQueue()
+	}
+	wasBusy := m.busy()
+	model, cmd := m.update(msg)
+	if drain := m.afterQueueUpdate(msg, wasBusy); drain != nil {
+		cmd = tea.Batch(cmd, drain)
+	}
+	return model, cmd
+}
+
+// update is Update without the message-queue bookkeeping (see
+// message_queue.go), which must run after every message whatever path
+// handled it.
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// A pending tool approval owns the keyboard until answered.
@@ -976,6 +992,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Shell-like composer-history recall on bare Up/Down. Returns false
 		// (falls through to suggestions / textarea navigation) unless it fully
 		// owns the key — see updateComposerHistory for the arbitration.
+		// Up on an empty composer edits the newest queued message first,
+		// ahead of history recall, the way the iOS app's queue panel does.
+		if msg.String() == "up" && m.input.Value() == "" && len(m.attachments) == 0 &&
+			len(m.queue.items) > 0 && !m.composerHistory.browsing {
+			m.editQueued(len(m.queue.items) - 1)
+			return m, nil
+		}
 		if m.updateComposerHistory(msg) {
 			return m, nil
 		}
@@ -1006,6 +1029,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputHeight()
 			return m, nil
 		case "ctrl+l":
+			m.resetQueue()
 			m.session.Clear()
 			m.resetToolOutput()
 			m.resetAgentRunCards()
@@ -1097,10 +1121,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
 				return m, m.runSlashCommand()
 			}
-			if !m.busy() {
-				return m, m.send()
+			if m.busy() {
+				// A message submitted while the model is working waits in
+				// the queue and goes out when it is free (message_queue.go).
+				if m.pendingAsk == nil {
+					m.enqueueComposer()
+				}
+				return m, nil
 			}
-			return m, nil
+			if m.queueEnter() {
+				return m, nil
+			}
+			return m, m.send()
 		}
 
 	case healthMsg:
@@ -1617,12 +1649,19 @@ func (m *Model) send() tea.Cmd {
 	// record ignores "" so an attachment-only send adds no entry.
 	m.composerHistory.record(text)
 	m.input.Reset()
-	m.errText = ""
-	m.notice = ""
 	images := m.attachments
 	m.attachments = nil
+	m.queue.editing = false
 	m.syncInputHeight()
 	m.relayout()
+	return m.submit(text, images)
+}
+
+// submit dispatches one user message: the composer's (send) or a queued one
+// (drainQueue). The caller has already checked that the model is not busy.
+func (m *Model) submit(text string, images []provider.Image) tea.Cmd {
+	m.errText = ""
+	m.notice = ""
 	m.exit.sentCount++
 	if m.pendingAsk != nil {
 		m.exit.sentCount--
@@ -3748,6 +3787,9 @@ func (m *Model) render() string {
 			}
 			inputContent = strings.Join(chips, "   ") + "\n" + inputContent
 		}
+	}
+	if panel := m.queuePanelView(max(1, m.width-m.theme.InputPanel.GetHorizontalFrameSize()-2)); panel != "" {
+		inputContent = panel + "\n" + inputContent
 	}
 	inputView := m.theme.InputPanel.Width(m.width - 2).Render(inputContent)
 	status := m.statusView()

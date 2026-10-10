@@ -17,6 +17,7 @@ unavailable while a reply, tool batch, or verification is in progress — press
 | `/help [topic]` | Keys and commands, grouped by category (scrollable dialog) |
 | `/copy` | Copy the last reply to the clipboard |
 | `/clear` | Clear the conversation (and session summary) |
+| `/queue [list\|edit <n>\|drop <n>\|clear\|pause\|resume]` | Show, edit, or drop messages queued while the model works (see [keyboard.md](keyboard.md#queued-messages)) |
 | `/retry` | Retry the last user message with current settings |
 | `/quit` (alias `/exit`) | Save the session and exit |
 
