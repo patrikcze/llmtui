@@ -180,8 +180,7 @@ struct AgentLoopRunTests {
         _ = model.newConversation()
         model.draft = "Which motorcycle events are in Prague in 2027?"
         model.send()
-        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
-        #expect(!model.isGenerating)
+        #expect(await waitUntil { !model.isGenerating })
         return (model, AgentStubProtocol.requests(), base)
     }
 
@@ -223,12 +222,15 @@ struct AgentLoopRunTests {
         // 3. The check sees only the plan, the evidence and the answer.
         let check = try messages(requests[2])
         #expect(check.count == 1)
-        #expect((check.first?["content"] as? String ?? "").contains("Motocykl 2027 is the main show."))
+        let checkPrompt = try #require(check.first?["content"] as? String)
+        #expect(checkPrompt.contains("Motocykl 2027 is the main show."))
 
         // 4. What was missing becomes the next pass's prompt.
         let second = try messages(requests[3])
-        #expect((second.first?["content"] as? String ?? "").contains("pass 2 of"))
-        #expect((second.last?["content"] as? String ?? "").contains("- No dates"))
+        let secondSystem = try #require(second.first?["content"] as? String)
+        #expect(secondSystem.contains("pass 2 of"))
+        let feedback = try #require(second.last?["content"] as? String)
+        #expect(feedback.contains("- No dates"))
 
         // The bubble holds the final answer; the card holds the run.
         let reply = try #require(model.messages.last)
@@ -273,7 +275,7 @@ struct AgentLoopRunTests {
         _ = model.newConversation()
         model.draft = "Hello"
         model.send()
-        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(await waitUntil { !model.isGenerating })
         #expect(AgentStubProtocol.requests().count == 1)
         #expect(model.messages.last?.text == "Just an answer.")
         #expect(model.messages.last?.agentRun == nil)
@@ -319,12 +321,12 @@ struct ReplyResumeTests {
         model.sceneDidEnterBackground()
         send(model)
         // The cut request is recorded, and the reply waits for the foreground.
-        for _ in 0..<40_000 { if ResumeStubProtocol.requests().count == 1 { break }; await Task.yield() }
+        #expect(await waitUntil { ResumeStubProtocol.requests().count == 1 })
         for _ in 0..<2_000 { await Task.yield() }
         #expect(model.isGenerating)
         #expect(ResumeStubProtocol.requests().count == 1)
         model.sceneDidBecomeActive()
-        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(await waitUntil { !model.isGenerating })
         #expect(ResumeStubProtocol.requests().count == 2)
         #expect(model.messages.last?.text == "Resumed answer.")
         #expect(model.errorMessage == nil)
@@ -336,7 +338,7 @@ struct ReplyResumeTests {
         ResumeStubProtocol.set([Self.stream("Never sent.")], failFirst: .networkConnectionLost)
         model.sceneDidBecomeActive()
         send(model)
-        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(await waitUntil { !model.isGenerating })
         #expect(ResumeStubProtocol.requests().count == 1)
         #expect(model.errorMessage != nil)
     }
