@@ -209,3 +209,28 @@ func TestAgentStatusWithoutRunKeepsNotice(t *testing.T) {
 		t.Fatalf("overlay=%t notice=%q", m.overlayOpen, m.notice)
 	}
 }
+
+func TestAgentRunCardRefreshesTheCachedTranscript(t *testing.T) {
+	m, _ := configureAgentTestModel(t)
+	run, err := agent.NewRun("run-cache", "tidy the notes", m.agentLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginContract(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.CompleteContract([]string{"notes are tidy \x1b]52;c;aGk=\x07"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.syncAgentDebug()
+	before := m.settledTranscriptCached()
+	if strings.Contains(before, "\x1b]52") || !strings.Contains(ansi.Strip(before), "○ notes are tidy") {
+		t.Fatalf("pinned card:\n%q", before)
+	}
+	run.Criteria[0].Status = agent.CriterionSatisfied
+	m.syncAgentDebug()
+	if after := ansi.Strip(m.settledTranscriptCached()); !strings.Contains(after, "✓ notes are tidy") {
+		t.Fatalf("cached transcript kept the old tick:\n%s", after)
+	}
+}
