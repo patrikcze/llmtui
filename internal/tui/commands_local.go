@@ -668,7 +668,7 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 	}
 	add("token usage", usage)
 	add("native tools", caps.NativeTools.String())
-	add("parallel calls", caps.ParallelToolCalls.String()+" (emission; host execution stays ordered)")
+	add("parallel calls", caps.ParallelToolCalls.String()+" (emission; reads and web calls run concurrently, effects stay ordered)")
 	add("reasoning events", caps.ReasoningEvents.String())
 	add("structured output", caps.StructuredOutput.String())
 	add("context window", fmt.Sprintf("%d from %s", window, windowSource))

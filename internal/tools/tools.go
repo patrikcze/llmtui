@@ -398,11 +398,12 @@ type Runner struct {
 	root             string
 	maxKB            int
 	defaultReadLines int
-	// execution serializes calls made through this runner. A tool batch is
-	// ordered, but cancellation/resend can briefly leave an old command
-	// goroutine alive while a new batch starts; allowing both to mutate the
-	// workspace would make their effects race.
-	execution chan struct{}
+	// execution serializes every call that is not ConcurrentSafe, and lets
+	// concurrent-safe reads overlap only each other. Cancellation/resend
+	// can briefly leave an old command goroutine alive while a new batch
+	// starts; allowing it to overlap another call would make their effects
+	// race.
+	execution *executionGate
 
 	// CommandTimeout bounds run_command execution (default 30s).
 	CommandTimeout time.Duration
@@ -490,7 +491,7 @@ func NewRunner(root string, maxKB int) *Runner {
 	return &Runner{
 		root:                 root,
 		maxKB:                maxKB,
-		execution:            make(chan struct{}, 1),
+		execution:            newExecutionGate(),
 		CommandTimeout:       30 * time.Second,
 		Guardrails:           DefaultGuardrails(),
 		LocalContext:         NewLocalContextCollector(root),
@@ -590,20 +591,21 @@ func (r *Runner) Execute(c Call) Result {
 	return r.ExecuteContext(context.Background(), c)
 }
 
-// ExecuteContext runs one serialized call. Cancellation is honored while a
-// call waits for the runner and is propagated to commands and web requests.
+// ExecuteContext runs one call. Concurrent-safe calls (see ConcurrentSafe)
+// may overlap each other; every other call runs alone. Cancellation is
+// honored while a call waits for the runner and is propagated to commands
+// and web requests.
 func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 	res := Result{Call: c}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	select {
-	case r.execution <- struct{}{}:
-		defer func() { <-r.execution }()
-	case <-ctx.Done():
-		res.Err = fmt.Errorf("tool call cancelled: %w", ctx.Err())
+	release, err := r.execution.acquire(ctx, ConcurrentSafe(c))
+	if err != nil {
+		res.Err = fmt.Errorf("tool call cancelled: %w", err)
 		return res
 	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		res.Err = fmt.Errorf("tool call cancelled: %w", err)
 		return res

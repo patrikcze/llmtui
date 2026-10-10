@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -343,10 +344,14 @@ type operationGuard struct {
 }
 
 // runMixedToolBatch executes every native/MCP batch as a single async
-// tea.Cmd. Calls run sequentially and in order because MCP servers commonly
-// serialize session state (jiraWorklog sets allow_parallel: false) and the
-// latency cost of sequential execution is negligible next to model-inference
-// time for the handful of calls a typical turn makes.
+// tea.Cmd. MCP calls, writes, commands and every other call with an effect
+// run one at a time and in order, because MCP servers commonly serialize
+// session state (jiraWorklog sets allow_parallel: false) and an effect must
+// never overlap another call. Consecutive concurrent-safe calls
+// (tools.ConcurrentSafe: workspace reads and web tools) run together, at most
+// maxConcurrentToolCalls at once, so a turn that searches or fetches several
+// pages waits for the slowest one rather than their sum. Results always
+// return in the model's order.
 func runMixedToolBatch(ctx context.Context, runner *tools.Runner, mcpReg *mcp.Registry, calls []tools.Call, guards ...operationGuard) tea.Cmd {
 	return runPlannedToolBatch(ctx, runner, mcpReg, newToolBatchPlan(calls), guards...)
 }
@@ -366,17 +371,22 @@ func runPlannedToolBatch(
 		maxBytes = runner.MaxResultBytes()
 	}
 	return func() tea.Msg {
-		executed := make([]tools.Result, 0, len(plan.calls)-plan.blockedCount())
+		var runnable []tools.Call
 		for i, c := range plan.calls {
-			if plan.blocked[i] != "" {
-				continue
+			if plan.blocked[i] == "" {
+				runnable = append(runnable, c)
 			}
+		}
+		executed := make([]tools.Result, len(runnable))
+		runOne := func(i int) {
+			c := runnable[i]
 			if ctx.Err() != nil {
-				// Cancelled between calls: nothing below may start. The
-				// synthetic result keeps history call/result-paired and is
-				// never evidence (see markNotStartedResults).
-				executed = append(executed, notStartedResult(c))
-				continue
+				// Cancelled before this call started: nothing below may
+				// start. The synthetic result keeps history
+				// call/result-paired and is never evidence (see
+				// markNotStartedResults).
+				executed[i] = notStartedResult(c)
+				return
 			}
 			execute := func() tools.Result {
 				// A call flagged with InputErr (e.g. the embedded runtime
@@ -390,15 +400,57 @@ func runPlannedToolBatch(
 				return annotateUnknownTool(runner.ExecuteContext(ctx, c), mcpReg)
 			}
 			if len(guards) == 0 || !history.IsDurableSideEffect(c) {
-				executed = append(executed, execute())
-				continue
+				executed[i] = execute()
+				return
 			}
-			executed = append(executed, executeDurableCall(c, guards[0], execute))
+			executed[i] = executeDurableCall(c, guards[0], execute)
+		}
+		for start := 0; start < len(runnable); {
+			end := start + 1
+			if runnerConcurrentSafe(runnable[start]) {
+				for end < len(runnable) && runnerConcurrentSafe(runnable[end]) {
+					end++
+				}
+			}
+			if end-start == 1 {
+				runOne(start)
+			} else {
+				runConcurrently(start, end, runOne)
+			}
+			start = end
 		}
 		results, observed, statuses := plan.mergeResults(executed)
 		observed = markNotStartedResults(results, observed, statuses)
 		return mcpToolResultsMsg{results: results, observed: observed, statuses: statuses}
 	}
+}
+
+// maxConcurrentToolCalls bounds how many concurrent-safe calls from one
+// batch run at once. web_research already fans out its own searches and
+// fetches, so a small cap keeps a wide batch from opening dozens of
+// connections.
+const maxConcurrentToolCalls = 4
+
+// runnerConcurrentSafe reports whether a batch call may overlap its
+// neighbours: a built-in, read-only call with no durable side effect.
+func runnerConcurrentSafe(c tools.Call) bool {
+	return tools.ConcurrentSafe(c) && !history.IsDurableSideEffect(c)
+}
+
+// runConcurrently runs run(i) for every i in [start, end), at most
+// maxConcurrentToolCalls at a time, and returns when all have finished.
+func runConcurrently(start, end int, run func(int)) {
+	slots := make(chan struct{}, maxConcurrentToolCalls)
+	var wg sync.WaitGroup
+	for i := start; i < end; i++ {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer func() { <-slots; wg.Done() }()
+			run(i)
+		}(i)
+	}
+	wg.Wait()
 }
 
 // cancelledBeforeStartCode marks the synthetic result of a call that a
