@@ -773,7 +773,7 @@ final class MobileAppModel {
         if usesTools {
             systemInstructions += """
 
-            Tools: work toward the user's goal with the available tools, inspect each result before continuing, ask with ask_user when an important choice is missing, and stop once the task is done. Never claim a tool ran unless its result is present.
+            Tools: work toward the user's goal with the available tools, inspect each result before continuing, ask with ask_user when an important choice is missing, and stop once the task is done. Never claim a tool ran unless its result is present. Call only the tools listed, by their exact names, and include every required argument; if a call returns an error, fix the call as the error says instead of repeating it.
 
             Research: for facts you are not sure of, current events, prices, schedules, opening hours, or anything that may have changed, call web_research instead of answering from what you remember of training. Give it the full question and 2-3 distinct queries (different phrasings, the official source, a recent-news angle). Answer from its notes and cite sources as [1], [2]. If the notes are thin or disagree, research again with sharper queries (at most twice more), then say clearly what is still uncertain. Use local_context for the current date and time. Use web_search or web_fetch only for one specific page or site.
             """
@@ -876,7 +876,7 @@ final class MobileAppModel {
                 if offeredNames.contains(call.name) {
                     output = try await execute(call, assistantID: assistantID)
                 } else {
-                    output = "Error: This tool was not offered for the current reply."
+                    output = ToolArguments.unknownTool(call.name, offered: offeredNames)
                     let activity = appendToolActivity(to: assistantID, name: call.name, detail: "Unadvertised tool", status: .failed)
                     updateToolActivity(activity, in: assistantID, status: .failed, result: output)
                 }
@@ -1163,29 +1163,35 @@ final class MobileAppModel {
     ) async throws -> String {
         switch call.name {
         case "ask_user":
-            guard let question = arguments["question"] as? String else {
-                throw ValidationError("ask_user requires a question.")
+            guard let question = ToolArguments.string(arguments, ["question", "text", "prompt", "message"]) else {
+                throw ValidationError(ToolArguments.missing(tool: "ask_user", argument: "question", example: #"{"question":"Which city do you mean?"}"#, received: arguments))
             }
             pendingQuestion = String(question.prefix(1_000))
             return await withCheckedContinuation { questionContinuation = $0 }
         case "memory_search":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
-            guard let query = arguments["query"] as? String else {
-                throw ValidationError("memory_search requires a query.")
+            guard let query = ToolArguments.string(arguments, ["query", "q", "text", "keywords", "search"]) else {
+                throw ValidationError(ToolArguments.missing(tool: "memory_search", argument: "query", example: #"{"query":"home city"}"#, received: arguments))
             }
             return await MobileMemoryStore.shared.search(query)
         case "memory_list":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             return await MobileMemoryStore.shared.list()
         case "web_research":
-            guard let question = arguments["question"] as? String else {
-                throw ValidationError("web_research requires a question.")
+            // Accepts the near misses models send when a server does not
+            // enforce the schema: the question under another name, or only
+            // search queries (the first then stands for the question).
+            let listedQueries = ToolArguments.strings(arguments["queries"] ?? arguments["search_queries"])
+            guard let question = ToolArguments.string(arguments, ["question", "query", "q", "topic", "prompt", "search", "text"]) ?? listedQueries.first else {
+                throw ValidationError(ToolArguments.missing(
+                    tool: "web_research",
+                    argument: "question",
+                    example: #"{"question":"Which motorcycle events are in Prague in 2027?","queries":["motorcycle show Prague 2027","Motocykl Praha 2027"]}"#,
+                    received: arguments
+                ))
             }
-            let queries = WebResearch.normalizedQueries(
-                (arguments["queries"] as? [Any])?.compactMap { $0 as? String } ?? [],
-                fallback: question
-            )
-            let maxSources = (arguments["max_sources"] as? NSNumber)?.intValue ?? WebResearch.defaultSources
+            let queries = WebResearch.normalizedQueries(listedQueries, fallback: question)
+            let maxSources = ToolArguments.int(arguments, ["max_sources", "maxSources", "sources", "limit"]) ?? WebResearch.defaultSources
             let summary = "Search " + queries.map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")
                 + " and read up to \(min(max(maxSources, 1), WebResearch.maxSources)) pages."
             guard await approveIfNeeded(call.name, summary: summary, activityID: activityID, assistantID: assistantID) else {
@@ -1193,25 +1199,25 @@ final class MobileAppModel {
             }
             return try await WebResearch.run(question: question, queries: queries, maxSources: maxSources)
         case "web_search":
-            guard let query = arguments["query"] as? String else {
-                throw ValidationError("web_search requires a query.")
+            guard let query = ToolArguments.string(arguments, ["query", "q", "question", "search", "text"]) ?? ToolArguments.strings(arguments["queries"]).first else {
+                throw ValidationError(ToolArguments.missing(tool: "web_search", argument: "query", example: #"{"query":"Motocykl 2027 Praha"}"#, received: arguments))
             }
             guard await approveIfNeeded(call.name, summary: query, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
             }
             return try await SafeWebFetcher.search(query)
         case "web_fetch":
-            guard let url = arguments["url"] as? String else {
-                throw ValidationError("web_fetch requires a URL.")
+            guard let url = ToolArguments.string(arguments, ["url", "link", "uri", "href", "page"]) else {
+                throw ValidationError(ToolArguments.missing(tool: "web_fetch", argument: "url", example: #"{"url":"https://example.com/page","focus":"dates"}"#, received: arguments))
             }
             guard await approveIfNeeded(call.name, summary: url, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
             }
-            return try await SafeWebFetcher.fetch(url, focus: arguments["focus"] as? String)
+            return try await SafeWebFetcher.fetch(url, focus: ToolArguments.string(arguments, ["focus", "query", "question"]))
         case "memory_remember":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
-            guard let text = arguments["text"] as? String else {
-                throw ValidationError("memory_remember requires text.")
+            guard let text = ToolArguments.string(arguments, ["text", "fact", "memory", "content", "note"]) else {
+                throw ValidationError(ToolArguments.missing(tool: "memory_remember", argument: "text", example: #"{"text":"The user lives in Brno."}"#, received: arguments))
             }
             guard await approveIfNeeded(call.name, summary: String(text.prefix(180)), activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
@@ -1219,8 +1225,8 @@ final class MobileAppModel {
             return try await MobileMemoryStore.shared.remember(text)
         case "memory_forget":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
-            guard let id = arguments["id"] as? String else {
-                throw ValidationError("memory_forget requires an identifier.")
+            guard let id = ToolArguments.string(arguments, ["id", "memory_id", "identifier"]) else {
+                throw ValidationError(ToolArguments.missing(tool: "memory_forget", argument: "id", example: #"{"id":"a1b2c3"}"#, received: arguments))
             }
             guard await approveIfNeeded(call.name, summary: id, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
@@ -1324,13 +1330,13 @@ final class MobileAppModel {
 
     private func toolDetail(name: String, arguments: [String: Any]) -> String {
         switch name {
-        case "web_research": arguments["question"] as? String ?? "Research"
+        case "web_research": ToolArguments.string(arguments, ["question", "query", "q", "topic", "prompt", "search", "text"]) ?? ToolArguments.strings(arguments["queries"]).first ?? "Research"
         case "document_search": arguments["query"] as? String ?? "Attachments"
         case "document_read": [arguments["document_id"] as? String, arguments["chunk_id"] as? String].compactMap { $0 }.joined(separator: " ")
         case "document_list": "Attachments in this chat"
         case "memory_search": arguments["query"] as? String ?? "Memory"
-        case "web_search": arguments["query"] as? String ?? "Search"
-        case "web_fetch": arguments["url"] as? String ?? "URL"
+        case "web_search": ToolArguments.string(arguments, ["query", "q", "question", "search", "text"]) ?? "Search"
+        case "web_fetch": ToolArguments.string(arguments, ["url", "link", "uri", "href", "page"]) ?? "URL"
         case "memory_remember": arguments["text"] as? String ?? "Memory"
         case "memory_forget": arguments["id"] as? String ?? "Memory"
         default: name.replacingOccurrences(of: "_", with: " ")
