@@ -66,7 +66,7 @@ func (m *Model) queueIdle() bool {
 	if m.quitting || m.busy() || m.pendingAsk != nil || len(m.pendingCalls) > 0 {
 		return false
 	}
-	switch m.turnRuntime.state {
+	switch m.state {
 	case turnWaitingApproval, turnWaitingUserInput:
 		return false
 	}
@@ -182,7 +182,7 @@ func (m *Model) afterQueueUpdate(msg tea.Msg, wasBusy bool) tea.Cmd {
 		case tea.KeyPressMsg, tea.MouseReleaseMsg:
 			stopped = true
 		}
-		if stopped || m.turnRuntime.state == turnFailed {
+		if stopped || m.state == turnFailed {
 			m.queue.paused = true
 			m.notice = fmt.Sprintf("%d queued message(s) paused — enter on an empty composer resumes · /queue to edit", len(m.queue.items))
 		}
