@@ -174,8 +174,6 @@ struct AgentLoopRunTests {
         model.profiles = [provider]
         model.activeProfileID = provider.id
         model.toolsEnabled = false
-        let previous = UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey)
-        defer { UserDefaults.standard.set(previous, forKey: MobileAppModel.agentEnabledKey) }
         model.agentEnabled = true
 
         AgentStubProtocol.set(replies.map(Self.stream))
@@ -211,7 +209,7 @@ struct AgentLoopRunTests {
             #"{"complete":true,"met":[1,2],"missing":[],"feedback":""}"#
         ])
         defer { try? FileManager.default.removeItem(at: base) }
-        #expect(requests.count == 5)
+        try #require(requests.count == 5)
 
         // 1. The plan is asked for without tools.
         #expect(try body(requests[0])["tools"] == nil)
@@ -249,7 +247,7 @@ struct AgentLoopRunTests {
             "Looks fine to me!"
         ])
         defer { try? FileManager.default.removeItem(at: base) }
-        #expect(requests.count == 3)
+        try #require(requests.count == 3)
         let agent = try #require(model.messages.last?.agentRun)
         #expect(agent.stopReason == .unverified)
         #expect(agent.plan?.criteria == ["The answer fully addresses the request."])
@@ -270,8 +268,6 @@ struct AgentLoopRunTests {
         model.profiles = [provider]
         model.activeProfileID = provider.id
         model.toolsEnabled = false
-        let previous = UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey)
-        defer { UserDefaults.standard.set(previous, forKey: MobileAppModel.agentEnabledKey) }
         model.agentEnabled = false
         AgentStubProtocol.set([Self.stream("Just an answer.")])
         _ = model.newConversation()
@@ -284,6 +280,77 @@ struct AgentLoopRunTests {
     }
 }
 
+/// A reply cut by a suspension (screen lock) resumes when the app is active
+/// again; the same failure in the foreground is reported as before.
+@MainActor @Suite(.serialized)
+struct ReplyResumeTests {
+    private func makeModel() -> (MobileAppModel, URL) {
+        let base = FileManager.default.temporaryDirectory.appending(path: "ReplyResumeTests-\(UUID().uuidString)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ResumeStubProtocol.self]
+        let model = MobileAppModel(
+            conversationStore: MobileConversationStore(directory: base.appending(path: "Conversations")),
+            documentStore: DocumentStore(root: base.appending(path: "Attachments")),
+            runtime: MobileChatRuntime(session: URLSession(configuration: configuration))
+        )
+        let provider = MobileProviderProfile(model: "test-model")
+        model.profiles = [provider]
+        model.activeProfileID = provider.id
+        model.toolsEnabled = false
+        return (model, base)
+    }
+
+    private static func stream(_ text: String) -> String {
+        let chunk = ["choices": [["delta": ["content": text], "finish_reason": "stop"]]]
+        return "data: \(String(decoding: try! JSONSerialization.data(withJSONObject: chunk), as: UTF8.self))\n\ndata: [DONE]\n\n"
+    }
+
+    private func send(_ model: MobileAppModel) {
+        model.agentEnabled = false
+        _ = model.newConversation()
+        model.draft = "Hello"
+        model.send()
+    }
+
+    @Test func aReplyCutWhileSuspendedResumesWhenActive() async throws {
+        let (model, base) = makeModel()
+        defer { try? FileManager.default.removeItem(at: base) }
+        ResumeStubProtocol.set([Self.stream("Resumed answer.")], failFirst: .networkConnectionLost)
+        model.sceneDidEnterBackground()
+        send(model)
+        // The cut request is recorded, and the reply waits for the foreground.
+        for _ in 0..<40_000 { if ResumeStubProtocol.requests().count == 1 { break }; await Task.yield() }
+        for _ in 0..<2_000 { await Task.yield() }
+        #expect(model.isGenerating)
+        #expect(ResumeStubProtocol.requests().count == 1)
+        model.sceneDidBecomeActive()
+        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(ResumeStubProtocol.requests().count == 2)
+        #expect(model.messages.last?.text == "Resumed answer.")
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test func aForegroundFailureIsStillReported() async throws {
+        let (model, base) = makeModel()
+        defer { try? FileManager.default.removeItem(at: base) }
+        ResumeStubProtocol.set([Self.stream("Never sent.")], failFirst: .networkConnectionLost)
+        model.sceneDidBecomeActive()
+        send(model)
+        for _ in 0..<40_000 { if !model.isGenerating { break }; await Task.yield() }
+        #expect(ResumeStubProtocol.requests().count == 1)
+        #expect(model.errorMessage != nil)
+    }
+
+    @Test func onlyConnectionErrorsCountAsInterruptions() {
+        #expect(MobileAppModel.isConnectionInterruption(URLError(.networkConnectionLost)))
+        #expect(MobileAppModel.isConnectionInterruption(URLError(.timedOut)))
+        #expect(MobileAppModel.isConnectionInterruption(MobileChatError.invalidResponse))
+        #expect(!MobileAppModel.isConnectionInterruption(MobileChatError.server(500, "")))
+        #expect(!MobileAppModel.isConnectionInterruption(URLError(.badServerResponse)))
+        #expect(!MobileAppModel.isConnectionInterruption(CancellationError()))
+    }
+}
+
 /// A scripted model server private to these tests: replies are served in
 /// order, and every request is recorded. Not shared with other suites,
 /// which run in parallel.
@@ -291,11 +358,27 @@ nonisolated final class AgentStubProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var replies: [Data] = []
     nonisolated(unsafe) private static var captured: [URLRequest] = []
+    nonisolated(unsafe) private static var failFirst: URLError.Code?
 
-    static func set(_ texts: [String]) {
+    /// Serves `texts` in order; with `failFirst`, the first request fails
+    /// with that error instead, like a connection cut by a suspension.
+    static func set(_ texts: [String], failFirst code: URLError.Code? = nil) {
         lock.lock(); defer { lock.unlock() }
         replies = texts.map { Data($0.utf8) }
         captured = []
+        failFirst = code
+    }
+
+    /// Records a request without using up a reply (a failed request).
+    private static func record(_ request: URLRequest) {
+        lock.lock(); defer { lock.unlock() }
+        captured.append(request)
+    }
+
+    private static func takeFailure() -> URLError.Code? {
+        lock.lock(); defer { lock.unlock() }
+        defer { failFirst = nil }
+        return failFirst
     }
 
     static func requests() -> [URLRequest] {
@@ -312,6 +395,11 @@ nonisolated final class AgentStubProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let code = Self.takeFailure() {
+            Self.record(request)
+            client?.urlProtocol(self, didFailWithError: URLError(code))
+            return
+        }
         let data = Self.next(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -319,4 +407,77 @@ nonisolated final class AgentStubProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+/// The same scripted server for `ReplyResumeTests`, with its own state, so
+/// the two suites can run in parallel.
+nonisolated final class ResumeStubProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var replies: [Data] = []
+    nonisolated(unsafe) private static var captured: [URLRequest] = []
+    nonisolated(unsafe) private static var failFirst: URLError.Code?
+
+    /// Serves `texts` in order; with `failFirst`, the first request fails
+    /// with that error instead, like a connection cut by a suspension.
+    static func set(_ texts: [String], failFirst code: URLError.Code? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        replies = texts.map { Data($0.utf8) }
+        captured = []
+        failFirst = code
+    }
+
+    /// Records a request without using up a reply (a failed request).
+    private static func record(_ request: URLRequest) {
+        lock.lock(); defer { lock.unlock() }
+        captured.append(request)
+    }
+
+    private static func takeFailure() -> URLError.Code? {
+        lock.lock(); defer { lock.unlock() }
+        defer { failFirst = nil }
+        return failFirst
+    }
+
+    static func requests() -> [URLRequest] {
+        lock.lock(); defer { lock.unlock() }
+        return captured
+    }
+
+    private static func next(_ request: URLRequest) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        captured.append(request)
+        return replies.isEmpty ? Data() : replies.removeFirst()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        if let code = Self.takeFailure() {
+            Self.record(request)
+            client?.urlProtocol(self, didFailWithError: URLError(code))
+            return
+        }
+        let data = Self.next(request)
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+
+/// The test host is the app itself: its saved agent setting must not leak
+/// into tests, and tests must not change it.
+@MainActor
+struct AgentSettingIsolationTests {
+    @Test func agentModeStartsOffAndIsNotSavedUnderTests() {
+        let saved = UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey) as? Bool
+        let model = MobileAppModel(conversationStore: MobileConversationStore(directory: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)))
+        #expect(MobileAppModel.isTesting)
+        #expect(!model.agentEnabled)
+        #expect(!model.requestsBackgroundTime)
+        model.agentEnabled = true
+        #expect(UserDefaults.standard.object(forKey: MobileAppModel.agentEnabledKey) as? Bool == saved)
+    }
 }

@@ -16,10 +16,17 @@ final class MobileAppModel {
     var toolsEnabled = true
     /// ∞ agent mode: plan, act and verify in a bounded loop (AgentLoop.swift)
     /// instead of answering after one tool loop. Kept across launches.
-    var agentEnabled = UserDefaults.standard.bool(forKey: MobileAppModel.agentEnabledKey) {
-        didSet { UserDefaults.standard.set(agentEnabled, forKey: Self.agentEnabledKey) }
+    /// Under the test runner it starts off and is not saved: the test host
+    /// is the app, so tests must neither depend on nor change this setting.
+    var agentEnabled = MobileAppModel.isTesting ? false : UserDefaults.standard.bool(forKey: MobileAppModel.agentEnabledKey) {
+        didSet {
+            guard !Self.isTesting else { return }
+            UserDefaults.standard.set(agentEnabled, forKey: Self.agentEnabledKey)
+        }
     }
     static let agentEnabledKey = "iosAgentMode"
+    /// Whether the app runs as the host of the unit tests.
+    nonisolated static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     var reasoning: MobileReasoning = .automatic
     var draftAttachments: [MobileAttachment] = []
     var isGenerating = false
@@ -170,6 +177,118 @@ final class MobileAppModel {
         // closing transports; a foreground transition never replays it.
         if isGenerating && !mcpBindings.isEmpty { stop() }
         mcp.enterBackground()
+    }
+
+    // MARK: - Background and foreground
+
+    /// Whether the app is in the foreground. iOS suspends a backgrounded app
+    /// within seconds (screen lock included), which cuts any open connection
+    /// to the model server.
+    private(set) var isActive = true
+    /// Counts trips to the background, so a failed request can tell whether
+    /// the app was suspended while it ran.
+    private var backgroundEntries = 0
+    private var activeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var replyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Whether a reply asks iOS for extra background time. Off under the
+    /// test runner: a test that ends while a reply is still running would
+    /// otherwise leave the test host holding a background task.
+    var requestsBackgroundTime = !MobileAppModel.isTesting
+    /// How often one model request is re-sent after a suspension cut it.
+    static let maxResumes = 2
+
+    func sceneDidEnterBackground() {
+        isActive = false
+        backgroundEntries += 1
+        suspendMCP()
+    }
+
+    func sceneDidBecomeActive() {
+        isActive = true
+        let waiters = activeWaiters
+        activeWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitUntilActive() async {
+        guard !isActive else { return }
+        await withCheckedContinuation { activeWaiters.append($0) }
+    }
+
+    /// Asks iOS for extra time (about 30 seconds) while a reply generates,
+    /// so a short screen lock does not cut the stream at all.
+    private func beginReplyBackgroundTime() {
+        guard requestsBackgroundTime, replyBackgroundTask == .invalid else { return }
+        replyBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Reply") { [weak self] in
+            Task { @MainActor in self?.endReplyBackgroundTime() }
+        }
+    }
+
+    private func endReplyBackgroundTime() {
+        guard replyBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(replyBackgroundTask)
+        replyBackgroundTask = .invalid
+    }
+
+    /// One model request, resumed after a suspension. If the stream fails
+    /// because the app was backgrounded while it ran (a lost connection, a
+    /// timeout, or a stream cut before it finished), the partial text is
+    /// discarded and the same request is sent again once the app is active,
+    /// at most `maxResumes` times. Only the model request is repeated: tool
+    /// calls already ran and their results are in `messages`, and a model
+    /// request has no effects. Failures in the foreground are reported as
+    /// before.
+    private func streamModel(
+        profile: MobileProviderProfile,
+        apiKey: String,
+        messages: [[String: Any]],
+        tools: [[String: Any]]?,
+        reasoning: MobileReasoning,
+        bubble: UUID?
+    ) async throws -> ChatTurnResult {
+        var resumes = 0
+        while true {
+            let entries = backgroundEntries
+            if bubble != nil { flushStreamedText() }
+            let snapshot = bubble.flatMap { message(id: $0)?.text }
+            let separate = separateNextRound
+            do {
+                return try await runtime.streamTurn(
+                    profile: profile,
+                    apiKey: apiKey,
+                    messages: messages,
+                    tools: tools,
+                    reasoning: reasoning
+                ) { [weak self] delta in
+                    guard let bubble else { return }
+                    await self?.appendRoundDelta(delta, to: bubble)
+                }
+            } catch {
+                guard !(error is CancellationError), !Task.isCancelled,
+                      resumes < Self.maxResumes,
+                      backgroundEntries != entries || !isActive,
+                      Self.isConnectionInterruption(error)
+                else { throw error }
+                resumes += 1
+                if let bubble {
+                    replaceText(of: bubble, with: snapshot ?? "")
+                    separateNextRound = separate
+                }
+                await waitUntilActive()
+                try Task.checkCancellation()
+            }
+        }
+    }
+
+    /// Errors a suspended app's connection typically ends with.
+    nonisolated static func isConnectionInterruption(_ error: Error) -> Bool {
+        if let url = error as? URLError {
+            return [.networkConnectionLost, .timedOut, .notConnectedToInternet, .cannotConnectToHost,
+                    .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed,
+                    .backgroundSessionWasDisconnected].contains(url.code)
+        }
+        if case MobileChatError.invalidResponse = error { return true }
+        return false
     }
 
     // MARK: - Chats
@@ -551,6 +670,7 @@ final class MobileAppModel {
         hasRuntimeProblem = false
         separateNextRound = false
         persistConversation(conversationID)
+        beginReplyBackgroundTime()
 
         generationTask = Task {
             do {
@@ -587,6 +707,7 @@ final class MobileAppModel {
             pendingToolApproval = nil
             pendingQuestion = nil
             persistConversation(conversationID)
+            endReplyBackgroundTime()
             // Started from inside the finished task, after its state is
             // reset, so the next reply never races the previous one.
             dequeueNextIfNeeded()
@@ -729,15 +850,14 @@ final class MobileAppModel {
     ) async throws -> (answered: Bool, answer: String, toolCalls: Int) {
         var toolCalls = 0
         for _ in 0..<maxRounds {
-            let result = try await runtime.streamTurn(
+            let result = try await streamModel(
                 profile: profile,
                 apiKey: apiKey,
                 messages: messages,
                 tools: tools,
-                reasoning: reasoning
-            ) { [weak self] delta in
-                await self?.appendRoundDelta(delta, to: assistantID)
-            }
+                reasoning: reasoning,
+                bubble: assistantID
+            )
             if result.toolCalls.isEmpty { return (true, result.text, toolCalls) }
 
             messages.append([
@@ -786,15 +906,14 @@ final class MobileAppModel {
             "role": "user",
             "content": "[Tool round limit reached] Answer now using only the tool results above, without calling more tools. Say briefly what is still unknown."
         ])
-        let result = try await runtime.streamTurn(
+        let result = try await streamModel(
             profile: profile,
             apiKey: apiKey,
             messages: messages,
             tools: nil,
-            reasoning: reasoning
-        ) { [weak self] delta in
-            await self?.appendRoundDelta(delta, to: assistantID)
-        }
+            reasoning: reasoning,
+            bubble: assistantID
+        )
         return result.text
     }
 
@@ -823,13 +942,14 @@ final class MobileAppModel {
         setAgentRun(run, on: assistantID)
 
         // 1. Define "done": the plan and its criteria. No tools, nothing streamed.
-        let planReply = try await runtime.streamTurn(
+        let planReply = try await streamModel(
             profile: profile,
             apiKey: apiKey,
             messages: history + [["role": "user", "content": AgentPrompts.planner(request: request)]],
             tools: nil,
-            reasoning: options.reasoning
-        ) { _ in }
+            reasoning: options.reasoning,
+            bubble: nil
+        )
         let plan = AgentPlan.parse(planReply.text, request: request)
         run.plan = plan
 
@@ -869,7 +989,7 @@ final class MobileAppModel {
             run.phase = .verifying
             setAgentRun(run, on: assistantID)
             let gaps = AgentRules.deterministicGaps(answer: answer)
-            let check = try await runtime.streamTurn(
+            let check = try await streamModel(
                 profile: profile,
                 apiKey: apiKey,
                 messages: [["role": "user", "content": AgentPrompts.verifier(
@@ -878,8 +998,9 @@ final class MobileAppModel {
                     answer: answer
                 )]],
                 tools: nil,
-                reasoning: options.reasoning
-            ) { _ in }
+                reasoning: options.reasoning,
+                bubble: nil
+            )
             let verdict = AgentVerdict.parse(check.text, criteriaCount: plan.criteria.count)
             run.checks.append(.init(pass: pass, complete: verdict?.complete == true && gaps.isEmpty, missing: gaps + (verdict?.missing ?? [])))
             if let verdict { run.met = verdict.met }

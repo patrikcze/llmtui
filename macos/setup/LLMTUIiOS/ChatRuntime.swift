@@ -83,7 +83,10 @@ struct MobileChatRuntime: Sendable {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        // The longest silence allowed between streamed bytes. A slow local
+        // model can take minutes to read a long prompt before its first
+        // token, so this is generous; Stop cancels at any time.
+        request.timeoutInterval = 600
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAuthorization(apiKey, to: &request)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

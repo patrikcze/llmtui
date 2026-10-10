@@ -24,8 +24,11 @@ struct ContentView: View {
         // The chat retention guardrail runs when the app opens and whenever
         // it returns to the foreground (iOS gives no reliable background run).
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { model.applyRetention() }
-            if phase == .background { model.suspendMCP() }
+            if phase == .active {
+                model.sceneDidBecomeActive()
+                model.applyRetention()
+            }
+            if phase == .background { model.sceneDidEnterBackground() }
         }
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(

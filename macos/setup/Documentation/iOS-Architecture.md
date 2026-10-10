@@ -53,6 +53,24 @@ deployment target, iPhone and iPad, Swift with main-actor default isolation.
 5. When the task ends, the chat is saved and the next queued message, if
    any, is sent.
 
+## Screen lock and the background
+
+iOS suspends a backgrounded app within seconds, screen lock included, which
+cuts the open connection to the model server.
+- While a reply generates, the app asks iOS for extra background time
+  (`beginBackgroundTask`, about 30 seconds), so a short lock does not
+  interrupt it.
+- If a longer lock cuts a model request (a lost connection, a timeout, or a
+  stream ended before `[DONE]` while the app was in the background),
+  `streamModel` discards that request's partial text. Once the app is active
+  again, it sends the same request again, at most twice. Only the model
+  request is repeated: tool calls already ran and their results are in the
+  messages, and a model request has no effects. The same failure in the
+  foreground is reported as before.
+- Replies using MCP still stop on background, as described under MCP servers.
+- The stream allows 10 minutes of silence between bytes, since a slow local
+  model can take minutes to read a long prompt before its first token.
+
 ## Agent mode (∞)
 
 With ∞ on, `runToolLoop` hands the turn to `runAgentLoop`, which wraps the
