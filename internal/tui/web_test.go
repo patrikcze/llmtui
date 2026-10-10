@@ -22,8 +22,8 @@ func TestWebSpecsOnlySentWhenWebOn(t *testing.T) {
 
 	m.webOn = true
 	req = m.buildRequest(nil)
-	if len(req.Tools) != base+2 {
-		t.Errorf("web on: %d tool specs, want %d", len(req.Tools), base+2)
+	if want := base + len(tools.WebSpecs()); len(req.Tools) != want {
+		t.Errorf("web on: %d tool specs, want %d", len(req.Tools), want)
 	}
 }
 

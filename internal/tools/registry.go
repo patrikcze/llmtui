@@ -126,6 +126,7 @@ var approvalForTool = map[string]string{
 	ToolRunCommand:       "ask unless read-only",
 	ToolWebSearch:        "no for ordinary queries; ask for bulk or opaque ones",
 	ToolWebFetch:         "ask",
+	ToolWebResearch:      "ask once per research request",
 	ToolSkillLoad:        "no",
 	ToolAskUser:          "no (never authorizes another tool)",
 	ToolLocalContext:     "ask for clipboard; otherwise no",

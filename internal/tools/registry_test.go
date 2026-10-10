@@ -113,6 +113,11 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			},
 		},
 		{
+			name:     ToolWebResearch,
+			approval: "ask once per research request",
+			checks:   []approvalCheck{{call: Call{Tool: ToolWebResearch, Body: "latest go release"}, want: true}},
+		},
+		{
 			name:     ToolSearch,
 			approval: "no (discovery only)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolSearch, Body: "search tools"}}},

@@ -110,7 +110,7 @@ cannot race session toggles. The snapshot is assembled by the same
 - `read_file` accepts an optional 1-based `offset`/`limit` line range;
   `edit_file` (one exact, unique text replacement in an existing file) is a
   `workspace_write` builtin alongside `write_file`.
-- `/web on|off` adds or removes `web_search` and `web_fetch`.
+- `/web on|off` adds or removes `web_search`, `web_fetch` and `web_research`.
 - `skill_load` appears only while the model-visible skill catalog is available.
 - A configured MCP server contributes no tools until `/mcp connect` completes
   its MCP `tools/list` request successfully.

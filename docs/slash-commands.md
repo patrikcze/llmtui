@@ -115,7 +115,7 @@ cycle owns context. They never stop work automatically.
 | Command | Description |
 | --- | --- |
 | `/web` · `/web status` | Show whether the web tools are on |
-| `/web on` / `/web off` | Let the model use `web_search` (DuckDuckGo, runs without asking) and `web_fetch` (asks per URL), or turn them off |
+| `/web on` / `/web off` | Let the model use `web_search` (DuckDuckGo, runs without asking) `web_fetch` (asks per URL) and `web_research` (asks per request), or turn them off |
 
 ## RAG
 Optional local workspace retrieval, off by default. See [rag.md](rag.md).

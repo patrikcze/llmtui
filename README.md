@@ -552,7 +552,7 @@ context and does not bypass MCP approval.
 
 ## Web tools
 
-`/web on` (or `tools.web.enabled: true`) adds two more tools on top of the
+`/web on` (or `tools.web.enabled: true`) adds three more tools on top of the
 workspace tools, in ordinary chat and `/agent on` alike:
 
 - `web_search` — DuckDuckGo search, **no API key needed**; returns titles,
@@ -563,6 +563,14 @@ workspace tools, in ordinary chat and `/agent on` alike:
   default 128 KB). **Asks for approval per URL** — a fetched URL can leak
   data and fetched pages can carry prompt injection, so you stay in the
   loop.
+- `web_research` — answers a question from several sources in one call:
+  runs up to three searches concurrently, fuses and de-duplicates the
+  results (at most two pages per site), reads the best few pages
+  concurrently (default 4, at most 6), and returns numbered notes holding
+  only the passages relevant to the question, for the model to cite as
+  `[1]`, `[2]`. **Asks for approval once per request** (the approval line
+  shows the question and every query). Same SSRF guard and size caps as
+  `web_fetch`; it is the Go port of the iOS app's `web_research`.
 
 ```yaml
 tools:

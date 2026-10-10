@@ -1476,13 +1476,13 @@ func cmdWeb(m *Model, args string) tea.Cmd {
 	case "", "status":
 		state := "off — enable with /web on"
 		if m.webOn {
-			state = "on — web_search runs automatically, web_fetch asks per URL"
+			state = "on — web_search runs automatically, web_fetch asks per URL, web_research asks per request"
 		}
 		m.notice = "🌐 web tools " + state
 	case "on":
 		m.webOn = true
 		m.toolRunner.Web = m.webClient
-		m.notice = "🌐 web tools on — web_search (DuckDuckGo) auto, web_fetch asks per URL"
+		m.notice = "🌐 web tools on — web_search (DuckDuckGo) auto, web_fetch asks per URL, web_research asks per request"
 		if !m.toolsOn {
 			m.notice += " · also run /tools on so the model can use tools"
 		}

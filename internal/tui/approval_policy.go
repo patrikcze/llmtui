@@ -126,6 +126,11 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		return c.Tool, strings.TrimSpace(c.Path), strings.Join([]string{strings.TrimSpace(c.WebCacheMode), strconv.Itoa(c.WebCacheMaxAge), strings.TrimSpace(c.WebRefreshEpoch)}, "\x00")
 	case tools.ToolWebSearch:
 		return c.Tool, strings.TrimSpace(c.Body), ""
+	case tools.ToolWebResearch:
+		// The question is the target; the exact queries and page count are
+		// the variant, so approving one research request never authorises
+		// different searches under the same question.
+		return c.Tool, strings.TrimSpace(c.Body), strings.Join(append(tools.WebResearchQueries(c), strconv.Itoa(c.Max)), "\x00")
 	case tools.ToolLocalContext:
 		return c.Tool, strings.TrimSpace(c.ContextKind), ""
 	case tools.ToolSkillLoad:
@@ -159,6 +164,8 @@ func approvalScopeDescription(c tools.Call) string {
 		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolRunCommand:
 		return "this exact command"
+	case tools.ToolWebResearch:
+		return "this exact web_research request"
 	case tools.ToolPersonalApps:
 		return "this exact personal_apps request"
 	default:

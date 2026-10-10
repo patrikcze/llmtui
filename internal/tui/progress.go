@@ -197,6 +197,12 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 	switch c.Tool {
 	case tools.ToolWebSearch:
 		resource = normalizeText(c.Body) + "\x1e" + strconv.Itoa(c.Max) + "\x1e" + strings.TrimSpace(c.Freshness)
+	case tools.ToolWebResearch:
+		queries := tools.WebResearchQueries(c)
+		for i := range queries {
+			queries[i] = normalizeText(queries[i])
+		}
+		resource = normalizeText(c.Body) + "\x1e" + strings.Join(queries, "\x1d") + "\x1e" + strconv.Itoa(c.Max) + "\x1e" + strings.TrimSpace(c.Freshness)
 	case tools.ToolRunCommand:
 		if canonical, ok := tools.CanonicalReadOnlyCommandIdentity(c.Body, root); ok {
 			resource = "read-only\x1e" + canonical

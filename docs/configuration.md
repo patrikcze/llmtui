@@ -388,9 +388,11 @@ used only for a fully trusted server and all of its advertised side effects.
 ### `tools.web`
 
 Optional web tools (`web_search` via DuckDuckGo — no API key — and
-`web_fetch`, which returns one page as readable Markdown). Off by default;
-toggle per session with `/web on`. `web_search` runs automatically;
-`web_fetch` asks for approval per URL. See the README's "Web tools" section
+`web_fetch`, which returns one page as readable Markdown, and
+`web_research`, which searches, reads several pages and returns cited
+notes). Off by default; toggle per session with `/web on`. `web_search` runs
+automatically; `web_fetch` asks for approval per URL and `web_research` once
+per request. See the README's "Web tools" section
 and [security.md](security.md):
 
 | Key | Default | Meaning |
