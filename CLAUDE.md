@@ -218,7 +218,8 @@ two apps. See `macos/setup/README.md`.
   and has its own Swift chat, agent and tool loop for LM Studio / Ollama.
   Shipped as a zip on every `v*` tag.
 - **LLMTUIiOS** (iOS/iPadOS 18+): a standalone chat app that does not read
-  `config.yaml`. It has its own providers, a bounded tool loop, web research,
+  `config.yaml`. It has its own providers, a bounded tool loop and an optional
+  plan/act/verify agent loop (`AgentLoop.swift`), web research,
   memory, PDF/text/OCR attachments with validated citations, per-chat remote
   MCP tooling with mandatory call approval, and a chat retention guardrail. Not part of any release; don't cut a release tag for
   iOS-only changes. Architecture: `macos/setup/Documentation/iOS-Architecture.md`.

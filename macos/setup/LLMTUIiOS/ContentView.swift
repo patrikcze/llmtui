@@ -24,8 +24,11 @@ struct ContentView: View {
         // The chat retention guardrail runs when the app opens and whenever
         // it returns to the foreground (iOS gives no reliable background run).
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { model.applyRetention() }
-            if phase == .background { model.suspendMCP() }
+            if phase == .active {
+                model.sceneDidBecomeActive()
+                model.applyRetention()
+            }
+            if phase == .background { model.sceneDidEnterBackground() }
         }
         .preferredColorScheme(MobileAppearanceMode(rawValue: appearanceMode)?.colorScheme)
         .alert("Something went wrong", isPresented: Binding(
@@ -78,6 +81,7 @@ private struct SettingsScreen: View {
     @State private var pendingRetention: PendingRetentionChange?
     @AppStorage(MobileToolApprovalMode.storageKey) private var approvalMode = MobileToolApprovalMode.always.rawValue
     @AppStorage(MobileMemoryStore.enabledKey) private var memoryEnabled = true
+    @AppStorage(AgentPolicy.passesKey) private var agentPasses = AgentPolicy.defaultPasses
     @State private var memoryCount = 0
 
     var body: some View {
@@ -114,6 +118,16 @@ private struct SettingsScreen: View {
                     Text("Tools")
                 } footer: {
                     Text(approvalFooter)
+                }
+
+                Section {
+                    Stepper(value: $agentPasses, in: AgentPolicy.passRange) {
+                        Label { Text("Passes: \(agentPasses)") } icon: { IconTile(systemName: "infinity", tint: Theme.accent, size: 30) }
+                    }
+                } header: {
+                    Text("Agent")
+                } footer: {
+                    Text("With ∞ on, the agent first writes down what a complete answer must contain, then works and checks its answer against that list. Each pass that falls short is sent back with what is missing, up to this many passes. Tool approvals still apply.")
                 }
 
                 Section {
@@ -906,6 +920,9 @@ private struct MessageBubble: View {
                 Text(message.role == .user ? "You" : "Assistant")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(message.role == .user ? AnyShapeStyle(.white.opacity(0.8)) : AnyShapeStyle(Theme.accent))
+                if let run = message.agentRun {
+                    AgentRunCard(run: run)
+                }
                 if message.role == .assistant {
                     MobileRichMessageView(
                         source: message.text.isEmpty && message.isStreaming ? "Thinking…" : displayText
@@ -1113,8 +1130,19 @@ private struct ChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityValue(model.toolsEnabled ? "Enabled" : "Disabled")
+                Button {
+                    model.agentEnabled.toggle()
+                } label: {
+                    ComposerIcon(
+                        systemName: "infinity",
+                        active: model.agentEnabled,
+                        accessibilityLabel: "Agent: plan, act and check the answer until it is done"
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(model.agentEnabled ? "Enabled" : "Disabled")
                 Spacer()
-                Text(model.toolsEnabled ? "Tools" : "Chat")
+                Text(model.agentEnabled ? (model.toolsEnabled ? "Agent" : "Agent, no tools") : (model.toolsEnabled ? "Tools" : "Chat"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if isFocused.wrappedValue {

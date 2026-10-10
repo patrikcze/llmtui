@@ -14,6 +14,19 @@ final class MobileAppModel {
     /// Tools on runs the bounded tool loop (search, fetch, memory, local
     /// context, ask); off is a plain chat.
     var toolsEnabled = true
+    /// ∞ agent mode: plan, act and verify in a bounded loop (AgentLoop.swift)
+    /// instead of answering after one tool loop. Kept across launches.
+    /// Under the test runner it starts off and is not saved: the test host
+    /// is the app, so tests must neither depend on nor change this setting.
+    var agentEnabled = MobileAppModel.isTesting ? false : UserDefaults.standard.bool(forKey: MobileAppModel.agentEnabledKey) {
+        didSet {
+            guard !Self.isTesting else { return }
+            UserDefaults.standard.set(agentEnabled, forKey: Self.agentEnabledKey)
+        }
+    }
+    static let agentEnabledKey = "iosAgentMode"
+    /// Whether the app runs as the host of the unit tests.
+    nonisolated static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     var reasoning: MobileReasoning = .automatic
     var draftAttachments: [MobileAttachment] = []
     var isGenerating = false
@@ -164,6 +177,118 @@ final class MobileAppModel {
         // closing transports; a foreground transition never replays it.
         if isGenerating && !mcpBindings.isEmpty { stop() }
         mcp.enterBackground()
+    }
+
+    // MARK: - Background and foreground
+
+    /// Whether the app is in the foreground. iOS suspends a backgrounded app
+    /// within seconds (screen lock included), which cuts any open connection
+    /// to the model server.
+    private(set) var isActive = true
+    /// Counts trips to the background, so a failed request can tell whether
+    /// the app was suspended while it ran.
+    private var backgroundEntries = 0
+    private var activeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var replyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Whether a reply asks iOS for extra background time. Off under the
+    /// test runner: a test that ends while a reply is still running would
+    /// otherwise leave the test host holding a background task.
+    var requestsBackgroundTime = !MobileAppModel.isTesting
+    /// How often one model request is re-sent after a suspension cut it.
+    static let maxResumes = 2
+
+    func sceneDidEnterBackground() {
+        isActive = false
+        backgroundEntries += 1
+        suspendMCP()
+    }
+
+    func sceneDidBecomeActive() {
+        isActive = true
+        let waiters = activeWaiters
+        activeWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitUntilActive() async {
+        guard !isActive else { return }
+        await withCheckedContinuation { activeWaiters.append($0) }
+    }
+
+    /// Asks iOS for extra time (about 30 seconds) while a reply generates,
+    /// so a short screen lock does not cut the stream at all.
+    private func beginReplyBackgroundTime() {
+        guard requestsBackgroundTime, replyBackgroundTask == .invalid else { return }
+        replyBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Reply") { [weak self] in
+            Task { @MainActor in self?.endReplyBackgroundTime() }
+        }
+    }
+
+    private func endReplyBackgroundTime() {
+        guard replyBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(replyBackgroundTask)
+        replyBackgroundTask = .invalid
+    }
+
+    /// One model request, resumed after a suspension. If the stream fails
+    /// because the app was backgrounded while it ran (a lost connection, a
+    /// timeout, or a stream cut before it finished), the partial text is
+    /// discarded and the same request is sent again once the app is active,
+    /// at most `maxResumes` times. Only the model request is repeated: tool
+    /// calls already ran and their results are in `messages`, and a model
+    /// request has no effects. Failures in the foreground are reported as
+    /// before.
+    private func streamModel(
+        profile: MobileProviderProfile,
+        apiKey: String,
+        messages: [[String: Any]],
+        tools: [[String: Any]]?,
+        reasoning: MobileReasoning,
+        bubble: UUID?
+    ) async throws -> ChatTurnResult {
+        var resumes = 0
+        while true {
+            let entries = backgroundEntries
+            if bubble != nil { flushStreamedText() }
+            let snapshot = bubble.flatMap { message(id: $0)?.text }
+            let separate = separateNextRound
+            do {
+                return try await runtime.streamTurn(
+                    profile: profile,
+                    apiKey: apiKey,
+                    messages: messages,
+                    tools: tools,
+                    reasoning: reasoning
+                ) { [weak self] delta in
+                    guard let bubble else { return }
+                    await self?.appendRoundDelta(delta, to: bubble)
+                }
+            } catch {
+                guard !(error is CancellationError), !Task.isCancelled,
+                      resumes < Self.maxResumes,
+                      backgroundEntries != entries || !isActive,
+                      Self.isConnectionInterruption(error)
+                else { throw error }
+                resumes += 1
+                if let bubble {
+                    replaceText(of: bubble, with: snapshot ?? "")
+                    separateNextRound = separate
+                }
+                await waitUntilActive()
+                try Task.checkCancellation()
+            }
+        }
+    }
+
+    /// Errors a suspended app's connection typically ends with.
+    nonisolated static func isConnectionInterruption(_ error: Error) -> Bool {
+        if let url = error as? URLError {
+            return [.networkConnectionLost, .timedOut, .notConnectedToInternet, .cannotConnectToHost,
+                    .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed,
+                    .backgroundSessionWasDisconnected].contains(url.code)
+        }
+        if case MobileChatError.invalidResponse = error { return true }
+        return false
     }
 
     // MARK: - Chats
@@ -472,7 +597,7 @@ final class MobileAppModel {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftAttachments.isEmpty else { return }
-        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning, mcpServerIDs: selectedMCPServerIDs, mcpGenerations: mcp.connections.mapValues(\.generation))
+        let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning, mcpServerIDs: selectedMCPServerIDs, mcpGenerations: mcp.connections.mapValues(\.generation), agentEnabled: agentEnabled)
         let conversationID = currentConversationID ?? newConversation()
 
         guard !isGenerating else {
@@ -507,6 +632,7 @@ final class MobileAppModel {
         draft = queued.text
         draftAttachments = queued.attachments
         toolsEnabled = queued.options.toolsEnabled
+        agentEnabled = queued.options.agentEnabled
         reasoning = queued.options.reasoning
     }
 
@@ -544,6 +670,7 @@ final class MobileAppModel {
         hasRuntimeProblem = false
         separateNextRound = false
         persistConversation(conversationID)
+        beginReplyBackgroundTime()
 
         generationTask = Task {
             do {
@@ -557,9 +684,11 @@ final class MobileAppModel {
                 hasRuntimeProblem = false
             } catch is CancellationError {
                 flushStreamedText()
+                stopAgentRun(on: assistantID)
                 appendDelta("\n\nStopped.", to: assistantID)
             } catch {
                 flushStreamedText()
+                stopAgentRun(on: assistantID)
                 hasRuntimeProblem = true
                 if message(id: assistantID)?.text.isEmpty == true {
                     removeMessage(id: assistantID)
@@ -578,6 +707,7 @@ final class MobileAppModel {
             pendingToolApproval = nil
             pendingQuestion = nil
             persistConversation(conversationID)
+            endReplyBackgroundTime()
             // Started from inside the finished task, after its state is
             // reset, so the next reply never races the previous one.
             dequeueNextIfNeeded()
@@ -677,19 +807,60 @@ final class MobileAppModel {
         let offeredNames = Set(toolList.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
         guard offeredNames.count == toolList.count else { throw MobileMCPError.message("Tool catalog contained a duplicate or invalid name.") }
         let tools = toolList.isEmpty ? nil : toolList
-        for _ in 0..<Self.maximumToolRounds {
-            let result = try await runtime.streamTurn(
+        if options.agentEnabled {
+            try await runAgentLoop(
                 profile: profile,
                 apiKey: apiKey,
-                messages: wireMessages,
+                baseSystem: systemInstructions,
+                history: initialHistory.map(wireMessage),
                 tools: tools,
-                reasoning: options.reasoning
-            ) { [weak self] delta in
-                await self?.appendRoundDelta(delta, to: assistantID)
-            }
-            if result.toolCalls.isEmpty { return }
+                offeredNames: offeredNames,
+                assistantID: assistantID,
+                options: options
+            )
+            return
+        }
+        let rounds = try await runRounds(
+            &wireMessages,
+            profile: profile,
+            apiKey: apiKey,
+            tools: tools,
+            offeredNames: offeredNames,
+            maxRounds: Self.maximumToolRounds,
+            assistantID: assistantID,
+            reasoning: options.reasoning
+        )
+        if !rounds.answered {
+            _ = try await forceAnswer(&wireMessages, profile: profile, apiKey: apiKey, assistantID: assistantID, reasoning: options.reasoning)
+        }
+    }
 
-            wireMessages.append([
+    /// Streams rounds until the model answers without calling tools or
+    /// `maxRounds` is used up. Tool calls and results are appended to
+    /// `messages`; the answer text is not.
+    private func runRounds(
+        _ messages: inout [[String: Any]],
+        profile: MobileProviderProfile,
+        apiKey: String,
+        tools: [[String: Any]]?,
+        offeredNames: Set<String>,
+        maxRounds: Int,
+        assistantID: UUID,
+        reasoning: MobileReasoning
+    ) async throws -> (answered: Bool, answer: String, toolCalls: Int) {
+        var toolCalls = 0
+        for _ in 0..<maxRounds {
+            let result = try await streamModel(
+                profile: profile,
+                apiKey: apiKey,
+                messages: messages,
+                tools: tools,
+                reasoning: reasoning,
+                bubble: assistantID
+            )
+            if result.toolCalls.isEmpty { return (true, result.text, toolCalls) }
+
+            messages.append([
                 "role": "assistant",
                 "content": result.text,
                 "tool_calls": result.toolCalls.map { call in
@@ -709,7 +880,8 @@ final class MobileAppModel {
                     let activity = appendToolActivity(to: assistantID, name: call.name, detail: "Unadvertised tool", status: .failed)
                     updateToolActivity(activity, in: assistantID, status: .failed, result: output)
                 }
-                wireMessages.append([
+                toolCalls += 1
+                messages.append([
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": output
@@ -717,23 +889,168 @@ final class MobileAppModel {
             }
             separateNextRound = true
         }
+        return (false, "", toolCalls)
+    }
 
-        // Out of tool rounds: ask once more without tools, so the reply ends
-        // with an answer built from the results gathered so far rather than
-        // stopping right after a tool call.
-        wireMessages.append([
+    /// Out of tool rounds: asks once more without tools, so the reply ends
+    /// with an answer built from the results gathered so far rather than
+    /// stopping right after a tool call.
+    private func forceAnswer(
+        _ messages: inout [[String: Any]],
+        profile: MobileProviderProfile,
+        apiKey: String,
+        assistantID: UUID,
+        reasoning: MobileReasoning
+    ) async throws -> String {
+        messages.append([
             "role": "user",
             "content": "[Tool round limit reached] Answer now using only the tool results above, without calling more tools. Say briefly what is still unknown."
         ])
-        _ = try await runtime.streamTurn(
+        let result = try await streamModel(
             profile: profile,
             apiKey: apiKey,
-            messages: wireMessages,
+            messages: messages,
             tools: nil,
-            reasoning: options.reasoning
-        ) { [weak self] delta in
-            await self?.appendRoundDelta(delta, to: assistantID)
+            reasoning: reasoning,
+            bubble: assistantID
+        )
+        return result.text
+    }
+
+    // MARK: - Agent mode
+
+    /// The ∞ agent loop (see AgentLoop.swift): plan with explicit completion
+    /// criteria, act with the tool loop, check the answer with a separate
+    /// no-tools request, and feed what is missing back as the next pass's
+    /// prompt, within the AgentPolicy limits. Approvals still apply to every
+    /// tool call. Each pass's answer replaces the previous one in the bubble;
+    /// the progress card keeps the plan and every check.
+    private func runAgentLoop(
+        profile: MobileProviderProfile,
+        apiKey: String,
+        baseSystem: String,
+        history: [[String: Any]],
+        tools: [[String: Any]]?,
+        offeredNames: Set<String>,
+        assistantID: UUID,
+        options: MobileTurnOptions
+    ) async throws {
+        let policy = AgentPolicy.load()
+        let started = Date()
+        let request = (history.last?["content"] as? String) ?? ""
+        var run = MobileAgentRun(maxPasses: policy.maxPasses)
+        setAgentRun(run, on: assistantID)
+
+        // 1. Define "done": the plan and its criteria. No tools, nothing streamed.
+        let planReply = try await streamModel(
+            profile: profile,
+            apiKey: apiKey,
+            messages: history + [["role": "user", "content": AgentPrompts.planner(request: request)]],
+            tools: nil,
+            reasoning: options.reasoning,
+            bubble: nil
+        )
+        let plan = AgentPlan.parse(planReply.text, request: request)
+        run.plan = plan
+
+        var messages = history
+        let runStart = messages.count
+        var toolCalls = 0
+        var pass = 0
+        while true {
+            pass += 1
+            try Task.checkCancellation()
+            run.pass = pass
+            run.phase = .acting
+            setAgentRun(run, on: assistantID)
+            if pass > 1 { replaceText(of: assistantID, with: "") }
+
+            // 2-3. Build the context from state and act.
+            var passMessages = [["role": "system", "content": baseSystem + "\n\n" + AgentPrompts.agentInstructions(plan: plan, pass: pass, maxPasses: policy.maxPasses)]] + messages
+            let rounds = try await runRounds(
+                &passMessages,
+                profile: profile,
+                apiKey: apiKey,
+                tools: tools,
+                offeredNames: offeredNames,
+                maxRounds: policy.roundsPerPass,
+                assistantID: assistantID,
+                reasoning: options.reasoning
+            )
+            toolCalls += rounds.toolCalls
+            let answer = rounds.answered
+                ? rounds.answer
+                : try await forceAnswer(&passMessages, profile: profile, apiKey: apiKey, assistantID: assistantID, reasoning: options.reasoning)
+            flushStreamedText()
+            messages = Array(passMessages.dropFirst())
+            messages.append(["role": "assistant", "content": answer])
+
+            // 4. Verify with a fresh context and no tools.
+            run.phase = .verifying
+            setAgentRun(run, on: assistantID)
+            let gaps = AgentRules.deterministicGaps(answer: answer)
+            let check = try await streamModel(
+                profile: profile,
+                apiKey: apiKey,
+                messages: [["role": "user", "content": AgentPrompts.verifier(
+                    plan: plan,
+                    evidence: AgentPrompts.evidence(from: Array(messages[runStart...])),
+                    answer: answer
+                )]],
+                tools: nil,
+                reasoning: options.reasoning,
+                bubble: nil
+            )
+            let verdict = AgentVerdict.parse(check.text, criteriaCount: plan.criteria.count)
+            run.checks.append(.init(pass: pass, complete: verdict?.complete == true && gaps.isEmpty, missing: gaps + (verdict?.missing ?? [])))
+            if let verdict { run.met = verdict.met }
+
+            // 5. Stop, or turn what is missing into the next prompt.
+            let contextShare = Double(Self.estimatedTokens(messages)) / Double(max(contextWindow, 1))
+            switch AgentRules.decide(
+                verdict: verdict,
+                gaps: gaps,
+                pass: pass,
+                policy: policy,
+                toolCalls: toolCalls,
+                elapsed: Date().timeIntervalSince(started),
+                contextShare: contextShare
+            ) {
+            case .finish(let reason):
+                run.phase = .finished
+                run.stopReason = reason
+                setAgentRun(run, on: assistantID)
+                return
+            case .nextPass(let feedback):
+                messages.append(["role": "user", "content": feedback])
+            }
         }
+    }
+
+    /// A rough token count of request messages (characters / 4).
+    private static func estimatedTokens(_ messages: [[String: Any]]) -> Int {
+        messages.reduce(0) { total, message in
+            total + (((message["content"] as? String)?.count ?? 0) + ((message["tool_calls"] as? [[String: Any]])?.count ?? 0) * 60) / 4 + 8
+        }
+    }
+
+    private func setAgentRun(_ run: MobileAgentRun, on id: UUID) {
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages[m].agentRun = run
+    }
+
+    /// Marks an unfinished agent run as stopped (Stop or an error).
+    private func stopAgentRun(on id: UUID) {
+        guard let (c, m) = location(of: id), var run = conversations[c].messages[m].agentRun, run.phase != .finished else { return }
+        run.phase = .finished
+        run.stopReason = .cancelled
+        conversations[c].messages[m].agentRun = run
+    }
+
+    private func replaceText(of id: UUID, with text: String) {
+        flushStreamedText()
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages[m].text = text
     }
 
     /// Runs one tool call. A failure is returned to the model as the tool's

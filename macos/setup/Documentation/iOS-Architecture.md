@@ -11,7 +11,9 @@ deployment target, iPhone and iPad, Swift with main-actor default isolation.
 |---|---|
 | `LLMTUIiOSApp.swift` | App entry point; shows `ContentView`. |
 | `ContentView.swift` | Tabs (Chats, Providers, Settings), the chat list, chat screen, composer, tool cards, approval sheet, provider editor, Settings (appearance, tool approval, chat retention, memory) and the Archived screen. |
-| `MobileAppModel.swift` | The main-actor model: chats, the open chat, providers, sending and queueing, the tool loop, tool dispatch and approval, attachment consent, citations, retention, archive and pin. |
+| `MobileAppModel.swift` | The main-actor model: chats, the open chat, providers, sending and queueing, the tool loop and the agent loop, tool dispatch and approval, attachment consent, citations, retention, archive and pin. |
+| `AgentLoop.swift` | The agent loop's pure parts: policy and limits, plan and verdict parsing, the stop rules, the prompts built from state, and the run record. |
+| `AgentViews.swift` | The agent progress card on a reply. |
 | `ChatRuntime.swift` | HTTP to the provider: model discovery, streaming chat completions (SSE), and the tool definitions sent to the model. |
 | `ProviderModels.swift` | Provider profiles and types, chat messages, tool activity records, reasoning and approval modes, turn options, queued messages, errors. |
 | `ProviderStore.swift` | Saves provider profiles in the app's preferences and API keys in the Keychain. |
@@ -50,6 +52,59 @@ deployment target, iPhone and iPad, Swift with main-actor default isolation.
    one request without tools so the reply ends with an answer.
 5. When the task ends, the chat is saved and the next queued message, if
    any, is sent.
+
+## Screen lock and the background
+
+iOS suspends a backgrounded app within seconds, screen lock included, which
+cuts the open connection to the model server.
+- While a reply generates, the app asks iOS for extra background time
+  (`beginBackgroundTask`, about 30 seconds), so a short lock does not
+  interrupt it.
+- If a longer lock cuts a model request (a lost connection, a timeout, or a
+  stream ended before `[DONE]` while the app was in the background),
+  `streamModel` discards that request's partial text. Once the app is active
+  again, it sends the same request again, at most twice. Only the model
+  request is repeated: tool calls already ran and their results are in the
+  messages, and a model request has no effects. The same failure in the
+  foreground is reported as before.
+- Replies using MCP still stop on background, as described under MCP servers.
+- The stream allows 10 minutes of silence between bytes, since a slow local
+  model can take minutes to read a long prompt before its first token.
+
+## Agent mode (∞)
+
+With ∞ on, `runToolLoop` hands the turn to `runAgentLoop`, which wraps the
+same tool rounds in a bounded plan → act → verify loop. The pure parts are in
+`AgentLoop.swift`.
+
+1. **Define done.** One request without tools asks for the goal, 2-5
+   checkable completion criteria and a short plan. Nothing from it is
+   streamed. An unreadable plan falls back to the request as the goal and
+   one generic criterion. Code-level checks also apply: an empty answer is
+   never done.
+2. **Build the context.** Each pass's system prompt is the normal one plus
+   the goal, the numbered criteria, the plan and the pass number. The
+   conversation keeps the earlier passes' tool calls, answers and feedback.
+3. **Act.** `runRounds` runs up to 6 tool rounds. `forceAnswer` asks for an
+   answer without tools if they run out. The answer streams into the
+   bubble, replacing the previous pass's answer.
+4. **Verify.** A separate request with no tools and none of the chat's
+   history checks the answer against each criterion. It also gets the
+   run's tool calls and results as evidence (`AgentPrompts.evidence`). It
+   returns JSON: `complete`, `met`, `missing` and `feedback`.
+5. **Feed back or stop** (`AgentRules.decide`):
+   - Stop as *verified* when every criterion is confirmed.
+   - Stop as *unverified* when the check's reply cannot be read.
+   - Stop at the pass limit (`Settings › Agent`, 1-8, default 5), the
+     32-call tool limit, the 15-minute time limit, or 85% of the model's
+     context window.
+   - Otherwise, the missing items and the reviewer's note become the next
+     pass's user message.
+
+The run (phase, plan, pass, met criteria, every check, stop reason) is saved
+on the reply as `agentRun` and drawn by `AgentRunCard`. Approvals, attachment
+consent and the MCP rules apply to every tool call in every pass. Stop marks
+the run as stopped. Queued messages keep the mode they were written in.
 
 ## Approvals
 
@@ -95,6 +150,7 @@ if it would act on existing chats.
 - `DocumentToolsTests` exercises extraction (real PDFKit and Vision), the
   document tools, citations and the attachment lifecycle.
 - `ChatRetentionTests` covers the retention policy and the model behaviour.
+- `AgentLoopTests` covers plan and verdict parsing, the stop rules and prompts, and full agent runs against a scripted server (`AgentLoopRunTests`).
 - `LLMTUIiOSUITests` has the UI tests.
 
 ## MCP servers (Swift only)
