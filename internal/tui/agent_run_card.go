@@ -164,10 +164,14 @@ func agentRunCardStatus(card agentRunCard) string {
 	switch card.Status {
 	case agent.DecisionRunning, agent.DecisionContinue, agent.DecisionRetry:
 	case agent.DecisionDone:
-		if card.Cycle <= 1 {
-			return "done · verified · " + progress
+		outcome := "verified"
+		if agentRunCardUnverified(card) {
+			outcome = "not verified"
 		}
-		return fmt.Sprintf("done · verified after %d passes · %s", card.Cycle, progress)
+		if card.Cycle <= 1 {
+			return "done · " + outcome + " · " + progress
+		}
+		return fmt.Sprintf("done · %s after %d passes · %s", outcome, card.Cycle, progress)
 	case agent.DecisionNeedsUserInput:
 		return pass + "waiting for you · " + progress
 	default:
@@ -185,6 +189,12 @@ func agentRunCardStatus(card agentRunCard) string {
 		doing = "working"
 	}
 	return pass + doing + " · " + progress
+}
+
+// agentRunCardUnverified reports a done run whose criteria were accepted by a
+// controller pass that no verifier judged (deterministic or off mode).
+func agentRunCardUnverified(card agentRunCard) bool {
+	return card.Status == agent.DecisionDone && strings.HasPrefix(card.StopReason, unverifiedStopReason)
 }
 
 func agentRunCardMet(card agentRunCard) (met, total int) {
@@ -215,6 +225,9 @@ func agentRunCardStopSummary(card agentRunCard) string {
 	case agent.DecisionRunning, agent.DecisionContinue, agent.DecisionRetry:
 		return ""
 	case agent.DecisionDone:
+		if agentRunCardUnverified(card) {
+			return with("Stopped without verification")
+		}
 		return "Stopped because every criterion was verified."
 	case agent.DecisionNeedsUserInput:
 		return with("Paused for your input")

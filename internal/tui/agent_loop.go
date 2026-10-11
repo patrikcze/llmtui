@@ -1376,8 +1376,7 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	}
 	stop := agent.Decide(run, time.Now())
 	if unverifiedPass && stop.Decision == agent.DecisionDone {
-		stop.Reason = fmt.Sprintf("executor finished; acceptance criteria were accepted without semantic verification (agent.verifier.mode %s)",
-			m.cfg.Agent.Verifier.ResolvedMode())
+		stop.Reason = fmt.Sprintf("%s (agent.verifier.mode %s)", unverifiedStopReason, m.cfg.Agent.Verifier.ResolvedMode())
 	}
 	if err := run.ApplyStop(stop, time.Now()); err != nil {
 		m.failVerifiedRun(err)
@@ -1417,6 +1416,11 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 	m.refreshViewport()
 	return m, tea.Batch(persist, shadowCmd)
 }
+
+// unverifiedStopReason begins the stop reason of a run that ended on a
+// controller pass no verifier judged (deterministic or off mode). The run
+// card keys its "not verified" wording on it.
+const unverifiedStopReason = "executor finished; acceptance criteria were accepted without semantic verification"
 
 // satisfyLegacyPassedCriteria interprets a "passed" verdict that carries no
 // per-ID criteria updates.

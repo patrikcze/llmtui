@@ -33,3 +33,25 @@ func TestUnverifiedModesDoNotReportVerification(t *testing.T) {
 		})
 	}
 }
+
+// TestRunCardDoesNotCallAnUnverifiedRunVerified: the transcript's run card
+// rendered every done run as "done · verified" and "Stopped because every
+// criterion was verified." — including a deterministic-mode run whose stop
+// reason says nothing was verified (seen live).
+func TestRunCardDoesNotCallAnUnverifiedRunVerified(t *testing.T) {
+	m, _ := callersRunModel(t, agentScriptStep{text: "parseConfig is only called from main.go. Done."})
+	m.cfg.Agent.Verifier.Mode = "deterministic"
+	driveAgentCommands(t, m, m.startVerifiedRun("Find every caller of parseConfig in this project.", nil))
+
+	if len(m.agentCards) == 0 {
+		t.Fatal("no run card was created")
+	}
+	card := m.agentCards[len(m.agentCards)-1]
+	status, summary := agentRunCardStatus(card), agentRunCardStopSummary(card)
+	if strings.Contains(status, "verified") && !strings.Contains(status, "not verified") {
+		t.Errorf("card status = %q, want it to say the run was not verified", status)
+	}
+	if strings.Contains(summary, "every criterion was verified") || !strings.Contains(summary, "without verification") {
+		t.Errorf("card summary = %q, want it to say the run stopped without verification", summary)
+	}
+}
