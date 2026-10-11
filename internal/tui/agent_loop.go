@@ -1359,6 +1359,11 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 			RecommendedNext: "Write the requested workspace file with write_file or edit_file, then report the observed tool result.",
 		}
 	}
+	// A controller pass in deterministic/off mode accepts pinned criteria no
+	// verifier ever judged. The run may stop as configured, but it must not
+	// report them as verified.
+	unverifiedPass := verifierPath != "semantic" && result.Verdict == agent.VerificationPassed &&
+		len(result.CriteriaUpdates) == 0 && len(run.UnresolvedSemanticCriteria()) > 0
 	result = satisfyLegacyPassedCriteria(run, result, verifierPath == "semantic")
 	if err := run.CompleteVerification(result, time.Now()); err != nil {
 		m.failVerifiedRun(err)
@@ -1370,6 +1375,10 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, m.persistAgentRun()
 	}
 	stop := agent.Decide(run, time.Now())
+	if unverifiedPass && stop.Decision == agent.DecisionDone {
+		stop.Reason = fmt.Sprintf("executor finished; acceptance criteria were accepted without semantic verification (agent.verifier.mode %s)",
+			m.cfg.Agent.Verifier.ResolvedMode())
+	}
 	if err := run.ApplyStop(stop, time.Now()); err != nil {
 		m.failVerifiedRun(err)
 		return m, m.persistAgentRun()
@@ -1386,6 +1395,10 @@ func (m *Model) handleAgentVerification(msg agentVerificationMsg) (tea.Model, te
 		return m, tea.Batch(persist, shadowCmd, m.startNextAgentCycle(stop.NextObjective))
 	case agent.DecisionDone:
 		m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · verification passed", shortRunID(run.ID), run.Cycle)
+		if unverifiedPass {
+			m.notice = fmt.Sprintf("agent %s completed in %d cycle(s) · not verified (verifier mode %s)",
+				shortRunID(run.ID), run.Cycle, m.cfg.Agent.Verifier.ResolvedMode())
+		}
 		m.autoPromoteAgentOutcome(verifierPath == "semantic")
 	case agent.DecisionNeedsUserInput:
 		if len(result.UserOptions) > 0 {
@@ -1423,7 +1436,7 @@ func satisfyLegacyPassedCriteria(run *agent.AgentRun, result agent.VerificationR
 		return result
 	}
 	unresolved := run.UnresolvedSemanticCriteria()
-	note := "controller verification passed the pinned contract"
+	note := "accepted without semantic verification"
 	if fromSemanticVerifier {
 		if len(unresolved) != 1 {
 			return result

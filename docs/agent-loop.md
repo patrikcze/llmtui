@@ -460,7 +460,10 @@ A semantic verifier's
 criteria is sent back once for per-ID statuses, and if it still has none, no
 criterion is satisfied implicitly — the unresolved ones drive the next cycle.
 In `deterministic` and `off` modes, where no semantic verifier runs, the
-controller's own pass resolves the criteria as configured. Before
+controller's own pass resolves the criteria as configured, and the run is
+reported as such — `completed … · not verified (verifier mode …)`, with a
+stop reason saying the criteria were accepted without semantic verification —
+never as "verification passed". Before
 verification, the executor directive and the verifier input show
 controller-computed read-coverage facts under each exact-read criterion
 (for example `lines 1-120 of 300 of "report.md" delivered contiguously`);
