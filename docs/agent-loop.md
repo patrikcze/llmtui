@@ -185,7 +185,11 @@ stateDiagram-v2
 
 Seen as a conversation between the controller and the model(s), one cycle looks
 like this — note that the executor and the verifier are *separate* provider
-requests, and the verifier never sees the executor's transcript or its tools:
+requests, and the verifier never sees the executor's transcript or its tools.
+It does see bounded, redacted views of what this cycle's successful reads
+returned (`read_file`, `list_dir`, `grep`, `glob`, `run_command`; at most 4
+complete views and 2 KiB, untrusted-framed, dropped first under budget
+pressure), so it can check the executor's claims against observed content:
 
 ```mermaid
 sequenceDiagram

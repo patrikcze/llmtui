@@ -1181,7 +1181,7 @@ func (m *Model) dispatchVerifierAttempt(run *agent.AgentRun, execution agent.Exe
 		RunID: runID, Cycle: cycle, Task: run.Request, Objective: run.Objective,
 		AcceptanceCriteria: []string{run.Request},
 		Criteria:           run.UnresolvedSemanticCriteria(), Evidence: run.Evidence, PriorCycles: run.Memory,
-		Observations: m.criterionEvidenceViews(run, execution),
+		Observations: m.verifierObservationViews(run, execution),
 		// Criteria are now pinned by the pre-execution task contract. Keep the
 		// field for parser compatibility with older persisted verifier replies,
 		// but never ask a post-execution verifier to establish goalposts.
