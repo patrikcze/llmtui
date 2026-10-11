@@ -265,6 +265,15 @@ least one of these is true:
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
 
+A retryable `failed` or `inconclusive` verdict that names no next step —
+an empty `recommended_next`, or one that only restates the request — still
+has corrective work when a pinned criterion is unresolved: the controller
+uses `Address the next unresolved acceptance criterion: …` as the next
+objective, as it already does for a `passed` verdict with unresolved
+criteria. That objective is admitted once per run, so the same rejection in
+that cycle ends the run; a restated request never counts as a changed
+objective. `blocked` and non-retryable verdicts are unchanged.
+
 A rejected retry ends the run as `failed`, and its stop reason starts with
 the verifier's own cause (for example `requested file write has no successful
 write_file or edit_file receipt; retry rejected because …`), so the run says

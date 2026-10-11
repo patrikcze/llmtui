@@ -69,8 +69,7 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 			if len(unresolved) == 0 {
 				return StopResult{Decision: DecisionDone, Reason: "all pinned acceptance criteria satisfied"}
 			}
-			return continueResult(run, verify, DecisionContinue,
-				"Address the next unresolved acceptance criterion: "+unresolved[0].Text)
+			return continueResult(run, verify, DecisionContinue, criterionObjective(unresolved[0]))
 		}
 		if len(verify.RemainingCriteria) == 0 {
 			return StopResult{Decision: DecisionDone, Reason: "observable acceptance criteria passed"}
@@ -97,6 +96,25 @@ func retryResult(run *AgentRun, verify *VerificationResult) StopResult {
 		return StopResult{Decision: DecisionBudgetExhausted, Reason: fmt.Sprintf("maximum %d cycles reached", run.Limits.MaxCycles)}
 	}
 	next := strings.TrimSpace(verify.RecommendedNext)
+	// A rejected answer whose verifier named no next step (empty, or only a
+	// restatement of the request — common with small local verifiers) still
+	// has corrective work when a pinned criterion is unresolved: that
+	// criterion is the objective, exactly as for a passed verdict with
+	// unresolved criteria. It is admitted once per run, so the same failure
+	// in that cycle still ends the run below.
+	if verify.Verdict == VerificationFailed || verify.Verdict == VerificationInconclusive {
+		if strings.EqualFold(next, strings.TrimSpace(run.Request)) {
+			// Restating the request names no corrective step; counting it
+			// as a changed objective would let failures alternate between
+			// the request and another objective without limit.
+			next = ""
+		}
+		if next == "" {
+			if objective, ok := untriedCriterionObjective(run); ok {
+				next = objective
+			}
+		}
+	}
 	changed := next != "" && !strings.EqualFold(next, strings.TrimSpace(run.Objective))
 	if !changed && !verify.NewEvidence && !verify.StrategyChanged && !verify.TransientFailure {
 		// Keep the verifier's own cause: without it the run's only visible
@@ -112,6 +130,29 @@ func retryResult(run *AgentRun, verify *VerificationResult) StopResult {
 		next = "Retry the bounded objective using the new evidence or corrected strategy."
 	}
 	return StopResult{Decision: DecisionRetry, Reason: nonempty(verify.Summary, "verification requested a bounded retry"), NextObjective: next}
+}
+
+// criterionObjective is the controller-authored objective for working on
+// one unresolved pinned criterion.
+func criterionObjective(criterion Criterion) string {
+	return "Address the next unresolved acceptance criterion: " + criterion.Text
+}
+
+// untriedCriterionObjective returns the objective for the first unresolved
+// pinned criterion, unless some cycle of this run already had exactly that
+// objective — the bound that keeps a repeated failure from retrying forever.
+func untriedCriterionObjective(run *AgentRun) (string, bool) {
+	unresolved := run.UnresolvedCriteria()
+	if len(unresolved) == 0 {
+		return "", false
+	}
+	objective := criterionObjective(unresolved[0])
+	for _, cycle := range run.Cycles {
+		if strings.EqualFold(strings.TrimSpace(cycle.Objective), objective) {
+			return "", false
+		}
+	}
+	return objective, true
 }
 
 func continueResult(run *AgentRun, verify *VerificationResult, decision Decision, fallbackNext string) StopResult {
