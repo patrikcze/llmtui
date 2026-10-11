@@ -433,7 +433,7 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | --- | --- |
 | `off` | No semantic evaluation. The executor answer is explicitly unverified; controller-required read coverage and write receipts still apply. |
 | `deterministic` | Mechanical checks only, never a model request. With no deterministic failure or missing required read coverage a cycle passes with low confidence. |
-| `adaptive` (default) | A conclusive mechanical failure (failed test, a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
+| `adaptive` (default) | A conclusive mechanical failure (a failed test — a test command whose latest run in the cycle failed, so a red run fixed and rerun green does not count — a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:

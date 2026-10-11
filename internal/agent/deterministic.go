@@ -9,10 +9,8 @@ import "fmt"
 // Callers use it both to skip a semantic verification whose verdict would
 // be discarded anyway and to clamp an optimistic semantic verdict.
 func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool) {
-	for _, test := range execution.TestsRun {
-		if !test.Passed {
-			return deterministicVerdict(VerificationFailed, "deterministic test failure: "+test.Name, true, false), true
-		}
+	if name, failed := failingTestCommand(execution.TestsRun); failed {
+		return deterministicVerdict(VerificationFailed, "deterministic test failure: "+name, true, false), true
 	}
 	// Only the cycle's most recent tool call decides whether it ended in
 	// blockage. A tool call failing and being recovered from later in the
@@ -98,4 +96,27 @@ func deterministicVerdict(verdict VerificationVerdict, summary string, retryable
 		Confidence:       1,
 		TransientFailure: transient,
 	}
+}
+
+// failingTestCommand reports the first test command, in first-run order,
+// whose latest run in the cycle failed. Run the tests, fix the code, rerun
+// them green is the normal sequence, so an earlier failure of a command that
+// later passed is not this cycle's outcome; a command that passed and then
+// failed, or only ever failed, still is. Commands are matched exactly, so a
+// differently spelled rerun does not clear a failure.
+func failingTestCommand(runs []TestResult) (string, bool) {
+	latest := make(map[string]bool, len(runs))
+	order := make([]string, 0, len(runs))
+	for _, run := range runs {
+		if _, seen := latest[run.Name]; !seen {
+			order = append(order, run.Name)
+		}
+		latest[run.Name] = run.Passed
+	}
+	for _, name := range order {
+		if !latest[name] {
+			return name, true
+		}
+	}
+	return "", false
 }
