@@ -352,6 +352,43 @@ func (m *Model) criterionEvidenceViews(run *agent.AgentRun, execution agent.Exec
 	return views
 }
 
+// verifierObservationViews is the semantic verifier's bounded content
+// projection: the criterion-linked views above first, then — within the same
+// view and byte bounds — this cycle's other complete, successful read
+// observations, newest first. Without the second part a criterion with no
+// local-read assessment (most contract criteria) reached the verifier with
+// no observed content at all, only tool names, success flags and the
+// executor's own claim, so the verifier could not tell a supported answer
+// from an unsupported one. Truncated, failed and earlier-cycle views are
+// still never substituted.
+func (m *Model) verifierObservationViews(run *agent.AgentRun, execution agent.ExecutionResult) []agent.ObservationView {
+	views := m.criterionEvidenceViews(run, execution)
+	if m == nil || run == nil || m.agentLoop.observations == nil || len(views) >= verifierObservationMaxViews {
+		return views
+	}
+	seen := make(map[string]struct{}, len(views))
+	usedBytes := 0
+	for _, view := range views {
+		seen[view.ResourceKey] = struct{}{}
+		usedBytes += len(view.Excerpt)
+	}
+	for _, view := range m.agentLoop.observations.Recent(maxDirectiveObservations) {
+		if len(views) >= verifierObservationMaxViews {
+			break
+		}
+		if view.Cycle != run.Cycle || !view.Success || view.Truncated || strings.TrimSpace(view.Excerpt) == "" {
+			continue
+		}
+		if _, ok := seen[view.ResourceKey]; ok || usedBytes+len(view.Excerpt) > verifierObservationMaxBytes {
+			continue
+		}
+		seen[view.ResourceKey] = struct{}{}
+		views = append(views, view)
+		usedBytes += len(view.Excerpt)
+	}
+	return views
+}
+
 func criterionAssessmentSignal(support, contradiction float64) string {
 	switch {
 	case support >= 0.5 && contradiction < 0.5:

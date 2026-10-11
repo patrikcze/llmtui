@@ -185,7 +185,11 @@ stateDiagram-v2
 
 Seen as a conversation between the controller and the model(s), one cycle looks
 like this — note that the executor and the verifier are *separate* provider
-requests, and the verifier never sees the executor's transcript or its tools:
+requests, and the verifier never sees the executor's transcript or its tools.
+It does see bounded, redacted views of what this cycle's successful reads
+returned (`read_file`, `list_dir`, `grep`, `glob`, `run_command`; at most 4
+complete views and 2 KiB, untrusted-framed, dropped first under budget
+pressure), so it can check the executor's claims against observed content:
 
 ```mermaid
 sequenceDiagram
@@ -264,6 +268,15 @@ least one of these is true:
 - the strategy changed;
 - new evidence or corrected context exists;
 - the failure was transient and the retry remains within budget.
+
+A retryable `failed` or `inconclusive` verdict that names no next step —
+an empty `recommended_next`, or one that only restates the request — still
+has corrective work when a pinned criterion is unresolved: the controller
+uses `Address the next unresolved acceptance criterion: …` as the next
+objective, as it already does for a `passed` verdict with unresolved
+criteria. That objective is admitted once per run, so the same rejection in
+that cycle ends the run; a restated request never counts as a changed
+objective. `blocked` and non-retryable verdicts are unchanged.
 
 A rejected retry ends the run as `failed`, and its stop reason starts with
 the verifier's own cause (for example `requested file write has no successful
@@ -420,7 +433,7 @@ settle the cycle. `agent.verifier.mode` selects the policy:
 | --- | --- |
 | `off` | No semantic evaluation. The executor answer is explicitly unverified; controller-required read coverage and write receipts still apply. |
 | `deterministic` | Mechanical checks only, never a model request. With no deterministic failure or missing required read coverage a cycle passes with low confidence. |
-| `adaptive` (default) | A conclusive mechanical failure (failed test, a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
+| `adaptive` (default) | A conclusive mechanical failure (a failed test — a test command whose latest run in the cycle failed, so a red run fixed and rerun green does not count — a failed or denied trailing tool call other than an observational `not_found`/`range_after_eof` read, truncation, timeout) becomes the verdict with no evaluator request. If every pinned acceptance criterion is already resolved, the cycle passes on the ledger alone. Otherwise, semantic verification evaluates the unresolved criteria. |
 | `always` | A semantic evaluation after every cycle — the pre-adaptive behavior. Deterministic evidence still clamps its verdict. |
 
 An empty `mode` derives the policy from the legacy `verifier.enabled` flag:
@@ -447,7 +460,10 @@ A semantic verifier's
 criteria is sent back once for per-ID statuses, and if it still has none, no
 criterion is satisfied implicitly — the unresolved ones drive the next cycle.
 In `deterministic` and `off` modes, where no semantic verifier runs, the
-controller's own pass resolves the criteria as configured. Before
+controller's own pass resolves the criteria as configured, and the run is
+reported as such — `completed … · not verified (verifier mode …)`, with a
+stop reason saying the criteria were accepted without semantic verification —
+never as "verification passed". Before
 verification, the executor directive and the verifier input show
 controller-computed read-coverage facts under each exact-read criterion
 (for example `lines 1-120 of 300 of "report.md" delivered contiguously`);
