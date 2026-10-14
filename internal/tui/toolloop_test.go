@@ -380,8 +380,8 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 	if m.errText != "" {
 		t.Errorf("errText = %q, want empty before the retry has even run", m.errText)
 	}
-	if !m.emptyContinuationRetried {
-		t.Error("emptyContinuationRetried must be set after spending the one retry")
+	if m.toolRecoveryAttempts != 1 || m.toolRecoveryReason != provider.ToolRecoveryEmptyContinuation {
+		t.Errorf("recovery budget = attempts:%d reason:%q, want the one retry spent on empty_continuation", m.toolRecoveryAttempts, m.toolRecoveryReason)
 	}
 	if !m.thinking {
 		t.Fatal("continueChat's retry must leave a request in flight")
@@ -454,8 +454,8 @@ func TestMalformedToolCallRetriesOnceThenReportsError(t *testing.T) {
 	if m.errText != "" {
 		t.Errorf("errText = %q, want empty before the retry has even run", m.errText)
 	}
-	if !m.malformedToolCallRetried {
-		t.Error("malformedToolCallRetried must be set after spending the one retry")
+	if m.toolRecoveryAttempts != 1 || m.toolRecoveryReason != provider.ToolRecoveryMalformedCall {
+		t.Errorf("recovery budget = attempts:%d reason:%q, want the one retry spent on malformed_native_call", m.toolRecoveryAttempts, m.toolRecoveryReason)
 	}
 	if m.toolsNative {
 		t.Error("malformed native tool call must switch the retry to the fenced protocol")

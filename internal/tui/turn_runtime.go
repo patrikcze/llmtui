@@ -66,9 +66,6 @@ type turnRuntime struct {
 	toolRecoveryAttempts     int
 	toolRecoveryReason       provider.ToolRecoveryReason
 	lastToolRecoveryDecision provider.ToolRecoveryDecision
-	emptyContinuationRetried bool
-	malformedToolCallRetried bool
-	hasHiddenToolRecovery    bool
 	// streamReplayed records that the current model round already used its
 	// single mid-stream interruption replay (see replayInterruptedStream).
 	// It is independent of the tool-recovery budget: a transport drop says
@@ -129,9 +126,6 @@ func (r *turnRuntime) resetCycle() {
 	r.toolRecoveryAttempts = 0
 	r.toolRecoveryReason = ""
 	r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{}
-	r.emptyContinuationRetried = false
-	r.malformedToolCallRetried = false
-	r.hasHiddenToolRecovery = false
 	r.streamReplayed = false
 	if !r.busy() {
 		r.transition(turnIdle, turnOutcomeNone)
@@ -146,34 +140,6 @@ func (r *turnRuntime) renewToolBudget() {
 	r.toolDepth = 0
 }
 
-func (r *turnRuntime) claimMalformedToolRetry() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryMalformedCall)
-	if decision.Allowed() {
-		r.malformedToolCallRetried = true
-	}
-	return decision.Allowed()
-}
-
-func (r *turnRuntime) clearMalformedToolRetry() {
-	r.malformedToolCallRetried = false
-}
-
-func (r *turnRuntime) claimHiddenToolRecovery() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
-	if decision.Allowed() {
-		r.hasHiddenToolRecovery = true
-	}
-	return decision.Allowed()
-}
-
-func (r *turnRuntime) claimEmptyContinuationRetry() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
-	if decision.Allowed() {
-		r.emptyContinuationRetried = true
-	}
-	return decision.Allowed()
-}
-
 // claimStreamReplay grants at most one interruption replay per model round.
 func (r *turnRuntime) claimStreamReplay() bool {
 	if r.streamReplayed {
@@ -186,10 +152,6 @@ func (r *turnRuntime) claimStreamReplay() bool {
 // clearStreamReplay renews the replay allowance once a round completes.
 func (r *turnRuntime) clearStreamReplay() {
 	r.streamReplayed = false
-}
-
-func (r *turnRuntime) clearEmptyContinuationRetry() {
-	r.emptyContinuationRetried = false
 }
 
 // claimToolRecovery enforces one recovery reissue across all categories in a
@@ -207,6 +169,16 @@ func (r *turnRuntime) claimToolRecovery(reason provider.ToolRecoveryReason) prov
 		Reason: reason, Attempt: r.toolRecoveryAttempts, Outcome: provider.ToolRecoveryScheduled,
 	}
 	return r.lastToolRecoveryDecision
+}
+
+// exhaustedRecoveryDetail explains why a recovery for reason was refused.
+// The budget is shared across categories, so "retry did not help" is only
+// true when this same category spent it; otherwise name what did.
+func (r *turnRuntime) exhaustedRecoveryDetail(reason provider.ToolRecoveryReason) string {
+	if r.toolRecoveryReason == reason {
+		return "twice in a row (retry did not help)"
+	}
+	return fmt.Sprintf("and this turn's one recovery retry was already used (%s)", r.toolRecoveryReason)
 }
 
 func (r *turnRuntime) busy() bool {

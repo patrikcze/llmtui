@@ -2758,7 +2758,6 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			malformedRecovery := m.claimToolRecovery(provider.ToolRecoveryMalformedCall)
 			m.recordToolRecovery(malformedRecovery)
 			if malformedRecovery.Allowed() {
-				m.malformedToolCallRetried = true
 				if m.toolsNative {
 					m.rejectNativeToolCapability()
 					m.notice = "model's native tool call could not be parsed by the backend — retrying with the prompt-based protocol"
@@ -2768,7 +2767,8 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 				m.refreshViewport()
 				return m, m.continueChat()
 			}
-			m.errText = "Model's tool call could not be parsed by the backend, twice in a row (retry did not help). " +
+			m.errText = "Model's tool call could not be parsed by the backend, " +
+				m.exhaustedRecoveryDetail(provider.ToolRecoveryMalformedCall) + ". " +
 				"This is typically the backend (e.g. LM Studio) failing to convert the model's tool-call attempt into a structured call — check for a backend/runtime update for this model, or try again."
 			m.failVerifiedRun(errors.New(m.errText))
 			m.complete(turnOutcomeExecutionFailure)
@@ -2776,7 +2776,6 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, m.persistAgentRun()
 		}
-		m.clearMalformedToolRetry()
 		if emptyToolContinuation {
 			// A model can occasionally sample straight to EOS right after a
 			// tool result lands, especially deep into a long tool-heavy
@@ -2787,7 +2786,6 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			emptyRecovery := m.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
 			m.recordToolRecovery(emptyRecovery)
 			if emptyRecovery.Allowed() {
-				m.emptyContinuationRetried = true
 				m.notice = "model returned an empty completion after tool execution — retrying once"
 				m.refreshViewport()
 				return m, m.continueChat()
@@ -2804,7 +2802,6 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			// the cycle from its observable evidence, exactly as for any other
 			// executor turn; a genuinely incomplete cycle still fails there.
 			if m.agentRunActive() && m.agentCycleHasSuccessfulTool() {
-				m.clearEmptyContinuationRetry()
 				m.complete(turnOutcomeFinalAnswer)
 				// handleAgentYield sets its own notice (continuing, verifying,
 				// or terminal) — this path's own value would go stale the
@@ -2812,15 +2809,14 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 				return m, m.handleAgentYield()
 			}
 			m.errText = fmt.Sprintf(
-				"Model returned an empty completion after tool execution, twice in a row (retry did not help; this round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t).",
-				completionTokens, roundReasoningChars, msg.event.Truncated)
+				"Model returned an empty completion after tool execution, %s. This round generated %d completion token(s) — 0-1 suggests the model stopped immediately, a larger count means real output was generated but not recognized as text or a tool call; %d reasoning char(s) this round; finish reason reported truncated=%t.",
+				m.exhaustedRecoveryDetail(provider.ToolRecoveryEmptyContinuation), completionTokens, roundReasoningChars, msg.event.Truncated)
 			m.failVerifiedRun(errors.New(m.errText))
 			m.complete(turnOutcomeExecutionFailure)
 			m.endAgentRun()
 			m.refreshViewport()
 			return m, m.persistAgentRun()
 		}
-		m.clearEmptyContinuationRetry()
 		if truncatedToolCall {
 			return m, m.failTruncatedToolCall()
 		}

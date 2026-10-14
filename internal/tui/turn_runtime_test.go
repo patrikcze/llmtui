@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,9 +86,7 @@ func TestTurnRuntimeCancellationInvalidatesToolResults(t *testing.T) {
 func TestTurnRuntimeResetStartsFreshTurn(t *testing.T) {
 	runtime := newTurnRuntime(1, t.TempDir())
 	runtime.toolDepth = 4
-	runtime.emptyContinuationRetried = true
-	runtime.malformedToolCallRetried = true
-	runtime.hasHiddenToolRecovery = true
+	runtime.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
 	runtime.pendingCalls = []tools.Call{{Tool: tools.ToolWriteFile}}
 	runtime.complete(turnOutcomeExecutionFailure)
 
@@ -95,14 +94,8 @@ func TestTurnRuntimeResetStartsFreshTurn(t *testing.T) {
 	if runtime.state != turnIdle || runtime.lastOutcome != turnOutcomeNone {
 		t.Fatalf("reset transition = %s/%s", runtime.state, runtime.lastOutcome)
 	}
-	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried || runtime.hasHiddenToolRecovery {
-		t.Fatalf(
-			"retry state not reset: depth=%d empty=%t malformed=%t hidden=%t",
-			runtime.toolDepth,
-			runtime.emptyContinuationRetried,
-			runtime.malformedToolCallRetried,
-			runtime.hasHiddenToolRecovery,
-		)
+	if runtime.toolDepth != 0 || runtime.toolRecoveryAttempts != 0 || runtime.toolRecoveryReason != "" {
+		t.Fatalf("retry state not reset: depth=%d attempts=%d reason=%q", runtime.toolDepth, runtime.toolRecoveryAttempts, runtime.toolRecoveryReason)
 	}
 	if len(runtime.pendingCalls) != 0 || runtime.progress == nil || runtime.progress.threshold != 2 {
 		t.Fatalf("reset pending/progress = %d/%+v", len(runtime.pendingCalls), runtime.progress)
@@ -114,9 +107,7 @@ func TestTurnRuntimeCycleResetPreservesRunProgress(t *testing.T) {
 	call := tools.Call{Tool: tools.ToolReadFile, Path: "README.md"}
 	runtime.progress.observeResults([]tools.Result{{Call: call, Output: "same"}})
 	runtime.toolDepth = 3
-	runtime.emptyContinuationRetried = true
-	runtime.malformedToolCallRetried = true
-	runtime.hasHiddenToolRecovery = true
+	runtime.claimToolRecovery(provider.ToolRecoveryMalformedCall)
 	progress := runtime.progress
 
 	runtime.resetCycle()
@@ -124,32 +115,40 @@ func TestTurnRuntimeCycleResetPreservesRunProgress(t *testing.T) {
 	if runtime.progress != progress {
 		t.Fatal("cycle reset replaced the run-wide progress ledger")
 	}
-	if runtime.toolDepth != 0 || runtime.emptyContinuationRetried || runtime.malformedToolCallRetried || runtime.hasHiddenToolRecovery {
-		t.Fatalf(
-			"cycle state not reset: depth=%d empty=%t malformed=%t hidden=%t",
-			runtime.toolDepth,
-			runtime.emptyContinuationRetried,
-			runtime.malformedToolCallRetried,
-			runtime.hasHiddenToolRecovery,
-		)
+	if runtime.toolDepth != 0 || runtime.toolRecoveryAttempts != 0 || runtime.toolRecoveryReason != "" {
+		t.Fatalf("cycle state not reset: depth=%d attempts=%d reason=%q", runtime.toolDepth, runtime.toolRecoveryAttempts, runtime.toolRecoveryReason)
 	}
 }
 
 func TestTurnRuntimeRecoveryRetriesShareOneTurnBudget(t *testing.T) {
 	runtime := newTurnRuntime(3, t.TempDir())
-	if !runtime.claimEmptyContinuationRetry() {
+	if !runtime.claimToolRecovery(provider.ToolRecoveryEmptyContinuation).Allowed() {
 		t.Fatal("empty continuation retry was not admitted")
 	}
-	runtime.clearEmptyContinuationRetry()
-	if runtime.claimMalformedToolRetry() || runtime.claimHiddenToolRecovery() {
+	if runtime.claimToolRecovery(provider.ToolRecoveryMalformedCall).Allowed() || runtime.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool).Allowed() {
 		t.Fatal("recovery categories were able to bypass the shared budget")
 	}
 	if runtime.toolRecoveryAttempts != 1 || runtime.toolRecoveryReason != provider.ToolRecoveryEmptyContinuation {
 		t.Fatalf("recovery state = attempts:%d reason:%q", runtime.toolRecoveryAttempts, runtime.toolRecoveryReason)
 	}
 	runtime.resetCycle()
-	if !runtime.claimMalformedToolRetry() || runtime.toolRecoveryReason != provider.ToolRecoveryMalformedCall {
+	if !runtime.claimToolRecovery(provider.ToolRecoveryMalformedCall).Allowed() || runtime.toolRecoveryReason != provider.ToolRecoveryMalformedCall {
 		t.Fatal("new cycle did not receive a fresh shared recovery budget")
+	}
+}
+
+// TestExhaustedRecoveryDetailNamesTheSpendingCategory: the budget is shared,
+// so "retry did not help" must only be claimed when the same category spent
+// it — otherwise the error would blame a retry that never happened.
+func TestExhaustedRecoveryDetailNamesTheSpendingCategory(t *testing.T) {
+	runtime := newTurnRuntime(3, t.TempDir())
+	runtime.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
+	if got := runtime.exhaustedRecoveryDetail(provider.ToolRecoveryEmptyContinuation); !strings.Contains(got, "twice in a row") {
+		t.Errorf("same-category detail = %q, want twice in a row", got)
+	}
+	got := runtime.exhaustedRecoveryDetail(provider.ToolRecoveryMalformedCall)
+	if strings.Contains(got, "twice in a row") || !strings.Contains(got, string(provider.ToolRecoveryEmptyContinuation)) {
+		t.Errorf("cross-category detail = %q, want it to name empty_continuation, not claim a repeat", got)
 	}
 }
 
