@@ -303,7 +303,7 @@ The full reference for every section lives in
 | `llmtui models` | List models on the active provider |
 | `llmtui providers` | List configured providers and their status |
 | `llmtui provider switch <name>` | Persist a provider as the default for future sessions |
-| `llmtui config init / show / path` | Manage configuration |
+| `llmtui config init / show / path / schema / validate` | Manage configuration |
 | `llmtui doctor` | Diagnose config and backend connectivity |
 | `llmtui history` | List saved chat sessions |
 | `llmtui stats` | All-time token usage per day with sparkline |
@@ -327,8 +327,9 @@ The full reference for every section lives in
 | `Ctrl+O` | Toggle text-selection mode (releases the mouse so your terminal can select/copy; toggles back to wheel scrolling) |
 | `Ctrl+V` | Paste an image from the clipboard (vision models) |
 | `Ctrl+X` | Remove the last pasted image |
-| `Esc` | Stop the current generation (keeps partial reply) |
-| `PgUp` / `PgDn` | Scroll the chat (mouse wheel works too); typing never scrolls it |
+| `Esc` | Stop the current generation (keeps partial reply), or stop an `/agent` step or verification |
+| `F6` | Toggle keyboard transcript navigation: `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` then scroll the chat until `F6` or any other key returns them to the composer |
+| Mouse wheel | Scroll the chat; outside `F6` mode, `PgUp`/`PgDn` and typing go to the composer and never scroll it |
 | `Ctrl+L` | Clear conversation |
 | `Ctrl+C` `Ctrl+C` | Quit (press twice within 2 s). The first press stops generation or clears the input; quitting auto-saves the session |
 

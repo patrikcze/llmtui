@@ -62,13 +62,15 @@ type turnRuntime struct {
 	streamToolCalls    []provider.ToolCall
 	streamContinuation *provider.ProviderContinuation
 
-	toolDepth                int
+	toolDepth int
+	// toolRecoveryAttempts counts retries scheduled this cycle (diagnostics
+	// only); toolRecoveryReason is the latest one. toolRecoverySpent holds
+	// the categories whose single retry has been used since the last clean
+	// round — see claimToolRecovery.
 	toolRecoveryAttempts     int
 	toolRecoveryReason       provider.ToolRecoveryReason
+	toolRecoverySpent        map[provider.ToolRecoveryReason]bool
 	lastToolRecoveryDecision provider.ToolRecoveryDecision
-	emptyContinuationRetried bool
-	malformedToolCallRetried bool
-	hasHiddenToolRecovery    bool
 	// streamReplayed records that the current model round already used its
 	// single mid-stream interruption replay (see replayInterruptedStream).
 	// It is independent of the tool-recovery budget: a transport drop says
@@ -128,10 +130,8 @@ func (r *turnRuntime) resetCycle() {
 	r.toolDepth = 0
 	r.toolRecoveryAttempts = 0
 	r.toolRecoveryReason = ""
+	r.toolRecoverySpent = nil
 	r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{}
-	r.emptyContinuationRetried = false
-	r.malformedToolCallRetried = false
-	r.hasHiddenToolRecovery = false
 	r.streamReplayed = false
 	if !r.busy() {
 		r.transition(turnIdle, turnOutcomeNone)
@@ -144,34 +144,6 @@ func (r *turnRuntime) advanceToolRound() {
 
 func (r *turnRuntime) renewToolBudget() {
 	r.toolDepth = 0
-}
-
-func (r *turnRuntime) claimMalformedToolRetry() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryMalformedCall)
-	if decision.Allowed() {
-		r.malformedToolCallRetried = true
-	}
-	return decision.Allowed()
-}
-
-func (r *turnRuntime) clearMalformedToolRetry() {
-	r.malformedToolCallRetried = false
-}
-
-func (r *turnRuntime) claimHiddenToolRecovery() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
-	if decision.Allowed() {
-		r.hasHiddenToolRecovery = true
-	}
-	return decision.Allowed()
-}
-
-func (r *turnRuntime) claimEmptyContinuationRetry() bool {
-	decision := r.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
-	if decision.Allowed() {
-		r.emptyContinuationRetried = true
-	}
-	return decision.Allowed()
 }
 
 // claimStreamReplay grants at most one interruption replay per model round.
@@ -188,25 +160,34 @@ func (r *turnRuntime) clearStreamReplay() {
 	r.streamReplayed = false
 }
 
-func (r *turnRuntime) clearEmptyContinuationRetry() {
-	r.emptyContinuationRetried = false
-}
-
-// claimToolRecovery enforces one recovery reissue across all categories in a
-// turn. Keeping the budget shared prevents alternating parser, discovery, and
-// empty-output failures from multiplying requests.
+// claimToolRecovery grants each recovery category one retry until the next
+// clean round (renewToolRecovery). A category that fails again before a
+// clean round is exhausted: its retry did not help. Categories do not share
+// the retry, so an empty continuation does not use up a later malformed
+// call's chance. Alternating failures stay bounded: between two clean rounds
+// each category retries at most once, and every clean round either runs
+// tools (counted against the tool-round budget) or ends the turn.
 func (r *turnRuntime) claimToolRecovery(reason provider.ToolRecoveryReason) provider.ToolRecoveryDecision {
-	const maxToolRecoveryAttempts = 1
-	if r.toolRecoveryAttempts >= maxToolRecoveryAttempts {
+	if r.toolRecoverySpent[reason] {
 		r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{Reason: reason, Outcome: provider.ToolRecoveryExhausted}
 		return r.lastToolRecoveryDecision
 	}
+	if r.toolRecoverySpent == nil {
+		r.toolRecoverySpent = make(map[provider.ToolRecoveryReason]bool)
+	}
+	r.toolRecoverySpent[reason] = true
 	r.toolRecoveryAttempts++
 	r.toolRecoveryReason = reason
 	r.lastToolRecoveryDecision = provider.ToolRecoveryDecision{
 		Reason: reason, Attempt: r.toolRecoveryAttempts, Outcome: provider.ToolRecoveryScheduled,
 	}
 	return r.lastToolRecoveryDecision
+}
+
+// renewToolRecovery restores every category's retry after a round that
+// passed all recovery checks.
+func (r *turnRuntime) renewToolRecovery() {
+	r.toolRecoverySpent = nil
 }
 
 func (r *turnRuntime) busy() bool {

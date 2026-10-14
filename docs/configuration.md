@@ -248,6 +248,8 @@ never retained. See
 | --- | --- | --- |
 | `output_storage` | `memory` | Retained entity bodies use bounded process memory; `disk` opts into the private session spool and `off` disables body retention |
 | `output_storage_path` | OS temporary directory | Optional owner-controlled root for the explicit disk spool; invalid or unavailable roots fall back to bounded memory with a diagnostic |
+| `max_output_bytes` | `4194304` (4 MiB) | Cap on one output body retained in the entity registry |
+| `max_total_output_bytes` | `16777216` (16 MiB) | Cap on all output bodies the entity registry retains together |
 
 ### `agent`
 
@@ -306,6 +308,7 @@ section and [security.md](security.md)):
 | `max_iterations` | `10` | Tool rounds per user message. When spent, a prompt asks whether to grant more rounds or have the model answer with what it already has |
 | `max_file_kb` | `512` | Whole-file read/write, command output, and MCP tool result output cap; ranged `read_file` output keeps this cap while scanning is separately bounded |
 | `command_timeout` | `30s` | Wall-clock limit for one `run_command` execution |
+| `read.default_lines` | `200` | Line window `read_file` returns when the model gives no explicit range |
 
 The core set also includes `ask_user`, bounded `local_context`, and local
 `tool_search`. `local_context(kind="clipboard")` always enters the sensitive
@@ -528,7 +531,9 @@ and each subsequent native LLM request use the same visible snapshot.
 
 Documented in detail in [cache.md](cache.md), [memory.md](memory.md),
 [prompt-composition.md](prompt-composition.md), and
-[context-management.md](context-management.md).
+[context-management.md](context-management.md). The opt-in Laya
+`decision_engine.*` keys (off by default) are documented in
+[decision-engine.md](decision-engine.md).
 
 `prompt.fresh_runtime_context` (default `auto`) places a turn's first-request
 runtime context: `message` keeps the system message identical across turns so

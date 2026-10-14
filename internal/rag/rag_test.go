@@ -382,6 +382,51 @@ func TestFormatContextKeepsWholeSnippetsThatFit(t *testing.T) {
 	}
 }
 
+// TestStoreSaveIgnoresStaleTempFile: the index holds workspace excerpts, so a
+// leftover index.json.tmp with a looser mode must not leak that mode into the
+// saved index, and Save must not leave temporary files behind.
+func TestStoreSaveIgnoresStaleTempFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	root := t.TempDir()
+	writeFile(t, root, "a.md", "content for indexing")
+	idx, _, err := Build(BuildConfig{Root: root, Include: []string{"**/*.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "ragdir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, indexFileName+".tmp")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewStore(dir).Save(idx, root); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, indexFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("saved index mode = %o, want 600", mode)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != indexFileName && e.Name() != indexFileName+".tmp" {
+			t.Errorf("unexpected file left in index dir: %s", e.Name())
+		}
+	}
+}
+
 func TestStoreForRootIsolatesWorkspaces(t *testing.T) {
 	base := NewStore(filepath.Join(t.TempDir(), "ragdir"))
 	rootA, rootB := t.TempDir(), t.TempDir()

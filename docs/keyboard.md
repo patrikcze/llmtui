@@ -14,9 +14,10 @@
 | `Ctrl+V` | Paste an image from the clipboard (vision models) |
 | `Ctrl+X` | Remove the last pasted image |
 | `Ctrl+L` | Clear the conversation |
-| `PgUp` / `PgDn` | Scroll the chat (mouse wheel works too); typing never scrolls it |
+| `F6` | Toggle keyboard transcript navigation: `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` then scroll the chat until `F6` or any other key returns them to the composer |
+| Mouse wheel | Scroll the chat; outside `F6` mode, `PgUp`/`PgDn` and typing go to the composer and never scroll it |
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
-| `Esc` | Stop generation (keeps partial reply) · close overlay |
+| `Esc` | Stop generation (keeps partial reply), or stop an `/agent` step or verification · close overlay |
 | `↑` / `↓` | Choose an item in `/models`, `/providers`, `/skills list`, `/plugins list`, and other pickers; navigate command suggestions |
 | `↑` on an empty composer with queued messages | Pull the newest queued message back into the composer to edit it |
 | `↑` / `↓` in the composer | Recall previously submitted prompts and slash commands when the composer is empty; otherwise move the cursor between (soft-wrapped) input lines |

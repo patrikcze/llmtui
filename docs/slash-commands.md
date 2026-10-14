@@ -7,7 +7,8 @@ suggested. `/help` shows everything grouped by category; `/help <category>`
 filters.
 
 Commands that would change what an in-flight request depends on (`/clear`,
-`/provider`, `/model`, `/config reload`, `/history load|clear`) are
+`/provider`, `/model`, `/think`, `/tools`, `/web`, `/skills`, `/plugins`,
+`/rag`, `/mcp`, `/personal-apps`, `/config reload`, `/history load|clear`) are
 unavailable while a reply, tool batch, or verification is in progress — press
 `Esc` to stop it first.
 
@@ -49,7 +50,7 @@ needs workspace tools. See [agent-loop.md](agent-loop.md).
 | `/profile auto` | Restore automatic profile matching for the active model |
 | `/profile set <name>` / `/profile inspect` | Pin a named profile / inspect the active profile |
 | `/think [on\|off\|auto\|low\|medium\|high\|status]` | Reasoning mode; GPT-OSS uses low/medium/high effort and defaults to medium |
-| `/thoughts [show\|hide\|toggle\|status]` | Show or hide captured reasoning without changing model behavior |
+| `/thoughts [show\|hide\|toggle\|status]` (alias `/thinking`) | Show or hide captured reasoning without changing model behavior |
 | `/math [on\|off\|toggle\|status]` | Render LaTeX math (`$…$`, `$$…$$`) in Markdown answers as terminal Unicode; display-only, needs `ui.markdown` |
 
 ## Prompt
@@ -145,7 +146,7 @@ Declaring a server starts nothing; only `connect` launches it. See [mcp.md](mcp.
 ## Skills
 | Command | Description |
 | --- | --- |
-| `/skills` · `/skills status` | Skills overlay: discovered, active, limits, model-driven load state |
+| `/skills` · `/skills status` (alias `/skill`) | Skills overlay: discovered, active, limits, model-driven load state |
 | `/skills list` | Dialog of discovered skills; `Enter` activates/deactivates the selected skill for the session |
 | `/skills active` | Active skills in deterministic prompt order |
 | `/skills inspect <id>` | Metadata, provenance, hash, recommended tools, content preview |
@@ -157,7 +158,7 @@ Declaring a server starts nothing; only `connect` launches it. See [mcp.md](mcp.
 ## Plugins
 | Command | Description |
 | --- | --- |
-| `/plugins` · `/plugins list` | Dialog of discovered plugin packages; `Enter` enables/disables the selected plugin (`/plugins status` shows the read-only list) |
+| `/plugins` · `/plugins list` (alias `/plugin`) | Dialog of discovered plugin packages; `Enter` enables/disables the selected plugin (`/plugins status` shows the read-only list) |
 | `/plugins inspect <id>` | Manifest, source, root, declared skills |
 | `/plugins enable <id>` | Register the plugin's skills (activates nothing, runs nothing) |
 | `/plugins disable <id>` | Unregister its skills; deactivates any that were active |
@@ -181,4 +182,4 @@ Declaring a server starts nothing; only `connect` launches it. See [mcp.md](mcp.
 | `/usage [session\|last\|reset\|export]` | Usage dashboard and stats |
 | `/stats` | Per-exchange session table |
 | `/save` | Save the session |
-| `/history [load <name>\|search <q>\|export md\|json\|clear]` | Saved sessions; bare `/history` opens a dialog where `Enter` loads the highlighted session |
+| `/history [load <name>\|save\|search <q>\|export md\|json\|clear]` | Saved sessions; bare `/history` opens a dialog where `Enter` loads the highlighted session |

@@ -66,6 +66,25 @@ func TestHelpGroupsByCategory(t *testing.T) {
 	}
 }
 
+// TestHelpListsEveryCommandCategory guards the two sources of truth for
+// /help: helpOverlay prints only the categories in commandCategories, so a
+// command registered under any other category silently vanished from /help.
+func TestHelpListsEveryCommandCategory(t *testing.T) {
+	known := make(map[string]bool, len(commandCategories))
+	for _, cat := range commandCategories {
+		known[cat] = true
+	}
+	for _, c := range slashCommands() {
+		if !known[c.category] {
+			t.Errorf("/%s has category %q, which is missing from commandCategories", c.name, c.category)
+		}
+	}
+	m := newTestModel(t)
+	if help := m.helpOverlay(""); !strings.Contains(help, "/personal-apps") {
+		t.Error("/help does not list /personal-apps")
+	}
+}
+
 func TestCacheCommands(t *testing.T) {
 	m := newTestModel(t)
 	m.responseCache = cache.New(t.TempDir(), time.Hour, 16, true)

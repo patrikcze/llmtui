@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -211,8 +212,14 @@ func TestSaveIsAtomic(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "s1.json.tmp")); !os.IsNotExist(err) {
-		t.Errorf("temp file left behind: err = %v", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
 	}
 	got, err := Load(dir, "s1")
 	if err != nil {
@@ -220,6 +227,34 @@ func TestSaveIsAtomic(t *testing.T) {
 	}
 	if got.Model != "b" || len(got.Messages) != 1 || got.Messages[0].Content != "second" {
 		t.Errorf("loaded session = %+v, want fully replaced by the second save", got)
+	}
+}
+
+// TestSaveIgnoresStaleTempFile guards the permission contract: a leftover
+// <name>.json.tmp from an older build (or another writer) must neither be
+// reused nor lend its looser mode to the saved session.
+func TestSaveIgnoresStaleTempFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "s1.json.tmp")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := Save(dir, "s1", Session{Model: "m"})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("saved session mode = %o, want 600", mode)
 	}
 }
 

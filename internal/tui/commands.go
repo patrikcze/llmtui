@@ -57,7 +57,7 @@ func (c slashCommand) is(name string) bool {
 
 // Command categories, in /help display order.
 var commandCategories = []string{
-	"Chat", "Agent", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Skills", "Plugins", "RAG", "MCP", "Diagnostics", "Session",
+	"Chat", "Agent", "Provider", "Model", "Prompt", "Context", "Cache", "Memory", "Tools", "Skills", "Plugins", "RAG", "MCP", "Personal apps", "Diagnostics", "Session",
 }
 
 type modelsResultMsg struct {
@@ -119,7 +119,7 @@ func slashCommands() []slashCommand {
 		}},
 
 		// --- Model ---
-		{name: "models", usage: "/models [refresh]", desc: "list models on the current provider", category: "Model", run: func(m *Model, _ string) tea.Cmd {
+		{name: "models", usage: "/models", desc: "list models on the current provider (queried fresh each time)", category: "Model", run: func(m *Model, _ string) tea.Cmd {
 			prov := m.prov
 			return func() tea.Msg {
 				models, err := prov.ListModels(context.Background())
@@ -195,7 +195,7 @@ func slashCommands() []slashCommand {
 			m.saveWithNotice()
 			return nil
 		}},
-		{name: "history", usage: "/history [load <name>|search <q>|export md|json|clear]", desc: "saved sessions: list, load, search, export", category: "Session", run: cmdHistory},
+		{name: "history", usage: "/history [load <name>|save|search <q>|export md|json|clear]", desc: "saved sessions: list, load, search, export", category: "Session", run: cmdHistory},
 	}
 }
 

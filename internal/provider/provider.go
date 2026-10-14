@@ -350,7 +350,10 @@ type ChatEvent struct {
 //
 // Chat returns a channel that emits EventDelta events followed by exactly one
 // terminal event (EventDone or EventError), after which the channel is closed.
-// Implementations must respect ctx cancellation.
+// Implementations must respect ctx cancellation: once ctx is canceled a
+// producer must not block (send with Emit), and its terminal error is
+// best-effort (TryEmit), so a consumer that stopped reading may see the
+// channel close without one.
 type Provider interface {
 	Name() string
 	ListModels(ctx context.Context) ([]ModelInfo, error)

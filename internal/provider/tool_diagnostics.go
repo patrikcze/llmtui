@@ -65,8 +65,8 @@ const (
 	ToolRecoveryEmptyContinuation ToolRecoveryReason = "empty_continuation"
 )
 
-// ToolRecoveryOutcome describes whether the shared per-turn recovery budget
-// admitted a retry. It is diagnostic control state, never execution evidence.
+// ToolRecoveryOutcome describes whether a recovery category's single retry
+// (renewed after each clean round) admitted a retry. It is diagnostic control state, never execution evidence.
 type ToolRecoveryOutcome string
 
 const (
