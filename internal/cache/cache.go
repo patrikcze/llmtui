@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 )
 
 // Key identifies one cacheable request. API keys and other secrets must
@@ -215,45 +217,17 @@ func (c *Cache) Put(k Key, e Entry) error {
 	return nil
 }
 
-func writeAtomic(path string, data []byte) (retErr error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".llmtui-cache-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	closed := false
-	defer func() {
-		if !closed {
-			retErr = errors.Join(retErr, tmp.Close())
-		}
-		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove temporary file: %w", err))
-		}
-	}()
-
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("set temporary file permissions: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write temporary file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary file: %w", err)
-	}
-	closed = true
-	if err := os.Rename(tmpPath, path); err != nil {
+func writeAtomic(path string, data []byte) error {
+	err := atomicfile.WriteFile(path, data, 0o600)
+	if errors.Is(err, atomicfile.ErrReplace) {
 		// Another process may have won an immutable-key race. Preserve its
-		// complete entry rather than replacing it non-atomically on platforms
-		// where Rename cannot overwrite an existing file.
+		// complete entry rather than failing on platforms where the replace
+		// cannot overwrite a file that is open elsewhere.
 		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
 			return nil
 		}
-		return fmt.Errorf("rename temporary file: %w", err)
 	}
-	return nil
+	return err
 }
 
 // prune removes oldest entries until total size fits maxBytes.

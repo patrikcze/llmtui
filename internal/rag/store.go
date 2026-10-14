@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 )
 
 // indexFileName is the on-disk index inside the configured index directory.
@@ -90,39 +92,10 @@ func (s *Store) Save(idx *Index, root string) error {
 	if err != nil {
 		return fmt.Errorf("rag: encode index: %w", err)
 	}
-	if err := writeFileAtomic(s.path(), data); err != nil {
+	if err := atomicfile.WriteFile(s.path(), data, 0o600); err != nil {
 		return fmt.Errorf("rag: write index: %w", err)
 	}
 	return nil
-}
-
-// writeFileAtomic replaces path with data through a fresh, uniquely named
-// 0o600 temp file that is synced before the rename. A fixed "<path>.tmp"
-// would be shared by concurrent writers and, if left over, would keep its old
-// (possibly looser) mode — the index holds workspace source excerpts.
-func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".index-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
 }
 
 // Load reads the index. A missing file returns (nil, "", time.Time{}, nil):

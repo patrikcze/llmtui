@@ -5,7 +5,7 @@ Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
 in-process. Local-first: no telemetry, no network call the user did not
 configure. Audience: developers running models on their own machine.
 
-This is a mature 42-package Go codebase (41 internal packages plus the
+This is a mature 43-package Go codebase (42 internal packages plus the
 `cmd/llmtui` entry point), not a scaffold. Read the code before changing it;
 refresh the exact inventory with `go list ./...` and see
 `docs/architecture/package-map.md` for the maintained map.
@@ -111,12 +111,15 @@ Each rule below is what the code already does — match it, don't improve on it.
   configured value with `0`. Env prefix constant:
   `internal/config/config.go:18`.
 - **File permissions**: config and state files are `0o600`; the config dir is
-  `0o755`, private state dirs (history, RAG index) `0o700`. A write that
-  replaces a file goes through a fresh `os.CreateTemp` file in the target dir,
-  `Chmod(0o600)`, `Sync`, then rename (`writeConfigDocument` in
-  `internal/config/config.go`, `writeAtomic` in `internal/cache/cache.go`).
-  Never reuse a fixed `<path>.tmp`: a leftover one keeps its old mode and
-  concurrent writers collide. `config init` (`WriteDefault`) creates a new
+  `0o755`, private state dirs (history, RAG index) `0o700`. Replace a file
+  only with `atomicfile.Write` / `atomicfile.WriteFile`
+  (`internal/atomicfile`): fresh temp file in the target dir, `Chmod` to the
+  caller's mode, `Sync`, rename + directory fsync (`MoveFileEx` write-through
+  on Windows). Don't hand-roll another copy, and never reuse a fixed
+  `<path>.tmp`: a leftover one keeps its old mode and concurrent writers
+  collide. Exceptions: `internal/tools` workspace writes (confined through
+  `os.Root`) and `internal/entity`'s create-only spool. `config init`
+  (`WriteDefault`) creates a new
   file directly and refuses to overwrite.
 - **Secrets**: never in logs, cache keys, command env, debug output, or
   `config show`. `--api-key`'s own help text warns it is visible in the process

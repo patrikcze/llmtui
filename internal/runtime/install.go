@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 )
 
 // InstallOptions configures a runtime installation.
@@ -314,29 +316,22 @@ func cacheArchive(source, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(destination), ".runtime-archive-*")
+	in, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	tempName := temp.Name()
-	if closeErr := temp.Close(); closeErr != nil {
-		_ = os.Remove(tempName)
-		return closeErr
-	}
-	defer os.Remove(tempName)
-	if err := copyFile(source, tempName); err != nil {
-		return err
-	}
-	if err := os.Chmod(tempName, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tempName, destination); err != nil {
+	defer in.Close()
+	err = atomicfile.Write(destination, 0o600, func(w io.Writer) error {
+		_, copyErr := io.Copy(w, in)
+		return copyErr
+	})
+	if errors.Is(err, atomicfile.ErrReplace) {
+		// A concurrent install already cached this archive.
 		if _, statErr := os.Stat(destination); statErr == nil {
 			return nil
 		}
-		return err
 	}
-	return nil
+	return err
 }
 
 // extractArchiveSafe extracts the archive to extractDir, rejecting traversal,

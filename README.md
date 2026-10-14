@@ -710,6 +710,7 @@ internal/prompt/          prompt composition (raw message never rewritten)
 internal/history/         session persistence + usage log
 internal/clipboard/       image paste / text copy via platform tools
 internal/procutil/        cross-platform process-group containment for run_command
+internal/atomicfile/      crash-safe file replacement (temp file + fsync + rename) for state and config
 internal/tui/             Bubble Tea chat screen
 internal/tui/components/  status bar, charts, usage panel, buttons
 internal/tui/styles/      Lip Gloss theme
