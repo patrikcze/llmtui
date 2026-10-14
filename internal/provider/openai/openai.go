@@ -478,6 +478,7 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 			event.ReasoningBytes = len(reasoning)
 		}
 		if !provider.Emit(ctx, events, event) {
+			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 			return
 		}
 	}
@@ -487,6 +488,7 @@ func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req pr
 	}
 	malformed := !protocol.HarmonyRequired && len(toolCalls) == 0 && looksLikeUnparsedToolCall(content)
 	if !malformed && !provider.Emit(ctx, events, provider.ChatEvent{Type: provider.EventDelta, Delta: content}) {
+		provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: ctx.Err()})
 		return
 	}
 	usage := out.Usage.toUsage()

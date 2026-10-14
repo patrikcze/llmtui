@@ -386,6 +386,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 	if !loaded {
 		base := filepath.Base(opts.ModelPath)
 		if !provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventProgress, Delta: fmt.Sprintf("loading model %s …", base)}) {
+			provider.TryEmit(events, provider.ChatEvent{Type: provider.EventError, Err: genCtx.Err()})
 			return
 		}
 		meta, err := rt.Load(genCtx, opts, func(msg string) {
