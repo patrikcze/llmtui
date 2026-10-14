@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 	"github.com/patrikcze/llmtui/internal/redact"
 )
 
@@ -334,36 +335,9 @@ func (s *ProjectStore) saveLocked(records []ProjectRecord) error {
 		return fmt.Errorf("secure project store directory: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(s.dir, ".project-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create project store temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	removeTemp := true
-	defer func() {
-		if removeTemp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("secure project store temp file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write project store: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync project store: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close project store: %w", err)
-	}
-	if err := replaceProjectFile(tmpPath, s.Path()); err != nil {
+	if err := atomicfile.WriteFile(s.Path(), data, 0o600); err != nil {
 		return fmt.Errorf("replace project store: %w", err)
 	}
-	removeTemp = false
 	return nil
 }
 
