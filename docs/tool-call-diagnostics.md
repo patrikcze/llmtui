@@ -36,14 +36,18 @@ The detector intentionally ignores ordinary prose, fenced JSON examples, and
 bare JSON. It does not inspect or display reasoning content. When it sees a
 strong provider-specific marker but the provider supplied no structured call,
 the controller drops that visible envelope and may make **one** schema-bound
-reissue for the current execution cycle. The reissue contains a fixed protocol
+reissue until the next clean round. The reissue contains a fixed protocol
 reminder, never the envelope, inferred arguments, or reasoning. A later call
 is executable only if the provider returns a fresh structured call that passes
 the normal registration, validation, and approval path.
 
-The single recovery budget is shared with malformed-native-call,
-hidden-MCP-schema, and empty-continuation recovery. It prevents alternating
-failures from multiplying model requests. `/debug tool-calls` records a
+Each recovery category (visible pseudo-call, malformed native call, hidden
+MCP schema, empty continuation) has its own single retry. A category that
+fails again before a clean round is exhausted and the turn fails; a round
+that passes every recovery check renews all of them. Alternating failures
+stay bounded: between clean rounds each category retries at most once, and
+every clean round either runs tools (counted against `tools.max_iterations`)
+or ends the turn. `/debug tool-calls` records a
 content-free `recovery` event with its category, attempt, and scheduled or
 exhausted outcome. A marker itself still never becomes a tool call.
 

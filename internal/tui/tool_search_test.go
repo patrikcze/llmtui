@@ -426,7 +426,7 @@ func TestHiddenNativeMCPRecoveryRequiresExactEligibleNameAndIsBounded(t *testing
 	}
 
 	m := configureDiscoveryModel(t, 10, nil)
-	m.toolRecoveryAttempts = 1
+	m.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
 	m.session.AddUser("continue")
 	m.transition(turnModelStreaming, turnOutcomeNone)
 	m.thinking = true

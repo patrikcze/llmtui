@@ -111,22 +111,31 @@ func TestVisiblePseudoCallNeverOverridesNativeToolCall(t *testing.T) {
 	}
 }
 
-func TestVisiblePseudoCallCannotAlternateWithHiddenMCPRecovery(t *testing.T) {
+// TestVisiblePseudoCallRetryIsIndependentOfOtherCategories: a hidden-MCP
+// recovery earlier in the same stretch must not use up the pseudo-call retry,
+// but a repeated pseudo-call before a clean round is still refused.
+func TestVisiblePseudoCallRetryIsIndependentOfOtherCategories(t *testing.T) {
 	m := configureDiscoveryModel(t, 10, nil)
 	m.toolsNative = true
-	m.toolRecoveryAttempts = 1
+	m.claimToolRecovery(provider.ToolRecoveryHiddenMCPTool)
 	m.session.AddUser("create an issue")
-	m.transition(turnModelStreaming, turnOutcomeNone)
-	m.thinking = true
-
-	_, cmd := m.handleStreamEvent(streamEventMsg{gen: m.streamGen, ok: true, event: provider.ChatEvent{
+	pseudo := provider.ChatEvent{
 		Type: provider.EventDone,
 		ToolCallDiagnostics: []provider.ToolCallDiagnostic{{
 			Stage: provider.ToolCallStageIntentSuspected, Classification: provider.ToolCallSuspectedCensored,
 		}},
-	}})
-	if cmd != nil {
-		t.Fatal("exhausted shared recovery budget allowed a second reissue")
+	}
+
+	m.transition(turnModelStreaming, turnOutcomeNone)
+	m.thinking = true
+	if _, cmd := m.handleStreamEvent(streamEventMsg{gen: m.streamGen, ok: true, event: pseudo}); cmd == nil {
+		t.Fatal("an earlier hidden-MCP recovery used up the pseudo-call retry")
+	}
+
+	m.transition(turnModelStreaming, turnOutcomeNone)
+	m.thinking = true
+	if _, cmd := m.handleStreamEvent(streamEventMsg{gen: m.streamGen, ok: true, event: pseudo}); cmd != nil {
+		t.Fatal("a repeated pseudo-call before a clean round was retried again")
 	}
 	if !strings.Contains(m.notice, "nothing was executed") {
 		t.Fatalf("exhausted pseudo-call notice = %q", m.notice)

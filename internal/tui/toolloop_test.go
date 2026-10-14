@@ -421,6 +421,38 @@ func TestEmptyCompletionAfterToolExecutionRetriesOnceThenReportsError(t *testing
 	}
 }
 
+// TestMalformedToolCallRetryIsNotSpentByEmptyContinuation: the user-facing
+// policy is one retry per failure type. An empty-continuation retry earlier
+// in the turn must not leave a later malformed call with no retry, and a
+// clean round in between renews every type.
+func TestMalformedToolCallRetryIsNotSpentByEmptyContinuation(t *testing.T) {
+	m := newTestModel(t)
+	m.thinking = true
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.claimToolRecovery(provider.ToolRecoveryEmptyContinuation)
+
+	_, cmd := m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone, MalformedToolCall: true},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if cmd == nil || m.errText != "" {
+		t.Fatalf("malformed call after an empty-continuation retry: cmd=%v errText=%q, want a retry", cmd != nil, m.errText)
+	}
+
+	// A clean answer round renews every category.
+	_, _ = m.handleStreamEvent(streamEventMsg{
+		event: provider.ChatEvent{Type: provider.EventDone},
+		ok:    true,
+		gen:   m.streamGen,
+	})
+	if m.toolRecoverySpent != nil {
+		t.Fatalf("clean round left spent recovery categories: %v", m.toolRecoverySpent)
+	}
+}
+
 // TestTruncatedNativeToolCallIsNotExecuted guards the fix for
 // docs/architecture/v1-agent-runtime.md §2: a tool call truncated by
 // max_tokens must never be executed, in ordinary tool chat just as much as
