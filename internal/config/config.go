@@ -12,6 +12,8 @@ import (
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
+
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 )
 
 // EnvPrefix is the prefix for all llmtui environment variables.
@@ -1730,32 +1732,7 @@ func writeConfigDocument(path string, document *yaml.Node) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary config: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	temporaryOpen := true
-	defer func() {
-		if temporaryOpen {
-			_ = temporary.Close()
-		}
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("set temporary config permissions: %w", err)
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return fmt.Errorf("write temporary config: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync temporary config: %w", err)
-	}
-	temporaryOpen = false
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary config: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil
