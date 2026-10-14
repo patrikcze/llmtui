@@ -33,7 +33,7 @@ the non-obvious design decisions and the conventions.
 5. User input goes through `Model.dispatch`.
 6. Cache lookup happens before prompt composition mutates context state.
 7. `Model.compose` builds labeled sections: system, template, helper guidance, model hints, summary, memory, retrieved RAG context, recent messages, raw user message.
-8. `Model.buildRequest` adds provider messages and native tool specs when enabled.
+8. `Model.buildRequestWithTools` adds provider messages and the prepared request's native tool specs when enabled (`Model.buildRequest` is a test convenience wrapper).
 9. `Model.startRequest` owns retries, native-tool fallback, and the inactivity watchdog.
 10. Provider emits `ChatEvent` values; TUI appends deltas, reasoning activity, usage, and tool calls.
 11. Tool calls execute through `tools.Runner` after approval checks, append results, then continue the model turn without cache or new user text.

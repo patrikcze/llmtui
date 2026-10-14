@@ -62,6 +62,13 @@ llmtui decision pull laya:english-mlx --revision 047678560251f28113ee8f5df4be821
 llmtui decision predict laya:english-mlx --input internal/decision/testdata/mlx/request.json
 ```
 
+Checkpoint management uses the same explicit command group:
+`llmtui decision models` lists available and installed checkpoints,
+`decision inspect <model>` shows installed metadata, `decision verify <model>`
+re-checks installed artifact checksums, `decision remove <model> [--revision]`
+removes one installed revision, and `decision pull --repair` reinstalls an
+invalid existing installation.
+
 `predict` reads `{"state": ..., "questions": {...}}` from a file or stdin and
 prints normalized JSON. It defaults to a two-minute total timeout; `--timeout`
 can override it. One CLI invocation makes one prediction. Long-lived callers

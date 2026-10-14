@@ -5,8 +5,8 @@ cross-check for apparent duplication (the same noun — *skill*, *memory*,
 *tool*, *runtime* — showing up in several packages).
 
 Current inventory: 42 Go packages (41 under `internal/` plus `cmd/llmtui`),
-about 139k Go LOC including tests (excluding `third_party/`), measured
-2026-09-30. Use `go list ./...`
+about 150k Go LOC including tests (excluding `third_party/`), measured
+2026-10-14. Use `go list ./...`
 for the exact package inventory; keep this file in sync with the one-line list
 in the README's "Package layout" section. File lists below name production
 files unless a developer-only test or fixture is called out explicitly.
@@ -106,7 +106,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 ## 6. TUI layer (`internal/tui`)
 
 One Bubble Tea `Model` split across files by concern. This is where most of
-the size is (`app.go` ~3800 LOC, several siblings 1800–2100). See
+the size is (`app.go` ~4000 LOC, several siblings 2000–2200). See
 `docs/tui-design.md`.
 
 | File(s) | Concern |
@@ -206,9 +206,9 @@ where both are needed (e.g. `llamart/vision.go`).
 
 ## Size hot-spots (not duplication, but worth knowing)
 
-1. `internal/tui` carries most of the complexity: `app.go` (~3800),
-   `commands_local.go` (~2100), `agent_loop.go` (~2100),
-   `pipeline.go` (~1800). `app.go`'s `Update` switch is the natural next
+1. `internal/tui` carries most of the complexity: `app.go` (~4000),
+   `commands_local.go` (~2000), `agent_loop.go` (~2200),
+   `pipeline.go` (~2000). `app.go`'s `Update` switch is the natural next
    extraction target (delegate more to `turn_runtime` / `commands`).
 2. `internal/tools/tools.go` (~2000) and `local_context.go` (~800) each mix
    protocol parsing, execution, and validation in one file.

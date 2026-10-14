@@ -43,7 +43,7 @@ Not runnable in a plain checkout:
   fake workers. See `docs/decision-engine.md` for the offline integration run.
 
 - `make dist-archive` must run on the native target OS/arch — it installs and
-  hash-verifies that platform's llama.cpp binaries (`Makefile:198-202`).
+  hash-verifies that platform's llama.cpp binaries (the `dist-archive` target).
 
 ## Architecture
 
@@ -75,8 +75,9 @@ Six things that are easy to get wrong:
    error, not a convenience.
 4. **Providers do not own timeouts.** No global `http.Client.Timeout` — a
    stream can take minutes. Connect timeout belongs in
-   `internal/app/factory.go`; the inactivity watchdog belongs in
-   `internal/tui/pipeline.go:1717` (`startRequest`).
+   `internal/app/factory.go`; the inactivity watchdog belongs to the TUI
+   (`startRequest` in `internal/tui/pipeline.go`, armed by
+   `turnRuntime.beginStream` in `internal/tui/turn_runtime.go`).
 5. **The raw user message is never rewritten.** Memory, RAG, skills, summaries
    and model hints are separate labeled sections in `internal/prompt/compose.go`;
    the user's text goes in last, verbatim. See `docs/prompt-composition.md`.
@@ -98,7 +99,8 @@ Six things that are easy to get wrong:
 Each rule below is what the code already does — match it, don't improve on it.
 
 - **Errors**: wrap with `fmt.Errorf("context: %w", err)`
-  (`internal/cli/root.go:116`). 714 of 1,252 production `fmt.Errorf` calls use `%w`. No
+  (`internal/cli/root.go:116`). Most production `fmt.Errorf` calls use `%w`
+  (719 of 1,262 on 2026-10-14). No
   `pkg/errors`. Do not panic for normal runtime failures.
 - **Logging**: there is none. No `slog`, `log`, `logrus`, or `zap` anywhere in
   non-test code. Diagnostics surface through the TUI, `llmtui doctor`, and
@@ -108,8 +110,14 @@ Each rule below is what the code already does — match it, don't improve on it.
   `internal/cli/root.go:110-118`) so an unset `--temperature` cannot clobber a
   configured value with `0`. Env prefix constant:
   `internal/config/config.go:18`.
-- **File permissions**: config and state written `0o600`, dirs `0o755`, writes
-  are temp-file + `Chmod` + rename (`internal/config/config.go:1640-1680`).
+- **File permissions**: config and state files are `0o600`; the config dir is
+  `0o755`, private state dirs (history, RAG index) `0o700`. A write that
+  replaces a file goes through a fresh `os.CreateTemp` file in the target dir,
+  `Chmod(0o600)`, `Sync`, then rename (`writeConfigDocument` in
+  `internal/config/config.go`, `writeAtomic` in `internal/cache/cache.go`).
+  Never reuse a fixed `<path>.tmp`: a leftover one keeps its old mode and
+  concurrent writers collide. `config init` (`WriteDefault`) creates a new
+  file directly and refuses to overwrite.
 - **Secrets**: never in logs, cache keys, command env, debug output, or
   `config show`. `--api-key`'s own help text warns it is visible in the process
   list and points at `LLMTUI_API_KEY` / `api_key_env`
@@ -118,16 +126,19 @@ Each rule below is what the code already does — match it, don't improve on it.
   `internal/terminaltext.Sanitize` before rendering and
   `internal/untrusted.Frame` before entering a prompt. Both are deliberately
   below the TUI — don't reimplement either locally.
-- **Provider contract**: `internal/provider/provider.go:347`. `Chat` returns a
+- **Provider contract**: the `Provider` interface in
+  `internal/provider/provider.go`. `Chat` returns a
   channel, emits deltas/reasoning, finishes with exactly one `EventDone` or
-  `EventError`, closes the channel, and honors context cancellation. Providers
-  holding resources implement `Closer` (`provider.go:359`); callers must
+  `EventError`, closes the channel, and honors context cancellation — after
+  cancel no send may block, and the terminal error is best-effort: send it
+  with `provider.TryEmit` rather than returning bare. Providers
+  holding resources implement `Closer` (same file); callers must
   `CloseProvider` on switch and exit.
 - **Cross-platform code**: split by `//go:build` into `*_unix.go` /
   `*_windows.go` / `*_other.go` (`internal/procutil/`, `internal/runtime/`,
   `internal/tools/local_context_disk_*.go`). Tests follow the same suffixes.
 - **Tests**: stdlib `testing` only — **no testify**. Table-driven with named
-  subtests where it fits (60+ files). `httptest` via `internal/testutil`.
+  subtests where it fits (100+ files). `httptest` via `internal/testutil`.
   Deterministic — temp dirs and fakes, not sleeps. Test files sit beside the
   code as `x_test.go` in the same package.
 - **Package docs**: every package has one, and several encode contracts
@@ -173,7 +184,7 @@ them **and add a regression test for the specific case it touches**:
 - `go test ./...` passing does not cover native inference or the release
   archive; both are CI-only paths (see Commands).
 - `make lint` **silently skips** when `golangci-lint` is absent
-  (`Makefile:115-122`). "Lint passed" from `make check` may mean "lint didn't
+  (the `lint` target in `Makefile`). "Lint passed" from `make check` may mean "lint didn't
   run" — call `golangci-lint run ./...` directly if you need certainty.
 - `.golangci.yml` excludes `errcheck` on deferred `Close`, `Fprint*`,
   `json.Encoder.Encode`, `os.Remove`. Those unchecked returns are intentional.
@@ -203,8 +214,8 @@ them **and add a regression test for the specific case it touches**:
   never run during normal chat startup. See `docs/decision-engine.md`.
 - Declaring an MCP server starts nothing; only an explicit connect launches a
   subprocess.
-- `internal/tui/app.go` (~3800 LOC), `commands_local.go` (~2100),
-  `agent_loop.go` (~2100), `internal/tools/tools.go` (~2000) and
+- `internal/tui/app.go` (~4000 LOC), `commands_local.go` (~2000),
+  `agent_loop.go` (~2200), `pipeline.go` (~2000), `internal/tools/tools.go` (~2000) and
   `internal/config/config.go` (~1700) are
   known size hot-spots. Add to them reluctantly; extraction targets are listed
   at the end of `docs/architecture/package-map.md`.
