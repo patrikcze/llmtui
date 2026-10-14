@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 )
 
 // InstallManifest is a small, non-sensitive record written by `self install`
@@ -26,7 +28,9 @@ type InstallManifest struct {
 
 const manifestSchemaVersion = 1
 
-// WriteManifest writes m to path atomically with 0o644 permissions.
+// WriteManifest writes m to path atomically with 0o644 permissions: the
+// manifest holds nothing secret and other users of a system-wide install
+// must be able to read it.
 func WriteManifest(path string, m InstallManifest) error {
 	m.SchemaVersion = manifestSchemaVersion
 	if m.InstalledAt == "" {
@@ -40,23 +44,7 @@ func WriteManifest(path string, m InstallManifest) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create manifest dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".install-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp manifest: %w", err)
-	}
-	tmpName := tmp.Name()
-	_, writeErr := tmp.Write(data)
-	closeErr := tmp.Close()
-	if writeErr != nil || closeErr != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("write temp manifest: %w", errorsJoin(writeErr, closeErr))
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
+	if err := atomicfile.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("install manifest: %w", err)
 	}
 	return nil
@@ -74,13 +62,4 @@ func ReadManifest(path string) (*InstallManifest, error) {
 		return nil, fmt.Errorf("parse install manifest %s: %w", path, err)
 	}
 	return &m, nil
-}
-
-func errorsJoin(errs ...error) error {
-	for _, e := range errs {
-		if e != nil {
-			return e
-		}
-	}
-	return nil
 }
