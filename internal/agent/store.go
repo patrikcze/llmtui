@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 	"github.com/patrikcze/llmtui/internal/redact"
 )
 
@@ -90,36 +91,9 @@ func (s *FileStore) Save(ctx context.Context, run *AgentRun) error {
 		return NewError(ErrorMemoryWrite, "create run directory", err)
 	}
 	path := filepath.Join(s.dir, run.ID+".json")
-	tmp, err := os.CreateTemp(s.dir, ".run-*.tmp")
-	if err != nil {
-		return NewError(ErrorMemoryWrite, "create run temp file", err)
-	}
-	tmpPath := tmp.Name()
-	removeTemp := true
-	defer func() {
-		if removeTemp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return NewError(ErrorMemoryWrite, "secure run temp file", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
 		return NewError(ErrorMemoryWrite, "write run", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return NewError(ErrorMemoryWrite, "sync run", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return NewError(ErrorMemoryWrite, "close run", err)
-	}
-	if err := replaceFile(tmpPath, path); err != nil {
-		return NewError(ErrorMemoryWrite, "finalize run", err)
-	}
-	removeTemp = false
 	if err := s.pruneLocked(); err != nil {
 		return NewError(ErrorMemoryWrite, "prune run history", err)
 	}
