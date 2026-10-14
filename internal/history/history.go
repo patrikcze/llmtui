@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/patrikcze/llmtui/internal/atomicfile"
 	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/redact"
 	"github.com/patrikcze/llmtui/internal/skill"
@@ -219,40 +220,10 @@ func Save(dir, name string, s Session) (string, error) {
 		return "", fmt.Errorf("encode session: %w", err)
 	}
 	path := filepath.Join(dir, name+".json")
-	if err := writeFileAtomic(path, data); err != nil {
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("write session: %w", err)
 	}
 	return path, nil
-}
-
-// writeFileAtomic replaces path with data so a crash mid-write never leaves a
-// truncated session (os.WriteFile truncates the destination first). The temp
-// file is created fresh with a unique name — a fixed "<path>.tmp" would be
-// shared by concurrent writers and, if left over, would keep its old mode —
-// then set to 0o600 and synced before the rename.
-func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
 }
 
 // Load reads a saved session by name.
