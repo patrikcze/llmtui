@@ -3,6 +3,7 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -234,5 +235,38 @@ func TestClear(t *testing.T) {
 	}
 	if s := c.Stats(); s.Entries != 0 {
 		t.Error("cache should be empty after Clear")
+	}
+}
+
+// A replace that loses to a non-file at the target must still fail: only a
+// complete regular entry written by another process may stand in for ours.
+func TestWriteAtomicReportsReplaceOverNonFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "entry.json")
+	if err := os.MkdirAll(filepath.Join(path, "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(path, []byte("{}")); err == nil {
+		t.Fatal("writeAtomic over a directory succeeded")
+	}
+}
+
+// The keep-the-existing-entry fallback covers only the final replace. A
+// failure before it (here: the temp file cannot be created) must surface even
+// though a complete entry already exists.
+func TestWriteAtomicReportsEarlyFailureWhenEntryExists(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX directory permissions enforced for this user")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := writeAtomic(path, []byte(`{"new":true}`)); err == nil {
+		t.Fatal("writeAtomic in a read-only directory reported success")
 	}
 }
