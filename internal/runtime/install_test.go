@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1083,5 +1084,57 @@ func TestVerify(t *testing.T) {
 	}
 	if len(result.Result.BadHashes) == 0 {
 		t.Errorf("expected bad hash report")
+	}
+}
+
+func TestCacheArchiveCopiesPrivatelyWithoutLeftovers(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "llama.tar.gz")
+	if err := os.WriteFile(source, []byte("archive bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(t.TempDir(), "runtime-archives")
+	destination := filepath.Join(cacheDir, "llama.tar.gz")
+	for range 2 { // the second call replaces the cached copy
+		if err := cacheArchive(source, destination); err != nil {
+			t.Fatalf("cacheArchive: %v", err)
+		}
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "archive bytes" {
+		t.Fatalf("cached content = %q", got)
+	}
+	if goruntime.GOOS != "windows" {
+		info, err := os.Stat(destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("cached archive mode = %o, want 600", mode)
+		}
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("cache dir holds %d entries, want only the archive", len(entries))
+	}
+}
+
+func TestCacheArchiveMissingSourceLeavesNothing(t *testing.T) {
+	cacheDir := filepath.Join(t.TempDir(), "runtime-archives")
+	destination := filepath.Join(cacheDir, "llama.tar.gz")
+	if err := cacheArchive(filepath.Join(t.TempDir(), "missing"), destination); err == nil {
+		t.Fatal("cacheArchive of a missing source succeeded")
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache dir holds %d entries after a failed copy, want none", len(entries))
 	}
 }
