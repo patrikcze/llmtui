@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const libffiVersion = "3.5.1"
+const libffiVersion = "3.8.0"
 
 //go:embed assets/libffi/LICENSE
 var embeddedLicense []byte
@@ -30,7 +30,7 @@ func init() {
 	if os.MkdirAll(destDir, 0755) == nil {
 		if fileInfo, err := os.Stat(destLib); err != nil {
 			if os.IsNotExist(err) {
-				if os.WriteFile(destLib, embeddedLib, 0755) == nil {
+				if os.WriteFile(destLib, embeddedLib, 0644) == nil {
 					filename = destLib
 				}
 			}
