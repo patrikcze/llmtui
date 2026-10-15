@@ -1,6 +1,7 @@
 package llamart
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -122,13 +123,13 @@ func TestBackendInitRetriesAfterLoadFailure(t *testing.T) {
 	}
 	initializeCalls := 0
 
-	if err := state.initLlama("bad", load, func() { initializeCalls++ }); err == nil {
+	if err := state.initLlama("bad", load, func() error { initializeCalls++; return nil }); err == nil {
 		t.Fatal("first initLlama() error = nil, want load failure")
 	}
 	if state.dir != "" || state.llamaInitialized {
 		t.Fatalf("failed initialization poisoned state: dir=%q initialized=%v", state.dir, state.llamaInitialized)
 	}
-	if err := state.initLlama("good", load, func() { initializeCalls++ }); err != nil {
+	if err := state.initLlama("good", load, func() error { initializeCalls++; return nil }); err != nil {
 		t.Fatalf("retry initLlama() error = %v", err)
 	}
 	if state.dir != "good" || !state.llamaInitialized {
@@ -136,6 +137,29 @@ func TestBackendInitRetriesAfterLoadFailure(t *testing.T) {
 	}
 	if loadCalls != 2 || initializeCalls != 1 {
 		t.Fatalf("load calls = %d, initialize calls = %d; want 2, 1", loadCalls, initializeCalls)
+	}
+}
+
+// llama.Init returns an error since yzma v1.29.0 (backend loading from the
+// runtime directory can fail). It must surface and must not latch the
+// backend as initialized, exactly like a load failure.
+func TestBackendInitReportsInitializeFailure(t *testing.T) {
+	var state backendState
+	load := func(string) error { return nil }
+	initErr := errors.New("backend path rejected")
+
+	err := state.initLlama("dir", load, func() error { return initErr })
+	if !errors.Is(err, initErr) {
+		t.Fatalf("initLlama() error = %v, want %v", err, initErr)
+	}
+	if state.dir != "" || state.llamaInitialized {
+		t.Fatalf("failed initialize poisoned state: dir=%q initialized=%v", state.dir, state.llamaInitialized)
+	}
+	if err := state.initLlama("dir", load, func() error { return nil }); err != nil {
+		t.Fatalf("retry initLlama() error = %v", err)
+	}
+	if !state.llamaInitialized {
+		t.Fatal("successful retry did not initialize")
 	}
 }
 
@@ -370,4 +394,29 @@ func TestGPULayerCount(t *testing.T) {
 
 func int64ToInt(value int64) int {
 	return int(value)
+}
+
+func TestRecordNativeInfoRunsOnce(t *testing.T) {
+	var state backendState
+	versionCalls, scanCalls := 0, 0
+	version := func() string { versionCalls++; return "0.6.0" }
+	scan := func(dir string) []error {
+		scanCalls++
+		return []error{errors.New("libggml-vulkan.so: libvulkan.so.1: cannot open shared object file")}
+	}
+
+	state.recordNativeInfo("dir", version, scan)
+	state.recordNativeInfo("dir", version, scan)
+
+	if versionCalls != 1 || scanCalls != 1 {
+		t.Fatalf("version calls = %d, scan calls = %d; want 1, 1", versionCalls, scanCalls)
+	}
+	gotVersion, gotErrors := state.nativeInfo()
+	if gotVersion != "0.6.0" || len(gotErrors) != 1 || !strings.Contains(gotErrors[0], "libvulkan.so.1") {
+		t.Fatalf("nativeInfo() = %q, %q", gotVersion, gotErrors)
+	}
+	gotErrors[0] = "mutated"
+	if _, again := state.nativeInfo(); again[0] == "mutated" {
+		t.Fatal("nativeInfo() returned the internal slice")
+	}
 }
