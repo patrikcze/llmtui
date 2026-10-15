@@ -12,6 +12,7 @@ deployment target, iPhone and iPad, Swift with main-actor default isolation.
 | `LLMTUIiOSApp.swift` | App entry point; shows `ContentView`. |
 | `ContentView.swift` | Tabs (Chats, Providers, Settings), the chat list, chat screen, composer, tool cards, approval sheet, provider editor, Settings (appearance, tool approval, chat retention, memory) and the Archived screen. |
 | `MobileAppModel.swift` | The main-actor model: chats, the open chat, providers, sending and queueing, the tool loop and the agent loop, tool dispatch and approval, attachment consent, citations, retention, archive and pin. |
+| `ComposerEchoGuard.swift` | Drops a sent or queued message that the multi-line message field writes back right after Send cleared it (the keyboard committing pending text). |
 | `AgentLoop.swift` | The agent loop's pure parts: policy and limits, plan and verdict parsing, the stop rules, the prompts built from state, and the run record. |
 | `AgentViews.swift` | The agent progress card on a reply. |
 | `ChatRuntime.swift` | HTTP to the provider: model discovery, streaming chat completions (SSE), and the tool definitions sent to the model. |

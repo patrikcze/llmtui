@@ -11,6 +11,12 @@ final class MobileAppModel {
     var conversations: [MobileConversation] = []
     var currentConversationID: UUID?
     var draft = ""
+    /// Bumped when the message field wrote a sent message back; the
+    /// composer rebuilds the field so it stops showing the stale text.
+    private(set) var composerResetCount = 0
+    @ObservationIgnored private var composerEcho = ComposerEchoGuard()
+    /// The clock the composer echo guard reads; tests replace it.
+    @ObservationIgnored var composerClock: () -> ContinuousClock.Instant = { ContinuousClock.now }
     /// Tools on runs the bounded tool loop (search, fetch, memory, local
     /// context, ask); off is a plain chat.
     var toolsEnabled = true
@@ -595,6 +601,7 @@ final class MobileAppModel {
     /// written with and sends automatically, in order, once the current
     /// reply finishes (the same behavior as the macOS app).
     func send() {
+        let rawDraft = draft
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftAttachments.isEmpty else { return }
         let options = MobileTurnOptions(toolsEnabled: toolsEnabled, reasoning: reasoning, mcpServerIDs: selectedMCPServerIDs, mcpGenerations: mcp.connections.mapValues(\.generation), agentEnabled: agentEnabled)
@@ -611,15 +618,31 @@ final class MobileAppModel {
                 attachments: draftAttachments,
                 options: options
             ))
-            draft = ""
-            draftAttachments = []
+            clearDraft(sent: rawDraft)
             return
         }
 
         let attachments = draftAttachments
+        clearDraft(sent: rawDraft)
+        dispatch(text: text, attachments: attachments, options: options, conversationID: conversationID)
+    }
+
+    /// Empties the composer after a send or queue and arms the echo guard
+    /// (see `ComposerEchoGuard`).
+    private func clearDraft(sent rawDraft: String) {
         draft = ""
         draftAttachments = []
-        dispatch(text: text, attachments: attachments, options: options, conversationID: conversationID)
+        composerEcho.arm(with: rawDraft, at: composerClock())
+    }
+
+    /// The message field's writes come through here rather than straight
+    /// into `draft`, so a sent message the field writes back is dropped.
+    func updateDraftFromComposer(_ text: String) {
+        guard composerEcho.accepts(text, at: composerClock()) else {
+            composerResetCount += 1
+            return
+        }
+        draft = text
     }
 
     func removeQueuedMessage(_ queued: MobileQueuedMessage) {
@@ -629,6 +652,7 @@ final class MobileAppModel {
     /// Takes a queued message back into the composer for editing.
     func editQueuedMessage(_ queued: MobileQueuedMessage) {
         queuedMessages.removeAll { $0.id == queued.id }
+        composerEcho.disarm()
         draft = queued.text
         draftAttachments = queued.attachments
         toolsEnabled = queued.options.toolsEnabled
