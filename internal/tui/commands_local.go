@@ -43,6 +43,15 @@ func (m *Model) kv(b *strings.Builder, key, value string) {
 		m.theme.StatusValue.Render(value))
 }
 
+// subjectTitle titles a dialog about one named thing ("MCP · github"),
+// sanitizing the user-typed subject; an empty one leaves just the kind.
+func subjectTitle(kind, subject string) string {
+	if subject == "" {
+		return kind
+	}
+	return kind + " · " + terminaltext.Sanitize(subject)
+}
+
 func (m *Model) overlayFooter(b *strings.Builder) string {
 	if m.modalActive() {
 		return b.String() // the dialog's bottom border carries the key hints
@@ -75,7 +84,7 @@ func cmdCache(m *Model, args string) tea.Cmd {
 	sub, _ := splitArgs(args)
 	switch sub {
 	case "", "stats":
-		m.openOverlay(func() string { return m.cacheOverlay() })
+		m.openModalOverlay("Response cache", scrollHint, func() string { return m.cacheOverlay() })
 	case "clear":
 		removed, err := m.responseCache.Clear()
 		if err != nil {
@@ -122,7 +131,7 @@ func cmdProfile(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "inspect":
-		m.openOverlay(func() string { return m.profileOverlay() })
+		m.openModalOverlay("Model profile", scrollHint, func() string { return m.profileOverlay() })
 	case "list":
 		m.openProfilesPicker()
 	case "auto":
@@ -265,11 +274,11 @@ func cmdPrompt(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "":
-		m.openOverlay(func() string { return m.promptOverlay() })
+		m.openModalOverlay("Prompt", scrollHint, func() string { return m.promptOverlay() })
 	case "preview", "composed":
-		m.openOverlay(func() string { return m.promptPreviewOverlay(false) })
+		m.openModalOverlay("Prompt · preview", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.promptPreviewOverlay(false) })
 	case "raw":
-		m.openOverlay(func() string { return m.promptPreviewOverlay(true) })
+		m.openModalOverlay("Prompt · raw", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.promptPreviewOverlay(true) })
 	case "mode":
 		if rest == "" {
 			m.notice = "prompt mode: " + m.effectivePromptMode() + " (set with /prompt mode minimal|balanced|coding|strict)"
@@ -569,11 +578,11 @@ type mcpDisconnectMsg struct {
 func cmdDoctor(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	if sub == "mcp" {
-		m.openOverlay(func() string { return m.doctorMcpOverlay() })
+		m.openModalOverlay("Doctor · MCP", scrollHint, func() string { return m.doctorMcpOverlay() })
 		return nil
 	}
 	if sub == "personal-apps" {
-		m.openOverlay(func() string { return m.personalAppsDoctorOverlay() })
+		m.openModalOverlay("Doctor · personal apps", scrollHint, func() string { return m.personalAppsDoctorOverlay() })
 		return nil
 	}
 	name := m.prov.Name()
@@ -1130,7 +1139,7 @@ func cmdKeys(m *Model, args string) tea.Cmd {
 	case "raw":
 		m.enterKeysMode(true)
 	case "help":
-		m.openOverlay(func() string { return m.helpOverlay("keys") })
+		m.openModalOverlay("Help · keys", scrollHint, func() string { return m.helpOverlay("keys") })
 	default:
 		return m.fail("usage: /keys [raw|help]")
 	}
@@ -1461,13 +1470,13 @@ func cmdTools(m *Model, args string) tea.Cmd {
 		}
 		m.refreshViewport()
 	case "list":
-		m.openOverlay(func() string { return m.toolsListOverlay(args) })
+		m.openModalOverlay("Workspace tools · list", scrollHint, func() string { return m.toolsListOverlay(args) })
 	case "inspect":
 		_, name := splitArgs(args)
-		m.openOverlay(func() string { return m.toolsInspectOverlay(name) })
+		m.openModalOverlay(subjectTitle("Tool", name), scrollHint, func() string { return m.toolsInspectOverlay(name) })
 	case "check":
 		_, cmdline := splitArgs(args)
-		m.openOverlay(func() string { return m.toolsCheckOverlay(cmdline) })
+		m.openModalOverlay("Tools · command check", scrollHint, func() string { return m.toolsCheckOverlay(cmdline) })
 	default:
 		return m.fail("usage: /tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]")
 	}
@@ -1538,7 +1547,7 @@ func cmdRag(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.ragOverlay() })
+		m.openModalOverlay("RAG", scrollHint, func() string { return m.ragOverlay() })
 	case "on":
 		m.ragOn = true
 		if m.ragIndex == nil {
@@ -1555,9 +1564,9 @@ func cmdRag(m *Model, args string) tea.Cmd {
 		if strings.TrimSpace(rest) == "" {
 			return m.fail("usage: /rag search <query>")
 		}
-		m.openOverlay(func() string { return m.ragSearchOverlay(rest) })
+		m.openModalOverlay(subjectTitle("RAG search", rest), scrollHint, func() string { return m.ragSearchOverlay(rest) })
 	case "sources":
-		m.openOverlay(func() string { return m.ragSourcesOverlay() })
+		m.openModalOverlay("RAG · sources", scrollHint, func() string { return m.ragSourcesOverlay() })
 	case "clear":
 		if m.ragStore != nil {
 			if err := m.ragStore.Clear(); err != nil {
@@ -1764,11 +1773,12 @@ func cmdMcp(m *Model, args string) tea.Cmd {
 	}
 	switch sub {
 	case "", "status", "list":
-		m.openOverlay(func() string { return m.mcpOverlay() })
+		m.openModalOverlay("MCP servers", scrollHint, func() string { return m.mcpOverlay() })
 	case "tools":
-		m.openOverlay(func() string { return m.mcpToolsOverlay() })
+		m.openModalOverlay("MCP · tools", scrollHint, func() string { return m.mcpToolsOverlay() })
 	case "inspect":
-		m.openOverlay(func() string { return m.mcpInspectOverlay(strings.TrimSpace(rest)) })
+		name := strings.TrimSpace(rest)
+		m.openModalOverlay(subjectTitle("MCP", name), scrollHint, func() string { return m.mcpInspectOverlay(name) })
 	case "enable":
 		name := strings.TrimSpace(rest)
 		if name == "" {

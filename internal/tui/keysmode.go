@@ -24,7 +24,7 @@ func (m *Model) enterKeysMode(raw bool) {
 	m.keys.keysMode = true
 	m.keys.keysRaw = raw
 	m.keys.keyLog = nil
-	m.openOverlay(func() string { return m.keysOverlay() })
+	m.openModalOverlay("Key inspector", "press keys to inspect · esc close", func() string { return m.keysOverlay() })
 }
 
 // logKey records one received key event and refreshes the inspector.
@@ -33,7 +33,12 @@ func (m *Model) logKey(entry string) {
 	if len(m.keys.keyLog) > maxKeyLog {
 		m.keys.keyLog = m.keys.keyLog[len(m.keys.keyLog)-maxKeyLog:]
 	}
-	m.viewport.SetContent(m.keysOverlay())
+	content := m.keysOverlay()
+	if m.overlayRender != nil {
+		content = m.overlayRender() // wrapped to the dialog body
+	}
+	m.viewport.SetContent(content)
+	m.fitModalHeight(content)
 	m.viewport.GotoBottom()
 }
 
@@ -93,6 +98,5 @@ func (m *Model) keysOverlay() string {
 		"  If shift+enter shows as \"enter\", this terminal does not expose it as a\n"+
 			"  distinct key event. Use alt+enter or ctrl+j for newlines, or enable an\n"+
 			"  enhanced keyboard protocol in your terminal if supported.") + "\n")
-	b.WriteString("\n" + m.theme.SystemNote.Render("esc to close"))
-	return b.String()
+	return m.overlayFooter(&b)
 }
