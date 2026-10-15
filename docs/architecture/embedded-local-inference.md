@@ -2,6 +2,80 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-10-15 addendum: runtime pin → llama.cpp v0.6.0 / yzma v1.29.1, ffi v0.8.0
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump plus the
+vendored libffi binding. Supersedes every earlier pin value in this document,
+including the 2026-09-28 addendum's.
+
+- yzma `v1.28.0` → **`v1.29.1`** (`go.mod`, one line; `go.sum` gains only the
+  new yzma hashes). This is yzma's declared binding for llama.cpp `v0.6.0`.
+  Changes that touch llmtui:
+  - `llama.Init()` now returns an error (backend loading from the runtime
+    directory). llmtui called it as a statement, which still compiles and
+    drops the error; `initBackend` now returns it and, like a load failure,
+    does not latch the backend as initialized.
+  - New `llama.Version()` and `llama.GGMLBackendLoadErrors(dir)`. llmtui
+    records both once after initialization and shows them with the native
+    backends in `/doctor` (`llama.cpp` and `backend not loaded` rows). ggml
+    skips a backend library it cannot open, so a Vulkan pack without the
+    system `libvulkan` otherwise falls back to the CPU with no message.
+  - yzma's own `SetAbortCallback`, `SetProgressCallback` and `LogSilent` now
+    share one purego callback each instead of using a new slot per call (slots
+    are never freed and stop at 2000). llmtui never used those helpers: it
+    registers one process-wide abort callback in the context parameters, so
+    nothing changes here.
+  - Other fixes llmtui inherits without code changes: `NewSampler` params and
+    EOG bias, `Tokenize` with NUL bytes, mtmd `HelperEvalChunks` locking per
+    context, and Windows DLL dependencies resolved from the runtime folder.
+    API changes llmtui does not call: `mtmd.BitmapInit` takes a byte slice,
+    `StateLoadFile`/`StateSeqLoadFile` return the token count, the session and
+    state-sequence file versions are bumped, and the common `SamplerParams`
+    struct changes fields.
+  - Not adopted: `ModelThreads(model)` (a thread count sized from the model's
+    active weight bytes, at most `llama.Threads()`) would change what
+    `threads: 0` selects, so it is a separate decision; the `BatchExt`/
+    `Process` batch API and `GetCausalAttn` have no llmtui use yet. The
+    experimental `exp/speculative` NextN bindings remain unused and
+    `draft-mtp` remains an explicit error.
+- llama.cpp `b11146` / `v0.5.0` → **`b11429` / `v0.6.0`**, commit
+  `d81235049384534c167caea52b85a694f6103d14`. yzma's manifest names `b11429`
+  as the release's upstream build, and this time the upstream git tag `v0.6.0`
+  is the same commit.
+- yzma pins the `v0.6.0` digest manifest (`llama-cpp-builder` release
+  `v0.6.0.json`) at
+  `sha256:eae6acae7a2044bb27981d2bd72481780b5675d92b6adaefe5035364160d8153`;
+  the downloaded manifest hashes to exactly that. All eight archive SHA-256s in
+  `pin.json` (five platforms and three Vulkan packs) match that authenticated
+  manifest. Archive sizes and every allowlisted per-file hash were computed
+  from the downloaded archives.
+- `compatible_range` is the exact compatible build, `b11429`–`b11429`.
+  Library versions move from llama/mtmd `.0.5.0` to `.0.6.0` and ggml
+  `.0.25.1` to `.0.26.0`. The allowlist and alias families are unchanged.
+  `libllama-common` and the `*-impl` tool libraries remain excluded:
+  `libllama` and `libmtmd` link only to `libggml*`, and yzma loads only
+  `ggml`, `ggml-base`, `llama` and `mtmd`. Vulkan packs' shared base files are
+  byte-identical to the CPU archives. The upstream `LICENSE` is unchanged and
+  matches the embedded fallback copy.
+- `github.com/jupiterrider/ffi` `v0.7.0` → **`v0.8.0`**. The copy in
+  `third_party/ffi` had stayed on upstream v0.6.0 code while `go.mod` named
+  v0.7.0; it is now pristine v0.8.0 plus the same lazy-loading patch,
+  documented in `third_party/ffi/LLMTUI-PATCH.md`. v0.8.0 keeps the argument
+  type slices passed to `ffi_prep_cif` reachable (upstream issue #19: they
+  could be garbage-collected while libffi still pointed at them), embeds
+  libffi 3.8.0 for macOS and Windows, and adds a Windows arm64 build.
+  `purego` stays at `v0.10.2`; yzma requires `v0.10.0`, and v0.11 adds only
+  platforms and struct support llmtui does not use.
+
+Validation: `go test -count=1 ./...`, `go vet ./...`, and `golangci-lint` pass.
+`llmtui runtime install` downloads, size/SHA-256-verifies, extracts, and
+full-verifies the b11429 darwin-arm64 runtime. The native integration suite
+then passes against it with `gemma-4-E4B-it-Q4_K_M.gguf` on Metal and CPU-only
+(`LLMTUI_TEST_CPU=1`): text, native tools, vision with its `mmproj` (including
+cancel and reuse), wrong-projector rejection, large prompt, and the embedded
+provider factory. On that runtime `llama.Version()` reports `0.6.0-dev` with
+no backend load errors. Linux and Windows are covered by CI's native lane.
+
 ## 2026-09-28 addendum: runtime pin → llama.cpp v0.5.0 / yzma v1.28.0
 
 Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
@@ -318,8 +392,8 @@ native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
 The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
-yzma `v1.28.0`, llama.cpp build `b11146` — the build behind upstream's
-`v0.5.0` tagged release; see the 2026-09-28 addendum). Packaged
+yzma `v1.29.1`, llama.cpp build `b11429` — the build behind upstream's
+`v0.6.0` tagged release; see the 2026-10-15 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
@@ -501,7 +575,7 @@ Two new optional persistent flags, `--context-size` and `--gpu-layers`,
 bind only when set (existing precedence rules). `ListModels` returns the
 configured model plus sibling `*.gguf` files for the model picker.
 
-The pinned Yzma v1.28.0 context ABI also supports independently configured
+The pinned Yzma v1.29.1 context ABI also supports independently configured
 `NThreadsBatch`, `NUbatch`, `TypeK`, `TypeV`, and `Offload_kqv`. llmtui maps
 these from opt-in embedded settings while retaining the old `kv_cache_type` as
 a shared K/V fallback and preserving native defaults for omitted micro-batch

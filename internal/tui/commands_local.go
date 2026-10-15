@@ -690,6 +690,12 @@ func doctorReport(prov provider.Provider, pc config.ProviderConfig, model string
 		native := diagnostics.NativeDiagnostics()
 		if native.Loaded {
 			add("native backends", fmt.Sprintf("%d registered, %d devices", native.Registrations, native.Devices))
+			if native.LlamaVersion != "" {
+				add("llama.cpp", terminaltext.Sanitize(native.LlamaVersion))
+			}
+			for _, loadErr := range native.BackendLoadErrors {
+				add("backend not loaded", terminaltext.Sanitize(loadErr))
+			}
 		} else {
 			add("native backends", "runtime not loaded")
 		}

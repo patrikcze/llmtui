@@ -40,6 +40,13 @@ type backendState struct {
 	dir              string
 	llamaInitialized bool
 	mtmdInitialized  bool
+	// llamaVersion and backendLoadErrors are recorded once, right after a
+	// successful initialization, for NativeDiagnostics. ggml does not report
+	// a backend library it failed to open (a Vulkan backend without
+	// libvulkan, say): inference silently falls back to the CPU.
+	nativeInfoRecorded bool
+	llamaVersion       string
+	backendLoadErrors  []string
 }
 
 var globalBackend backendState
@@ -173,7 +180,7 @@ func (r *Runtime) Load(
 		return meta, fmt.Errorf("context_size must not be negative: %d", opts.ContextSize)
 	}
 	if opts.Speculative.Type == embedded.SpeculativeDraftMTP {
-		return meta, errors.New("speculative.type draft-mtp is not supported by llmtui's embedded runtime: the pinned Yzma v1.28.0 exposes llama.cpp's NextN staging APIs only as an experimental, unstable package, and llmtui implements no MTP decoder; disable speculative decoding")
+		return meta, errors.New("speculative.type draft-mtp is not supported by llmtui's embedded runtime: the pinned Yzma v1.29.1 exposes llama.cpp's NextN staging APIs only as an experimental, unstable package, and llmtui implements no MTP decoder; disable speculative decoding")
 	}
 	if err := opts.RopeScaling.Validate(); err != nil {
 		return meta, err
@@ -694,10 +701,13 @@ func (r *Runtime) NativeDiagnostics() embedded.NativeDiagnostics {
 	if r.lctx == 0 {
 		return embedded.NativeDiagnostics{}
 	}
+	version, loadErrors := globalBackend.nativeInfo()
 	return embedded.NativeDiagnostics{
-		Loaded:        true,
-		Registrations: llama.GGMLBackendRegCount(),
-		Devices:       llama.GGMLBackendDeviceCount(),
+		Loaded:            true,
+		Registrations:     llama.GGMLBackendRegCount(),
+		Devices:           llama.GGMLBackendDeviceCount(),
+		LlamaVersion:      version,
+		BackendLoadErrors: loadErrors,
 	}
 }
 
@@ -738,16 +748,42 @@ func initBackend(dir string) error {
 	if err := runtime.PrepareLibraryDir(dir); err != nil {
 		return fmt.Errorf("prepare native runtime directory: %w", err)
 	}
-	return globalBackend.initLlama(dir, llama.Load, func() {
+	err := globalBackend.initLlama(dir, llama.Load, func() error {
 		// Capture native logs into a bounded in-memory ring instead of
 		// silencing them: nothing reaches stderr (which would corrupt the
 		// TUI), and load/allocation failures can quote the decisive lines.
 		llama.LogSet(nativeLogCallback())
-		llama.Init()
+		return llama.Init()
 	})
+	if err != nil {
+		return err
+	}
+	globalBackend.recordNativeInfo(dir, llama.Version, llama.GGMLBackendLoadErrors)
+	return nil
 }
 
-func (state *backendState) initLlama(dir string, load func(string) error, initialize func()) (err error) {
+// recordNativeInfo stores the loaded llama.cpp version and the ggml backend
+// libraries in dir that fail to open. It runs once per process.
+func (state *backendState) recordNativeInfo(dir string, version func() string, loadErrors func(string) []error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.nativeInfoRecorded {
+		return
+	}
+	state.nativeInfoRecorded = true
+	state.llamaVersion = version()
+	for _, err := range loadErrors(dir) {
+		state.backendLoadErrors = append(state.backendLoadErrors, err.Error())
+	}
+}
+
+func (state *backendState) nativeInfo() (string, []string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.llamaVersion, append([]string(nil), state.backendLoadErrors...)
+}
+
+func (state *backendState) initLlama(dir string, load func(string) error, initialize func() error) (err error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -765,7 +801,9 @@ func (state *backendState) initLlama(dir string, load func(string) error, initia
 	if err := load(dir); err != nil {
 		return err
 	}
-	initialize()
+	if err := initialize(); err != nil {
+		return fmt.Errorf("initialize llama.cpp backends from %q: %w", dir, err)
+	}
 	state.dir = dir
 	state.llamaInitialized = true
 	return nil

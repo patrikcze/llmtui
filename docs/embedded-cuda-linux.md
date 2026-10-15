@@ -244,15 +244,16 @@ symbol/ABI errors.
 
 ```bash
 # The authoritative values live in internal/runtime/pin.json:
-#   llama_tag  (e.g. b11146)      -> PIN below
+#   llama_tag  (e.g. b11429)      -> PIN below
 #   llama_commit                  -> exact commit for that tag
 #   compatible_range.min/max      -> the only builds yzma accepts
-PIN=b11146          # <-- read this from internal/runtime/pin.json of YOUR llmtui
-#   Upstream also publishes semver releases (v0.5.0, …) whose binaries come
+PIN=b11429          # <-- read this from internal/runtime/pin.json of YOUR llmtui
+#   Upstream also publishes semver releases (v0.6.0, …) whose binaries come
 #   from a nightly bNNNNN build (see the release's nightly-tag.txt). Always
 #   check out the bNNNNN tag that pin.json records: the semver *git* tag can
-#   point at a later commit (v0.5.0 -> b11149, while its binaries and the pin
-#   are b11146), which would build source that does not match the pin.
+#   point at a later commit (v0.5.0 -> b11149, while its binaries were
+#   b11146), which would build source that does not match the pin. For
+#   v0.6.0 the git tag and b11429 are the same commit.
 
 git clone https://github.com/ggml-org/llama.cpp.git /opt/build/llama.cpp-$PIN
 cd /opt/build/llama.cpp-$PIN
@@ -482,9 +483,12 @@ or explicit device selection.
   nvidia-smi dmon           # per-GPU utilisation / power / memory, one line per sample
   ```
 
-Inside the TUI, `/debug` shows a `native backends` line
+Inside the TUI, `/doctor` shows a `native backends` line
 (`N registered, M devices`) once a model is loaded — `M` is the number of
 GGML backend devices the runtime actually registered (CPU + each CUDA GPU).
+If `libggml-cuda.so` cannot be opened (a missing or mismatched CUDA runtime
+library, for example), ggml skips it silently; `/doctor` then adds a
+`backend not loaded` row with the loader's error.
 
 <a id="8-staged-validation"></a>
 ## 8. Staged validation

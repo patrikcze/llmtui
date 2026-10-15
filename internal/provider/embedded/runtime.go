@@ -99,6 +99,12 @@ type NativeDiagnostics struct {
 	Loaded        bool
 	Registrations uint64
 	Devices       uint64
+	// LlamaVersion is the version the loaded llama.cpp library reports.
+	LlamaVersion string
+	// BackendLoadErrors lists ggml backend libraries in the runtime directory
+	// that failed to open. ggml skips them silently, so a GPU backend with a
+	// missing system dependency otherwise just leaves inference on the CPU.
+	BackendLoadErrors []string
 }
 
 type nativeDiagnosticsReporter interface {
