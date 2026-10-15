@@ -213,7 +213,7 @@ struct MobileQueuedMessage: Identifiable, Equatable {
     let options: MobileTurnOptions
 }
 
-struct ToolCall: Sendable, Equatable {
+nonisolated struct ToolCall: Sendable, Equatable {
     let id: String
     let name: String
     let arguments: String
