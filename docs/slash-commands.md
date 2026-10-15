@@ -1,9 +1,21 @@
 # Slash Commands
 
-Type `/` in the chat input to open the suggestion popup. `↑`/`↓` navigate,
-`Tab` completes, `Enter` runs the highlighted command, `Esc` dismisses.
-An exactly typed command always runs itself even when a longer command is
-suggested. `/help` shows everything grouped by category; `/help <category>`
+Type `/` in the chat input to open the suggestion popup. It lists every
+command — `/providers`, `/models`, `/skills`, `/plugins`, `/mcp` and `/help`
+first — six rows at a time; `↑`/`↓` scroll through the rest (a `↑`/`↓` in the
+gutter marks more rows). `Tab` completes, `Enter` runs the highlighted
+command, `Esc` dismisses. An exactly typed command always runs itself even
+when a longer command is suggested.
+
+After a command and a space the popup lists its subcommands, and `Tab`
+completes them too: `/mcp l` + `Tab` gives `/mcp list`, `/personal-apps
+connect c` gives `/personal-apps connect calendar`. Where a subcommand takes a
+name, the popup offers the configured ones: providers (`/provider switch`,
+`/doctor provider`), profiles (`/profile set`), skills, plugins, and MCP
+servers. Completing never runs anything. `Enter` runs exactly what is typed —
+`/cache c` is not expanded to `/cache clear` — unless you picked a subcommand
+with `↑`/`↓`; a picked subcommand that still needs an argument is filled in
+for you to finish. `/help` shows everything grouped by category; `/help <category>`
 filters.
 
 Commands that would change what an in-flight request depends on (`/clear`,

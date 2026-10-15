@@ -19,9 +19,10 @@ Top to bottom, always full-screen (alt-screen mode):
                                  or the animated working/stop buttons
 ```
 
-`/providers`, `/models`, `/profile list`, `/tools`, `/skills list`,
+`/providers`, `/models`, `/profile`, `/tools`, `/skills`,
 `/plugins`, `/history`, `/template list`, `/personal-apps`, `/entities`, `/help`,
-`/debug last`, `/usage`, `/stats`, `/context`, `/config` and `/memory` open as
+`/debug last`, `/usage`, `/stats`, `/context`, `/config`, `/memory`, `/cache`,
+`/prompt`, `/rag`, `/mcp`, `/doctor` and the `/keys` inspector open as
 **dialogs**: a
 rounded, titled frame centered over the dimmed transcript, with key hints in
 the bottom border, sized to its content. `/providers` shows the provider list

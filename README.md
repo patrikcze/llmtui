@@ -354,7 +354,8 @@ themselves and never forward them to the running program.)
 ## Slash commands
 
 Type `/` in the chat input to open a live suggestion popup (`↑`/`↓` to
-navigate, `Tab` to complete, `Enter` to run, `Esc` to dismiss):
+scroll through every command, `Tab` to complete a command or subcommand such
+as `/mcp l` → `/mcp list`, `Enter` to run, `Esc` to dismiss):
 
 | Command | Description |
 | --- | --- |

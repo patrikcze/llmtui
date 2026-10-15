@@ -27,6 +27,13 @@ type slashCommand struct {
 	// it would mutate state the in-flight request still depends on.
 	blockWhileThinking bool
 	run                func(m *Model, args string) tea.Cmd
+	// subs are the argument phrases Tab completes after the command name
+	// ("list", "inspect <server>", "connect mail"). Literal words come
+	// first; a <required> or [optional] placeholder ends the phrase.
+	subs []string
+	// argValues, when set, lists live values for the placeholder that
+	// follows the literal phrase sub (e.g. server names after "connect").
+	argValues func(m *Model, sub string) []string
 }
 
 // matches reports whether typed is a prefix of the name or any alias.
@@ -101,7 +108,7 @@ func slashCommands() []slashCommand {
 			m.refreshViewport()
 			return nil
 		}},
-		{name: "queue", usage: "/queue [list|edit <n>|drop <n>|clear|pause|resume]", desc: "show, edit, or drop messages queued while the model works", category: "Chat", run: cmdQueue},
+		{name: "queue", usage: "/queue [list|edit <n>|drop <n>|clear|pause|resume]", desc: "show, edit, or drop messages queued while the model works", category: "Chat", subs: []string{"list", "edit <n>", "drop <n>", "clear", "pause", "resume"}, run: cmdQueue},
 		{name: "retry", usage: "/retry", desc: "retry the last user message", category: "Chat", run: func(m *Model, _ string) tea.Cmd {
 			return m.retryLast()
 		}},
@@ -110,10 +117,10 @@ func slashCommands() []slashCommand {
 		}},
 
 		// --- Agent ---
-		{name: "agent", usage: "/agent [on|off|status|cancel|resume [run-id]]", desc: "bounded multi-cycle mode with fresh verification", category: "Agent", run: cmdAgent},
+		{name: "agent", usage: "/agent [on|off|status|cancel|resume [run-id]]", desc: "bounded multi-cycle mode with fresh verification", category: "Agent", subs: []string{"on", "off", "status", "cancel", "resume [run-id]"}, run: cmdAgent},
 
 		// --- Provider ---
-		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, run: cmdProvider},
+		{name: "provider", usage: "/provider [list|switch <name>]", desc: "show or switch the active provider", category: "Provider", blockWhileThinking: true, subs: []string{"list", "switch <name>"}, argValues: providerArgValues, run: cmdProvider},
 		{name: "providers", usage: "/providers", desc: "list configured providers", category: "Provider", run: func(m *Model, _ string) tea.Cmd {
 			return m.openProvidersPicker()
 		}},
@@ -135,58 +142,58 @@ func slashCommands() []slashCommand {
 			m.setModel(args)
 			return nil
 		}},
-		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", run: cmdProfile},
-		{name: "think", usage: "/think [auto|on|off|low|medium|high|status]", desc: "reasoning mode or GPT-OSS effort", category: "Model", blockWhileThinking: true, run: cmdThink},
-		{name: "thoughts", aliases: []string{"thinking"}, usage: "/thoughts [show|hide|toggle|status]", desc: "show or hide captured reasoning without changing model behavior", category: "Model", run: cmdThoughts},
-		{name: "math", usage: "/math [on|off|toggle|status]", desc: "render LaTeX math in Markdown answers as terminal Unicode (display only)", category: "Model", run: cmdMath},
+		{name: "profile", usage: "/profile [list|auto|set <name>|inspect]", desc: "model profiles: context window, temperature, style", category: "Model", subs: []string{"list", "auto", "set <name>", "inspect"}, argValues: profileArgValues, run: cmdProfile},
+		{name: "think", usage: "/think [auto|on|off|low|medium|high|status]", desc: "reasoning mode or GPT-OSS effort", category: "Model", blockWhileThinking: true, subs: []string{"auto", "on", "off", "low", "medium", "high", "status"}, run: cmdThink},
+		{name: "thoughts", aliases: []string{"thinking"}, usage: "/thoughts [show|hide|toggle|status]", desc: "show or hide captured reasoning without changing model behavior", category: "Model", subs: []string{"show", "hide", "toggle", "status"}, run: cmdThoughts},
+		{name: "math", usage: "/math [on|off|toggle|status]", desc: "render LaTeX math in Markdown answers as terminal Unicode (display only)", category: "Model", subs: []string{"on", "off", "toggle", "status"}, run: cmdMath},
 
 		// --- Prompt ---
-		{name: "prompt", usage: "/prompt [preview|raw|composed|mode <m>]", desc: "inspect and configure prompt composition", category: "Prompt", run: cmdPrompt},
-		{name: "template", usage: "/template [list|use <name>|clear|inspect <name>]", desc: "reusable conversation templates", category: "Prompt", run: cmdTemplate},
+		{name: "prompt", usage: "/prompt [preview|raw|composed|mode <m>]", desc: "inspect and configure prompt composition", category: "Prompt", subs: []string{"preview", "raw", "composed", "mode", "mode minimal", "mode balanced", "mode coding", "mode strict"}, run: cmdPrompt},
+		{name: "template", usage: "/template [list|use <name>|clear|inspect <name>]", desc: "reusable conversation templates", category: "Prompt", subs: []string{"list", "use <name>", "clear", "inspect <name>"}, run: cmdTemplate},
 
 		// --- Context ---
-		{name: "context", usage: "/context [status|summary|summarize|compact|rebuild|preview|refresh|clear-summary|strategy <s>]", desc: "inspect and safely manage context", category: "Context", run: cmdContext},
+		{name: "context", usage: "/context [status|summary|summarize|compact|rebuild|preview|refresh|clear-summary|strategy <s>]", desc: "inspect and safely manage context", category: "Context", subs: []string{"status", "summary", "summarize", "compact", "rebuild", "preview", "refresh", "clear-summary", "strategy", "strategy none", "strategy truncate", "strategy summarize", "strategy auto"}, run: cmdContext},
 		{name: "compact", usage: "/compact", desc: "summarize older messages now to free up context (alias for /context summarize)", category: "Context", run: func(m *Model, _ string) tea.Cmd {
 			return cmdContext(m, "summarize")
 		}},
 
 		// --- Cache ---
-		{name: "cache", usage: "/cache [stats|clear|on|off]", desc: "local response cache", category: "Cache", run: cmdCache},
+		{name: "cache", usage: "/cache [stats|clear|on|off]", desc: "local response cache", category: "Cache", subs: []string{"stats", "clear", "on", "off"}, run: cmdCache},
 
 		// --- Memory ---
 		{
 			name: "memory", usage: "/memory [on|off|add|list|status|inspect|remove|search|explain]",
-			desc: "typed local memory (opt-in)", category: "Memory", run: cmdMemory,
+			desc: "typed local memory (opt-in)", category: "Memory", subs: []string{"on", "off", "add <text>", "list [user|project|episode|run]", "status", "inspect <id>", "remove <id>", "search <query>", "explain <query>"}, run: cmdMemory,
 		},
 
 		// --- Tools ---
-		{name: "tools", usage: "/tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]", desc: "workspace tools: enable/disable, list capabilities, inspect one tool, or classify a command", category: "Tools", blockWhileThinking: true, run: cmdTools},
-		{name: "web", usage: "/web [on|off|status]", desc: "let the model search the web and fetch pages (web_fetch asks per URL)", category: "Tools", blockWhileThinking: true, run: cmdWeb},
+		{name: "tools", usage: "/tools [on|off|ask|auto|output|status|list|inspect <name>|check <cmd>]", desc: "workspace tools: enable/disable, list capabilities, inspect one tool, or classify a command", category: "Tools", blockWhileThinking: true, subs: []string{"on", "off", "ask", "auto", "output", "status", "list", "inspect <name>", "check <command>"}, run: cmdTools},
+		{name: "web", usage: "/web [on|off|status]", desc: "let the model search the web and fetch pages (web_fetch asks per URL)", category: "Tools", blockWhileThinking: true, subs: []string{"on", "off", "status"}, run: cmdWeb},
 
 		// --- Skills ---
-		{name: "skills", aliases: []string{"skill"}, usage: "/skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]", desc: "discover, inspect and activate task-specific agent skills (instructions, never permissions)", category: "Skills", blockWhileThinking: true, run: cmdSkills},
+		{name: "skills", aliases: []string{"skill"}, usage: "/skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]", desc: "discover, inspect and activate task-specific agent skills (instructions, never permissions)", category: "Skills", blockWhileThinking: true, subs: []string{"status", "list", "active", "inspect <id>", "use <id>", "disable <id>", "reload", "paths"}, argValues: skillArgValues, run: cmdSkills},
 
 		// --- Plugins ---
-		{name: "plugins", aliases: []string{"plugin"}, usage: "/plugins [status|list|inspect <id>|enable <id>|disable <id>|reload|paths]", desc: "manage local declarative plugin packages that contribute skills", category: "Plugins", blockWhileThinking: true, run: cmdPlugins},
+		{name: "plugins", aliases: []string{"plugin"}, usage: "/plugins [status|list|inspect <id>|enable <id>|disable <id>|reload|paths]", desc: "manage local declarative plugin packages that contribute skills", category: "Plugins", blockWhileThinking: true, subs: []string{"status", "list", "inspect <id>", "enable <id>", "disable <id>", "reload", "paths"}, argValues: pluginArgValues, run: cmdPlugins},
 
 		// --- RAG ---
-		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, run: cmdRag},
+		{name: "rag", usage: "/rag [status|index|search <q>|sources|clear|on|off]", desc: "optional local workspace index and keyword retrieval (off by default)", category: "RAG", blockWhileThinking: true, subs: []string{"status", "index", "search <query>", "sources", "clear", "on", "off"}, run: cmdRag},
 
 		// --- MCP ---
-		{name: "mcp", usage: "/mcp [status|list|tools|inspect <s>|enable <s>|connect <s>|disconnect <s>|disable <s>]", desc: "optional Model Context Protocol servers over stdio (off by default; connect launches the server)", category: "MCP", blockWhileThinking: true, run: cmdMcp},
+		{name: "mcp", usage: "/mcp [status|list|tools|inspect <s>|enable <s>|connect <s>|disconnect <s>|disable <s>]", desc: "optional Model Context Protocol servers over stdio (off by default; connect launches the server)", category: "MCP", blockWhileThinking: true, subs: []string{"status", "list", "tools", "inspect <server>", "enable <server>", "connect <server>", "disconnect <server>", "disable <server>"}, argValues: mcpArgValues, run: cmdMcp},
 
 		// --- Personal apps ---
-		{name: "personal-apps", usage: "/personal-apps [status|connect mail|calendar|disconnect mail|calendar]", desc: "optional Apple Mail/Calendar integration (off by default; connect is a human decision, never the model's)", category: "Personal apps", blockWhileThinking: true, run: cmdPersonalApps},
+		{name: "personal-apps", usage: "/personal-apps [status|connect mail|calendar|disconnect mail|calendar]", desc: "optional Apple Mail/Calendar integration (off by default; connect is a human decision, never the model's)", category: "Personal apps", blockWhileThinking: true, subs: []string{"status", "connect mail", "connect calendar", "disconnect mail", "disconnect calendar"}, run: cmdPersonalApps},
 
 		// --- Diagnostics ---
-		{name: "doctor", usage: "/doctor [provider [name]|mcp|personal-apps]", desc: "provider, model, MCP, and personal-app diagnostics", category: "Diagnostics", run: cmdDoctor},
-		{name: "debug", usage: "/debug [on|off|last|tool-calls [test]]", desc: "debug drawer; inspect or probe native tool calls", category: "Diagnostics", run: cmdDebug},
-		{name: "entities", usage: "/entities [status|list|inspect <id>]", desc: "inspect ephemeral runtime entity references", category: "Diagnostics", run: cmdEntities},
-		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", run: cmdKeys},
-		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", run: cmdConfig},
+		{name: "doctor", usage: "/doctor [provider [name]|mcp|personal-apps]", desc: "provider, model, MCP, and personal-app diagnostics", category: "Diagnostics", subs: []string{"provider [name]", "mcp", "personal-apps"}, argValues: providerArgValues, run: cmdDoctor},
+		{name: "debug", usage: "/debug [on|off|last|tool-calls [test]]", desc: "debug drawer; inspect or probe native tool calls", category: "Diagnostics", subs: []string{"on", "off", "last", "tool-calls", "tool-calls test"}, run: cmdDebug},
+		{name: "entities", usage: "/entities [status|list|inspect <id>]", desc: "inspect ephemeral runtime entity references", category: "Diagnostics", subs: []string{"status", "list", "inspect <id>"}, run: cmdEntities},
+		{name: "keys", usage: "/keys [raw]", desc: "interactive key inspector (debug shift+enter)", category: "Diagnostics", subs: []string{"raw", "help"}, run: cmdKeys},
+		{name: "config", usage: "/config [path|show|reload]", desc: "show or reload configuration (secrets redacted)", category: "Diagnostics", subs: []string{"path", "show", "reload"}, run: cmdConfig},
 
 		// --- Session ---
-		{name: "usage", usage: "/usage [session|last|reset|export]", desc: "usage dashboard: charts, models, cache, streaks", category: "Session", run: cmdUsage},
+		{name: "usage", usage: "/usage [session|last|reset|export]", desc: "usage dashboard: charts, models, cache, streaks", category: "Session", subs: []string{"session", "last", "reset", "export"}, run: cmdUsage},
 		{name: "stats", usage: "/stats", desc: "per-exchange session statistics", category: "Session", run: func(m *Model, _ string) tea.Cmd {
 			m.openModalOverlay("Session statistics", scrollHint, func() string { return m.statsOverlay() })
 			return nil
@@ -195,49 +202,7 @@ func slashCommands() []slashCommand {
 			m.saveWithNotice()
 			return nil
 		}},
-		{name: "history", usage: "/history [load <name>|save|search <q>|export md|json|clear]", desc: "saved sessions: list, load, search, export", category: "Session", run: cmdHistory},
-	}
-}
-
-const maxSuggestions = 6
-
-// suggestState is the slash-command autocomplete dropdown: the currently
-// matching commands (capped at maxSuggestions) and the highlighted row. Both
-// fields' zero value is the correct "no popup" state.
-type suggestState struct {
-	sugs   []slashCommand
-	sugIdx int
-}
-
-// updateSuggestions recomputes the command popup from the current input.
-func (m *Model) updateSuggestions() {
-	prev := len(m.suggest.sugs)
-	m.suggest.sugs = nil
-
-	val := m.input.Value()
-	// Suggest only while the command name itself is being typed.
-	if strings.HasPrefix(val, "/") && !strings.ContainsAny(val, " \n") {
-		typed := strings.TrimPrefix(val, "/")
-		for _, c := range slashCommands() {
-			if !c.hidden && c.matches(typed) {
-				// An exact name match leads the list ("/model" must not
-				// highlight "/models" just because it registers earlier).
-				if c.is(typed) {
-					m.suggest.sugs = append([]slashCommand{c}, m.suggest.sugs...)
-				} else {
-					m.suggest.sugs = append(m.suggest.sugs, c)
-				}
-				if len(m.suggest.sugs) == maxSuggestions {
-					break
-				}
-			}
-		}
-	}
-	if m.suggest.sugIdx >= len(m.suggest.sugs) {
-		m.suggest.sugIdx = 0
-	}
-	if len(m.suggest.sugs) != prev {
-		m.relayout()
+		{name: "history", usage: "/history [load <name>|save|search <q>|export md|json|clear]", desc: "saved sessions: list, load, search, export", category: "Session", subs: []string{"load <name>", "save", "search <query>", "export markdown", "export json", "clear"}, run: cmdHistory},
 	}
 }
 
@@ -519,9 +484,9 @@ func (m *Model) helpOverlay(topic string) string {
 			{"f6", "toggle keyboard transcript navigation (↑/↓/pgup/pgdn/home/end)"},
 			{"esc", "stop generation · close this overlay"},
 			{"ctrl+l", "clear conversation"},
-			{"↑/↓", "recall submitted input (empty composer) · command suggestions · multiline cursor"},
+			{"↑/↓", "recall submitted input (empty composer) · scroll command suggestions · multiline cursor"},
 			{"↑", "on an empty composer with queued messages: edit the last queued one"},
-			{"tab", "complete selected command"},
+			{"tab", "complete the selected command or subcommand (/mcp l → /mcp list)"},
 			{"ctrl+c", "press twice to quit (first stops/clears)"},
 		}
 		for _, k := range keys {
@@ -615,19 +580,4 @@ func (m *Model) statsOverlay() string {
 	}
 
 	return m.overlayFooter(&b)
-}
-
-// suggestionsView renders the command popup shown above the input.
-func (m *Model) suggestionsView() string {
-	limit := min(len(m.suggest.sugs), m.layout.suggestionRows)
-	lines := make([]string, limit)
-	for i, c := range m.suggest.sugs[:limit] {
-		usage := fmt.Sprintf("%-20s", c.usage)
-		if i == m.suggest.sugIdx {
-			lines[i] = m.theme.UserLabel.Render(" ▸ "+usage) + m.theme.StatusValue.Render(c.desc)
-		} else {
-			lines[i] = m.theme.StatusBar.Render("   "+usage) + m.theme.StatusBar.Render(c.desc)
-		}
-	}
-	return strings.Join(lines, "\n")
 }

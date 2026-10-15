@@ -1002,20 +1002,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.updateComposerHistory(msg) {
 			return m, nil
 		}
-		if len(m.suggest.sugs) > 0 {
-			switch msg.String() {
-			case "up":
-				m.suggest.sugIdx = (m.suggest.sugIdx - 1 + len(m.suggest.sugs)) % len(m.suggest.sugs)
-				return m, nil
-			case "down":
-				m.suggest.sugIdx = (m.suggest.sugIdx + 1) % len(m.suggest.sugs)
-				return m, nil
-			case "tab":
-				m.input.SetValue("/" + m.suggest.sugs[m.suggest.sugIdx].name + " ")
-				m.input.CursorEnd()
-				m.updateSuggestions()
-				return m, nil
-			}
+		if m.handleSuggestionKey(msg) {
+			return m, nil
 		}
 		switch msg.String() {
 		case "ctrl+c":
@@ -1251,7 +1239,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doctorResultMsg:
 		m.notice = ""
-		m.openOverlay(func() string { return m.doctorOverlay(msg.report) })
+		m.openModalOverlay("Doctor", scrollHint, func() string { return m.doctorOverlay(msg.report) })
 		return m, nil
 
 	case mcpConnectMsg:

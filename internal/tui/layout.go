@@ -37,7 +37,7 @@ func (m *Model) layoutFor(width, height, statusLines int) layoutMetrics {
 	// The composer has a top and bottom border. The footer remains one row,
 	// including the compact and busy variants.
 	fixedRows := usageRows + activityRows + attachmentRows + 2 + statusLines + 1
-	requestedSuggestions := min(len(m.suggest.sugs), 6)
+	requestedSuggestions := min(m.suggest.count(), maxSuggestionRows)
 	switch {
 	case height < 12:
 		requestedSuggestions = min(requestedSuggestions, 1)

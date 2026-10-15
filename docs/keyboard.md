@@ -18,7 +18,8 @@
 | Mouse wheel | Scroll the chat; outside `F6` mode, `PgUp`/`PgDn` and typing go to the composer and never scroll it |
 | `Ctrl+C` ×2 | Quit (first press stops generation / clears input) |
 | `Esc` | Stop generation (keeps partial reply), or stop an `/agent` step or verification · close overlay |
-| `↑` / `↓` | Choose an item in `/models`, `/providers`, `/skills list`, `/plugins list`, and other pickers; navigate command suggestions |
+| `↑` / `↓` | Choose an item in `/models`, `/providers`, `/skills list`, `/plugins list`, and other pickers; scroll through command and subcommand suggestions |
+| `Tab` | Complete the highlighted command, subcommand, or name (`/mcp l` → `/mcp list`, `/mcp connect g` → `/mcp connect github`) |
 | `↑` on an empty composer with queued messages | Pull the newest queued message back into the composer to edit it |
 | `↑` / `↓` in the composer | Recall previously submitted prompts and slash commands when the composer is empty; otherwise move the cursor between (soft-wrapped) input lines |
 | `Enter` in picker | Switch to the selected model/provider, or toggle enable/disable for a skill/plugin |

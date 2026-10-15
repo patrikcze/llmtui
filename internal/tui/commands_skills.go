@@ -22,11 +22,11 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 	sub, rest := splitArgs(args)
 	switch sub {
 	case "", "status":
-		m.openOverlay(func() string { return m.skillsStatusOverlay() })
+		m.openModalOverlay("Skills · status", scrollHint, func() string { return m.skillsStatusOverlay() })
 	case "list":
 		m.openSkillsPicker()
 	case "active":
-		m.openOverlay(func() string { return m.skillsActiveOverlay() })
+		m.openModalOverlay("Skills · active", scrollHint, func() string { return m.skillsActiveOverlay() })
 	case "inspect":
 		if rest == "" {
 			return m.fail("usage: /skills inspect <id> (see /skills list)")
@@ -35,7 +35,7 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 		if err != nil {
 			return m.fail(err.Error())
 		}
-		m.openOverlay(func() string { return m.skillsInspectOverlay(s) })
+		m.openModalOverlay("Skill · "+terminaltext.Sanitize(s.QualifiedID()), scrollHint, func() string { return m.skillsInspectOverlay(s) })
 	case "use", "activate":
 		return m.skillsUse(rest)
 	case "disable", "deactivate", "unuse":
@@ -55,7 +55,7 @@ func cmdSkills(m *Model, args string) tea.Cmd {
 			m.refreshViewport()
 		}
 	case "paths":
-		m.openOverlay(func() string { return m.skillsPathsOverlay() })
+		m.openModalOverlay("Skill & plugin paths", scrollHint, func() string { return m.skillsPathsOverlay() })
 	default:
 		return m.fail("usage: /skills [status|list|active|inspect <id>|use <id> [--scope run|session]|disable <id>|reload|paths]")
 	}
@@ -351,7 +351,7 @@ func cmdPlugins(m *Model, args string) tea.Cmd {
 			m.refreshViewport()
 		}
 	case "paths":
-		m.openOverlay(func() string { return m.skillsPathsOverlay() })
+		m.openModalOverlay("Skill & plugin paths", scrollHint, func() string { return m.skillsPathsOverlay() })
 	default:
 		return m.fail("usage: /plugins [status|list|inspect <id>|enable <id>|disable <id>|reload|paths]")
 	}
