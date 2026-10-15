@@ -22,6 +22,13 @@ what loading accepts but llmtui would fail on or ignore later:
   unknown keys (usually typos, which llmtui ignores).
 
 It exits non-zero only on errors; `--json` prints the findings as JSON.
+
+Loading itself refuses a list setting written as a quoted string that looks
+like a list, such as `stop: "[]"` or `paths: "[a, b]"`. YAML reads the quotes
+as a string, and llmtui would turn it into a one-item list (`stop: "[]"`
+becomes the stop string `[]`) instead of the list you meant. The error names
+every such key; write the list without quotes (`stop: []`). Older versions of
+the macOS settings app wrote empty lists this way.
 `config schema` prints every key a config file can set, as JSON, with its
 type, default, accepted values and whether it holds a secret (provider
 `api_key`, MCP server `env`). It does not read the config file. Both commands

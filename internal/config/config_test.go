@@ -1224,3 +1224,125 @@ providers:
 		t.Errorf("KVCacheType/FlashAttention = %q/%q, want empty", pc.KVCacheType, pc.FlashAttention)
 	}
 }
+
+// A quoted inline list such as `stop: "[]"` is a YAML string, which viper
+// would split into the one-item list ["[]"]. For the embedded provider's
+// stop strings that silently ended every reply at the first "[]" — the
+// /agent task contract always contains one. An older macOS settings app
+// wrote exactly this, so Load must refuse it with the key named instead of
+// guessing what was meant.
+func TestLoadRejectsQuotedInlineLists(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantKey string
+	}{
+		{
+			name:    "embedded stop strings",
+			yaml:    "providers:\n  embedded:\n    type: embedded\n    model_path: /m.gguf\n    sampling:\n      stop: \"[]\"\n",
+			wantKey: "providers.embedded.sampling.stop",
+		},
+		{
+			name:    "top-level section list",
+			yaml:    "skills:\n  paths: \"[]\"\n",
+			wantKey: "skills.paths",
+		},
+		{
+			name:    "non-empty quoted list",
+			yaml:    "plugins:\n  enabled: \"[a, b]\"\n",
+			wantKey: "plugins.enabled",
+		},
+		{
+			name:    "list inside a named map entry",
+			yaml:    "model_profiles:\n  small:\n    match: ' [] '\n",
+			wantKey: "model_profiles.small.match",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := NewViper(writeConfig(t, tt.yaml))
+			if err != nil {
+				t.Fatalf("NewViper: %v", err)
+			}
+			_, err = Load(v)
+			if err == nil {
+				t.Fatal("Load accepted a quoted inline list")
+			}
+			if !strings.Contains(err.Error(), tt.wantKey) || !strings.Contains(err.Error(), "without quotes") {
+				t.Fatalf("error %q does not name %s and the fix", err, tt.wantKey)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsRealListsAndPlainStrings(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  embedded:
+    type: embedded
+    model_path: /m.gguf
+    sampling:
+      stop: ["[/INST]", "</s>"]
+  other:
+    type: embedded
+    model_path: /n.gguf
+    sampling:
+      stop: []
+skills:
+  paths:
+    - "./skills"
+plugins:
+  enabled: []
+chat:
+  system_prompt: "[x]"
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Providers["embedded"].Sampling.Stop; len(got) != 2 || got[0] != "[/INST]" || got[1] != "</s>" {
+		t.Fatalf("embedded stop = %q", got)
+	}
+	if got := cfg.Providers["other"].Sampling.Stop; len(got) != 0 {
+		t.Fatalf("other stop = %q, want empty", got)
+	}
+	if len(cfg.Skills.Paths) != 1 || len(cfg.Plugins.Enabled) != 0 {
+		t.Fatalf("skills.paths = %q, plugins.enabled = %q", cfg.Skills.Paths, cfg.Plugins.Enabled)
+	}
+	if cfg.Chat.SystemPrompt != "[x]" {
+		t.Fatalf("system prompt = %q, a plain string setting must stay a string", cfg.Chat.SystemPrompt)
+	}
+}
+
+func TestLoadReportsEveryQuotedInlineList(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  embedded:
+    type: embedded
+    model_path: /m.gguf
+    sampling:
+      stop: "[]"
+skills:
+  paths: "[]"
+plugins:
+  paths: "[]"
+  enabled: "[]"
+`)
+	v, err := NewViper(path)
+	if err != nil {
+		t.Fatalf("NewViper: %v", err)
+	}
+	_, err = Load(v)
+	if err == nil {
+		t.Fatal("Load accepted quoted inline lists")
+	}
+	for _, key := range []string{"providers.embedded.sampling.stop", "skills.paths", "plugins.paths", "plugins.enabled"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error does not name %s:\n%v", key, err)
+		}
+	}
+}

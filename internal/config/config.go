@@ -984,6 +984,9 @@ func NewViper(cfgFile string) (*viper.Viper, error) {
 // Load unmarshals the merged configuration.
 func Load(v *viper.Viper) (*Config, error) {
 	var cfg Config
+	if err := checkQuotedInlineLists(v.AllSettings()); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
