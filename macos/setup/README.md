@@ -131,7 +131,7 @@ the Mac's Wi-Fi address and let the server listen on the local network.
 | **Attachments** | Attach PDFs, plain text and Markdown files, or read the text of screenshots and images. Text is extracted on the device with PDFKit and Vision OCR. The model lists, searches and reads passages through `document_*` tools. |
 | **Citations** | Answers cite attachment passages; tap a citation to open the PDF at the page (with the passage highlighted when the page has a text layer), a text file at the lines, or an image with its OCR text. Only passages a tool actually returned in that reply become links. |
 | **Rich replies** | Markdown, tables, code, KaTeX math, Mermaid diagrams (**Export PNG**), and images from `![alt](url)` with a full-screen viewer. **Copy** and **Share** on every reply. |
-| **Composer** | Send while a reply is generating to queue the message. Reasoning effort menu. Hide the keyboard from the composer row or by tapping the chat. |
+| **Composer** | Send while a reply is generating to queue the message. Reasoning effort menu. Hide the keyboard from the composer row or by tapping the chat. On iPhone in landscape the composer is one row, the tab bar is hidden in a chat and the top bar while typing (Stop moves into the composer). |
 | **Appearance** | Light (white cards, violet-to-pink accent) and Dark (charcoal cards, magenta accent), following **Settings › Appearance**. |
 
 ### Guardrails

@@ -604,6 +604,7 @@ private struct ChatScreen: View {
     let conversationID: UUID
     let close: () -> Void
     @FocusState private var composerFocused: Bool
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var renaming: UUID?
     @State private var deleting: UUID?
     @State private var openSource: DocumentSourceSelection?
@@ -685,6 +686,11 @@ private struct ChatScreen: View {
                 }
             }
         }
+        // iPhone landscape: no tab bar in a chat, and no top bar while
+        // typing (the composer then shows Stop), so the conversation stays
+        // readable above the keyboard. Portrait and iPad keep both.
+        .toolbar(verticalSizeClass == .compact ? .hidden : .automatic, for: .tabBar)
+        .toolbar(verticalSizeClass == .compact && composerFocused ? .hidden : .automatic, for: .navigationBar)
         .renameConversationAlert(model: model, conversationID: $renaming)
         .deleteConversationConfirmation(model: model, conversationID: $deleting, onDelete: close)
         .onAppear { model.openConversation(conversationID) }
@@ -1080,6 +1086,7 @@ private struct ToolActivityView: View {
 private struct ChatComposer: View {
     let model: MobileAppModel
     var isFocused: FocusState<Bool>.Binding
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var readingPhotos: [PhotosPickerItem] = []
     @State private var showVisionPicker = false
@@ -1091,7 +1098,6 @@ private struct ChatComposer: View {
     ].compactMap { $0 }
 
     var body: some View {
-        let hasAttachments = !model.draftAttachments.isEmpty || !model.currentDocuments.isEmpty
         VStack(spacing: 8) {
             if !model.draftAttachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -1105,107 +1111,58 @@ private struct ChatComposer: View {
                 }
                 .scrollIndicators(.hidden)
             }
-            HStack(spacing: 18) {
-                ReasoningMenu(model: model)
-                Menu {
-                    Button("PDF, Text or Markdown File", systemImage: "doc") { showFileImporter = true }
-                    Button("Read Text from Screenshot or Image", systemImage: "text.viewfinder") { showReadingPicker = true }
-                    Button("Photo for the Model to See", systemImage: "photo") { showVisionPicker = true }
-                        .disabled(model.draftAttachments.count >= 4)
-                } label: {
-                    ComposerIcon(
-                        systemName: "paperclip",
-                        active: hasAttachments,
-                        accessibilityLabel: "Attach"
-                    )
-                }
-                Button {
-                    model.toolsEnabled.toggle()
-                } label: {
-                    ComposerIcon(
-                        systemName: "wrench.and.screwdriver",
-                        active: model.toolsEnabled,
-                        accessibilityLabel: "Tools: web search, fetch, memory and device context"
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(model.toolsEnabled ? "Enabled" : "Disabled")
-                Button {
-                    model.agentEnabled.toggle()
-                } label: {
-                    ComposerIcon(
-                        systemName: "infinity",
-                        active: model.agentEnabled,
-                        accessibilityLabel: "Agent: plan, act and check the answer until it is done"
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(model.agentEnabled ? "Enabled" : "Disabled")
-                Spacer()
-                Text(model.agentEnabled ? (model.toolsEnabled ? "Agent" : "Agent, no tools") : (model.toolsEnabled ? "Tools" : "Chat"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if isFocused.wrappedValue {
-                    // Lives in this row, above the message field, so it never
-                    // covers the text or the Send button.
-                    Button {
-                        isFocused.wrappedValue = false
-                    } label: {
-                        ComposerIcon(
-                            systemName: "keyboard.chevron.compact.down",
-                            active: false,
-                            accessibilityLabel: "Hide keyboard"
-                        )
+            // iPhone landscape puts everything in one row, so the keyboard
+            // leaves room for the conversation; elsewhere the controls sit
+            // above the message field. AnyLayout keeps the field the same
+            // view across a rotation, so it keeps focus and the keyboard.
+            let layout = isCompactHeight
+                ? AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
+                : AnyLayout(VStackLayout(spacing: 8))
+            layout {
+                if isCompactHeight {
+                    // The mode label is left out; the highlighted icons
+                    // already show it.
+                    HStack(spacing: 10) { controls }
+                        .padding(.bottom, 4)
+                } else {
+                    HStack(spacing: 18) {
+                        controls
+                        Spacer()
+                        Text(model.agentEnabled ? (model.toolsEnabled ? "Agent" : "Agent, no tools") : (model.toolsEnabled ? "Tools" : "Chat"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if isFocused.wrappedValue {
+                            // Lives in this row, above the message field, so it never
+                            // covers the text or the Send button.
+                            hideKeyboardButton
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .transition(.opacity)
+                    .animation(.default, value: isFocused.wrappedValue)
                 }
-            }
-            .animation(.default, value: isFocused.wrappedValue)
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message", text: Bindable(model).draft, axis: .vertical)
-                    .lineLimit(2...8)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
-                            .strokeBorder(isFocused.wrappedValue ? Theme.accent.opacity(0.6) : Theme.hairline, lineWidth: 1)
-                    }
-                    .submitLabel(.return)
-                    .focused(isFocused)
-                // While a reply is generating, Send queues the message
-                // instead (its icon changes); the ring around it shows the
-                // estimated context use and the badge the queued messages.
-                ZStack(alignment: .topTrailing) {
-                    ZStack {
-                        ContextUsageRing(usage: model.contextUsage, isKnown: model.contextWindowIsKnown)
-                            .frame(width: 54, height: 54)
-                        SendButton(
-                            isQueueing: model.isGenerating,
-                            isEnabled: !(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                && model.draftAttachments.isEmpty)
-                        ) { model.send() }
-                    }
-                    if !model.currentQueuedMessages.isEmpty {
-                        Text("\(model.currentQueuedMessages.count)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(4)
-                            .frame(minWidth: 18, minHeight: 18)
-                            .background(Theme.accent, in: Circle())
-                            .offset(x: 4, y: -4)
-                            .allowsHitTesting(false)
-                            .accessibilityLabel("\(model.currentQueuedMessages.count) queued")
+                HStack(alignment: .bottom, spacing: 10) {
+                    messageField(lines: isCompactHeight ? 1...3 : 2...8)
+                    sendControl
+                    if isCompactHeight && isFocused.wrappedValue {
+                        // The top bar is hidden while typing here, so Stop
+                        // moves into this row.
+                        if model.isGenerating {
+                            Button {
+                                model.stop()
+                            } label: {
+                                ComposerIcon(systemName: "stop.fill", active: true, accessibilityLabel: "Stop")
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 4)
+                        }
+                        hideKeyboardButton
+                            .padding(.bottom, 4)
                     }
                 }
-                .task(id: "\(model.activeProfile?.id.uuidString ?? "")|\(model.activeProfile?.model ?? "")") {
-                    model.refreshContextWindow()
-                }
+                .animation(isCompactHeight ? .default : nil, value: isFocused.wrappedValue)
             }
         }
-        .padding()
+        .padding(.horizontal)
+        .padding(.vertical, isCompactHeight ? 6 : 16)
         .background(.bar)
         .photosPicker(
             isPresented: $showVisionPicker,
@@ -1240,6 +1197,119 @@ private struct ChatComposer: View {
                 }
                 selectedPhotos = []
             }
+        }
+    }
+
+    private var isCompactHeight: Bool { verticalSizeClass == .compact }
+
+    /// Reasoning, attachments, tools and agent mode.
+    @ViewBuilder private var controls: some View {
+        ReasoningMenu(model: model)
+        Menu {
+            Button("PDF, Text or Markdown File", systemImage: "doc") { showFileImporter = true }
+            Button("Read Text from Screenshot or Image", systemImage: "text.viewfinder") { showReadingPicker = true }
+            Button("Photo for the Model to See", systemImage: "photo") { showVisionPicker = true }
+                .disabled(model.draftAttachments.count >= 4)
+        } label: {
+            ComposerIcon(
+                systemName: "paperclip",
+                active: !model.draftAttachments.isEmpty || !model.currentDocuments.isEmpty,
+                accessibilityLabel: "Attach"
+            )
+        }
+        Button {
+            model.toolsEnabled.toggle()
+        } label: {
+            ComposerIcon(
+                systemName: "wrench.and.screwdriver",
+                active: model.toolsEnabled,
+                accessibilityLabel: "Tools: web search, fetch, memory and device context"
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(model.toolsEnabled ? "Enabled" : "Disabled")
+        Button {
+            model.agentEnabled.toggle()
+        } label: {
+            ComposerIcon(
+                systemName: "infinity",
+                active: model.agentEnabled,
+                accessibilityLabel: "Agent: plan, act and check the answer until it is done"
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(model.agentEnabled ? "Enabled" : "Disabled")
+    }
+
+    private var hideKeyboardButton: some View {
+        Button {
+            isFocused.wrappedValue = false
+        } label: {
+            ComposerIcon(
+                systemName: "keyboard.chevron.compact.down",
+                active: false,
+                accessibilityLabel: "Hide keyboard"
+            )
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity)
+    }
+
+    private func messageField(lines: ClosedRange<Int>) -> some View {
+        // Writes go through the model, which drops a sent message that the
+        // field writes back (see ComposerEchoGuard). When it drops one, the
+        // field is rebuilt so it no longer shows that text, and keeps focus.
+        TextField("Message", text: Binding(
+            get: { model.draft },
+            set: { model.updateDraftFromComposer($0) }
+        ), axis: .vertical)
+            .lineLimit(lines)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, isCompactHeight ? 8 : 12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .strokeBorder(isFocused.wrappedValue ? Theme.accent.opacity(0.6) : Theme.hairline, lineWidth: 1)
+            }
+            .submitLabel(.return)
+            .focused(isFocused)
+            .id(model.composerResetCount)
+            .onChange(of: model.composerResetCount) {
+                // After the old field has gone, so its focus loss does not
+                // win over this.
+                Task { @MainActor in isFocused.wrappedValue = true }
+            }
+    }
+
+    /// While a reply is generating, Send queues the message instead (its
+    /// icon changes); the ring around it shows the estimated context use and
+    /// the badge the queued messages.
+    private var sendControl: some View {
+        ZStack(alignment: .topTrailing) {
+            ZStack {
+                ContextUsageRing(usage: model.contextUsage, isKnown: model.contextWindowIsKnown)
+                    .frame(width: isCompactHeight ? 46 : 54, height: isCompactHeight ? 46 : 54)
+                SendButton(
+                    isQueueing: model.isGenerating,
+                    isEnabled: !(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && model.draftAttachments.isEmpty)
+                ) { model.send() }
+            }
+            if !model.currentQueuedMessages.isEmpty {
+                Text("\(model.currentQueuedMessages.count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(4)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Theme.accent, in: Circle())
+                    .offset(x: 4, y: -4)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("\(model.currentQueuedMessages.count) queued")
+            }
+        }
+        .task(id: "\(model.activeProfile?.id.uuidString ?? "")|\(model.activeProfile?.model ?? "")") {
+            model.refreshContextWindow()
         }
     }
 }
@@ -1310,12 +1380,18 @@ private struct SendButton: View {
 
 private struct QueuedMessagesPanel: View {
     let model: MobileAppModel
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
+        // iPhone landscape shows one queued message at a time (the rest
+        // scroll) and no header; the badge on the queue button counts them.
+        let isCompactHeight = verticalSizeClass == .compact
         VStack(alignment: .leading, spacing: 6) {
-            Text("Up next \u{00B7} \(model.currentQueuedMessages.count)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            if !isCompactHeight {
+                Text("Up next \u{00B7} \(model.currentQueuedMessages.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
             ScrollView {
                 VStack(spacing: 6) {
                     ForEach(model.currentQueuedMessages) { queued in
@@ -1351,11 +1427,11 @@ private struct QueuedMessagesPanel: View {
                     }
                 }
             }
-            .frame(maxHeight: 120)
-            .fixedSize(horizontal: false, vertical: model.currentQueuedMessages.count < 3)
+            .frame(maxHeight: isCompactHeight ? 36 : 120)
+            .fixedSize(horizontal: false, vertical: model.currentQueuedMessages.count < (isCompactHeight ? 2 : 3))
         }
         .padding(.horizontal)
-        .padding(.top, 10)
+        .padding(.top, isCompactHeight ? 6 : 10)
         .background(.bar)
     }
 }
