@@ -109,7 +109,7 @@ struct MCPProtocolTests {
         let binding = MobileMCPBinding(serverID: profile.id, serverName: profile.name, generation: info.generation, tool: try #require(info.tools.first))
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            try await service.call(binding, arguments: .object([:]))
+            _ = try await service.call(binding, arguments: .object([:]))
         }
         do { _ = try await task.value; Issue.record("Cancelled call was sent") } catch {}
         await service.disconnect(profile.id)
