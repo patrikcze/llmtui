@@ -1674,7 +1674,7 @@ struct LLMTUIConfigurationStore: Sendable {
             while let last = stack.last, last.indent >= indent { stack.removeLast() }
             if rawValue.isEmpty {
                 stack.append((indent, key))
-            } else {
+            } else if inlineCollection(rawValue) == nil {
                 values[(stack.map(\.key) + [key]).joined(separator: ".")] = yamlScalar(rawValue)
             }
         }
@@ -1698,11 +1698,9 @@ struct LLMTUIConfigurationStore: Sendable {
             let key = String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
             let rawValue = String(trimmed[trimmed.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             while let last = stack.last, last.indent >= indent { stack.removeLast() }
-            if key == "match", rawValue.hasPrefix("[") && rawValue.hasSuffix("]") {
+            if let inline = inlineCollection(rawValue), inline.hasPrefix("[") {
                 let path = (stack.map(\.key) + [key]).joined(separator: ".")
-                let body = rawValue.dropFirst().dropLast()
-                values[path] = body.split(separator: ",", omittingEmptySubsequences: true)
-                    .map { yamlScalar(String($0)) }
+                values[path] = inlineListItems(String(inline.dropFirst().dropLast()))
                 continue
             }
             if rawValue.isEmpty {
@@ -1853,8 +1851,11 @@ struct LLMTUIConfigurationStore: Sendable {
             result = replaceScalar(result, path: path, value: yamlPreserve(value))
         }
 
+        // An unchanged list keeps its form on disk (inline `[a, b]` stays
+        // inline) instead of being rewritten as a block list on every save.
+        let listsBeforeUpdate = listValues(in: result)
         for (path, values) in configuration.listSettings
-        where existingListPath(path, in: result) && writable(path)
+        where existingListPath(path, in: result) && listsBeforeUpdate[path] != values && writable(path)
             && (path.hasPrefix("personal_apps.") || path.hasPrefix("model_profiles.") || path.hasPrefix("providers.")
                 || schema?.field(for: path)?.kind == .list) {
             result = replaceList(result, path: path, values: values)
@@ -1937,6 +1938,52 @@ struct LLMTUIConfigurationStore: Sendable {
         }
 
         return result.hasSuffix("\n") ? result : result + "\n"
+    }
+
+    /// The value of a `key: value` line when it is an inline YAML list or
+    /// map (`[]`, `[a, b]`, `{}`), with any trailing comment removed; nil for
+    /// a scalar. A quoted value such as `"[]"` is a string, not a list. An
+    /// inline collection must never be read or written as a scalar: quoting
+    /// it on save turns `stop: []` into the one-item list `["[]"]`.
+    private func inlineCollection(_ rawValue: String) -> String? {
+        let value = (rawValue.split(separator: " #", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? rawValue)
+            .trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix("[") && value.hasSuffix("]") { return value }
+        if value.hasPrefix("{") && value.hasSuffix("}") { return value }
+        return nil
+    }
+
+    /// Splits the body of an inline list on the commas outside quotes, so an
+    /// item such as `"a, b"` stays one item.
+    private func inlineListItems(_ body: String) -> [String] {
+        var items: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaped = false
+        for character in body {
+            if escaped {
+                current.append(character)
+                escaped = false
+            } else if character == "\\", quote == "\"" {
+                current.append(character)
+                escaped = true
+            } else if let open = quote {
+                current.append(character)
+                if character == open { quote = nil }
+            } else if character == "\"" || character == "'" {
+                current.append(character)
+                quote = character
+            } else if character == "," {
+                items.append(current)
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+        items.append(current)
+        return items
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { yamlScalar($0) }
     }
 
     private func replaceScalar(_ source: String, path: String, value: String) -> String {
