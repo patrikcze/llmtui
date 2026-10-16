@@ -232,6 +232,7 @@ model_profiles:
 | `threads_batch` | `threads` | Optional prompt/batch CPU thread count; omit to retain the existing `threads` behavior |
 | `batch_size` | `512` | Prompt-decode batch size, capped by the context size |
 | `ubatch_size` | llama.cpp default | Optional physical micro-batch size; it must be positive and no larger than the effective `batch_size` |
+| `moe_cache_mib` | `0` | **Experimental.** Size in MiB of llama.cpp's GPU LRU cache for Mixture-of-Experts expert weights kept in host memory (upstream `--moe-cache-mib`). `0` disables it; negative values are rejected. It only helps when a MoE model's experts live in host memory while the rest runs on a GPU; llmtui has no expert-placement setting, so with the default `gpu_layers: -1` it has nothing to cache |
 | `chat_template` | model metadata | Inline Jinja chat template override; this is template text, not a filename |
 | `swa_full` | `false` | `true` restores llama.cpp's full-size KV cache for sliding-window-attention layers. The default window-sized SWA cache cuts KV memory several-fold on Gemma-style models (Gemma 4 E4B at 131072 tokens: ~2.0 GiB vs ~7.2 GiB) at the cost of occasional full prompt re-decodes when an old prefix cannot be trimmed in place |
 | `kv_cache_type` | `f16` | K/V cache element type; `q8_0` roughly halves KV memory with a small quality cost |

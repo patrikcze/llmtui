@@ -442,3 +442,37 @@ func TestBuildActiveProviderUnconfiguredProviderErrors(t *testing.T) {
 		t.Fatal("expected error for unconfigured active provider")
 	}
 }
+
+func TestBuildEmbeddedOptionsMoECacheMiB(t *testing.T) {
+	tests := []struct {
+		name    string
+		mib     int
+		want    int
+		wantErr string
+	}{
+		{name: "unset stays disabled", mib: 0, want: 0},
+		{name: "positive size carried", mib: 2048, want: 2048},
+		{name: "negative rejected", mib: -1, wantErr: "moe_cache_mib -1 must not be negative"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := buildEmbeddedOptions(config.ProviderConfig{
+				Type:        "embedded",
+				ModelPath:   "/models/moe.gguf",
+				MoECacheMiB: tt.mib,
+			}, ActiveOverrides{})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("buildEmbeddedOptions() error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildEmbeddedOptions() error = %v", err)
+			}
+			if opts.MoECacheMiB != tt.want {
+				t.Fatalf("MoECacheMiB = %d, want %d", opts.MoECacheMiB, tt.want)
+			}
+		})
+	}
+}

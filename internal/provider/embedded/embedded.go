@@ -628,6 +628,7 @@ func (p *Provider) RuntimeFingerprint() string {
 	writeInt64(h, int64(opts.ThreadsBatch))
 	writeInt64(h, int64(opts.BatchSize))
 	writeInt64(h, int64(opts.UBatchSize))
+	writeInt64(h, int64(opts.MoECacheMiB))
 	writeField(h, []byte(opts.ChatTemplate))
 	toolFormat := opts.ToolFormat
 	if toolFormat == "" {

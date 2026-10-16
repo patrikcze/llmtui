@@ -116,3 +116,33 @@ func TestValidateKVFlashCombination(t *testing.T) {
 		t.Errorf("f16 with flash_attention off: unexpected error %v", err)
 	}
 }
+
+// TestRuntimeFingerprintVariesWithMoECache keeps moe_cache_mib in the cache
+// key alongside the other native context options.
+func TestRuntimeFingerprintVariesWithMoECache(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "m.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := func(mib int) string {
+		p := New("embedded", Options{ModelPath: model, MoECacheMiB: mib}, func() Runtime { return nil })
+		return p.RuntimeFingerprint()
+	}
+	tests := []struct {
+		name      string
+		a, b      int
+		wantEqual bool
+	}{
+		{name: "disabled is stable", a: 0, b: 0, wantEqual: true},
+		{name: "enabled differs from disabled", a: 0, b: 1024},
+		{name: "sizes differ", a: 1024, b: 2048},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fingerprint(tt.a) == fingerprint(tt.b); got != tt.wantEqual {
+				t.Fatalf("fingerprint(%d) == fingerprint(%d) is %v, want %v", tt.a, tt.b, got, tt.wantEqual)
+			}
+		})
+	}
+}

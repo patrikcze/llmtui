@@ -301,6 +301,9 @@ type Options struct {
 	// UBatchSize is the native physical micro-batch size. 0 preserves the
 	// llama.cpp default used by older llmtui configurations.
 	UBatchSize int
+	// MoECacheMiB sizes llama.cpp's experimental device LRU cache for MoE
+	// experts kept in host memory, in MiB. 0 disables it.
+	MoECacheMiB int
 	// ChatTemplate overrides the model's GGUF chat-template metadata, for
 	// models that ship broken or missing template metadata.
 	ChatTemplate string

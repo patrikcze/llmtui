@@ -130,6 +130,7 @@ Embedded-only provider keys:
 | `threads_batch` | `threads` | Optional prompt/batch thread count |
 | `batch_size` | `512` | Prompt-decode batch size |
 | `ubatch_size` | llama.cpp default | Optional physical micro-batch size; must not exceed the effective batch size |
+| `moe_cache_mib` | `0` | Experimental GPU LRU cache (MiB) for MoE experts kept in host memory; `0` disables it. Only useful when experts are offloaded to host memory — see [embedded.md](embedded.md) |
 | `chat_template` | GGUF metadata | Inline Jinja template override |
 | `swa_full` | `false` | `true` restores full-size sliding-window KV caches (more memory) |
 | `kv_cache_type` | `f16` | `q8_0` halves KV memory with a small quality cost |

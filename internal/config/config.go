@@ -59,6 +59,9 @@ type ProviderConfig struct {
 	// UBatchSize is the native physical micro-batch size. Zero preserves the
 	// llama.cpp/Yzma default used before this setting existed.
 	UBatchSize int `mapstructure:"ubatch_size" yaml:"ubatch_size,omitempty"`
+	// MoECacheMiB sizes llama.cpp's experimental GPU LRU cache for MoE
+	// experts kept in host memory, in MiB. Zero (the default) disables it.
+	MoECacheMiB int `mapstructure:"moe_cache_mib" yaml:"moe_cache_mib,omitempty"`
 	// ChatTemplate overrides the model's GGUF chat-template metadata.
 	ChatTemplate string `mapstructure:"chat_template" yaml:"chat_template,omitempty"`
 	// ToolFormat selects the embedded llama.cpp tool-call grammar.

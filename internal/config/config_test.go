@@ -1346,3 +1346,36 @@ plugins:
 		}
 	}
 }
+
+func TestEmbeddedMoECacheMiBParses(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{name: "omitted defaults to disabled", yaml: "", want: 0},
+		{name: "explicit zero", yaml: "    moe_cache_mib: 0\n", want: 0},
+		{name: "explicit size", yaml: "    moe_cache_mib: 4096\n", want: 4096},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, `
+providers:
+  moe:
+    type: embedded
+    model_path: /models/moe.gguf
+`+tt.yaml)
+			v, err := NewViper(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Providers["moe"].MoECacheMiB; got != tt.want {
+				t.Fatalf("MoECacheMiB = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

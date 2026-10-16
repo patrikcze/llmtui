@@ -33,6 +33,9 @@ const (
 	defaultBatchSize   = 512
 	allGPULayers       = 999
 	tokenPieceBufSize  = 256
+	// maxMoECacheMiB keeps moe_cache_mib << 20 inside llama.cpp's uint64
+	// byte count.
+	maxMoECacheMiB = math.MaxUint64 >> 20
 )
 
 type backendState struct {
@@ -969,6 +972,9 @@ func buildContextParams(opts embedded.Options, nCtx int) (llama.ContextParams, i
 	if opts.UBatchSize < 0 || uint64(opts.UBatchSize) > math.MaxUint32 {
 		return llama.ContextParams{}, 0, fmt.Errorf("ubatch_size %d is outside the supported range 0..%d", opts.UBatchSize, uint64(math.MaxUint32))
 	}
+	if opts.MoECacheMiB < 0 || uint64(opts.MoECacheMiB) > maxMoECacheMiB {
+		return llama.ContextParams{}, 0, fmt.Errorf("moe_cache_mib %d is outside the supported range 0..%d", opts.MoECacheMiB, uint64(maxMoECacheMiB))
+	}
 
 	batchSize := opts.BatchSize
 	if batchSize == 0 {
@@ -1036,6 +1042,9 @@ func applyContextOptions(
 	}
 	if params.NUbatch > params.NBatch {
 		params.NUbatch = params.NBatch
+	}
+	if opts.MoECacheMiB > 0 {
+		params.MoeCacheSize = uint64(opts.MoECacheMiB) << 20
 	}
 	if opts.Threads > 0 {
 		params.NThreads = int32(opts.Threads)

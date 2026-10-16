@@ -237,6 +237,10 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		return embedded.Options{}, fmt.Errorf("embedded provider configuration: %w", err)
 	}
 
+	if pc.MoECacheMiB < 0 {
+		return embedded.Options{}, fmt.Errorf("embedded provider configuration: moe_cache_mib %d must not be negative", pc.MoECacheMiB)
+	}
+
 	contextSize := pc.ContextSize
 	if ov.ContextSize != nil {
 		contextSize = *ov.ContextSize
@@ -302,6 +306,7 @@ func buildEmbeddedOptions(pc config.ProviderConfig, ov ActiveOverrides) (embedde
 		ThreadsBatch:   pc.ThreadsBatch,
 		BatchSize:      pc.BatchSize,
 		UBatchSize:     pc.UBatchSize,
+		MoECacheMiB:    pc.MoECacheMiB,
 		ChatTemplate:   pc.ChatTemplate,
 		ToolFormat:     toolFormat,
 		SWAFull:        pc.SWAFull,
