@@ -664,8 +664,8 @@ func (m *Model) contractCapabilityCapsule() agentverify.CapabilityCapsule {
 		}
 	}
 	capsule := agentverify.CapabilityCapsule{WorkspaceAccess: m.toolsOn && m.toolRunner != nil}
-	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob), "read_files", &capsule)
-	category(has(tools.ToolWriteFile, tools.ToolEditFile), "write_files", &capsule)
+	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob, tools.ToolReadMultipleFiles, tools.ToolDirectoryTree), "read_files", &capsule)
+	category(has(tools.ToolWriteFile, tools.ToolEditFile, tools.ToolCreateDirectory, tools.ToolMoveFile), "write_files", &capsule)
 	category(has(tools.ToolRunCommand), "run_commands", &capsule)
 	category(has(tools.ToolWebSearch, tools.ToolWebFetch, tools.ToolWebResearch), "web_access", &capsule)
 	category(m.mcpRegistry != nil && len(mcpToolSpecs(m.mcpRegistry)) > 0, "mcp_tools", &capsule)
@@ -820,6 +820,8 @@ func (m *Model) startInitialAgentCycle(request string, images []provider.Image) 
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.initialImages = nil
 	m.agentLoop.compactedToolResults = 0
+	// sequential_thinking's log is per agent run: a new run starts empty.
+	m.toolRunner.ResetThinking()
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(run.ID), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
@@ -1613,8 +1615,16 @@ func isObservableReadTool(tool string) bool {
 // server/tool name only, never the raw per-server argument JSON.
 func toolCallDetail(call tools.Call) string {
 	switch call.Tool {
-	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolListDir, tools.ToolSkillLoad:
+	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolListDir, tools.ToolSkillLoad,
+		tools.ToolGetFileInfo, tools.ToolDirectoryTree, tools.ToolCreateDirectory:
 		return call.Path
+	case tools.ToolMoveFile:
+		return call.Path + " -> " + call.Destination
+	case tools.ToolSequentialThinking:
+		// The step number only: thought text is model prose, not a resource.
+		return fmt.Sprintf("thought %d", call.Thinking.ThoughtNumber)
+	case tools.ToolReadMultipleFiles:
+		return strings.Join(tools.ReadPaths(call), ", ")
 	case tools.ToolGrep, tools.ToolGlob:
 		if call.Path != "" {
 			return call.Body + " in " + call.Path
@@ -1746,6 +1756,7 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		record := agent.ToolCallRecord{
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: detail, Succeeded: result.Err == nil,
 			ErrorKind: kind, Summary: summary, Status: status,
+			Preview: result.Call.Tool == tools.ToolEditFile && result.Call.DryRun,
 		}
 		if result.Err != nil && result.Meta.Error != nil && agent.ValidToolErrorCode(result.Meta.Error.Code) {
 			record.ErrorCode = result.Meta.Error.Code
@@ -1815,6 +1826,10 @@ const maxAgentEvidenceKeys = 512
 // is not evidence.
 func (m *Model) isNewAgentEvidence(result tools.Result, record agent.ToolCallRecord) bool {
 	switch {
+	case result.Call.Tool == tools.ToolSequentialThinking:
+		// Planning observes nothing: its status changes on every call, so
+		// counting it would let a model look productive by only thinking.
+		return false
 	case result.Err == nil && result.Call.Tool == tools.ToolAskUser:
 		return true
 	case result.Err == nil && result.Meta.Effect == tools.EffectChanged:
@@ -2185,6 +2200,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.carriedExchange = nil // only a freshly started run carries one
 	m.agentLoop.execution = agent.ExecutionResult{}
 	m.agentLoop.initialImages = nil
+	m.toolRunner.ResetThinking() // never persisted, so a resumed run starts empty
 	m.resetAgentContext()
 	m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder = nil, nil
 	// A resumed run's observation cache starts empty: retained excerpts are

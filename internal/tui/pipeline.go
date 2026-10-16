@@ -533,6 +533,9 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			if m.skillLoadAvailable() {
 				instructions += "\n" + tools.SkillInstructions
 			}
+			if m.sequentialThinkingAvailable() {
+				instructions += "\n" + tools.ThinkingInstructions
+			}
 			if m.personalApps != nil {
 				for _, form := range tools.PersonalAppsFencedForms() {
 					instructions += "\n" + form
@@ -1663,6 +1666,12 @@ func (m *Model) activeToolSpecs() []provider.ToolSpec {
 	return m.modelVisibleToolSpecs()
 }
 
+// sequentialThinkingAvailable reports whether sequential_thinking is offered:
+// tools are on and tools.sequential_thinking.enabled is set.
+func (m *Model) sequentialThinkingAvailable() bool {
+	return m.toolsOn && m.toolRunner != nil && m.toolRunner.SequentialThinking
+}
+
 // eligibleToolSpecs is the authoritative full catalog the current session
 // may use. Visibility can narrow this set but can never add to it.
 func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
@@ -1684,6 +1693,9 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 	}
 	if m.skillLoadAvailable() {
 		specs = append(specs, tools.SkillSpecs()...)
+	}
+	if m.sequentialThinkingAvailable() {
+		specs = append(specs, tools.ThinkingSpecs()...)
 	}
 	if m.personalApps != nil {
 		specs = append(specs, tools.PersonalAppsSpecsFor(m.personalApps.Status().Operations)...)

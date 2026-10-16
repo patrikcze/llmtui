@@ -112,13 +112,32 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		sum := sha256.Sum256([]byte(c.Body + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolEditFile:
-		// Path identifies the file; the exact old→new pair identifies the
-		// change. Approving one replacement must never authorise a different
-		// old_text or a different new_text against the same file.
-		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
+		// Path identifies the file; the exact old→new pairs (every one, in
+		// order) and the dry-run flag identify the change. Approving one
+		// replacement must never authorise a different old_text or new_text,
+		// an extra edit, or a real write after a reviewed dry run.
+		sum := sha256.Sum256([]byte(tools.EditIdentity(c) + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""
+	case tools.ToolCreateDirectory:
+		// A fixed variant keeps a path-pattern grant from blanket-approving
+		// directory creation; only an exact reviewed path is covered.
+		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), "mkdir"
+	case tools.ToolMoveFile:
+		// The source is what is moved; the destination is where. Approving
+		// one move must never authorise moving the same source elsewhere.
+		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), "to:" + filepath.Clean(strings.TrimSpace(c.Destination))
+	case tools.ToolReadMultipleFiles:
+		// The exact path set is the target: approving one batch that names
+		// a secret file never covers a different batch. The fixed variant
+		// keeps GrantPath patterns (which carry none) from ever matching
+		// the joined path list.
+		paths := tools.ReadPaths(c)
+		for i := range paths {
+			paths[i] = filepath.Clean(paths[i])
+		}
+		return c.Tool, strings.Join(paths, "\x00"), "paths"
 	case tools.ToolRunCommand:
 		sum := sha256.Sum256([]byte(strings.TrimSpace(c.Body)))
 		return c.Tool, hex.EncodeToString(sum[:]), ""
@@ -162,6 +181,12 @@ func approvalScopeDescription(c tools.Call) string {
 		return fmt.Sprintf("%s %s with this exact replacement", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolReadFile, tools.ToolListDir, tools.ToolWebFetch:
 		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
+	case tools.ToolReadMultipleFiles:
+		return fmt.Sprintf("%s %s", c.Tool, strings.Join(tools.ReadPaths(c), ", "))
+	case tools.ToolCreateDirectory:
+		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
+	case tools.ToolMoveFile:
+		return fmt.Sprintf("%s %s → %s", c.Tool, strings.TrimSpace(c.Path), strings.TrimSpace(c.Destination))
 	case tools.ToolRunCommand:
 		return "this exact command"
 	case tools.ToolWebResearch:

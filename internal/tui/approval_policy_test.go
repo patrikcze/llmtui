@@ -162,3 +162,89 @@ func TestCapabilityPolicyScopesWebResearchRequest(t *testing.T) {
 		}
 	}
 }
+
+// An edit_file grant covers the exact edit list and dry-run flag: approving
+// a dry run (asked only for a secret file) never authorises the real write,
+// and approving one replacement never covers an extra one.
+func TestCapabilityPolicyScopesMultiEditAndDryRun(t *testing.T) {
+	now := time.Now()
+	edit := func(dry bool, pairs ...tools.EditPair) tools.Call {
+		c := tools.Call{Tool: tools.ToolEditFile, Path: ".env", DryRun: dry, EditCount: len(pairs)}
+		copy(c.Edits[:], pairs)
+		c.OldText, c.NewText = pairs[0].OldText, pairs[0].NewText
+		return c
+	}
+	var policy capabilityPolicy
+	reviewed := edit(true, tools.EditPair{OldText: "A", NewText: "B"})
+	policy.GrantCall(reviewed, now, time.Hour)
+	if !policy.Allows(reviewed, now) {
+		t.Fatal("the reviewed dry run was not allowed")
+	}
+	for name, other := range map[string]tools.Call{
+		"real write":  edit(false, tools.EditPair{OldText: "A", NewText: "B"}),
+		"extra edit":  edit(true, tools.EditPair{OldText: "A", NewText: "B"}, tools.EditPair{OldText: "C", NewText: "D"}),
+		"legacy pair": {Tool: tools.ToolEditFile, Path: ".env", OldText: "A", NewText: "B"},
+	} {
+		if policy.Allows(other, now) {
+			t.Errorf("%s: dry-run grant leaked", name)
+		}
+	}
+}
+
+// A move grant is pinned to its exact source and destination, and neither a
+// move nor a mkdir can be blanket-approved by a path pattern.
+func TestCapabilityPolicyScopesStructuralWrites(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	move := tools.Call{Tool: tools.ToolMoveFile, Path: "a.go", Destination: "b.go"}
+	policy.GrantCall(move, now, time.Hour)
+	if !policy.Allows(tools.Call{Tool: tools.ToolMoveFile, Path: "./a.go", Destination: "b.go"}, now) {
+		t.Fatal("the reviewed move was not allowed")
+	}
+	for _, other := range []tools.Call{
+		{Tool: tools.ToolMoveFile, Path: "a.go", Destination: "c.go"},
+		{Tool: tools.ToolMoveFile, Path: "x.go", Destination: "b.go"},
+		{Tool: tools.ToolCreateDirectory, Path: "a.go"},
+	} {
+		if policy.Allows(other, now) {
+			t.Fatalf("move grant leaked to %+v", other)
+		}
+	}
+	var patterns capabilityPolicy
+	patterns.GrantPath(tools.ToolMoveFile, "*", now, time.Hour)
+	patterns.GrantPath(tools.ToolCreateDirectory, "*", now, time.Hour)
+	if patterns.Allows(move, now) || patterns.Allows(tools.Call{Tool: tools.ToolCreateDirectory, Path: "build"}, now) {
+		t.Fatal("a path pattern blanket-approved a structural write")
+	}
+}
+
+func multiRead(paths ...string) tools.Call {
+	c := tools.Call{Tool: tools.ToolReadMultipleFiles, PathCount: len(paths)}
+	copy(c.Paths[:], paths)
+	return c
+}
+
+// A read_multiple_files grant (it asks only when a secret path is named) is
+// pinned to the exact path set, and a path-pattern grant never covers a batch.
+func TestCapabilityPolicyScopesReadMultipleFilesPaths(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	policy.GrantCall(multiRead("a.go", ".env"), now, time.Hour)
+	if !policy.Allows(multiRead("a.go", "./.env"), now) {
+		t.Fatal("the reviewed batch was not allowed")
+	}
+	for _, other := range []tools.Call{
+		multiRead("a.go", ".env.production"),
+		multiRead(".env"),
+		{Tool: tools.ToolReadFile, Path: ".env"},
+	} {
+		if policy.Allows(other, now) {
+			t.Fatalf("read_multiple_files grant leaked to %+v", other)
+		}
+	}
+	var patterns capabilityPolicy
+	patterns.GrantPath(tools.ToolReadMultipleFiles, "*", now, time.Hour)
+	if patterns.Allows(multiRead("a.go", ".env"), now) {
+		t.Fatal("a path pattern blanket-approved a read_multiple_files batch")
+	}
+}

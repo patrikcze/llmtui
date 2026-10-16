@@ -82,6 +82,23 @@ func TestSmallCatalogPreservesExistingToolVisibility(t *testing.T) {
 	}
 }
 
+// The filesystem built-ins added after the discovery threshold was calibrated
+// must not push an existing setup into progressive disclosure: five MCP tools
+// on top of the original built-ins stayed fully visible before and still do.
+func TestNewBuiltinsDoNotTriggerToolDiscovery(t *testing.T) {
+	m := configureDiscoveryModel(t, 5, nil)
+	m.toolRunner.SequentialThinking = true
+	eligible := m.eligibleToolSpecs()
+	for name := range tools.ThresholdExemptTools {
+		if _, ok := specByName(eligible, name); !ok {
+			t.Fatalf("eligible catalog is missing %s", name)
+		}
+	}
+	if visible := m.activeToolSpecs(); len(visible) != len(eligible) {
+		t.Fatalf("new built-ins triggered discovery: visible=%d eligible=%d", len(visible), len(eligible))
+	}
+}
+
 func TestLargeCatalogUsesProgressiveDisclosure(t *testing.T) {
 	m := configureDiscoveryModel(t, 10, nil)
 	if len(m.eligibleToolSpecs()) <= m.toolDiscoveryThreshold() {

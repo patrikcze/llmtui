@@ -926,7 +926,7 @@ func UserAnswerCausalFacts(execution ExecutionResult) []string {
 			answerReceived = true
 			continue
 		}
-		if answerReceived && call.Succeeded && (call.Name == "write_file" || call.Name == "edit_file") {
+		if answerReceived && call.IsWorkspaceWrite() {
 			return []string{"a user answer was received before the later workspace mutation"}
 		}
 	}

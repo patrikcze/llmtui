@@ -95,17 +95,22 @@ func (r *Registry) EnabledList(sources map[string]bool) []CapabilityInfo {
 
 // safetyForBuiltin maps the built-in tools to their safety class.
 var safetyForBuiltin = map[string]SafetyClass{
-	ToolListDir:          SafetyReadOnly,
-	ToolReadFile:         SafetyReadOnly,
-	ToolGlob:             SafetyReadOnly,
-	ToolGrep:             SafetyReadOnly,
-	ToolWriteFile:        SafetyWorkspaceWrite,
-	ToolEditFile:         SafetyWorkspaceWrite,
-	ToolRunCommand:       SafetyCommand,
-	ToolAskUser:          SafetyReadOnly,
-	ToolLocalContext:     SafetyReadOnly,
-	ToolSearch:           SafetyReadOnly,
-	ToolGetEntityDetails: SafetyReadOnly,
+	ToolListDir:           SafetyReadOnly,
+	ToolReadFile:          SafetyReadOnly,
+	ToolGlob:              SafetyReadOnly,
+	ToolGrep:              SafetyReadOnly,
+	ToolReadMultipleFiles: SafetyReadOnly,
+	ToolGetFileInfo:       SafetyReadOnly,
+	ToolDirectoryTree:     SafetyReadOnly,
+	ToolWriteFile:         SafetyWorkspaceWrite,
+	ToolEditFile:          SafetyWorkspaceWrite,
+	ToolCreateDirectory:   SafetyWorkspaceWrite,
+	ToolMoveFile:          SafetyWorkspaceWrite,
+	ToolRunCommand:        SafetyCommand,
+	ToolAskUser:           SafetyReadOnly,
+	ToolLocalContext:      SafetyReadOnly,
+	ToolSearch:            SafetyReadOnly,
+	ToolGetEntityDetails:  SafetyReadOnly,
 	// skill_load only changes prompt state inside the app: no file, command,
 	// or network effect, and no permission grant.
 	ToolSkillLoad: SafetyReadOnly,
@@ -115,23 +120,41 @@ var safetyForBuiltin = map[string]SafetyClass{
 	// operation string (e.g. "mail_search"), not ToolPersonalApps.
 }
 
+// ThresholdExemptTools are built-ins added after the MCP tool-discovery
+// threshold was calibrated. internal/tui leaves them out of the catalog
+// size it compares against tools.discovery.threshold, so offering them does
+// not change which MCP tools an existing setup sees.
+var ThresholdExemptTools = map[string]bool{
+	ToolReadMultipleFiles:  true,
+	ToolGetFileInfo:        true,
+	ToolDirectoryTree:      true,
+	ToolCreateDirectory:    true,
+	ToolMoveFile:           true,
+	ToolSequentialThinking: true,
+}
+
 // approvalForTool is the static approval policy per tool.
 var approvalForTool = map[string]string{
-	ToolListDir:          "no",
-	ToolReadFile:         "ask for secret files",
-	ToolGlob:             "no",
-	ToolGrep:             "ask for an explicit secret file",
-	ToolWriteFile:        "ask",
-	ToolEditFile:         "ask",
-	ToolRunCommand:       "ask unless read-only",
-	ToolWebSearch:        "no for ordinary queries; ask for bulk or opaque ones",
-	ToolWebFetch:         "ask",
-	ToolWebResearch:      "ask once per research request",
-	ToolSkillLoad:        "no",
-	ToolAskUser:          "no (never authorizes another tool)",
-	ToolLocalContext:     "ask for clipboard; otherwise no",
-	ToolSearch:           "no (discovery only)",
-	ToolGetEntityDetails: "no (read-only runtime lookup)",
+	ToolListDir:           "no",
+	ToolReadFile:          "ask for secret files",
+	ToolGlob:              "no",
+	ToolGrep:              "ask for an explicit secret file",
+	ToolReadMultipleFiles: "ask when any path is a secret file",
+	ToolGetFileInfo:       "no (metadata only)",
+	ToolDirectoryTree:     "no",
+	ToolWriteFile:         "ask",
+	ToolEditFile:          "ask (dry_run: ask only for secret files)",
+	ToolCreateDirectory:   "ask",
+	ToolMoveFile:          "ask",
+	ToolRunCommand:        "ask unless read-only",
+	ToolWebSearch:         "no for ordinary queries; ask for bulk or opaque ones",
+	ToolWebFetch:          "ask",
+	ToolWebResearch:       "ask once per research request",
+	ToolSkillLoad:         "no",
+	ToolAskUser:           "no (never authorizes another tool)",
+	ToolLocalContext:      "ask for clipboard; otherwise no",
+	ToolSearch:            "no (discovery only)",
+	ToolGetEntityDetails:  "no (read-only runtime lookup)",
 	// personal_apps: see personalAppsApprovalText below, used directly in
 	// DefaultRegistry — this map is keyed by native tool Name, and
 	// personal_apps now registers one entry per operation.
@@ -170,6 +193,18 @@ func DefaultRegistry() *Registry {
 			Source:      "skills",
 			Safety:      safetyForBuiltin[s.Name],
 			Approval:    approvalForTool[s.Name],
+			Parameters:  s.Parameters,
+		})
+	}
+	for _, s := range ThinkingSpecs() {
+		// Pure in-memory planning state: no file, command, or network
+		// effect, so it is read-only and never asks.
+		_ = r.Register(CapabilityInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      "thinking",
+			Safety:      SafetyReadOnly,
+			Approval:    "no (in-memory planning only)",
 			Parameters:  s.Parameters,
 		})
 	}

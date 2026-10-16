@@ -219,7 +219,7 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 	case tools.ToolWriteFile:
 		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolEditFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(tools.EditIdentity(c)) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolWebFetch:
 		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness) + "\x1e" + strings.TrimSpace(c.WebCacheMode) + "\x1e" + strconv.Itoa(c.WebCacheMaxAge) + "\x1e" + strings.TrimSpace(c.WebRefreshEpoch)
 	case tools.ToolReadFile:
@@ -239,6 +239,18 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 		}
 	case tools.ToolListDir:
 		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strconv.Itoa(c.SearchLimit), strings.TrimSpace(c.SearchCursor)}, "\x1e")
+	case tools.ToolReadMultipleFiles:
+		paths := tools.ReadPaths(c)
+		for i := range paths {
+			paths[i] = normalizeWorkspacePath(root, paths[i])
+		}
+		resource = strings.Join(paths, "\x1d")
+	case tools.ToolGetFileInfo, tools.ToolCreateDirectory:
+		resource = normalizeWorkspacePath(root, resource)
+	case tools.ToolMoveFile:
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + normalizeWorkspacePath(root, c.Destination)
+	case tools.ToolDirectoryTree:
+		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strconv.Itoa(c.Max), strings.TrimSpace(c.Filter)}, "\x1e")
 	case tools.ToolSearch:
 		resource = normalizeText(c.SearchQuery) + "\x1e" + strconv.Itoa(c.Max)
 	default:

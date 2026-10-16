@@ -1933,9 +1933,10 @@ func (m *Model) toolsListOverlay(args string) string {
 	) + "\n")
 
 	enabledSources := map[string]bool{
-		"builtin": m.toolsOn,
-		"web":     m.toolsOn && m.webOn,
-		"skills":  m.skillLoadAvailable(),
+		"builtin":  m.toolsOn,
+		"web":      m.toolsOn && m.webOn,
+		"skills":   m.skillLoadAvailable(),
+		"thinking": m.sequentialThinkingAvailable(),
 	}
 	if m.mcpRegistry != nil {
 		for _, srv := range m.mcpRegistry.List() {

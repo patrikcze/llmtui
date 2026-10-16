@@ -506,7 +506,7 @@ func (r *Runner) globFilesPage(ctx context.Context, call Call) (string, ResultMe
 	if err != nil {
 		return "", meta, nil, withCode(err, "invalid_pattern", RetryCorrectInput)
 	}
-	entries, complete, err := r.collectGlob(ctx, call.Path, pattern)
+	entries, complete, err := r.collectGlob(ctx, call.Path, newGlobMatcher(pattern, call.Filter, call.SearchCaseSensitive))
 	if err != nil {
 		return "", meta, nil, err
 	}
@@ -644,7 +644,7 @@ func listingLimit(limit int) (int, error) {
 }
 
 func listingHash(call Call) string {
-	return searchQueryHash(Call{Tool: call.Tool, Body: call.Body, Path: call.Path})
+	return searchQueryHash(Call{Tool: call.Tool, Body: call.Body, Path: call.Path, Filter: call.Filter, SearchCaseSensitive: call.SearchCaseSensitive})
 }
 
 func formatListingPage(entries []string, start, end, total int, token string, meta *ResultMeta) string {
@@ -670,7 +670,7 @@ func listingCapture(entries []string, token string) []Capture {
 	return []Capture{{Kind: entity.KindSearchResult, Label: "listing result set", Trust: entity.TrustWorkspaceUntrusted, ContentType: "application/json", Body: body, BodyDigest: digestBytes(body)}}
 }
 
-func (r *Runner) collectGlob(ctx context.Context, rel, pattern string) ([]string, bool, error) {
+func (r *Runner) collectGlob(ctx context.Context, rel string, matcher globMatcher) ([]string, bool, error) {
 	root, err := os.OpenRoot(r.root)
 	if err != nil {
 		return nil, false, fmt.Errorf("open workspace root: %w", err)
@@ -698,8 +698,18 @@ func (r *Runner) collectGlob(ctx context.Context, rel, pattern string) ([]string
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		relToBase, _ := filepath.Rel(filepath.FromSlash(baseRel), filepath.FromSlash(name))
+		relToBase = filepath.ToSlash(relToBase)
 		if entry.IsDir() {
-			if name != baseRel && isGitMetadataPath(filepath.ToSlash(name)) {
+			if name == baseRel {
+				return nil
+			}
+			if isGitMetadataPath(filepath.ToSlash(name)) {
+				return fs.SkipDir
+			}
+			if skip, matchErr := matcher.excluded(relToBase); matchErr != nil {
+				return matchErr
+			} else if skip {
 				return fs.SkipDir
 			}
 			return nil
@@ -707,8 +717,12 @@ func (r *Runner) collectGlob(ctx context.Context, rel, pattern string) ([]string
 		if entry.Type()&os.ModeSymlink != 0 || isGitMetadataPath(filepath.ToSlash(name)) {
 			return nil
 		}
-		relToBase, _ := filepath.Rel(filepath.FromSlash(baseRel), filepath.FromSlash(name))
-		matched, matchErr := matchSearchGlob(pattern, filepath.ToSlash(relToBase))
+		if skip, matchErr := matcher.excluded(relToBase); matchErr != nil {
+			return matchErr
+		} else if skip {
+			return nil
+		}
+		matched, matchErr := matcher.included(relToBase)
 		if matchErr != nil {
 			return matchErr
 		}

@@ -127,6 +127,15 @@ type ToolCallRecord struct {
 	// ActionExecuted, so no side effect can be inferred from failure alone.
 	// See ActionStatus in receipts.go.
 	Status ActionStatus `json:"status,omitempty"`
+	// Preview marks a call of a mutating tool that only previewed its effect
+	// (edit_file dry_run). It wrote nothing, so it is never a write receipt.
+	Preview bool `json:"preview,omitempty"`
+}
+
+// IsWorkspaceWrite reports whether a successful record is a workspace write
+// receipt: write_file or edit_file that actually ran, not a preview.
+func (r ToolCallRecord) IsWorkspaceWrite() bool {
+	return r.Succeeded && !r.Preview && (r.Name == "write_file" || r.Name == "edit_file")
 }
 
 // TestResult is deterministic evidence reported by an executor adapter.

@@ -172,7 +172,12 @@ unwanted save and `/memory off` stops future ones.
     pins a hash of the content you reviewed, so it authorises re-writing
     exactly those bytes — not a licence to rewrite that path with anything.
     An `edit_file` grant is likewise pinned to the exact `old_text`→`new_text`
-    pair: a different replacement to the same file re-prompts.
+    pairs (every one, in order) and the dry-run flag: a different or extra
+    replacement, or the real write after an approved dry run, re-prompts.
+    A `move_file` grant is pinned to its exact source and destination, a
+    `create_directory` grant to its exact path, and a `read_multiple_files`
+    grant to its exact path set; no path pattern can blanket-approve any of
+    them.
     `/tools ask` revokes all such grants. Global auto mode is an explicit
     high-trust override, not the recommended default.
   - **Surgical edits** — `edit_file` replaces one exact, unique text fragment
@@ -188,7 +193,22 @@ unwanted save and `/memory off` stops future ones.
     that last check can still have its change silently overwritten by the
     rename. A ranged `read_file` is still a `read_file`: the same
     secret-file approval and workspace confinement apply regardless of the
-    line range.
+    line range. A multi-replacement `edit_file` is all or nothing, and a
+    `dry_run` keeps every guardrail, writes nothing, and asks for a secret
+    file like a read would.
+  - **Structural writes** — `create_directory` and `move_file` always ask
+    and share `write_file`'s admission (guardrails, symlink-evaluated
+    confinement for not-yet-existing paths, no symlink path components).
+    `move_file` checks both ends, never replaces an existing destination
+    (an atomic no-replace rename where the OS offers one), never moves a
+    symlink, and refuses renaming a likely-secret file to a name the secret
+    classifier would not flag. Neither tool deletes anything; there is still
+    no delete tool.
+  - **Read-only inspection** — `read_multiple_files` asks when any path is a
+    secret file; `get_file_info` and `directory_tree` return metadata and
+    names only, never content, and never follow symlinks.
+  - **Planning** — `sequential_thinking` (opt-in) keeps a bounded in-memory
+    log, has no file/command/network effect, and is never persisted.
   - **Clarification is not authorization** — `ask_user` pauses for one
     bounded decision or missing fact and returns the answer through the
     original tool call. It cannot approve a write, command, web request, or

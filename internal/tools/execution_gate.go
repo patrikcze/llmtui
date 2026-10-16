@@ -15,7 +15,8 @@ func ConcurrentSafe(c Call) bool {
 		return false
 	}
 	switch c.Tool {
-	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWebSearch, ToolWebFetch, ToolWebResearch:
+	case ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolReadMultipleFiles, ToolGetFileInfo, ToolDirectoryTree,
+		ToolWebSearch, ToolWebFetch, ToolWebResearch:
 		return true
 	default:
 		return false

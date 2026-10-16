@@ -10,6 +10,14 @@
 //
 // Execution is confined to the workspace root: absolute paths and anything
 // escaping the root are rejected.
+//
+// There is deliberately no delete tool. move_file renames within the
+// workspace but never replaces an existing destination, and every mutating
+// tool (write_file, edit_file, create_directory, move_file) shares one
+// write admission: the write guardrails, symlink-evaluated confinement, and
+// refusal to act through a symlink path component. sequential_thinking is
+// the one stateful non-filesystem tool; its bounded log lives on the Runner
+// and is never persisted.
 package tools
 
 import (
@@ -76,6 +84,21 @@ const (
 	// ToolGetEntityDetails is a read-only controller capability. The TUI
 	// resolves it against its session-local entity registry.
 	ToolGetEntityDetails = "get_entity_details"
+	// ToolReadMultipleFiles reads several workspace files in one call; a
+	// failing path is reported inline and never aborts the others.
+	ToolReadMultipleFiles = "read_multiple_files"
+	// ToolGetFileInfo returns one path's metadata (type, size, permissions,
+	// timestamps) without reading its content.
+	ToolGetFileInfo = "get_file_info"
+	// ToolDirectoryTree returns a bounded recursive JSON tree of a directory.
+	ToolDirectoryTree = "directory_tree"
+	// ToolCreateDirectory creates a workspace directory and any missing
+	// parents; an existing directory is success with no change.
+	ToolCreateDirectory = "create_directory"
+	// ToolMoveFile moves or renames a file or directory inside the
+	// workspace. It never replaces an existing destination and never
+	// deletes anything.
+	ToolMoveFile = "move_file"
 )
 
 // read_file optional line-range bounds. DefaultReadLimit applies when a range
@@ -193,6 +216,21 @@ type Call struct {
 	// controlled deletion of that exact fragment).
 	OldText string
 	NewText string
+	// Edits and EditCount carry edit_file's optional multi-replacement form
+	// (EditCount 0 means the single OldText/NewText pair). DryRun previews
+	// an edit as a diff without writing. See EditPairs and EditIdentity.
+	Edits     [MaxEditFileEdits]EditPair
+	EditCount int
+	DryRun    bool
+	// Destination is move_file's target path; Path is its source.
+	Destination string
+	// Thinking carries sequential_thinking's step metadata; the thought text
+	// itself is in Body.
+	Thinking ThinkingStep
+	// Paths and PathCount carry read_multiple_files' workspace paths. A
+	// fixed array keeps Call comparable.
+	Paths     [MaxReadMultipleFiles]string
+	PathCount int
 	// ExpectedResourceID is the model-facing opaque snapshot selector for an
 	// edit. ExpectedVersion is controller-resolved metadata and never comes
 	// from provider JSON directly.
@@ -348,6 +386,14 @@ func Parse(reply string) []Call {
 						decodeSearchBody(&call)
 					case ToolGlob, ToolListDir:
 						decodeListingBody(&call)
+					case ToolReadMultipleFiles:
+						decodeReadMultipleBody(&call)
+					case ToolDirectoryTree:
+						decodeDirectoryTreeBody(&call)
+					case ToolMoveFile:
+						decodeMoveFileBody(&call)
+					case ToolSequentialThinking:
+						decodeThinkingArgs(&call, call.Body)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
 					case ToolWriteFile:
@@ -440,6 +486,12 @@ type Runner struct {
 	// (entities.output_storage); Resources only lets read_file recover a
 	// body some other path already published.
 	Resources ResourceReader
+
+	// SequentialThinking enables the sequential_thinking tool
+	// (tools.sequential_thinking.enabled). Its log lives in thinking and is
+	// reset by ResetThinking; it is never persisted.
+	SequentialThinking bool
+	thinking           thinkingLog
 
 	searchMu             sync.Mutex
 	searchCursors        map[string]searchCursor
@@ -659,7 +711,19 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 			meta.Effect = EffectNone
 			break
 		}
-		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, expected)
+		res.Output, res.Diff, meta, res.Err = r.editFileEdits(c.Path, EditPairs(c), expected, c.DryRun)
+	case ToolReadMultipleFiles:
+		res.Output, meta, res.Err = r.readMultipleFiles(ctx, c)
+	case ToolGetFileInfo:
+		res.Output, meta, res.Err = r.getFileInfo(c)
+	case ToolDirectoryTree:
+		res.Output, meta, res.Err = r.directoryTree(ctx, c)
+	case ToolSequentialThinking:
+		res.Output, meta, res.Err = r.sequentialThinking(c)
+	case ToolCreateDirectory:
+		res.Output, meta, res.Err = r.createDirectory(c)
+	case ToolMoveFile:
+		res.Output, meta, res.Err = r.moveFile(c)
 	case ToolGlob:
 		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
@@ -1225,6 +1289,14 @@ func (r *Runner) currentFileContent(rel string) (string, error) {
 // matching, and fails without writing when old_text is absent or matches more
 // than once — the model is expected to re-read and retry with unique context.
 func (r *Runner) editFile(rel, oldText, newText string, expected *entity.FileVersion) (output, diff string, meta ResultMeta, err error) {
+	return r.editFileEdits(rel, []EditPair{{OldText: oldText, NewText: newText}}, expected, false)
+}
+
+// editFileEdits applies one or more exact replacements in order, each
+// against the text produced by the previous one, all or nothing: if any
+// old_text is missing or ambiguous nothing is written. With dryRun it
+// returns a unified diff of the would-be result and writes nothing.
+func (r *Runner) editFileEdits(rel string, edits []EditPair, expected *entity.FileVersion, dryRun bool) (output, diff string, meta ResultMeta, err error) {
 	meta.Effect = EffectNone
 	meta.Precondition = "exact_text_only"
 	if expected != nil {
@@ -1234,11 +1306,17 @@ func (r *Runner) editFile(rel, oldText, newText string, expected *entity.FileVer
 	if rel == "" {
 		return "", "", meta, withCode(fmt.Errorf("edit_file needs a path"), "invalid_arguments", RetryCorrectInput)
 	}
-	if oldText == "" {
-		return "", "", meta, withCode(fmt.Errorf("edit_file needs old_text — the exact fragment to replace"), "invalid_arguments", RetryCorrectInput)
+	if len(edits) == 0 || len(edits) > MaxEditFileEdits {
+		return "", "", meta, withCode(fmt.Errorf("edit_file needs 1 to %d edits", MaxEditFileEdits), "invalid_arguments", RetryCorrectInput)
 	}
-	if oldText == newText {
-		return "", "", meta, withCode(fmt.Errorf("edit_file old_text and new_text are identical; nothing to change"), "no_change", RetryCorrectInput)
+	for i, e := range edits {
+		label := editLabel(i, len(edits))
+		if e.OldText == "" {
+			return "", "", meta, withCode(fmt.Errorf("%s needs old_text — the exact fragment to replace", label), "invalid_arguments", RetryCorrectInput)
+		}
+		if e.OldText == e.NewText {
+			return "", "", meta, withCode(fmt.Errorf("%s old_text and new_text are identical; nothing to change", label), "no_change", RetryCorrectInput)
+		}
 	}
 	rel = filepath.Clean(rel)
 	displayPath := filepath.ToSlash(rel)
@@ -1281,15 +1359,35 @@ func (r *Runner) editFile(rel, oldText, newText string, expected *entity.FileVer
 			return "", "", meta, withCode(fmt.Errorf("%q changed since the observed file version; re-read it before editing", displayPath), "stale_source", RetryReread)
 		}
 	}
-	switch matches := strings.Count(current, oldText); {
-	case matches == 0:
-		return "", "", meta, withCode(fmt.Errorf("old_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", displayPath), "match_not_found", RetryReread)
-	case matches > 1:
-		return "", "", meta, withCode(fmt.Errorf("old_text matches %d places in %q; include more surrounding context so it identifies exactly one location", matches, displayPath), "ambiguous_match", RetryCorrectInput)
+	updated := current
+	for i, e := range edits {
+		prefix := ""
+		if len(edits) > 1 {
+			prefix = editLabel(i, len(edits)) + ": "
+		}
+		switch matches := strings.Count(updated, e.OldText); {
+		case matches == 0:
+			return "", "", meta, withCode(fmt.Errorf("%sold_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", prefix, displayPath), "match_not_found", RetryReread)
+		case matches > 1:
+			return "", "", meta, withCode(fmt.Errorf("%sold_text matches %d places in %q; include more surrounding context so it identifies exactly one location", prefix, matches, displayPath), "ambiguous_match", RetryCorrectInput)
+		}
+		updated = strings.Replace(updated, e.OldText, e.NewText, 1)
+		if int64(len(updated)) > byteLimit {
+			return "", "", meta, withCode(fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
+		}
 	}
-	updated := strings.Replace(current, oldText, newText, 1)
-	if int64(len(updated)) > byteLimit {
-		return "", "", meta, withCode(fmt.Errorf("the edited %q would exceed the %d KB write limit", displayPath, r.maxKB), "unsupported_content", RetryCorrectInput)
+	if updated == current {
+		return "", "", meta, withCode(fmt.Errorf("the edits to %q cancel out; nothing would change", displayPath), "no_change", RetryCorrectInput)
+	}
+	if dryRun {
+		preview := RenderUnifiedDiff(displayPath, current, updated)
+		if len(preview) > int(byteLimit) {
+			text, _ := boundedUTF8([]byte(preview), int(byteLimit))
+			preview = text + "\n[diff truncated]"
+		}
+		meta.Outcome = OutcomeOK
+		meta.Coverage = Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(preview)), RetainedBytes: int64(len(preview))}
+		return "dry run — no changes written. The edit would produce:\n" + preview, "", meta, nil
 	}
 	diff, meta, err = r.writeFileChecked(rel, updated, &current)
 	meta.Precondition = "exact_text_only"
@@ -1299,7 +1397,17 @@ func (r *Runner) editFile(rel, oldText, newText string, expected *entity.FileVer
 	if err != nil {
 		return "", "", meta, err
 	}
+	if len(edits) > 1 {
+		return fmt.Sprintf("edited %s: applied %d exact replacements", displayPath, len(edits)), diff, meta, nil
+	}
 	return fmt.Sprintf("edited %s: replaced 1 exact occurrence", displayPath), diff, meta, nil
+}
+
+func editLabel(i, n int) string {
+	if n > 1 {
+		return fmt.Sprintf("edits[%d]", i)
+	}
+	return "edit_file"
 }
 
 func readRootFileLimited(root *os.Root, name string, limit int64) (data []byte, err error) {
@@ -1651,7 +1759,19 @@ func webSearchNeedsApproval(query string) bool {
 // id_rsa, …) ask first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:
+	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser, ToolGetFileInfo, ToolDirectoryTree, ToolSequentialThinking:
+		// get_file_info and directory_tree expose names and metadata only,
+		// never content, exactly like list_dir.
+		return false
+	case ToolReadMultipleFiles:
+		if !r.Guardrails.RequireApprovalForSecretReads {
+			return false
+		}
+		for _, p := range ReadPaths(c) {
+			if IsSecretPath(p) {
+				return true
+			}
+		}
 		return false
 	case ToolLocalContext:
 		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
@@ -1667,6 +1787,13 @@ func (r *Runner) NeedsApproval(c Call) bool {
 		return true
 	case ToolReadFile, ToolGrep:
 		return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
+	case ToolEditFile:
+		// A dry run writes nothing, but its diff shows file lines, so it
+		// follows read_file's secret-read policy. A real edit always asks.
+		if c.DryRun {
+			return r.Guardrails.RequireApprovalForSecretReads && IsSecretPath(c.Path)
+		}
+		return true
 	case ToolRunCommand:
 		return r.Guardrails.ClassifyCommand(c.Body, r.root).Verdict != VerdictAuto
 	case ToolPersonalApps:
@@ -1874,7 +2001,34 @@ func (c Call) Describe() string {
 	case ToolWriteFile:
 		return fmt.Sprintf("write %s (%d bytes)", c.Path, len(c.Body))
 	case ToolEditFile:
-		return fmt.Sprintf("edit_file %s (exact replacement)", c.Path)
+		what := "exact replacement"
+		if c.EditCount > 1 {
+			what = fmt.Sprintf("%d exact replacements", c.EditCount)
+		}
+		if c.DryRun {
+			what += ", dry run"
+		}
+		return fmt.Sprintf("edit_file %s (%s)", c.Path, what)
+	case ToolReadMultipleFiles:
+		return "read_multiple_files " + strings.Join(ReadPaths(c), ", ")
+	case ToolSequentialThinking:
+		return describeThinking(c)
+	case ToolCreateDirectory:
+		return "create_directory " + c.Path
+	case ToolMoveFile:
+		return fmt.Sprintf("move_file %s → %s", c.Path, c.Destination)
+	case ToolGetFileInfo:
+		return "get_file_info " + orWorkspace(c.Path)
+	case ToolDirectoryTree:
+		depth := c.Max
+		if depth == 0 {
+			depth = DefaultTreeDepth
+		}
+		excluding := ""
+		if n := len(globExcludes(c.Filter)); n > 0 {
+			excluding = fmt.Sprintf(" excluding %d pattern(s)", n)
+		}
+		return fmt.Sprintf("directory_tree %s (depth %d)%s", orWorkspace(c.Path), depth, excluding)
 	case ToolReadFile:
 		if c.ResourceID != "" {
 			if c.ByteOffset != nil {
@@ -1899,7 +2053,11 @@ func (c Call) Describe() string {
 	case ToolWebResearch:
 		return describeWebResearch(c)
 	case ToolGlob:
-		return fmt.Sprintf("glob %q in %s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), describePageOptions(c))
+		excluding := ""
+		if n := len(globExcludes(c.Filter)); n > 0 {
+			excluding = fmt.Sprintf(" excluding %d pattern(s)", n)
+		}
+		return fmt.Sprintf("glob %q in %s%s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), excluding, describePageOptions(c))
 	case ToolGrep:
 		target := orWorkspace(c.Path)
 		if c.ResourceID != "" {
@@ -1967,10 +2125,15 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
 - read_file <path> — return a bounded default window; an optional JSON body {"offset":1,"limit":200} returns a line range, and {"byte_offset":N} continues a partial giant line. Pass {"resource_id":"ent_..."} instead of a path to page a retained body without rerunning the command.
-- glob [path] — recursively find files; the glob pattern is the block's body
+- read_multiple_files — read several files at once; the block body is {"paths":["a.go","b.go"]} (at most 10). A failing path is reported inline and the others still return.
+- get_file_info <path> — size, type, permissions, and timestamps of one path, without reading it
+- directory_tree [path] — recursive JSON tree of a directory; optional JSON body {"depth":3,"exclude":["node_modules"]}
+- glob [path] — recursively find files; the glob pattern is the block's body (a pattern without / matches names at any depth, e.g. *config*), or a JSON body {"pattern":"*config*","case_sensitive":false,"exclude":["node_modules"]}
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}
-- edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}, optionally with "expected_resource_id" from a complete prior read
+- edit_file <path> — replace exact text fragments in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"} or {"edits":[{"old_text":"…","new_text":"…"},…]} (applied in order, all or nothing), optionally with "expected_resource_id" from a complete prior read and "dry_run":true to preview a unified diff without writing
+- create_directory <path> — create a directory and any missing parents; an existing directory is fine
+- move_file — move or rename a file or directory; the block body is {"source":"old/path","destination":"new/path"}. It never overwrites an existing destination.
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 - local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval

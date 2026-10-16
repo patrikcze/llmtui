@@ -327,6 +327,12 @@ current local and UTC time from a local clock — no network call, no shelling
 out — so models can retrieve the current or a relative date instead of
 guessing. None of these tools enables another tool or grants permission.
 
+### `tools.sequential_thinking`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Offer the `sequential_thinking` planning tool while tools are on: numbered thoughts with revisions and branches, kept in memory for the current conversation or `/agent` run only (at most 64 thoughts). Off by default because small local models tend to spend their tool budget on it. See [tools-architecture.md](tools-architecture.md#sequential_thinking). |
+
 ### `tools.guardrails`
 
 Hardens the workspace tools. Every protection defaults **on**; set one
@@ -337,7 +343,7 @@ command line would be classified, and `/tools list` / `/tools inspect
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `block_git_dir_writes` | `true` | Reject `write_file`/`edit_file` into `.git` (a written hook would run on your next git command) |
+| `block_git_dir_writes` | `true` | Reject `write_file`/`edit_file`/`create_directory`/`move_file` into `.git` (a written hook would run on your next git command) |
 | `block_symlink_escape` | `true` | Reject paths whose symlinks resolve outside the workspace root |
 | `protect_secret_files` | `true` | Reject writes into key-material directories (`.ssh`, `.gnupg`) |
 | `protect_shell_startup_files` | `true` | Reject writes to shell startup files (`.bashrc`, `.zshrc`, `.profile`, `config.fish`, …) |

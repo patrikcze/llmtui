@@ -155,6 +155,7 @@ func TestNativeDecoderAcceptsEveryDeclaredProperty(t *testing.T) {
 	generic := map[string]bool{
 		ToolListDir: true, ToolReadFile: true, ToolGlob: true, ToolGrep: true, ToolWriteFile: true,
 		ToolEditFile: true, ToolRunCommand: true, ToolWebSearch: true, ToolWebFetch: true, ToolSkillLoad: true,
+		ToolReadMultipleFiles: true, ToolGetFileInfo: true, ToolDirectoryTree: true, ToolCreateDirectory: true, ToolMoveFile: true,
 	}
 	seen := map[string]bool{}
 	for tool, props := range nativePropertyTypes() {
@@ -163,7 +164,7 @@ func TestNativeDecoderAcceptsEveryDeclaredProperty(t *testing.T) {
 		}
 		seen[tool] = true
 		for name, kind := range props {
-			value := map[string]string{"integer": `1`, "boolean": `true`, "string": `"x"`}[kind]
+			value := map[string]string{"integer": `1`, "boolean": `true`, "string": `"x"`, "array": `["x"]`}[kind]
 			if value == "" {
 				t.Errorf("%s.%s has unsupported type %q", tool, name, kind)
 				continue

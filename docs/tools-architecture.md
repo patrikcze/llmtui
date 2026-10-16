@@ -434,3 +434,78 @@ structured overwrite form of `write_file`. The controller pins that body
 through approval and execution rechecks the complete raw digest, so an
 external change fails as `stale_source`; without an observed version the
 legacy exact-text-only edit and unguarded overwrite paths remain available.
+
+`edit_file` also accepts an `edits` list (at most 16) instead of the single
+`old_text`/`new_text` pair. The replacements apply in order, each against the
+text produced by the previous one, and the whole call is all or nothing: one
+missing or ambiguous `old_text` (or edits that cancel out) writes nothing.
+Matching stays exact — there is no whitespace-tolerant fallback. With
+`dry_run: true` the call returns a git-style unified diff (`---`/`+++`/`@@`)
+of the would-be result to the model and writes nothing. A dry run still goes
+through the write guardrails and confinement, asks only when the path is a
+secret file (its diff shows file lines, like a read), is not journaled as a
+side effect, and is recorded as a *preview* so it never counts as an agent
+write receipt. Approval grants, no-progress fingerprints and operation keys
+derive from `tools.EditIdentity`, which covers every pair and the dry-run
+flag.
+
+### Filesystem inspection and structure tools
+
+These complement the core file tools with the coverage of the reference MCP
+filesystem server, implemented natively in `internal/tools`:
+
+| Tool | Class | Approval | Notes |
+| --- | --- | --- | --- |
+| `read_multiple_files` | read-only | ask if any path is a secret file | Up to 10 paths, each read through `read_file`'s own confined reader (default window) under a `==> path <==` header. A failing path is reported inline; the combined output is bounded by `tools.max_file_kb`. Use `read_file` for ranges or a version to edit against. |
+| `get_file_info` | read-only | no | `Lstat` metadata only — type, size, permissions, modified time, plus created (macOS, Windows) and changed (macOS, Linux) where the OS records them. Never reads content; a symlink is described, not followed. |
+| `directory_tree` | read-only | no | Compact JSON `{name, type, children}` tree, `depth` 1–10 (default 3), at most 2000 entries, `exclude` globs, skips `.git`, never follows symlinks (`type: "symlink"`). A directory cut off by depth or the entry limit carries `truncated: true`. |
+| `create_directory` | workspace write | ask | `mkdir -p`; an existing directory is success with no change. |
+| `move_file` | workspace write | ask | Moves or renames a file or directory and creates missing destination parents. Never overwrites, never deletes. |
+
+`glob` covers the reference `search_files`: a pattern without `/` matches
+names at any depth (`*config*` is a partial-name search), `case_sensitive:
+false` folds case, and `exclude` (at most 16 globs) prunes matching files and
+whole directories. `list_dir` already marks directories with a trailing `/`.
+The reference `list_allowed_directories` has no equivalent because llmtui has
+exactly one workspace root, stated in the system prompt and in
+`local_context kind=workspace`.
+
+`create_directory` and `move_file` share `write_file`'s admission: the write
+guardrails (`.git`, `.ssh`/`.gnupg`, `.llmtui`, shell startup files),
+symlink-evaluated confinement that walks up to the deepest existing ancestor
+(so a not-yet-existing path under a symlinked directory is still checked),
+and rejection of any symlink path component. `move_file` applies all of it to
+**both** source and destination, refuses to move a symlink, refuses moving a
+directory into itself, and refuses renaming a likely-secret file to a name
+`IsSecretPath` would not flag — the secret-read prompt keys on the logical
+name, so such a rename would launder it. The rename itself cannot replace an
+existing destination: `renameat2(RENAME_NOREPLACE)` on Linux and
+`renameatx_np(RENAME_EXCL)` on macOS run against parent directories opened
+through `os.Root`; Windows uses `MoveFileEx` without
+`MOVEFILE_REPLACE_EXISTING`; other platforms and filesystems without the
+flag fall back to an existence check plus `os.Root.Rename`, where only an
+external process creating the destination in that gap could race it.
+
+These five tools (and `sequential_thinking`) are listed in
+`tools.ThresholdExemptTools` and are not counted against
+`tools.discovery.threshold`, so adding them did not change which MCP tools an
+existing setup sees.
+
+### `sequential_thinking`
+
+An opt-in (`tools.sequential_thinking.enabled`, default off) native
+equivalent of the reference `sequentialthinking` MCP server. Each call
+records one numbered thought (`thought`, `thought_number`, `total_thoughts`,
+`next_thought_needed`, optionally `is_revision`/`revises_thought`,
+`branch_from_thought`/`branch_id`, `needs_more_thoughts`; the reference
+camelCase spellings are accepted too) and returns a JSON status:
+`thought_number`, `total_thoughts` (raised to the thought number if
+exceeded), `next_thought_needed`, `branches`, `thought_history_length`,
+`remaining_thoughts`. The thought text is not echoed back.
+
+State is a bounded log on the `Runner` — at most 64 thoughts of 4 KB and 16
+branches — reset at every session boundary (`resetEntities`) and at the start
+or resume of each `/agent` run, and never persisted. The tool has no file,
+command or network effect, needs no approval, and runs in model order. In
+`/agent` a thinking step never counts as new evidence, so a model cannot look
+productive by only planning; it does count toward the tool-call budget.

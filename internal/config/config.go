@@ -550,6 +550,14 @@ type ToolsConfig struct {
 	// Discovery progressively exposes large dynamic MCP catalogs while core
 	// tools remain visible. Discovery changes visibility, never permission.
 	Discovery ToolsDiscoveryConfig `mapstructure:"discovery" yaml:"discovery"`
+	// SequentialThinking offers the in-memory sequential_thinking planning
+	// tool. Off by default.
+	SequentialThinking ToolsSequentialThinkingConfig `mapstructure:"sequential_thinking" yaml:"sequential_thinking"`
+}
+
+// ToolsSequentialThinkingConfig toggles the sequential_thinking tool.
+type ToolsSequentialThinkingConfig struct {
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
 }
 
 // ToolsReadConfig controls the default file window. Zero keeps the direct
@@ -1191,6 +1199,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tools.discovery.enabled", true)
 	v.SetDefault("tools.discovery.threshold", 16)
 	v.SetDefault("tools.discovery.max_results", 5)
+	v.SetDefault("tools.sequential_thinking.enabled", false)
 
 	v.SetDefault("skills.enabled", true)
 	v.SetDefault("skills.expose_catalog_to_model", true)
@@ -1516,6 +1525,11 @@ tools:
     enabled: true
     threshold: 16
     max_results: 5
+  # Offer the sequential_thinking planning tool (numbered thoughts with
+  # revisions and branches, kept in memory for the conversation only). Off by
+  # default: small local models tend to spend their tool budget on it.
+  sequential_thinking:
+    enabled: false
 
 # Optional Apple Mail/Calendar integration. Off by default. Enabling it grants
 # no data access: use native account/calendar identifiers in the allowlists,

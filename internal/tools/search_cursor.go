@@ -69,16 +69,21 @@ func decodeListingBody(call *Call) {
 		return
 	}
 	known := map[string]bool{"pattern": true, "path": true, "limit": true, "cursor": true}
+	if call.Tool == ToolGlob {
+		known["exclude"], known["case_sensitive"] = true, true
+	}
 	for key := range raw {
 		if !known[key] {
 			return
 		}
 	}
 	var args struct {
-		Pattern string `json:"pattern"`
-		Path    string `json:"path"`
-		Limit   int    `json:"limit"`
-		Cursor  string `json:"cursor"`
+		Pattern       string   `json:"pattern"`
+		Path          string   `json:"path"`
+		Limit         int      `json:"limit"`
+		Cursor        string   `json:"cursor"`
+		Exclude       []string `json:"exclude"`
+		CaseSensitive *bool    `json:"case_sensitive"`
 	}
 	if err := json.Unmarshal([]byte(body), &args); err != nil {
 		call.InputErr = err.Error()
@@ -93,6 +98,11 @@ func decodeListingBody(call *Call) {
 	}
 	if call.Tool == ToolGlob {
 		call.Body = args.Pattern
+		call.SearchCaseSensitive = args.CaseSensitive
+		if err := setGlobExcludes(call, args.Exclude); err != nil {
+			call.InputErr = err.Error()
+			return
+		}
 	}
 	call.SearchLimit, call.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
 	if limit, err := defaultSearchLimit(call.SearchLimit); err != nil {

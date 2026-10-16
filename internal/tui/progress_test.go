@@ -132,6 +132,21 @@ func TestProgressFingerprintReadRangeAndEdit(t *testing.T) {
 	}
 }
 
+func TestProgressFingerprintFilesystemInspectionTools(t *testing.T) {
+	if progressFingerprint(multiRead("a.go", "b.go")) == progressFingerprint(multiRead("a.go", "c.go")) {
+		t.Fatal("different read_multiple_files batches collapsed to one fingerprint")
+	}
+	if progressFingerprint(multiRead("a.go")) != progressFingerprint(multiRead("./a.go")) {
+		t.Fatal("equivalent read_multiple_files paths produced different fingerprints")
+	}
+	shallow := tools.Call{Tool: tools.ToolDirectoryTree, Path: "src", Max: 1}
+	deep := tools.Call{Tool: tools.ToolDirectoryTree, Path: "src", Max: 4}
+	excluded := tools.Call{Tool: tools.ToolDirectoryTree, Path: "src", Max: 1, Filter: "vendor"}
+	if progressFingerprint(shallow) == progressFingerprint(deep) || progressFingerprint(shallow) == progressFingerprint(excluded) {
+		t.Fatal("different directory_tree requests collapsed to one fingerprint")
+	}
+}
+
 func TestProgressLedgerBlocksOnlyAfterThreshold(t *testing.T) {
 	l := newProgressLedger(3)
 	call := tools.Call{Tool: tools.ToolWebSearch, Body: "weather Brno-Bystrc"}

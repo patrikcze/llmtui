@@ -47,6 +47,7 @@ func TestMissingFileWriteReceipt(t *testing.T) {
 		{name: "failed write", request: "Create the report file", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "write_file", Succeeded: false}}}, want: true},
 		{name: "confirmed write", request: "Write the report file", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "write_file", Succeeded: true}}}},
 		{name: "confirmed edit", request: "Update the report.md", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "edit_file", Succeeded: true}}}},
+		{name: "dry-run edit only", request: "Update the report.md", execution: ExecutionResult{ToolCalls: []ToolCallRecord{{Name: "edit_file", Succeeded: true, Preview: true}}}, want: true},
 		{name: "informational", request: "Explain how to write a report file", want: false},
 		{name: "answer only", request: "Give me the weather report", want: false},
 		{name: "read-only constraint", request: "Read large.txt. Do not modify files.", want: false},

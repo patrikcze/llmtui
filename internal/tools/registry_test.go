@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestEditFileRegisteredAsWorkspaceWriteWithApproval(t *testing.T) {
 	if !ok {
 		t.Fatal("edit_file not registered")
 	}
-	if info.Source != "builtin" || info.Safety != SafetyWorkspaceWrite || info.Approval != "ask" {
+	if info.Source != "builtin" || info.Safety != SafetyWorkspaceWrite || !strings.HasPrefix(info.Approval, "ask") {
 		t.Fatalf("edit_file capability = %+v", info)
 	}
 }
@@ -70,8 +71,12 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 		},
 		{
 			name:     ToolEditFile,
-			approval: "ask",
-			checks:   []approvalCheck{{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new"}, want: true}},
+			approval: "ask (dry_run: ask only for secret files)",
+			checks: []approvalCheck{
+				{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new"}, want: true},
+				{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new", DryRun: true}, want: false},
+				{call: Call{Tool: ToolEditFile, Path: ".env", OldText: "old", NewText: "new", DryRun: true}, want: true},
+			},
 		},
 		{
 			name:     ToolRunCommand,
@@ -187,6 +192,39 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			name:     "open_item",
 			approval: "no (read-only or preview-only; change_apply is the only personal_apps operation that mutates anything)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"open_item","arguments":{"item_id":"msg_1"}}`}}},
+		},
+		{
+			name:     ToolReadMultipleFiles,
+			approval: "ask when any path is a secret file",
+			checks: []approvalCheck{
+				{call: multiReadCall("a.go", "b.go"), want: false},
+				{call: multiReadCall("a.go", ".env"), want: true},
+			},
+		},
+		{
+			name:     ToolSequentialThinking,
+			approval: "no (in-memory planning only)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolSequentialThinking, Body: "plan", Thinking: ThinkingStep{ThoughtNumber: 1, TotalThoughts: 2}}, want: false}},
+		},
+		{
+			name:     ToolCreateDirectory,
+			approval: "ask",
+			checks:   []approvalCheck{{call: Call{Tool: ToolCreateDirectory, Path: "build"}, want: true}},
+		},
+		{
+			name:     ToolMoveFile,
+			approval: "ask",
+			checks:   []approvalCheck{{call: Call{Tool: ToolMoveFile, Path: "a.go", Destination: "b.go"}, want: true}},
+		},
+		{
+			name:     ToolGetFileInfo,
+			approval: "no (metadata only)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolGetFileInfo, Path: ".env"}, want: false}},
+		},
+		{
+			name:     ToolDirectoryTree,
+			approval: "no",
+			checks:   []approvalCheck{{call: Call{Tool: ToolDirectoryTree}, want: false}},
 		},
 		{
 			name:     ToolGetEntityDetails,
