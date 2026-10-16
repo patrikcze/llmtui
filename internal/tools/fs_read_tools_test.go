@@ -2,6 +2,9 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -126,7 +129,16 @@ func TestGetFileInfo(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("get_file_info: %v", res.Err)
 	}
-	for _, want := range []string{"path: dir/a.txt", "type: file", "size: 6 bytes", "permissions: -rw-------", "modified: "} {
+	// The permission bits come from the platform: Windows has no Unix modes
+	// and Go synthesizes them from the read-only attribute (0666 / 0444), so
+	// the expectation is derived from the fixture's own Lstat.
+	fixture, err := os.Lstat(filepath.Join(root, "dir", "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := fixture.Mode().Perm()
+	wantPerm := fmt.Sprintf("permissions: %s (%04o)", perm, perm)
+	for _, want := range []string{"path: dir/a.txt", "type: file", "size: 6 bytes", wantPerm, "modified: "} {
 		if !strings.Contains(res.Output, want) {
 			t.Errorf("output missing %q:\n%s", want, res.Output)
 		}
