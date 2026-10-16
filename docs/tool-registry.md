@@ -108,8 +108,12 @@ cannot race session toggles. The snapshot is assembled by the same
 
 - `/tools off` returns an empty tool array.
 - `read_file` accepts an optional 1-based `offset`/`limit` line range;
-  `edit_file` (one exact, unique text replacement in an existing file) is a
-  `workspace_write` builtin alongside `write_file`.
+  `edit_file` (exact, unique text replacements in an existing file, with an
+  optional `dry_run` diff), `create_directory` and `move_file` are
+  `workspace_write` builtins alongside `write_file`. `read_multiple_files`,
+  `get_file_info` and `directory_tree` are read-only builtins.
+- `sequential_thinking` appears only while `tools.sequential_thinking.enabled`
+  is set.
 - `/web on|off` adds or removes `web_search`, `web_fetch` and `web_research`.
 - `skill_load` appears only while the model-visible skill catalog is available.
 - A configured MCP server contributes no tools until `/mcp connect` completes

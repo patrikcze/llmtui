@@ -451,9 +451,11 @@ tools:
     max_results: 5
 ```
 
-The seven workspace tools are `list_dir`, `read_file`, `glob`, `grep`,
+The core workspace tools are `list_dir`, `read_file`, `glob`, `grep`,
 `write_file`, `edit_file`, and `run_command` (one shell command in the
-workspace — `sh` on macOS/Linux, `cmd` on Windows, detected automatically):
+workspace — `sh` on macOS/Linux, `cmd` on Windows, detected automatically),
+plus `read_multiple_files`, `get_file_info`, `directory_tree`,
+`create_directory`, and `move_file` (see below):
 
 - `read_file` returns a whole file, or — with an optional 1-based `offset` and
   `limit` — just that line range (default 200 lines, hard cap 500), so a large
@@ -463,7 +465,21 @@ workspace — `sh` on macOS/Linux, `cmd` on Windows, detected automatically):
   (`old_text` → `new_text`). It fails without writing if `old_text` is missing
   or matches more than once, never creates a file, and refuses if the file
   changed since it was read. Use it for small changes instead of regenerating
-  the whole file; it shares `write_file`'s guardrails and approval.
+  the whole file; it shares `write_file`'s guardrails and approval. An `edits`
+  list applies several replacements in order, all or nothing, and
+  `dry_run: true` returns a unified diff without writing.
+- `glob` finds files by pattern; `*config*` is a partial-name search, and
+  `case_sensitive: false` and `exclude` globs narrow it.
+- `read_multiple_files` reads up to 10 files in one call (a failing file is
+  reported inline); `get_file_info` returns size, type, permissions and
+  timestamps without reading content; `directory_tree` returns a bounded
+  recursive JSON tree.
+- `create_directory` is `mkdir -p`; `move_file` moves or renames a file or
+  directory and never overwrites an existing destination. Both ask first.
+  There is no delete tool.
+- `sequential_thinking` (opt-in: `tools.sequential_thinking.enabled: true`)
+  lets a model plan with numbered, revisable, branchable thoughts kept in
+  memory for the conversation only.
 
 Three controller and local-assistant tools are also available:
 

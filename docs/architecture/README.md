@@ -332,10 +332,13 @@ overrides.
 matching set of native function specs (`native.go`), one capability catalog
 with a `SafetyClass` per tool (`registry.go`), and the command classifier
 (`guardrails.go` — auto / ask / deny). Tools available: `list_dir`,
-`read_file` (ranged), `glob`, `grep` (shell-free), `write_file`, `edit_file`
-(surgical exact-match), `run_command`, `web_search`, `web_fetch`,
-`local_context`, `tool_search`, `ask_user`, `skill_load`. There is **no
-delete tool**.
+`read_file` (ranged), `read_multiple_files`, `get_file_info`,
+`directory_tree`, `glob` (with excludes), `grep` (shell-free), `write_file`,
+`edit_file` (surgical exact-match, multi-edit, `dry_run` diff),
+`create_directory`, `move_file` (never overwrites), `run_command`,
+`web_search`, `web_fetch`, `local_context`, `tool_search`, `ask_user`,
+`skill_load`, and the opt-in `sequential_thinking`. There is **no delete
+tool**.
 
 The **safety invariants** (each traces to a confirmed bug —
 [`v1-security-review.md`](v1-security-review.md), [`v1-audit.md`](v1-audit.md),

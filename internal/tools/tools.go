@@ -10,6 +10,14 @@
 //
 // Execution is confined to the workspace root: absolute paths and anything
 // escaping the root are rejected.
+//
+// There is deliberately no delete tool. move_file renames within the
+// workspace but never replaces an existing destination, and every mutating
+// tool (write_file, edit_file, create_directory, move_file) shares one
+// write admission: the write guardrails, symlink-evaluated confinement, and
+// refusal to act through a symlink path component. sequential_thinking is
+// the one stateful non-filesystem tool; its bounded log lives on the Runner
+// and is never persisted.
 package tools
 
 import (
