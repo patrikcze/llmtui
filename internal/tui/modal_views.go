@@ -474,6 +474,7 @@ func (m *Model) toolsOverlay() string {
 		{tools.ToolMoveFile, "approval", "move or rename a file or directory; never overwrites"},
 		{tools.ToolRunCommand, "mixed", "run one shell command; read-only ones (ls, grep, git status, …) run automatically"},
 		{tools.ToolAskUser, "user", "ask a clarification with choices or text input (chat and agent)"},
+		{tools.ToolSequentialThinking, "auto", "numbered planning thoughts, kept in memory (tools.sequential_thinking.enabled)"},
 		{tools.ToolWebSearch, "auto", "search the web via DuckDuckGo (/web on)"},
 		{tools.ToolWebFetch, "approval", "fetch one page as Markdown (approval per URL)"},
 		{tools.ToolWebResearch, "approval", "answer a question from several web sources with cited notes (approval per request)"},

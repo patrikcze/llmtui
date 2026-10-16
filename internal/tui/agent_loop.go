@@ -820,6 +820,8 @@ func (m *Model) startInitialAgentCycle(request string, images []provider.Image) 
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
 	m.agentLoop.initialImages = nil
 	m.agentLoop.compactedToolResults = 0
+	// sequential_thinking's log is per agent run: a new run starts empty.
+	m.toolRunner.ResetThinking()
 	m.bypassCache = true
 	m.notice = fmt.Sprintf("agent %s · cycle 1/%d · executing", shortRunID(run.ID), run.Limits.MaxCycles)
 	return tea.Batch(m.dispatch(request, images), m.persistAgentRun())
@@ -1618,6 +1620,9 @@ func toolCallDetail(call tools.Call) string {
 		return call.Path
 	case tools.ToolMoveFile:
 		return call.Path + " -> " + call.Destination
+	case tools.ToolSequentialThinking:
+		// The step number only: thought text is model prose, not a resource.
+		return fmt.Sprintf("thought %d", call.Thinking.ThoughtNumber)
 	case tools.ToolReadMultipleFiles:
 		return strings.Join(tools.ReadPaths(call), ", ")
 	case tools.ToolGrep, tools.ToolGlob:
@@ -1821,6 +1826,10 @@ const maxAgentEvidenceKeys = 512
 // is not evidence.
 func (m *Model) isNewAgentEvidence(result tools.Result, record agent.ToolCallRecord) bool {
 	switch {
+	case result.Call.Tool == tools.ToolSequentialThinking:
+		// Planning observes nothing: its status changes on every call, so
+		// counting it would let a model look productive by only thinking.
+		return false
 	case result.Err == nil && result.Call.Tool == tools.ToolAskUser:
 		return true
 	case result.Err == nil && result.Meta.Effect == tools.EffectChanged:
@@ -2191,6 +2200,7 @@ func (m *Model) handleAgentResume(msg agentResumeMsg) (tea.Model, tea.Cmd) {
 	m.agentLoop.carriedExchange = nil // only a freshly started run carries one
 	m.agentLoop.execution = agent.ExecutionResult{}
 	m.agentLoop.initialImages = nil
+	m.toolRunner.ResetThinking() // never persisted, so a resumed run starts empty
 	m.resetAgentContext()
 	m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder = nil, nil
 	// A resumed run's observation cache starts empty: retained excerpts are

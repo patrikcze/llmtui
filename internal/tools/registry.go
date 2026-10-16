@@ -125,11 +125,12 @@ var safetyForBuiltin = map[string]SafetyClass{
 // size it compares against tools.discovery.threshold, so offering them does
 // not change which MCP tools an existing setup sees.
 var ThresholdExemptTools = map[string]bool{
-	ToolReadMultipleFiles: true,
-	ToolGetFileInfo:       true,
-	ToolDirectoryTree:     true,
-	ToolCreateDirectory:   true,
-	ToolMoveFile:          true,
+	ToolReadMultipleFiles:  true,
+	ToolGetFileInfo:        true,
+	ToolDirectoryTree:      true,
+	ToolCreateDirectory:    true,
+	ToolMoveFile:           true,
+	ToolSequentialThinking: true,
 }
 
 // approvalForTool is the static approval policy per tool.
@@ -192,6 +193,18 @@ func DefaultRegistry() *Registry {
 			Source:      "skills",
 			Safety:      safetyForBuiltin[s.Name],
 			Approval:    approvalForTool[s.Name],
+			Parameters:  s.Parameters,
+		})
+	}
+	for _, s := range ThinkingSpecs() {
+		// Pure in-memory planning state: no file, command, or network
+		// effect, so it is read-only and never asks.
+		_ = r.Register(CapabilityInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      "thinking",
+			Safety:      SafetyReadOnly,
+			Approval:    "no (in-memory planning only)",
 			Parameters:  s.Parameters,
 		})
 	}

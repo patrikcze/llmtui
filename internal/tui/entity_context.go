@@ -150,6 +150,7 @@ func (m *Model) resetEntities() {
 	m.webRefreshEpoch = 0
 	if m.toolRunner != nil {
 		m.toolRunner.ResetSearchCursors()
+		m.toolRunner.ResetThinking()
 	}
 	if m.entities != nil {
 		m.entities.Reset()

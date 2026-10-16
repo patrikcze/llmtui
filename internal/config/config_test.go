@@ -421,6 +421,9 @@ func TestAgentDefaultsAreBoundedAndOptIn(t *testing.T) {
 	if !cfg.Tools.Discovery.Enabled || cfg.Tools.Discovery.Threshold != 16 || cfg.Tools.Discovery.MaxResults != 5 {
 		t.Fatalf("tools.discovery defaults = %+v", cfg.Tools.Discovery)
 	}
+	if cfg.Tools.SequentialThinking.Enabled {
+		t.Fatal("tools.sequential_thinking must default off")
+	}
 	if cfg.ToolRegistry.Enabled || cfg.ToolRegistry.Listen != "127.0.0.1:7834" || cfg.ToolRegistry.TokenEnv != "" || cfg.ToolRegistry.ShutdownTimeout != "5s" {
 		t.Fatalf("tool registry defaults = %+v", cfg.ToolRegistry)
 	}

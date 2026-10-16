@@ -202,6 +202,11 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			},
 		},
 		{
+			name:     ToolSequentialThinking,
+			approval: "no (in-memory planning only)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolSequentialThinking, Body: "plan", Thinking: ThinkingStep{ThoughtNumber: 1, TotalThoughts: 2}}, want: false}},
+		},
+		{
 			name:     ToolCreateDirectory,
 			approval: "ask",
 			checks:   []approvalCheck{{call: Call{Tool: ToolCreateDirectory, Path: "build"}, want: true}},

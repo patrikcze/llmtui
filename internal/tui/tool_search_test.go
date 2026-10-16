@@ -87,6 +87,7 @@ func TestSmallCatalogPreservesExistingToolVisibility(t *testing.T) {
 // on top of the original built-ins stayed fully visible before and still do.
 func TestNewBuiltinsDoNotTriggerToolDiscovery(t *testing.T) {
 	m := configureDiscoveryModel(t, 5, nil)
+	m.toolRunner.SequentialThinking = true
 	eligible := m.eligibleToolSpecs()
 	for name := range tools.ThresholdExemptTools {
 		if _, ok := specByName(eligible, name); !ok {

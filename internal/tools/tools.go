@@ -216,6 +216,9 @@ type Call struct {
 	DryRun    bool
 	// Destination is move_file's target path; Path is its source.
 	Destination string
+	// Thinking carries sequential_thinking's step metadata; the thought text
+	// itself is in Body.
+	Thinking ThinkingStep
 	// Paths and PathCount carry read_multiple_files' workspace paths. A
 	// fixed array keeps Call comparable.
 	Paths     [MaxReadMultipleFiles]string
@@ -381,6 +384,8 @@ func Parse(reply string) []Call {
 						decodeDirectoryTreeBody(&call)
 					case ToolMoveFile:
 						decodeMoveFileBody(&call)
+					case ToolSequentialThinking:
+						decodeThinkingArgs(&call, call.Body)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
 					case ToolWriteFile:
@@ -473,6 +478,12 @@ type Runner struct {
 	// (entities.output_storage); Resources only lets read_file recover a
 	// body some other path already published.
 	Resources ResourceReader
+
+	// SequentialThinking enables the sequential_thinking tool
+	// (tools.sequential_thinking.enabled). Its log lives in thinking and is
+	// reset by ResetThinking; it is never persisted.
+	SequentialThinking bool
+	thinking           thinkingLog
 
 	searchMu             sync.Mutex
 	searchCursors        map[string]searchCursor
@@ -699,6 +710,8 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, meta, res.Err = r.getFileInfo(c)
 	case ToolDirectoryTree:
 		res.Output, meta, res.Err = r.directoryTree(ctx, c)
+	case ToolSequentialThinking:
+		res.Output, meta, res.Err = r.sequentialThinking(c)
 	case ToolCreateDirectory:
 		res.Output, meta, res.Err = r.createDirectory(c)
 	case ToolMoveFile:
@@ -1738,7 +1751,7 @@ func webSearchNeedsApproval(query string) bool {
 // id_rsa, …) ask first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser, ToolGetFileInfo, ToolDirectoryTree:
+	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser, ToolGetFileInfo, ToolDirectoryTree, ToolSequentialThinking:
 		// get_file_info and directory_tree expose names and metadata only,
 		// never content, exactly like list_dir.
 		return false
@@ -1990,6 +2003,8 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("edit_file %s (%s)", c.Path, what)
 	case ToolReadMultipleFiles:
 		return "read_multiple_files " + strings.Join(ReadPaths(c), ", ")
+	case ToolSequentialThinking:
+		return describeThinking(c)
 	case ToolCreateDirectory:
 		return "create_directory " + c.Path
 	case ToolMoveFile:

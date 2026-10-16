@@ -593,6 +593,7 @@ func (m *Model) rebuildFromConfig() {
 		m.toolRunner = tools.NewRunner(wd, cfg.Tools.MaxFileKB)
 		m.toolRunner.SetDefaultReadLines(cfg.Tools.Read.DefaultLines)
 		m.toolRunner.SetSearchCaptureEnabled(m.outputStorageEnabled())
+		m.toolRunner.SequentialThinking = cfg.Tools.SequentialThinking.Enabled
 		// Always wired, independent of entities.enabled/output_storage: the
 		// registry itself always exists (see m.entities above), and
 		// read_file's resource_id path against an empty/disabled registry

@@ -406,6 +406,13 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			out = append(out, c)
 			continue
 		}
+		if tc.Name == ToolSequentialThinking {
+			// Dedicated decoder: it accepts the reference server's camelCase
+			// spellings as well as llmtui's snake_case schema.
+			decodeThinkingArgs(&c, tc.Arguments)
+			out = append(out, c)
+			continue
+		}
 		if tc.Name == ToolWebResearch {
 			// web_research has its own tolerant decoder (queries may be a
 			// single string) shared with the fenced JSON form.
