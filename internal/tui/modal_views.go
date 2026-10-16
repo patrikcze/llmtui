@@ -463,7 +463,10 @@ func (m *Model) toolsOverlay() string {
 	rows := []toolRow{
 		{tools.ToolListDir, "auto", "list a directory in the workspace"},
 		{tools.ToolReadFile, "auto", "read a file's contents"},
-		{tools.ToolGlob, "auto", "find workspace files by glob pattern"},
+		{tools.ToolReadMultipleFiles, "auto", "read up to 10 files at once (approval for secret files)"},
+		{tools.ToolGetFileInfo, "auto", "size, type, permissions and timestamps of one path"},
+		{tools.ToolDirectoryTree, "auto", "bounded recursive JSON tree of a directory"},
+		{tools.ToolGlob, "auto", "find workspace files by glob pattern, with excludes and case folding"},
 		{tools.ToolGrep, "auto", "search workspace contents with a regular expression (secret files skipped)"},
 		{tools.ToolWriteFile, "approval", "create or overwrite a file"},
 		{tools.ToolEditFile, "approval", "replace one exact unique text fragment in an existing file"},
@@ -479,7 +482,7 @@ func (m *Model) toolsOverlay() string {
 		"mixed":    lipgloss.NewStyle().Foreground(m.theme.Accent),
 		"user":     lipgloss.NewStyle().Foreground(m.theme.Subtle),
 	}
-	toolColumns := []components.Column{{Width: 13}, {Width: 9}, {Width: 0}}
+	toolColumns := []components.Column{{Width: 20}, {Width: 9}, {Width: 0}}
 	lines = append(lines, "", components.SectionTitle(m.theme, "available tools", width),
 		key.Render(components.TableRow(toolColumns, []string{"tool", "access", "description"}, width)))
 	for _, r := range rows {

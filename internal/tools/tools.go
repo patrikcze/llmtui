@@ -76,6 +76,14 @@ const (
 	// ToolGetEntityDetails is a read-only controller capability. The TUI
 	// resolves it against its session-local entity registry.
 	ToolGetEntityDetails = "get_entity_details"
+	// ToolReadMultipleFiles reads several workspace files in one call; a
+	// failing path is reported inline and never aborts the others.
+	ToolReadMultipleFiles = "read_multiple_files"
+	// ToolGetFileInfo returns one path's metadata (type, size, permissions,
+	// timestamps) without reading its content.
+	ToolGetFileInfo = "get_file_info"
+	// ToolDirectoryTree returns a bounded recursive JSON tree of a directory.
+	ToolDirectoryTree = "directory_tree"
 )
 
 // read_file optional line-range bounds. DefaultReadLimit applies when a range
@@ -193,6 +201,10 @@ type Call struct {
 	// controlled deletion of that exact fragment).
 	OldText string
 	NewText string
+	// Paths and PathCount carry read_multiple_files' workspace paths. A
+	// fixed array keeps Call comparable.
+	Paths     [MaxReadMultipleFiles]string
+	PathCount int
 	// ExpectedResourceID is the model-facing opaque snapshot selector for an
 	// edit. ExpectedVersion is controller-resolved metadata and never comes
 	// from provider JSON directly.
@@ -348,6 +360,10 @@ func Parse(reply string) []Call {
 						decodeSearchBody(&call)
 					case ToolGlob, ToolListDir:
 						decodeListingBody(&call)
+					case ToolReadMultipleFiles:
+						decodeReadMultipleBody(&call)
+					case ToolDirectoryTree:
+						decodeDirectoryTreeBody(&call)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
 					case ToolWriteFile:
@@ -660,6 +676,12 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 			break
 		}
 		res.Output, res.Diff, meta, res.Err = r.editFile(c.Path, c.OldText, c.NewText, expected)
+	case ToolReadMultipleFiles:
+		res.Output, meta, res.Err = r.readMultipleFiles(ctx, c)
+	case ToolGetFileInfo:
+		res.Output, meta, res.Err = r.getFileInfo(c)
+	case ToolDirectoryTree:
+		res.Output, meta, res.Err = r.directoryTree(ctx, c)
 	case ToolGlob:
 		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
@@ -1651,7 +1673,19 @@ func webSearchNeedsApproval(query string) bool {
 // id_rsa, …) ask first when RequireApprovalForSecretReads is on.
 func (r *Runner) NeedsApproval(c Call) bool {
 	switch c.Tool {
-	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser:
+	case ToolListDir, ToolGlob, ToolSkillLoad, ToolAskUser, ToolGetFileInfo, ToolDirectoryTree:
+		// get_file_info and directory_tree expose names and metadata only,
+		// never content, exactly like list_dir.
+		return false
+	case ToolReadMultipleFiles:
+		if !r.Guardrails.RequireApprovalForSecretReads {
+			return false
+		}
+		for _, p := range ReadPaths(c) {
+			if IsSecretPath(p) {
+				return true
+			}
+		}
 		return false
 	case ToolLocalContext:
 		return strings.EqualFold(strings.TrimSpace(c.ContextKind), LocalContextClipboard)
@@ -1875,6 +1909,20 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("write %s (%d bytes)", c.Path, len(c.Body))
 	case ToolEditFile:
 		return fmt.Sprintf("edit_file %s (exact replacement)", c.Path)
+	case ToolReadMultipleFiles:
+		return "read_multiple_files " + strings.Join(ReadPaths(c), ", ")
+	case ToolGetFileInfo:
+		return "get_file_info " + orWorkspace(c.Path)
+	case ToolDirectoryTree:
+		depth := c.Max
+		if depth == 0 {
+			depth = DefaultTreeDepth
+		}
+		excluding := ""
+		if n := len(globExcludes(c.Filter)); n > 0 {
+			excluding = fmt.Sprintf(" excluding %d pattern(s)", n)
+		}
+		return fmt.Sprintf("directory_tree %s (depth %d)%s", orWorkspace(c.Path), depth, excluding)
 	case ToolReadFile:
 		if c.ResourceID != "" {
 			if c.ByteOffset != nil {
@@ -1971,6 +2019,9 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
 - read_file <path> — return a bounded default window; an optional JSON body {"offset":1,"limit":200} returns a line range, and {"byte_offset":N} continues a partial giant line. Pass {"resource_id":"ent_..."} instead of a path to page a retained body without rerunning the command.
+- read_multiple_files — read several files at once; the block body is {"paths":["a.go","b.go"]} (at most 10). A failing path is reported inline and the others still return.
+- get_file_info <path> — size, type, permissions, and timestamps of one path, without reading it
+- directory_tree [path] — recursive JSON tree of a directory; optional JSON body {"depth":3,"exclude":["node_modules"]}
 - glob [path] — recursively find files; the glob pattern is the block's body (a pattern without / matches names at any depth, e.g. *config*), or a JSON body {"pattern":"*config*","case_sensitive":false,"exclude":["node_modules"]}
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}

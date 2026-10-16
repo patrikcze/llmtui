@@ -12,8 +12,8 @@ import (
 
 func TestSpecsAreValidJSONSchemas(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 11 {
-		t.Fatalf("specs = %d, want 11", len(specs))
+	if len(specs) != 14 {
+		t.Fatalf("specs = %d, want 14", len(specs))
 	}
 	names := map[string]bool{}
 	for _, s := range specs {
@@ -29,7 +29,7 @@ func TestSpecsAreValidJSONSchemas(t *testing.T) {
 			t.Errorf("%s: missing description", s.Name)
 		}
 	}
-	for _, want := range []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand} {
+	for _, want := range []string{ToolListDir, ToolReadFile, ToolGlob, ToolGrep, ToolWriteFile, ToolEditFile, ToolRunCommand, ToolReadMultipleFiles, ToolGetFileInfo, ToolDirectoryTree} {
 		if !names[want] {
 			t.Errorf("missing spec for %s", want)
 		}

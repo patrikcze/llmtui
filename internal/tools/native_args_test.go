@@ -155,6 +155,7 @@ func TestNativeDecoderAcceptsEveryDeclaredProperty(t *testing.T) {
 	generic := map[string]bool{
 		ToolListDir: true, ToolReadFile: true, ToolGlob: true, ToolGrep: true, ToolWriteFile: true,
 		ToolEditFile: true, ToolRunCommand: true, ToolWebSearch: true, ToolWebFetch: true, ToolSkillLoad: true,
+		ToolReadMultipleFiles: true, ToolGetFileInfo: true, ToolDirectoryTree: true,
 	}
 	seen := map[string]bool{}
 	for tool, props := range nativePropertyTypes() {

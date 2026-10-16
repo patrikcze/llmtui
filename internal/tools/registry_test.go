@@ -189,6 +189,24 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			checks:   []approvalCheck{{call: Call{Tool: ToolPersonalApps, Body: `{"operation":"open_item","arguments":{"item_id":"msg_1"}}`}}},
 		},
 		{
+			name:     ToolReadMultipleFiles,
+			approval: "ask when any path is a secret file",
+			checks: []approvalCheck{
+				{call: multiReadCall("a.go", "b.go"), want: false},
+				{call: multiReadCall("a.go", ".env"), want: true},
+			},
+		},
+		{
+			name:     ToolGetFileInfo,
+			approval: "no (metadata only)",
+			checks:   []approvalCheck{{call: Call{Tool: ToolGetFileInfo, Path: ".env"}, want: false}},
+		},
+		{
+			name:     ToolDirectoryTree,
+			approval: "no",
+			checks:   []approvalCheck{{call: Call{Tool: ToolDirectoryTree}, want: false}},
+		},
+		{
 			name:     ToolGetEntityDetails,
 			approval: "no (read-only runtime lookup)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolGetEntityDetails, EntityIDs: [MaxEntityDetailsIDs]string{"ent_00001"}, EntityIDCount: 1}, want: false}},

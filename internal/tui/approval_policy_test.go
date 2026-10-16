@@ -162,3 +162,34 @@ func TestCapabilityPolicyScopesWebResearchRequest(t *testing.T) {
 		}
 	}
 }
+
+func multiRead(paths ...string) tools.Call {
+	c := tools.Call{Tool: tools.ToolReadMultipleFiles, PathCount: len(paths)}
+	copy(c.Paths[:], paths)
+	return c
+}
+
+// A read_multiple_files grant (it asks only when a secret path is named) is
+// pinned to the exact path set, and a path-pattern grant never covers a batch.
+func TestCapabilityPolicyScopesReadMultipleFilesPaths(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	policy.GrantCall(multiRead("a.go", ".env"), now, time.Hour)
+	if !policy.Allows(multiRead("a.go", "./.env"), now) {
+		t.Fatal("the reviewed batch was not allowed")
+	}
+	for _, other := range []tools.Call{
+		multiRead("a.go", ".env.production"),
+		multiRead(".env"),
+		{Tool: tools.ToolReadFile, Path: ".env"},
+	} {
+		if policy.Allows(other, now) {
+			t.Fatalf("read_multiple_files grant leaked to %+v", other)
+		}
+	}
+	var patterns capabilityPolicy
+	patterns.GrantPath(tools.ToolReadMultipleFiles, "*", now, time.Hour)
+	if patterns.Allows(multiRead("a.go", ".env"), now) {
+		t.Fatal("a path pattern blanket-approved a read_multiple_files batch")
+	}
+}

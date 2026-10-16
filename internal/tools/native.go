@@ -44,6 +44,42 @@ func Specs() []provider.ToolSpec {
 			}`),
 		},
 		{
+			Name:        ToolReadMultipleFiles,
+			Description: "Read several files in the project workspace in one call, each returned under a ==> path <== header with read_file's default window. A file that cannot be read is reported inline and does not stop the others. Use read_file for line ranges, retained bodies, or a version to edit against.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"paths": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "File paths relative to the project root."}
+				},
+				"required": ["paths"],
+				"additionalProperties": false
+			}`),
+		},
+		{
+			Name:        ToolGetFileInfo,
+			Description: "Get metadata for one file or directory in the project workspace — type, size, permissions, modified time, and created/changed time where the OS records them — without reading its content. Symlinks are described, not followed.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Path relative to the project root. Optional; defaults to the root."}
+				},
+				"additionalProperties": false
+			}`),
+		},
+		{
+			Name:        ToolDirectoryTree,
+			Description: "Return a recursive JSON tree of a workspace directory: each entry has name, type (file, directory, symlink, other) and, for listed directories, children. Directories cut off by depth or the entry limit carry truncated=true. Skips .git and never follows symlinks.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Directory relative to the project root. Optional; defaults to the root."},
+					"depth": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "How many directory levels to list."},
+					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Optional glob patterns to skip, for example node_modules or **/*.log. A pattern without / matches any name."}
+				},
+				"additionalProperties": false
+			}`),
+		},
+		{
 			Name:        ToolGlob,
 			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments; a pattern without / matches file names at any depth, so *config* finds every file whose name contains config. Use case_sensitive=false for case-insensitive matching and exclude to skip paths or directories. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
@@ -204,6 +240,8 @@ type nativeArgs struct {
 	Level              string   `json:"level"`
 	Kinds              []string `json:"kinds"`
 	Exclude            []string `json:"exclude"`
+	Paths              []string `json:"paths"`
+	Depth              int      `json:"depth"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -424,6 +462,12 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			if err := ValidateEditFileCall(&c); err != nil {
 				c.InputErr = err.Error()
 			}
+		case ToolReadMultipleFiles:
+			if err := setReadPaths(&c, args.Paths); err != nil {
+				c.InputErr = err.Error()
+			}
+		case ToolDirectoryTree:
+			setDirectoryTreeOptions(&c, args.Depth, args.Exclude)
 		case ToolGlob:
 			c.Body = args.Pattern
 			c.SearchCaseSensitive = args.CaseSensitive
