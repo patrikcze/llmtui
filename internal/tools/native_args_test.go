@@ -163,7 +163,7 @@ func TestNativeDecoderAcceptsEveryDeclaredProperty(t *testing.T) {
 		}
 		seen[tool] = true
 		for name, kind := range props {
-			value := map[string]string{"integer": `1`, "boolean": `true`, "string": `"x"`}[kind]
+			value := map[string]string{"integer": `1`, "boolean": `true`, "string": `"x"`, "array": `["x"]`}[kind]
 			if value == "" {
 				t.Errorf("%s.%s has unsupported type %q", tool, name, kind)
 				continue

@@ -1899,7 +1899,11 @@ func (c Call) Describe() string {
 	case ToolWebResearch:
 		return describeWebResearch(c)
 	case ToolGlob:
-		return fmt.Sprintf("glob %q in %s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), describePageOptions(c))
+		excluding := ""
+		if n := len(globExcludes(c.Filter)); n > 0 {
+			excluding = fmt.Sprintf(" excluding %d pattern(s)", n)
+		}
+		return fmt.Sprintf("glob %q in %s%s%s", strings.TrimSpace(c.Body), orWorkspace(c.Path), excluding, describePageOptions(c))
 	case ToolGrep:
 		target := orWorkspace(c.Path)
 		if c.ResourceID != "" {
@@ -1967,7 +1971,7 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 
 - list_dir [path] — list a directory (path optional, defaults to the project root)
 - read_file <path> — return a bounded default window; an optional JSON body {"offset":1,"limit":200} returns a line range, and {"byte_offset":N} continues a partial giant line. Pass {"resource_id":"ent_..."} instead of a path to page a retained body without rerunning the command.
-- glob [path] — recursively find files; the glob pattern is the block's body
+- glob [path] — recursively find files; the glob pattern is the block's body (a pattern without / matches names at any depth, e.g. *config*), or a JSON body {"pattern":"*config*","case_sensitive":false,"exclude":["node_modules"]}
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}
 - edit_file <path> — replace one exact text fragment in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"}, optionally with "expected_resource_id" from a complete prior read

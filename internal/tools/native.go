@@ -45,12 +45,14 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGlob,
-			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments. Use limit/cursor to page a captured sorted listing.",
+			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments; a pattern without / matches file names at any depth, so *config* finds every file whose name contains config. Use case_sensitive=false for case-insensitive matching and exclude to skip paths or directories. Use limit/cursor to page a captured sorted listing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go or README*."},
+					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go, README*, or *test*."},
 					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."},
+					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Optional glob patterns to skip, for example node_modules or **/*.min.js. A pattern without / matches any file or directory name; an excluded directory is not descended into."},
+					"case_sensitive": {"type": "boolean", "default": true},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
 					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
 				},
@@ -201,6 +203,7 @@ type nativeArgs struct {
 	EntityIDs          []string `json:"entity_ids"`
 	Level              string   `json:"level"`
 	Kinds              []string `json:"kinds"`
+	Exclude            []string `json:"exclude"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -423,7 +426,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			}
 		case ToolGlob:
 			c.Body = args.Pattern
+			c.SearchCaseSensitive = args.CaseSensitive
 			c.SearchLimit, c.SearchCursor = args.Limit, strings.TrimSpace(args.Cursor)
+			if err := setGlobExcludes(&c, args.Exclude); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolGrep:
 			c.Body = args.Pattern
 			c.Filter = strings.TrimSpace(args.Glob)
