@@ -120,6 +120,14 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""
+	case tools.ToolCreateDirectory:
+		// A fixed variant keeps a path-pattern grant from blanket-approving
+		// directory creation; only an exact reviewed path is covered.
+		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), "mkdir"
+	case tools.ToolMoveFile:
+		// The source is what is moved; the destination is where. Approving
+		// one move must never authorise moving the same source elsewhere.
+		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), "to:" + filepath.Clean(strings.TrimSpace(c.Destination))
 	case tools.ToolReadMultipleFiles:
 		// The exact path set is the target: approving one batch that names
 		// a secret file never covers a different batch. The fixed variant
@@ -175,6 +183,10 @@ func approvalScopeDescription(c tools.Call) string {
 		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
 	case tools.ToolReadMultipleFiles:
 		return fmt.Sprintf("%s %s", c.Tool, strings.Join(tools.ReadPaths(c), ", "))
+	case tools.ToolCreateDirectory:
+		return fmt.Sprintf("%s %s", c.Tool, strings.TrimSpace(c.Path))
+	case tools.ToolMoveFile:
+		return fmt.Sprintf("%s %s → %s", c.Tool, strings.TrimSpace(c.Path), strings.TrimSpace(c.Destination))
 	case tools.ToolRunCommand:
 		return "this exact command"
 	case tools.ToolWebResearch:

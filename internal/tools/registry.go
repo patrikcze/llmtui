@@ -104,6 +104,8 @@ var safetyForBuiltin = map[string]SafetyClass{
 	ToolDirectoryTree:     SafetyReadOnly,
 	ToolWriteFile:         SafetyWorkspaceWrite,
 	ToolEditFile:          SafetyWorkspaceWrite,
+	ToolCreateDirectory:   SafetyWorkspaceWrite,
+	ToolMoveFile:          SafetyWorkspaceWrite,
 	ToolRunCommand:        SafetyCommand,
 	ToolAskUser:           SafetyReadOnly,
 	ToolLocalContext:      SafetyReadOnly,
@@ -118,6 +120,18 @@ var safetyForBuiltin = map[string]SafetyClass{
 	// operation string (e.g. "mail_search"), not ToolPersonalApps.
 }
 
+// ThresholdExemptTools are built-ins added after the MCP tool-discovery
+// threshold was calibrated. internal/tui leaves them out of the catalog
+// size it compares against tools.discovery.threshold, so offering them does
+// not change which MCP tools an existing setup sees.
+var ThresholdExemptTools = map[string]bool{
+	ToolReadMultipleFiles: true,
+	ToolGetFileInfo:       true,
+	ToolDirectoryTree:     true,
+	ToolCreateDirectory:   true,
+	ToolMoveFile:          true,
+}
+
 // approvalForTool is the static approval policy per tool.
 var approvalForTool = map[string]string{
 	ToolListDir:           "no",
@@ -129,6 +143,8 @@ var approvalForTool = map[string]string{
 	ToolDirectoryTree:     "no",
 	ToolWriteFile:         "ask",
 	ToolEditFile:          "ask (dry_run: ask only for secret files)",
+	ToolCreateDirectory:   "ask",
+	ToolMoveFile:          "ask",
 	ToolRunCommand:        "ask unless read-only",
 	ToolWebSearch:         "no for ordinary queries; ask for bulk or opaque ones",
 	ToolWebFetch:          "ask",

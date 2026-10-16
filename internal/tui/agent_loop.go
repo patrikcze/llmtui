@@ -665,7 +665,7 @@ func (m *Model) contractCapabilityCapsule() agentverify.CapabilityCapsule {
 	}
 	capsule := agentverify.CapabilityCapsule{WorkspaceAccess: m.toolsOn && m.toolRunner != nil}
 	category(has(tools.ToolReadFile, tools.ToolListDir, tools.ToolGrep, tools.ToolGlob, tools.ToolReadMultipleFiles, tools.ToolDirectoryTree), "read_files", &capsule)
-	category(has(tools.ToolWriteFile, tools.ToolEditFile), "write_files", &capsule)
+	category(has(tools.ToolWriteFile, tools.ToolEditFile, tools.ToolCreateDirectory, tools.ToolMoveFile), "write_files", &capsule)
 	category(has(tools.ToolRunCommand), "run_commands", &capsule)
 	category(has(tools.ToolWebSearch, tools.ToolWebFetch, tools.ToolWebResearch), "web_access", &capsule)
 	category(m.mcpRegistry != nil && len(mcpToolSpecs(m.mcpRegistry)) > 0, "mcp_tools", &capsule)
@@ -1614,8 +1614,10 @@ func isObservableReadTool(tool string) bool {
 func toolCallDetail(call tools.Call) string {
 	switch call.Tool {
 	case tools.ToolWebFetch, tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolListDir, tools.ToolSkillLoad,
-		tools.ToolGetFileInfo, tools.ToolDirectoryTree:
+		tools.ToolGetFileInfo, tools.ToolDirectoryTree, tools.ToolCreateDirectory:
 		return call.Path
+	case tools.ToolMoveFile:
+		return call.Path + " -> " + call.Destination
 	case tools.ToolReadMultipleFiles:
 		return strings.Join(tools.ReadPaths(call), ", ")
 	case tools.ToolGrep, tools.ToolGlob:

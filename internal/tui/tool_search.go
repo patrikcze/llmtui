@@ -39,6 +39,21 @@ func (m *Model) toolDiscoveryThreshold() int {
 	return threshold
 }
 
+// discoveryCatalogSize is the catalog size compared against the discovery
+// threshold. The threshold (default 16) was calibrated against the original
+// built-in set, so the later built-ins listed in tools.ThresholdExemptTools
+// are not counted: adding them must not push an existing setup with a few
+// MCP tools into progressive disclosure and hide those tools.
+func discoveryCatalogSize(eligible []provider.ToolSpec) int {
+	n := 0
+	for _, spec := range eligible {
+		if !tools.ThresholdExemptTools[spec.Name] {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *Model) toolDiscoveryMaxResults() int {
 	limit := m.cfg.Tools.Discovery.MaxResults
 	if limit <= 0 {
@@ -48,7 +63,7 @@ func (m *Model) toolDiscoveryMaxResults() int {
 }
 
 func (m *Model) toolDiscoveryActive(eligible []provider.ToolSpec) bool {
-	if !m.cfg.Tools.Discovery.Enabled || len(eligible) <= m.toolDiscoveryThreshold() {
+	if !m.cfg.Tools.Discovery.Enabled || discoveryCatalogSize(eligible) <= m.toolDiscoveryThreshold() {
 		return false
 	}
 	for _, spec := range eligible {

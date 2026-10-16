@@ -202,6 +202,16 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 			},
 		},
 		{
+			name:     ToolCreateDirectory,
+			approval: "ask",
+			checks:   []approvalCheck{{call: Call{Tool: ToolCreateDirectory, Path: "build"}, want: true}},
+		},
+		{
+			name:     ToolMoveFile,
+			approval: "ask",
+			checks:   []approvalCheck{{call: Call{Tool: ToolMoveFile, Path: "a.go", Destination: "b.go"}, want: true}},
+		},
+		{
 			name:     ToolGetFileInfo,
 			approval: "no (metadata only)",
 			checks:   []approvalCheck{{call: Call{Tool: ToolGetFileInfo, Path: ".env"}, want: false}},

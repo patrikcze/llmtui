@@ -84,6 +84,13 @@ const (
 	ToolGetFileInfo = "get_file_info"
 	// ToolDirectoryTree returns a bounded recursive JSON tree of a directory.
 	ToolDirectoryTree = "directory_tree"
+	// ToolCreateDirectory creates a workspace directory and any missing
+	// parents; an existing directory is success with no change.
+	ToolCreateDirectory = "create_directory"
+	// ToolMoveFile moves or renames a file or directory inside the
+	// workspace. It never replaces an existing destination and never
+	// deletes anything.
+	ToolMoveFile = "move_file"
 )
 
 // read_file optional line-range bounds. DefaultReadLimit applies when a range
@@ -207,6 +214,8 @@ type Call struct {
 	Edits     [MaxEditFileEdits]EditPair
 	EditCount int
 	DryRun    bool
+	// Destination is move_file's target path; Path is its source.
+	Destination string
 	// Paths and PathCount carry read_multiple_files' workspace paths. A
 	// fixed array keeps Call comparable.
 	Paths     [MaxReadMultipleFiles]string
@@ -370,6 +379,8 @@ func Parse(reply string) []Call {
 						decodeReadMultipleBody(&call)
 					case ToolDirectoryTree:
 						decodeDirectoryTreeBody(&call)
+					case ToolMoveFile:
+						decodeMoveFileBody(&call)
 					case ToolEditFile:
 						decodeEditFileBody(&call)
 					case ToolWriteFile:
@@ -688,6 +699,10 @@ func (r *Runner) ExecuteContext(ctx context.Context, c Call) Result {
 		res.Output, meta, res.Err = r.getFileInfo(c)
 	case ToolDirectoryTree:
 		res.Output, meta, res.Err = r.directoryTree(ctx, c)
+	case ToolCreateDirectory:
+		res.Output, meta, res.Err = r.createDirectory(c)
+	case ToolMoveFile:
+		res.Output, meta, res.Err = r.moveFile(c)
 	case ToolGlob:
 		res.Output, meta, res.Captures, res.Err = r.globFilesPage(ctx, c)
 	case ToolGrep:
@@ -1975,6 +1990,10 @@ func (c Call) Describe() string {
 		return fmt.Sprintf("edit_file %s (%s)", c.Path, what)
 	case ToolReadMultipleFiles:
 		return "read_multiple_files " + strings.Join(ReadPaths(c), ", ")
+	case ToolCreateDirectory:
+		return "create_directory " + c.Path
+	case ToolMoveFile:
+		return fmt.Sprintf("move_file %s → %s", c.Path, c.Destination)
 	case ToolGetFileInfo:
 		return "get_file_info " + orWorkspace(c.Path)
 	case ToolDirectoryTree:
@@ -2090,6 +2109,8 @@ To use a tool, emit a fenced code block whose info string is "tool <name> [path]
 - grep [path] — recursively search file contents with a regular expression in the block's body
 - write_file <path> — create or overwrite a file with the block's body; to guard an overwrite, use a JSON body {"content":"…","expected_resource_id":"ent_…"}
 - edit_file <path> — replace exact text fragments in an existing file; the block body is one JSON object {"old_text":"…","new_text":"…"} or {"edits":[{"old_text":"…","new_text":"…"},…]} (applied in order, all or nothing), optionally with "expected_resource_id" from a complete prior read and "dry_run":true to preview a unified diff without writing
+- create_directory <path> — create a directory and any missing parents; an existing directory is fine
+- move_file — move or rename a file or directory; the block body is {"source":"old/path","destination":"new/path"}. It never overwrites an existing destination.
 - run_command — run one shell command in the project directory; the command is the block's body
 - ask_user — ask one necessary human question; the block body is one JSON object with question, optional choices (maximum 4), and optional allow_text
 - local_context — read bounded local time, system, workspace, process, clipboard, or recent-file facts; the block body is one JSON object with kind (time, system, workspace, processes, clipboard, recent_files) and optional limit. Use kind=time for the current date, time, timezone, weekday, or relative dates (today, tomorrow, next Monday) instead of guessing; clipboard requires human approval

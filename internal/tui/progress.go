@@ -245,8 +245,10 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 			paths[i] = normalizeWorkspacePath(root, paths[i])
 		}
 		resource = strings.Join(paths, "\x1d")
-	case tools.ToolGetFileInfo:
+	case tools.ToolGetFileInfo, tools.ToolCreateDirectory:
 		resource = normalizeWorkspacePath(root, resource)
+	case tools.ToolMoveFile:
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + normalizeWorkspacePath(root, c.Destination)
 	case tools.ToolDirectoryTree:
 		resource = strings.Join([]string{normalizeWorkspacePath(root, resource), strconv.Itoa(c.Max), strings.TrimSpace(c.Filter)}, "\x1e")
 	case tools.ToolSearch:

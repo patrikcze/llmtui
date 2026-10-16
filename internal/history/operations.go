@@ -77,7 +77,8 @@ func OpenOperationLog(dir, session string) (*OperationLog, error) {
 // effect semantics.
 func IsDurableSideEffect(c tools.Call) bool {
 	return c.MCPServer != "" || c.Tool == tools.ToolWriteFile ||
-		(c.Tool == tools.ToolEditFile && !c.DryRun) || c.Tool == tools.ToolRunCommand
+		(c.Tool == tools.ToolEditFile && !c.DryRun) || c.Tool == tools.ToolRunCommand ||
+		c.Tool == tools.ToolCreateDirectory || c.Tool == tools.ToolMoveFile
 }
 
 // Begin durably records intent before a side effect. Existing started or
@@ -208,6 +209,9 @@ func operationKey(c tools.Call) string {
 		}, "\x00")
 		if c.EditCount > 1 {
 			material += "\x00" + tools.EditIdentity(c)
+		}
+		if c.Destination != "" {
+			material += "\x00dst\x00" + c.Destination
 		}
 	}
 	sum := sha256.Sum256([]byte(material))

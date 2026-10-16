@@ -144,6 +144,31 @@ func Specs() []provider.ToolSpec {
 			}`),
 		},
 		{
+			Name:        ToolCreateDirectory,
+			Description: "Create a directory in the project workspace, including any missing parent directories. Succeeds without change if it already exists. May require the user's approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Directory path relative to the project root."}
+				},
+				"required": ["path"],
+				"additionalProperties": false
+			}`),
+		},
+		{
+			Name:        ToolMoveFile,
+			Description: "Move or rename a file or directory inside the project workspace. Missing destination parent directories are created. Fails if the destination already exists — it never overwrites or deletes anything. Symlinks are not moved. May require the user's approval.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"source": {"type": "string", "description": "Existing path relative to the project root."},
+					"destination": {"type": "string", "description": "New path relative to the project root; must not exist yet."}
+				},
+				"required": ["source", "destination"],
+				"additionalProperties": false
+			}`),
+		},
+		{
 			Name:        ToolRunCommand,
 			Description: "Run one shell command in the project workspace and return its output. Exactly one command line; save multi-line scripts with write_file first. Non-read-only commands may require the user's approval.",
 			Parameters: json.RawMessage(`{
@@ -245,6 +270,8 @@ type nativeArgs struct {
 	Paths              []string   `json:"paths"`
 	Edits              []EditPair `json:"edits"`
 	DryRun             bool       `json:"dry_run"`
+	Source             string     `json:"source"`
+	Destination        string     `json:"destination"`
 	Depth              int        `json:"depth"`
 }
 
@@ -474,6 +501,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 			}
 		case ToolDirectoryTree:
 			setDirectoryTreeOptions(&c, args.Depth, args.Exclude)
+		case ToolMoveFile:
+			c.Path, c.Destination = strings.TrimSpace(args.Source), strings.TrimSpace(args.Destination)
+			if err := ValidateMoveFileCall(&c); err != nil {
+				c.InputErr = err.Error()
+			}
 		case ToolGlob:
 			c.Body = args.Pattern
 			c.SearchCaseSensitive = args.CaseSensitive

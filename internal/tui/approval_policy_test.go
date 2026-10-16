@@ -191,6 +191,33 @@ func TestCapabilityPolicyScopesMultiEditAndDryRun(t *testing.T) {
 	}
 }
 
+// A move grant is pinned to its exact source and destination, and neither a
+// move nor a mkdir can be blanket-approved by a path pattern.
+func TestCapabilityPolicyScopesStructuralWrites(t *testing.T) {
+	now := time.Now()
+	var policy capabilityPolicy
+	move := tools.Call{Tool: tools.ToolMoveFile, Path: "a.go", Destination: "b.go"}
+	policy.GrantCall(move, now, time.Hour)
+	if !policy.Allows(tools.Call{Tool: tools.ToolMoveFile, Path: "./a.go", Destination: "b.go"}, now) {
+		t.Fatal("the reviewed move was not allowed")
+	}
+	for _, other := range []tools.Call{
+		{Tool: tools.ToolMoveFile, Path: "a.go", Destination: "c.go"},
+		{Tool: tools.ToolMoveFile, Path: "x.go", Destination: "b.go"},
+		{Tool: tools.ToolCreateDirectory, Path: "a.go"},
+	} {
+		if policy.Allows(other, now) {
+			t.Fatalf("move grant leaked to %+v", other)
+		}
+	}
+	var patterns capabilityPolicy
+	patterns.GrantPath(tools.ToolMoveFile, "*", now, time.Hour)
+	patterns.GrantPath(tools.ToolCreateDirectory, "*", now, time.Hour)
+	if patterns.Allows(move, now) || patterns.Allows(tools.Call{Tool: tools.ToolCreateDirectory, Path: "build"}, now) {
+		t.Fatal("a path pattern blanket-approved a structural write")
+	}
+}
+
 func multiRead(paths ...string) tools.Call {
 	c := tools.Call{Tool: tools.ToolReadMultipleFiles, PathCount: len(paths)}
 	copy(c.Paths[:], paths)
