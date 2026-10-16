@@ -262,7 +262,7 @@ func localReadAssessmentState(run *agent.AgentRun, execution agent.ExecutionResu
 	readIndex := matches[0]
 	for _, call := range execution.ToolCalls[readIndex+1:] {
 		switch call.Name {
-		case tools.ToolWriteFile, tools.ToolEditFile, tools.ToolRunCommand:
+		case tools.ToolWriteFile, tools.ToolEditFile, tools.ToolRunCommand, tools.ToolMoveFile:
 			return state, criterionAssessmentStaleEvidence
 		}
 	}

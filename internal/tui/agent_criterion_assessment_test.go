@@ -107,6 +107,12 @@ func TestBuildCriterionAssessmentStateAbstainsOnAmbiguousOrStaleRead(t *testing.
 				{Name: tools.ToolWriteFile, Detail: "report.md", Succeeded: true, Status: agent.ActionExecuted},
 			}, wantStatus: criterionAssessmentStaleEvidence,
 		},
+		{
+			name: "later move", calls: []agent.ToolCallRecord{
+				{Name: tools.ToolReadFile, Detail: "report.md", Succeeded: true, Status: agent.ActionExecuted},
+				{Name: tools.ToolMoveFile, Detail: "report.md -> old.md", Succeeded: true, Status: agent.ActionExecuted},
+			}, wantStatus: criterionAssessmentStaleEvidence,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
