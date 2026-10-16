@@ -2,6 +2,73 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-10-16 addendum: runtime pin → llama.cpp v0.7.0 / yzma v1.30.0
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
+every earlier pin value in this document, including the 2026-10-15 addendum's.
+
+- yzma `v1.29.1` → **`v1.30.0`** (`go.mod`, one line; `go.sum` gains only the
+  new yzma hashes). This is yzma's declared binding for llama.cpp `v0.7.0`.
+  Its `pkg/llama` changes are struct layouts that must move with the runtime:
+  - `ContextParams` gains `MoeCacheSize` (`uint64`, llama.cpp's
+    `moe_cache_size`) **in the middle of the struct**, after `TypeV`. A
+    v1.29.1 binding against a b11669 library would misplace every later
+    field (abort callback, embeddings, offload flags, samplers,
+    `ctx_other`), so yzma, `go.mod` and `pin.json` move in one commit.
+    llmtui builds its context parameters from `llama.ContextDefaultParams()`
+    and sets fields by name, so it needs no code change and `MoeCacheSize`
+    stays `0` (disabled).
+  - `PerfContextData` gains two graph-reallocation counters. llmtui does not
+    read perf data.
+  - `pkg/message`, `pkg/mtmd`, `pkg/template` and `exp/speculative` are
+    unchanged from v1.29.1.
+  - Not adopted: `MoeCacheSize` (upstream's `--moe-cache-mib`, a GPU LRU
+    cache for MoE experts kept in host memory) is experimental and only
+    matters when experts are offloaded to the host; exposing it is a separate
+    config decision. `exp/speculative` is still the staging NextN binding
+    (and may be unavailable on MSVC builds), so `draft-mtp` remains an
+    explicit error.
+- llama.cpp `b11429` / `v0.6.0` → **`b11669` / `v0.7.0`**, commit
+  `620d2225cc436ab0b001e3200e590e3b286ef9ab`. yzma's manifest names `b11669`
+  as the release's upstream build, and the upstream git tag `v0.7.0` is the
+  same commit.
+- yzma pins the `v0.7.0` digest manifest (`llama-cpp-builder` release
+  `v0.7.0.json`) at
+  `sha256:f8fac86089bf92657fd33fa1ea0f2ee147b4c729567a99610c64a150d7ca97d3`;
+  the downloaded manifest hashes to exactly that. All eight archive SHA-256s in
+  `pin.json` (five platforms and three Vulkan packs) match that authenticated
+  manifest. Archive sizes and every allowlisted per-file hash were computed
+  from the downloaded archives.
+- `compatible_range` is the exact compatible build, `b11669`–`b11669`.
+  Library versions move from llama/mtmd `.0.6.0` to `.0.7.0` and ggml
+  `.0.26.0` to `.0.27.0`. The allowlist and alias families are unchanged, and
+  no archive carries a library outside them other than `libllama-common` and
+  the `*-impl` tool libraries, which remain excluded (`libllama` and
+  `libmtmd` still link only to `libggml*`). Vulkan packs' shared base files
+  are byte-identical to the CPU archives. The upstream `LICENSE` is unchanged.
+- llama.cpp's template-derived chat auto-parser (`common/chat`, which derives
+  reasoning/content/tool-call parsers from template output) lives in
+  `libllama-common`, which llmtui neither ships nor loads. A runtime bump
+  therefore cannot change how llmtui parses output. Rendering uses
+  `llama_chat_apply_template` only for plain chats with no tools, reasoning
+  controls or images (its `src/llama-chat.cpp` is unchanged between b11429
+  and b11669); every other request renders through the Go Jinja engine, and
+  reasoning, Harmony and tool-call parsing are Go code in `llamart` plus
+  yzma's `pkg/message`. The parser surface that can drift is yzma's
+  `pkg/message`, so review it on yzma bumps.
+
+Validation: `go test -count=1 ./...`, `go vet ./...`, and `golangci-lint` pass.
+`llmtui runtime install` downloads, size/SHA-256-verifies, extracts, and
+full-verifies the b11669 darwin-arm64 runtime. The native integration suite
+then passes against it with `gemma-4-E4B-it-Q4_K_M.gguf` on Metal and CPU-only
+(`LLMTUI_TEST_CPU=1`): text, native tools, vision with its `mmproj` (including
+cancel and reuse), wrong-projector rejection, large prompt, runtime context,
+and the embedded provider factory. Upstream `llama-bench` on the same model
+(M-series Metal, `-p 512 -n 128 -r 3`, two alternating rounds) shows no
+meaningful change: tg128 36.9/35.9 tok/s on b11429 vs 36.2/34.4 on b11669,
+pp512 within run-to-run noise. Linux and Windows are covered by CI's native
+lane.
+
 ## 2026-10-15 addendum: runtime pin → llama.cpp v0.6.0 / yzma v1.29.1, ffi v0.8.0
 
 Status: **Accepted and implemented**. Routine pinned-runtime bump plus the
@@ -392,8 +459,8 @@ native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
 The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
-yzma `v1.29.1`, llama.cpp build `b11429` — the build behind upstream's
-`v0.6.0` tagged release; see the 2026-10-15 addendum). Packaged
+yzma `v1.30.0`, llama.cpp build `b11669` — the build behind upstream's
+`v0.7.0` tagged release; see the 2026-10-16 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
@@ -575,7 +642,7 @@ Two new optional persistent flags, `--context-size` and `--gpu-layers`,
 bind only when set (existing precedence rules). `ListModels` returns the
 configured model plus sibling `*.gguf` files for the model picker.
 
-The pinned Yzma v1.29.1 context ABI also supports independently configured
+The pinned Yzma v1.30.0 context ABI also supports independently configured
 `NThreadsBatch`, `NUbatch`, `TypeK`, `TypeV`, and `Offload_kqv`. llmtui maps
 these from opt-in embedded settings while retaining the old `kv_cache_type` as
 a shared K/V fallback and preserving native defaults for omitted micro-batch

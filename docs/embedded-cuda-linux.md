@@ -244,16 +244,16 @@ symbol/ABI errors.
 
 ```bash
 # The authoritative values live in internal/runtime/pin.json:
-#   llama_tag  (e.g. b11429)      -> PIN below
+#   llama_tag  (e.g. b11669)      -> PIN below
 #   llama_commit                  -> exact commit for that tag
 #   compatible_range.min/max      -> the only builds yzma accepts
-PIN=b11429          # <-- read this from internal/runtime/pin.json of YOUR llmtui
-#   Upstream also publishes semver releases (v0.6.0, …) whose binaries come
+PIN=b11669          # <-- read this from internal/runtime/pin.json of YOUR llmtui
+#   Upstream also publishes semver releases (v0.7.0, …) whose binaries come
 #   from a nightly bNNNNN build (see the release's nightly-tag.txt). Always
 #   check out the bNNNNN tag that pin.json records: the semver *git* tag can
 #   point at a later commit (v0.5.0 -> b11149, while its binaries were
 #   b11146), which would build source that does not match the pin. For
-#   v0.6.0 the git tag and b11429 are the same commit.
+#   v0.7.0 the git tag and b11669 are the same commit.
 
 git clone https://github.com/ggml-org/llama.cpp.git /opt/build/llama.cpp-$PIN
 cd /opt/build/llama.cpp-$PIN
