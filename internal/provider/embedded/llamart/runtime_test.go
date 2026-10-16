@@ -420,3 +420,44 @@ func TestRecordNativeInfoRunsOnce(t *testing.T) {
 		t.Fatal("nativeInfo() returned the internal slice")
 	}
 }
+
+func TestApplyContextOptionsMoECache(t *testing.T) {
+	tests := []struct {
+		name string
+		mib  int
+		want uint64
+	}{
+		{name: "zero keeps llama.cpp default", mib: 0, want: 0},
+		{name: "MiB converted to bytes", mib: 1536, want: 1536 << 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var params llama.ContextParams
+			opts := embedded.Options{MoECacheMiB: tt.mib}
+			if err := applyContextOptions(&params, opts, 4096, 512, embedded.KVCacheTypeF16, embedded.KVCacheTypeF16, embedded.FlashAttentionAuto); err != nil {
+				t.Fatalf("applyContextOptions() error = %v", err)
+			}
+			if params.MoeCacheSize != tt.want {
+				t.Fatalf("MoeCacheSize = %d, want %d", params.MoeCacheSize, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildContextParamsRejectsMoECacheOutOfRange(t *testing.T) {
+	tests := []struct {
+		name string
+		mib  int
+	}{
+		{name: "negative", mib: -1},
+		{name: "overflows bytes", mib: math.MaxInt},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := buildContextParams(embedded.Options{MoECacheMiB: tt.mib}, 4096)
+			if err == nil || !strings.Contains(err.Error(), "moe_cache_mib") {
+				t.Fatalf("buildContextParams() error = %v, want moe_cache_mib range error", err)
+			}
+		})
+	}
+}

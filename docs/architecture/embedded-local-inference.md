@@ -25,7 +25,8 @@ every earlier pin value in this document, including the 2026-10-15 addendum's.
   - Not adopted: `MoeCacheSize` (upstream's `--moe-cache-mib`, a GPU LRU
     cache for MoE experts kept in host memory) is experimental and only
     matters when experts are offloaded to the host; exposing it is a separate
-    config decision. `exp/speculative` is still the staging NextN binding
+    config decision (since exposed as the opt-in, default-`0` embedded
+    provider key `moe_cache_mib`; see `docs/embedded.md`). `exp/speculative` is still the staging NextN binding
     (and may be unavailable on MSVC builds), so `draft-mtp` remains an
     explicit error.
 - llama.cpp `b11429` / `v0.6.0` → **`b11669` / `v0.7.0`**, commit
