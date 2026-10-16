@@ -128,6 +128,25 @@ func TestEditFileIsDurableSideEffect(t *testing.T) {
 	if !IsDurableSideEffect(tools.Call{Tool: tools.ToolEditFile, Path: "a.go", OldText: "x", NewText: "y"}) {
 		t.Fatal("edit_file must be journaled as a durable side effect")
 	}
+	if IsDurableSideEffect(tools.Call{Tool: tools.ToolEditFile, Path: "a.go", OldText: "x", NewText: "y", DryRun: true}) {
+		t.Fatal("an edit_file dry run writes nothing and must not be journaled")
+	}
+}
+
+func TestOperationKeyDistinguishesMultiEdits(t *testing.T) {
+	multi := func(second string) tools.Call {
+		c := tools.Call{Tool: tools.ToolEditFile, Path: "cfg.go", OldText: "A", NewText: "B", EditCount: 2}
+		c.Edits[0] = tools.EditPair{OldText: "A", NewText: "B"}
+		c.Edits[1] = tools.EditPair{OldText: "C", NewText: second}
+		return c
+	}
+	first, replay := multi("D"), multi("D")
+	if operationKey(first) == operationKey(multi("E")) {
+		t.Fatal("multi-edits differing only in a later pair collided to one key")
+	}
+	if operationKey(first) != operationKey(replay) {
+		t.Fatal("identical multi-edits produced different keys")
+	}
 }
 
 // A fenced edit_file has no provider call ID, so its idempotency key must be

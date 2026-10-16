@@ -219,7 +219,7 @@ func progressFingerprintAtRoot(root string, c tools.Call) string {
 	case tools.ToolWriteFile:
 		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.Body) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolEditFile:
-		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(c.OldText) + "\x1e" + digestText(c.NewText) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
+		resource = normalizeWorkspacePath(root, resource) + "\x1e" + digestText(tools.EditIdentity(c)) + "\x1e" + strings.TrimSpace(c.ExpectedResourceID)
 	case tools.ToolWebFetch:
 		resource = normalizeURL(c.Path) + "\x1e" + strings.TrimSpace(c.Freshness) + "\x1e" + strings.TrimSpace(c.WebCacheMode) + "\x1e" + strconv.Itoa(c.WebCacheMaxAge) + "\x1e" + strings.TrimSpace(c.WebRefreshEpoch)
 	case tools.ToolReadFile:

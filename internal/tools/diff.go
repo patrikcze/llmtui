@@ -160,6 +160,70 @@ func splitLines(s string) []string {
 	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
 }
 
+// unifiedContext is the number of unchanged lines around each hunk in
+// RenderUnifiedDiff, matching git's default.
+const unifiedContext = 3
+
+// RenderUnifiedDiff renders a git-style unified diff (---/+++ headers and
+// @@ hunks). Unlike RenderWriteDiff it is model-facing: edit_file's dry_run
+// returns it so a model can check a planned change before applying it.
+func RenderUnifiedDiff(path, oldContent, newContent string) string {
+	oldLines, newLines := splitLines(oldContent), splitLines(newContent)
+	header := fmt.Sprintf("--- a/%s\n+++ b/%s\n", path, path)
+	if len(oldLines) > diffMaxLines || len(newLines) > diffMaxLines {
+		return header + fmt.Sprintf("(file too large to diff: %d → %d lines)", len(oldLines), len(newLines))
+	}
+	ops := diffOps(oldLines, newLines)
+	// oldPos/newPos[i] are the 1-based old/new line numbers op i starts at.
+	oldPos := make([]int, len(ops)+1)
+	newPos := make([]int, len(ops)+1)
+	oldPos[0], newPos[0] = 1, 1
+	for i, op := range ops {
+		oldPos[i+1], newPos[i+1] = oldPos[i], newPos[i]
+		if op.kind != '+' {
+			oldPos[i+1]++
+		}
+		if op.kind != '-' {
+			newPos[i+1]++
+		}
+	}
+	var b strings.Builder
+	b.WriteString(header)
+	for i := 0; i < len(ops); {
+		if ops[i].kind == ' ' {
+			i++
+			continue
+		}
+		start := max(0, i-unifiedContext)
+		end := i
+		// Extend the hunk while the next change is within 2×context lines.
+		for j := i; j < len(ops); j++ {
+			if ops[j].kind != ' ' {
+				end = j
+				continue
+			}
+			if j-end > 2*unifiedContext {
+				break
+			}
+		}
+		end = min(len(ops)-1, end+unifiedContext)
+		oldCount, newCount := oldPos[end+1]-oldPos[start], newPos[end+1]-newPos[start]
+		oldStart, newStart := oldPos[start], newPos[start]
+		if oldCount == 0 {
+			oldStart--
+		}
+		if newCount == 0 {
+			newStart--
+		}
+		fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
+		for _, op := range ops[start : end+1] {
+			fmt.Fprintf(&b, "%c%s\n", op.kind, op.text)
+		}
+		i = end + 1
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // CollectDiffs joins the display diffs of a batch (for the fenced-protocol
 // results message, which carries all calls in one message).
 func CollectDiffs(results []Result) string {

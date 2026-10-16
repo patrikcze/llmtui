@@ -22,10 +22,68 @@ type readFileArgs struct {
 	ResourceID string `json:"resource_id,omitempty"`
 }
 
+// MaxEditFileEdits caps how many replacements one edit_file call may carry.
+const MaxEditFileEdits = 16
+
+// EditPair is one exact replacement: OldText must occur exactly once in the
+// text it is applied to.
+type EditPair struct {
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
+}
+
 type editFileArgs struct {
-	OldText            string `json:"old_text"`
-	NewText            string `json:"new_text"`
-	ExpectedResourceID string `json:"expected_resource_id,omitempty"`
+	OldText            string     `json:"old_text"`
+	NewText            string     `json:"new_text"`
+	Edits              []EditPair `json:"edits"`
+	DryRun             bool       `json:"dry_run"`
+	ExpectedResourceID string     `json:"expected_resource_id,omitempty"`
+}
+
+// setEditPairs stores edit_file's replacements on call. Exactly one form may
+// be used: the legacy single old_text/new_text pair or the edits list. The
+// first replacement is always mirrored into OldText/NewText so code that
+// only knows the single-pair form still sees a meaningful value.
+func setEditPairs(call *Call, oldText, newText string, edits []EditPair) error {
+	call.Edits = [MaxEditFileEdits]EditPair{}
+	call.EditCount = 0
+	if len(edits) == 0 {
+		call.OldText, call.NewText = oldText, newText
+		return nil
+	}
+	if oldText != "" || newText != "" {
+		return fmt.Errorf("edit_file takes either old_text/new_text or edits, not both")
+	}
+	if len(edits) > MaxEditFileEdits {
+		return fmt.Errorf("edit_file accepts at most %d edits per call", MaxEditFileEdits)
+	}
+	call.EditCount = copy(call.Edits[:], edits)
+	call.OldText, call.NewText = edits[0].OldText, edits[0].NewText
+	return nil
+}
+
+// EditPairs returns edit_file's replacements in application order.
+func EditPairs(c Call) []EditPair {
+	if c.EditCount <= 0 {
+		return []EditPair{{OldText: c.OldText, NewText: c.NewText}}
+	}
+	return append([]EditPair(nil), c.Edits[:min(c.EditCount, MaxEditFileEdits)]...)
+}
+
+// EditIdentity is a canonical string covering every input that changes an
+// edit_file call's effect apart from its path and version selector: each
+// replacement, in order, and whether it is a dry run. Approval grants,
+// no-progress fingerprints, and operation keys all derive from it so none
+// of them can collide two different edits.
+func EditIdentity(c Call) string {
+	var b strings.Builder
+	if c.DryRun {
+		b.WriteString("dry_run\x1e")
+	}
+	for _, e := range EditPairs(c) {
+		fmt.Fprintf(&b, "%d:%s\x00%d:%s\x1e", len(e.OldText), e.OldText, len(e.NewText), e.NewText)
+	}
+	return b.String()
 }
 
 type writeFileArgs struct {
@@ -106,20 +164,24 @@ func decodeEditFileBody(call *Call) {
 	}
 	var args editFileArgs
 	if err := decodeOneJSONObject(call.Body, &args); err != nil {
-		call.InputErr = "edit_file needs one JSON object with old_text and new_text in the block body: " + err.Error()
+		call.InputErr = "edit_file needs one JSON object with old_text and new_text (or an edits list) in the block body: " + err.Error()
 		return
 	}
-	call.OldText, call.NewText = args.OldText, args.NewText
-	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 	call.Body = ""
+	if err := setEditPairs(call, args.OldText, args.NewText, args.Edits); err != nil {
+		call.InputErr = err.Error()
+		return
+	}
+	call.DryRun = args.DryRun
+	call.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
 	if err := ValidateEditFileCall(call); err != nil {
 		call.InputErr = err.Error()
 	}
 }
 
 // ValidateEditFileCall applies the model-facing prec: a non-empty target
-// path, a non-empty old_text, and a change that actually changes something.
-// It grants nothing and performs no I/O.
+// path and, for every replacement, a non-empty old_text and a change that
+// actually changes something. It grants nothing and performs no I/O.
 func ValidateEditFileCall(call *Call) error {
 	if call == nil {
 		return fmt.Errorf("edit_file call is missing")
@@ -127,11 +189,18 @@ func ValidateEditFileCall(call *Call) error {
 	if strings.TrimSpace(call.Path) == "" {
 		return fmt.Errorf("edit_file needs a target path in the block info string")
 	}
-	if call.OldText == "" {
-		return fmt.Errorf("edit_file needs old_text — the exact fragment to replace")
-	}
-	if call.OldText == call.NewText {
-		return fmt.Errorf("edit_file old_text and new_text are identical; nothing to change")
+	pairs := EditPairs(*call)
+	for i, e := range pairs {
+		label := "edit_file"
+		if len(pairs) > 1 {
+			label = fmt.Sprintf("edit_file edits[%d]", i)
+		}
+		if e.OldText == "" {
+			return fmt.Errorf("%s needs old_text — the exact fragment to replace", label)
+		}
+		if e.OldText == e.NewText {
+			return fmt.Errorf("%s old_text and new_text are identical; nothing to change", label)
+		}
 	}
 	return nil
 }

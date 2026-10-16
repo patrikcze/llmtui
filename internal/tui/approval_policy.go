@@ -112,10 +112,11 @@ func approvalScope(c tools.Call) (tool, target, variant string) {
 		sum := sha256.Sum256([]byte(c.Body + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolEditFile:
-		// Path identifies the file; the exact old→new pair identifies the
-		// change. Approving one replacement must never authorise a different
-		// old_text or a different new_text against the same file.
-		sum := sha256.Sum256([]byte(c.OldText + "\x00" + c.NewText + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
+		// Path identifies the file; the exact old→new pairs (every one, in
+		// order) and the dry-run flag identify the change. Approving one
+		// replacement must never authorise a different old_text or new_text,
+		// an extra edit, or a real write after a reviewed dry run.
+		sum := sha256.Sum256([]byte(tools.EditIdentity(c) + "\x00" + strings.TrimSpace(c.ExpectedResourceID)))
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), hex.EncodeToString(sum[:])
 	case tools.ToolReadFile, tools.ToolListDir:
 		return c.Tool, filepath.Clean(strings.TrimSpace(c.Path)), ""

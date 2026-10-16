@@ -125,7 +125,7 @@ func MissingFileWriteReceipt(request string, execution ExecutionResult) bool {
 // when the file already held the requested bytes and no diff was produced.
 func HasFileWriteReceipt(execution ExecutionResult) bool {
 	for _, call := range execution.ToolCalls {
-		if call.Succeeded && (call.Name == "write_file" || call.Name == "edit_file") {
+		if call.IsWorkspaceWrite() {
 			return true
 		}
 	}

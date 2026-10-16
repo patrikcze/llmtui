@@ -128,7 +128,7 @@ var approvalForTool = map[string]string{
 	ToolGetFileInfo:       "no (metadata only)",
 	ToolDirectoryTree:     "no",
 	ToolWriteFile:         "ask",
-	ToolEditFile:          "ask",
+	ToolEditFile:          "ask (dry_run: ask only for secret files)",
 	ToolRunCommand:        "ask unless read-only",
 	ToolWebSearch:         "no for ordinary queries; ask for bulk or opaque ones",
 	ToolWebFetch:          "ask",

@@ -1749,6 +1749,7 @@ func (m *Model) recordAgentToolResultsCount(results []tools.Result, denied bool,
 		record := agent.ToolCallRecord{
 			ID: result.Call.ID, Name: result.Call.Tool, Detail: detail, Succeeded: result.Err == nil,
 			ErrorKind: kind, Summary: summary, Status: status,
+			Preview: result.Call.Tool == tools.ToolEditFile && result.Call.DryRun,
 		}
 		if result.Err != nil && result.Meta.Error != nil && agent.ValidToolErrorCode(result.Meta.Error.Code) {
 			record.ErrorCode = result.Meta.Error.Code

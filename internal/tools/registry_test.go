@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestEditFileRegisteredAsWorkspaceWriteWithApproval(t *testing.T) {
 	if !ok {
 		t.Fatal("edit_file not registered")
 	}
-	if info.Source != "builtin" || info.Safety != SafetyWorkspaceWrite || info.Approval != "ask" {
+	if info.Source != "builtin" || info.Safety != SafetyWorkspaceWrite || !strings.HasPrefix(info.Approval, "ask") {
 		t.Fatalf("edit_file capability = %+v", info)
 	}
 }
@@ -70,8 +71,12 @@ func TestDefaultRegistryApprovalMatchesRunnerPolicy(t *testing.T) {
 		},
 		{
 			name:     ToolEditFile,
-			approval: "ask",
-			checks:   []approvalCheck{{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new"}, want: true}},
+			approval: "ask (dry_run: ask only for secret files)",
+			checks: []approvalCheck{
+				{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new"}, want: true},
+				{call: Call{Tool: ToolEditFile, Path: "main.go", OldText: "old", NewText: "new", DryRun: true}, want: false},
+				{call: Call{Tool: ToolEditFile, Path: ".env", OldText: "old", NewText: "new", DryRun: true}, want: true},
+			},
 		},
 		{
 			name:     ToolRunCommand,

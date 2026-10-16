@@ -129,16 +129,18 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolEditFile,
-			Description: "Replace one exact, unique text fragment in an existing workspace file. Pass expected_resource_id from a complete prior read to reject stale edits. Use this for a small surgical change instead of rewriting the whole file with write_file. old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing if old_text is missing or matches more than once. Cannot create files. May require the user's approval.",
+			Description: "Replace exact, unique text fragments in an existing workspace file. Pass expected_resource_id from a complete prior read to reject stale edits. Use this for surgical changes instead of rewriting the whole file with write_file. Give one old_text/new_text pair, or an edits list applied in order (each against the result of the previous one). Every old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing anything if any old_text is missing or matches more than once. Set dry_run=true to get a unified diff of the change without writing. Cannot create files. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path relative to the project root. The file must already exist."},
-					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate."},
-					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment."},
+					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate. Omit when using edits."},
+					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment. Omit when using edits."},
+					"edits": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["old_text", "new_text"], "additionalProperties": false}, "description": "Several exact replacements applied in order, all or nothing. Use instead of old_text/new_text."},
+					"dry_run": {"type": "boolean", "default": false, "description": "Return a unified diff of the change without writing the file."},
 					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
 				},
-				"required": ["path", "old_text", "new_text"]
+				"required": ["path"]
 			}`),
 		},
 		{
@@ -212,36 +214,38 @@ func Specs() []provider.ToolSpec {
 
 // nativeArgs is the union of all tool argument schemas.
 type nativeArgs struct {
-	Path               string   `json:"path"`
-	Content            string   `json:"content"`
-	Command            string   `json:"command"`
-	Query              string   `json:"query"`
-	URL                string   `json:"url"`
-	MaxResults         int      `json:"max_results"`
-	Skill              string   `json:"skill"`
-	Pattern            string   `json:"pattern"`
-	Glob               string   `json:"glob"`
-	Freshness          string   `json:"freshness_token"`
-	Offset             int      `json:"offset"`
-	Limit              int      `json:"limit"`
-	Literal            bool     `json:"literal"`
-	CaseSensitive      *bool    `json:"case_sensitive"`
-	Context            int      `json:"context"`
-	Cursor             string   `json:"cursor"`
-	ByteOffset         *int64   `json:"byte_offset"`
-	ResourceID         string   `json:"resource_id"`
-	OldText            string   `json:"old_text"`
-	NewText            string   `json:"new_text"`
-	ExpectedResourceID string   `json:"expected_resource_id"`
-	CacheMode          string   `json:"cache_mode"`
-	CacheMaxAge        int      `json:"cache_max_age"`
-	RefreshEpoch       string   `json:"refresh_epoch"`
-	EntityIDs          []string `json:"entity_ids"`
-	Level              string   `json:"level"`
-	Kinds              []string `json:"kinds"`
-	Exclude            []string `json:"exclude"`
-	Paths              []string `json:"paths"`
-	Depth              int      `json:"depth"`
+	Path               string     `json:"path"`
+	Content            string     `json:"content"`
+	Command            string     `json:"command"`
+	Query              string     `json:"query"`
+	URL                string     `json:"url"`
+	MaxResults         int        `json:"max_results"`
+	Skill              string     `json:"skill"`
+	Pattern            string     `json:"pattern"`
+	Glob               string     `json:"glob"`
+	Freshness          string     `json:"freshness_token"`
+	Offset             int        `json:"offset"`
+	Limit              int        `json:"limit"`
+	Literal            bool       `json:"literal"`
+	CaseSensitive      *bool      `json:"case_sensitive"`
+	Context            int        `json:"context"`
+	Cursor             string     `json:"cursor"`
+	ByteOffset         *int64     `json:"byte_offset"`
+	ResourceID         string     `json:"resource_id"`
+	OldText            string     `json:"old_text"`
+	NewText            string     `json:"new_text"`
+	ExpectedResourceID string     `json:"expected_resource_id"`
+	CacheMode          string     `json:"cache_mode"`
+	CacheMaxAge        int        `json:"cache_max_age"`
+	RefreshEpoch       string     `json:"refresh_epoch"`
+	EntityIDs          []string   `json:"entity_ids"`
+	Level              string     `json:"level"`
+	Kinds              []string   `json:"kinds"`
+	Exclude            []string   `json:"exclude"`
+	Paths              []string   `json:"paths"`
+	Edits              []EditPair `json:"edits"`
+	DryRun             bool       `json:"dry_run"`
+	Depth              int        `json:"depth"`
 }
 
 // mcpToolPrefix marks a native tool name as routing to an MCP server's tool:
@@ -457,9 +461,11 @@ func CallsFromNative(tcs []provider.ToolCall) []Call {
 				c.ByteOffset = args.ByteOffset
 			}
 		case ToolEditFile:
-			c.OldText, c.NewText = args.OldText, args.NewText
+			c.DryRun = args.DryRun
 			c.ExpectedResourceID = strings.TrimSpace(args.ExpectedResourceID)
-			if err := ValidateEditFileCall(&c); err != nil {
+			if err := setEditPairs(&c, args.OldText, args.NewText, args.Edits); err != nil {
+				c.InputErr = err.Error()
+			} else if err := ValidateEditFileCall(&c); err != nil {
 				c.InputErr = err.Error()
 			}
 		case ToolReadMultipleFiles:

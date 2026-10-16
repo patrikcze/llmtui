@@ -163,6 +163,34 @@ func TestCapabilityPolicyScopesWebResearchRequest(t *testing.T) {
 	}
 }
 
+// An edit_file grant covers the exact edit list and dry-run flag: approving
+// a dry run (asked only for a secret file) never authorises the real write,
+// and approving one replacement never covers an extra one.
+func TestCapabilityPolicyScopesMultiEditAndDryRun(t *testing.T) {
+	now := time.Now()
+	edit := func(dry bool, pairs ...tools.EditPair) tools.Call {
+		c := tools.Call{Tool: tools.ToolEditFile, Path: ".env", DryRun: dry, EditCount: len(pairs)}
+		copy(c.Edits[:], pairs)
+		c.OldText, c.NewText = pairs[0].OldText, pairs[0].NewText
+		return c
+	}
+	var policy capabilityPolicy
+	reviewed := edit(true, tools.EditPair{OldText: "A", NewText: "B"})
+	policy.GrantCall(reviewed, now, time.Hour)
+	if !policy.Allows(reviewed, now) {
+		t.Fatal("the reviewed dry run was not allowed")
+	}
+	for name, other := range map[string]tools.Call{
+		"real write":  edit(false, tools.EditPair{OldText: "A", NewText: "B"}),
+		"extra edit":  edit(true, tools.EditPair{OldText: "A", NewText: "B"}, tools.EditPair{OldText: "C", NewText: "D"}),
+		"legacy pair": {Tool: tools.ToolEditFile, Path: ".env", OldText: "A", NewText: "B"},
+	} {
+		if policy.Allows(other, now) {
+			t.Errorf("%s: dry-run grant leaked", name)
+		}
+	}
+}
+
 func multiRead(paths ...string) tools.Call {
 	c := tools.Call{Tool: tools.ToolReadMultipleFiles, PathCount: len(paths)}
 	copy(c.Paths[:], paths)

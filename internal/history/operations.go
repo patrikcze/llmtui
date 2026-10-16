@@ -77,7 +77,7 @@ func OpenOperationLog(dir, session string) (*OperationLog, error) {
 // effect semantics.
 func IsDurableSideEffect(c tools.Call) bool {
 	return c.MCPServer != "" || c.Tool == tools.ToolWriteFile ||
-		c.Tool == tools.ToolEditFile || c.Tool == tools.ToolRunCommand
+		(c.Tool == tools.ToolEditFile && !c.DryRun) || c.Tool == tools.ToolRunCommand
 }
 
 // Begin durably records intent before a side effect. Existing started or
@@ -199,12 +199,16 @@ func operationKey(c tools.Call) string {
 		// Fenced calls have no provider ID. Their content hash becomes the
 		// idempotency key, favoring duplicate prevention over silently
 		// repeating an identical non-idempotent command after recovery.
-		// edit_file's replacement identity lives in OldText/NewText, so both
-		// are part of the key: a second, materially different edit to the same
-		// path must not be mistaken for a recovered duplicate.
+		// edit_file's replacement identity lives in OldText/NewText (and,
+		// for a multi-edit call, every pair in Edits), so all of it is part
+		// of the key: a second, materially different edit to the same path
+		// must not be mistaken for a recovered duplicate.
 		material = strings.Join([]string{
 			"content", operationTool(c), c.Path, c.Body, c.MCPArgs, c.OldText, c.NewText,
 		}, "\x00")
+		if c.EditCount > 1 {
+			material += "\x00" + tools.EditIdentity(c)
+		}
 	}
 	sum := sha256.Sum256([]byte(material))
 	return hex.EncodeToString(sum[:])
