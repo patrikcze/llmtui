@@ -180,7 +180,7 @@ func (r *Runtime) Load(
 		return meta, fmt.Errorf("context_size must not be negative: %d", opts.ContextSize)
 	}
 	if opts.Speculative.Type == embedded.SpeculativeDraftMTP {
-		return meta, errors.New("speculative.type draft-mtp is not supported by llmtui's embedded runtime: the pinned Yzma v1.29.1 exposes llama.cpp's NextN staging APIs only as an experimental, unstable package, and llmtui implements no MTP decoder; disable speculative decoding")
+		return meta, errors.New("speculative.type draft-mtp is not supported by llmtui's embedded runtime: the pinned Yzma v1.30.0 exposes llama.cpp's NextN staging APIs only as an experimental, unstable package, and llmtui implements no MTP decoder; disable speculative decoding")
 	}
 	if err := opts.RopeScaling.Validate(); err != nil {
 		return meta, err
