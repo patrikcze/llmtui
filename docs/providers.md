@@ -16,7 +16,10 @@ context window. Tool/reasoning/structured-output support is tri-state
 backend can still be tried optimistically. Explicit per-provider config wins;
 then model-specific evidence, provider-wide evidence, and safe defaults apply.
 If a backend rejects native tools, only that provider/model pair learns the
-fenced fallback. See
+fenced fallback. A native call the backend cannot parse is different: the
+first time, only the retry and the rest of that turn use the fenced protocol,
+and native calling returns at the next message or agent cycle. A second such
+turn for the same pair switches it to fenced for the session. See
 [v1-provider-capabilities.md](architecture/v1-provider-capabilities.md).
 
 The embedded provider reports prompt/vision processing as activity, streams

@@ -726,6 +726,14 @@ interruption result; the persisted agent run remains `needs_user_input` and
 `/agent resume` starts a fresh cycle instead of synthesizing or replaying the
 incomplete protocol exchange.
 
+Each answer (the question and the answer, bounded, the most recent eight) is
+also carried into every later executor cycle of the same run, labeled as user
+data with an instruction not to ask again. A later cycle's history no longer
+holds the earlier tool exchange, and the receipt ledger records only "user
+answer received" (the verifier still sees answers redacted), so without this a
+later cycle knew it had asked but not what the user said. The carried answers
+live only in the running session; `/agent resume` does not restore them.
+
 If the verifier also extracted discrete choices from the executor's question
 (a numbered or lettered list, copied into the run's evidence rather than
 invented), the TUI presents them as a pickable overlay instead of requiring a
