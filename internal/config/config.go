@@ -1527,7 +1527,8 @@ tools:
     max_results: 5
   # Offer the sequential_thinking planning tool (numbered thoughts with
   # revisions and branches, kept in memory for the conversation only). Off by
-  # default: small local models tend to spend their tool budget on it.
+  # default: small local models tend to spend their tool budget on it. Meant
+  # for models without built-in reasoning; leave it off with /think on.
   sequential_thinking:
     enabled: false
 

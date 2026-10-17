@@ -479,7 +479,9 @@ plus `read_multiple_files`, `get_file_info`, `directory_tree`,
   There is no delete tool.
 - `sequential_thinking` (opt-in: `tools.sequential_thinking.enabled: true`)
   lets a model plan with numbered, revisable, branchable thoughts kept in
-  memory for the conversation only.
+  memory for the conversation only. It is meant for models without built-in
+  reasoning; with a thinking model and `/think on` it mostly duplicates the
+  model's own planning and costs a full turn per thought.
 
 Three controller and local-assistant tools are also available:
 
