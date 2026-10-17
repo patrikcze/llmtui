@@ -233,6 +233,12 @@ type Model struct {
 	// provider+model. One incapable model must not disable native tools for a
 	// different model or provider for the rest of the session.
 	nativeToolRejections map[string]bool
+	// nativeToolMalformed counts turns, per provider+model, in which a native
+	// tool call could not be parsed. The first suspends native calling for
+	// that turn only (nativeToolsSuspended); a repeat in a later turn is a
+	// pattern and rejects native calling for the session.
+	nativeToolMalformed  map[string]int
+	nativeToolsSuspended bool
 	toolsShowOutput      bool         // show full tool output instead of one-line summaries
 	toolOutputExpanded   map[int]bool // per-message overrides of toolsShowOutput
 	toolOutputRevision   int          // invalidates both transcript render caches
@@ -1661,6 +1667,7 @@ func (m *Model) submit(text string, images []provider.Image) tea.Cmd {
 	}
 	m.resetToolDisclosure()
 	m.releasePendingVersionPins()
+	m.restoreSuspendedNativeTools()
 	// A new submission supersedes a cancelled batch still finishing.
 	cancelSave, _ := m.finalizeCancelledToolBatch()
 	m.resetTurn(m.cfg.Tools.NoProgress.Threshold, m.progressRoot())
@@ -1878,6 +1885,42 @@ func (m *Model) resetNativeToolMode() {
 		return
 	}
 	m.toolsNative = !m.nativeToolRejections[m.nativeToolCapabilityKey()]
+}
+
+// suspendNativeToolsAfterMalformedCall answers a native call the backend
+// could not parse. A one-off hiccup (Gemma 4 E4B on the embedded runtime,
+// seen live) must not leave the whole session on the fenced protocol, which
+// is not that model's trained format: it then wrote its native call syntax
+// as plain text and the agent run failed. So the first time, the fenced
+// retry lasts only for the current turn; restoreSuspendedNativeTools brings
+// native calling back at the next user message or agent cycle. A second
+// malformed turn for the same provider/model (a backend whose parser keeps
+// failing, such as LM Studio's Harmony parser deep in a conversation)
+// rejects native calling for the session, as before.
+func (m *Model) suspendNativeToolsAfterMalformedCall() {
+	if m.nativeToolMalformed == nil {
+		m.nativeToolMalformed = make(map[string]int)
+	}
+	key := m.nativeToolCapabilityKey()
+	m.nativeToolMalformed[key]++
+	if m.nativeToolMalformed[key] > 1 {
+		m.nativeToolsSuspended = false
+		m.rejectNativeToolCapability()
+		return
+	}
+	m.toolsNative = false
+	m.nativeToolsSuspended = true
+	m.lastDebug.CacheStatus = "bypass"
+}
+
+// restoreSuspendedNativeTools ends a turn-scoped suspension by re-resolving
+// the native mode, which still honors a real rejection.
+func (m *Model) restoreSuspendedNativeTools() {
+	if !m.nativeToolsSuspended {
+		return
+	}
+	m.nativeToolsSuspended = false
+	m.resetNativeToolMode()
 }
 
 func (m *Model) rejectNativeToolCapability() {
@@ -2751,7 +2794,7 @@ func (m *Model) handleStreamEvent(msg streamEventMsg) (tea.Model, tea.Cmd) {
 			m.recordToolRecovery(malformedRecovery)
 			if malformedRecovery.Allowed() {
 				if m.toolsNative {
-					m.rejectNativeToolCapability()
+					m.suspendNativeToolsAfterMalformedCall()
 					m.notice = "model's native tool call could not be parsed by the backend — retrying with the prompt-based protocol"
 				} else {
 					m.notice = "model's tool call could not be parsed by the backend — retrying once"

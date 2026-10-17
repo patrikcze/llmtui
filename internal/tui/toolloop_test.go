@@ -492,8 +492,8 @@ func TestMalformedToolCallRetriesOnceThenReportsError(t *testing.T) {
 	if m.toolsNative {
 		t.Error("malformed native tool call must switch the retry to the fenced protocol")
 	}
-	if !m.nativeToolRejections[m.nativeToolCapabilityKey()] {
-		t.Error("malformed native tool call must be remembered for this provider/model")
+	if m.nativeToolRejections[m.nativeToolCapabilityKey()] || !m.nativeToolsSuspended {
+		t.Error("a first malformed native tool call must suspend native calling for this turn only, not reject it for the session")
 	}
 	if !m.thinking {
 		t.Fatal("continueChat's retry must leave a request in flight")
@@ -1458,5 +1458,36 @@ func TestStaleFirstStreamMsgNotAdopted(t *testing.T) {
 	}
 	if m.streamBuf.Len() != 0 {
 		t.Errorf("stale delta reached the stream buffer: %q", m.streamBuf.String())
+	}
+}
+
+// TestMalformedNativeCallFallbackLastsOneTurn: one malformed native call used
+// to put the whole session on the fenced protocol. Seen live on Gemma 4 E4B
+// (embedded): the next /agent run started in fenced mode, the model wrote its
+// native call syntax as plain text, and the run failed. The fallback now
+// lasts one turn; only a repeat in a later turn rejects native calling for
+// this provider/model.
+func TestMalformedNativeCallFallbackLastsOneTurn(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.resetNativeToolMode()
+	if !m.toolsNative {
+		t.Skip("test provider does not offer native tools")
+	}
+
+	m.suspendNativeToolsAfterMalformedCall()
+	if m.toolsNative {
+		t.Fatal("the retry after a malformed call must use the fenced protocol")
+	}
+	m.restoreSuspendedNativeTools() // next user message or agent cycle
+	if !m.toolsNative {
+		t.Fatal("native tool calling must return on the next turn after one malformed call")
+	}
+
+	m.suspendNativeToolsAfterMalformedCall() // a later turn fails the same way
+	m.restoreSuspendedNativeTools()
+	if m.toolsNative || !m.nativeToolRejections[m.nativeToolCapabilityKey()] {
+		t.Fatal("a repeated malformed native call must reject native calling for this provider/model")
 	}
 }

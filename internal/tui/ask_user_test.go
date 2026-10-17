@@ -163,6 +163,45 @@ func TestAskUserAgentPauseAndLiveResume(t *testing.T) {
 	}
 }
 
+// TestAgentDirectiveCarriesAskUserAnswers: a later executor cycle must know
+// what the user answered, not only that an answer arrived. Seen live on
+// Gemma 4 E4B: the user picked "Mul" in pass 1; pass 2's history no longer
+// held that exchange, the receipt said only "user answer received", and the
+// model asked the same question again until the run was stopped. The
+// verifier's ledger keeps the answer redacted.
+func TestAgentDirectiveCarriesAskUserAnswers(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolsNative = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.configureAgentLoop()
+	run, err := agent.NewRun("ask-carry", "name the function", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("name the function", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	call := nativeAskCall(t, "ask-carry-1", `{"question":"Multiply or Mul?","choices":["Multiply","Mul"]}`)
+	m.session.AddMessage(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: call.ID, Name: call.Tool}}})
+	m.startToolBatch([]tools.Call{call})
+	if cmd := m.answerAskUser("Mul"); cmd == nil {
+		t.Fatal("answer should resume executor")
+	}
+
+	directive := m.agentDirective(nil)
+	if !strings.Contains(directive, `asked "Multiply or Mul?"; answered "Mul"`) || !strings.Contains(directive, "do not ask again") {
+		t.Fatalf("directive does not carry the answer:\n%s", directive)
+	}
+	for _, record := range m.agentLoop.execution.ToolCalls {
+		if record.Name == tools.ToolAskUser && strings.Contains(record.Summary, "Mul") {
+			t.Fatalf("receipt summary %q exposes the answer; the verifier ledger stays redacted", record.Summary)
+		}
+	}
+}
+
 func TestAskUserShutdownCompletesProtocolWithoutResuming(t *testing.T) {
 	m := newTestModel(t)
 	m.toolsOn = true

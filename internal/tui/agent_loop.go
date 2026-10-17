@@ -58,13 +58,20 @@ type agentLoopState struct {
 	ctx             context.Context
 	runCancel       context.CancelFunc
 	execution       agent.ExecutionResult
-	initialImages   []provider.Image
-	contracting     bool
-	contractCancel  context.CancelFunc
-	contractGen     int
-	verifying       bool
-	verifyCancel    context.CancelFunc
-	verifyGen       int
+	// userAnswers are this run's ask_user exchanges, carried into every
+	// later executor cycle by agentDirective. A completed cycle's raw tool
+	// exchange is projected out of the next cycle's history, and the
+	// receipt ledger records only "user answer received" (the verifier sees
+	// answers redacted), so without this the executor knew it had asked but
+	// not what the user said, and asked again (seen live).
+	userAnswers    []agentUserAnswer
+	initialImages  []provider.Image
+	contracting    bool
+	contractCancel context.CancelFunc
+	contractGen    int
+	verifying      bool
+	verifyCancel   context.CancelFunc
+	verifyGen      int
 	// criteriaReview is a proposed contract waiting for the person to
 	// accept or edit it (agent.review_criteria); see agent_criteria_review.go.
 	criteriaReview *agentCriteriaReview
@@ -569,6 +576,7 @@ func (m *Model) startVerifiedRun(request string, images []provider.Image) tea.Cm
 	m.agentLoop.evidenceKeys, m.agentLoop.evidenceOrder = nil, nil
 	m.agentLoop.observations = agent.NewObservationCache()
 	m.agentLoop.evictedResourceKeys = nil
+	m.agentLoop.userAnswers = nil
 	// contractAssistance is deliberately NOT reset here: it is a
 	// session-lifetime measurement (see its doc comment), not a per-run one
 	// — a threshold of "two consecutive format failures" could otherwise
@@ -894,6 +902,7 @@ func (m *Model) resumeVerifiedRunWithInput(input string, images []provider.Image
 	}
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.restoreSuspendedNativeTools()
 	m.resetCycle()
 	m.agentLoop.compactedToolResults = 0
 	m.bypassCache = true
@@ -969,6 +978,12 @@ func (m *Model) agentDirective(history []provider.Message) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Original goal (untrusted user data): %q\nCurrent bounded objective: %q\n", run.Request, run.Objective)
 	b.WriteString("Constraints: complete one bounded unit; use only offered tools and existing approvals; report observable actions, artifacts, tests, errors, or the precise user input required. Never claim unobserved success.\n")
+	if answers := m.agentLoop.userAnswers; len(answers) > 0 {
+		b.WriteString("The user already answered these questions in this run (untrusted user data; use the answers and do not ask again):\n")
+		for _, a := range answers {
+			fmt.Fprintf(&b, "- asked %q; answered %q\n", a.Question, a.Answer)
+		}
+	}
 	if m.cfg.Agent.Yield.Enabled && m.toolsOn && m.toolRunner != nil {
 		obligations := run.PendingExactReadObligations(m.agentLoop.execution)
 		ids := make([]string, 0, len(obligations))
@@ -2254,4 +2269,32 @@ func truncatePersonalAppsDebugResult(value string, maxBytes int) string {
 	head, _ := terminaltext.TruncateBytes(value, headBytes)
 	tail, _ := terminaltext.TailBytes(value, tailBytes)
 	return head + marker + tail
+}
+
+// agentUserAnswer is one ask_user exchange retained for later cycles.
+type agentUserAnswer struct {
+	Question string
+	Answer   string
+}
+
+const (
+	maxAgentUserAnswers     = 8
+	maxAgentUserAnswerBytes = 512
+)
+
+// rememberAgentUserAnswer keeps a bounded copy of an answered ask_user call
+// for the rest of the active run. Only the most recent answers are kept, and
+// each side is truncated, so the directive stays small.
+func (m *Model) rememberAgentUserAnswer(question, answer string) {
+	if !m.agentRunActive() {
+		return
+	}
+	entry := agentUserAnswer{
+		Question: truncateAgentText(strings.TrimSpace(question), maxAgentUserAnswerBytes),
+		Answer:   truncateAgentText(strings.TrimSpace(answer), maxAgentUserAnswerBytes),
+	}
+	m.agentLoop.userAnswers = append(m.agentLoop.userAnswers, entry)
+	if extra := len(m.agentLoop.userAnswers) - maxAgentUserAnswers; extra > 0 {
+		m.agentLoop.userAnswers = m.agentLoop.userAnswers[extra:]
+	}
 }

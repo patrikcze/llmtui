@@ -121,6 +121,7 @@ func (m *Model) answerAskUser(answer string) tea.Cmd {
 		Coverage: tools.Coverage{SourceComplete: true, CaptureComplete: true, PreviewComplete: true, ObservedBytes: int64(len(payload)), RetainedBytes: int64(len(payload))},
 	}}
 	m.recordAgentToolResultsCount([]tools.Result{result}, false, []agent.ActionStatus{agent.ActionExecuted})
+	m.rememberAgentUserAnswer(call.Question, answer)
 	m.toolOK++
 	return tea.Batch(m.sendToolResults([]tools.Result{result}), m.persistAgentRun())
 }
