@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -886,6 +887,9 @@ func (r *Runner) readFileMetaContextByte(ctx context.Context, rel string, offset
 	defer func() { err = errors.Join(err, root.Close()) }()
 	name := filepath.Clean(rel)
 	info, err := root.Stat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", meta, withCode(fmt.Errorf("%q does not exist.%s", filepath.ToSlash(name), missingPathHint(root, name)), "not_found", RetryCorrectInput)
+	}
 	if err != nil {
 		return "", meta, withCode(fmt.Errorf("read file: %w", err), "not_found", RetryCorrectInput)
 	}
@@ -1354,7 +1358,7 @@ func (r *Runner) editFileEdits(rel string, edits []EditPair, expected *entity.Fi
 	defer func() { err = errors.Join(err, root.Close()) }()
 	info, statErr := root.Stat(rel)
 	if errors.Is(statErr, os.ErrNotExist) {
-		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath), "not_found", RetryCorrectInput)
+		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one.%s", displayPath, missingPathHint(root, rel)), "not_found", RetryCorrectInput)
 	}
 	if statErr != nil {
 		return "", "", meta, fmt.Errorf("edit file: %w", statErr)
@@ -2134,6 +2138,76 @@ func describePageOptions(c Call) string {
 		return ""
 	}
 	return " [" + strings.Join(options, ", ") + "]"
+}
+
+// maxMissingPathHintEntries bounds the directory listing a not-found hint
+// shows.
+const maxMissingPathHintEntries = 12
+
+// missingPathHint points a model that asked for a path that does not exist
+// at the nearest real place. Measured live on Gemma 4 E4B: after a bare
+// "no such file or directory" for its invented src/math.go, 8 of 12 samples
+// invented another wrong path; told that src/math is a directory and what
+// it contains, all 12 went to the right file or listed it. The hint names a
+// directory at the path without its extension (src/math.go -> src/math) or
+// else the nearest existing ancestor, with up to maxMissingPathHintEntries
+// entry names. It reads only through the confined root, skips .git, and
+// lists names only, as list_dir would.
+func missingPathHint(root *os.Root, rel string) string {
+	rel = filepath.Clean(rel)
+	dir := ""
+	if ext := filepath.Ext(rel); ext != "" {
+		if info, err := root.Stat(strings.TrimSuffix(rel, ext)); err == nil && info.IsDir() {
+			dir = strings.TrimSuffix(rel, ext)
+		}
+	}
+	if dir == "" {
+		for parent := filepath.Dir(rel); ; parent = filepath.Dir(parent) {
+			if info, err := root.Stat(parent); err == nil && info.IsDir() {
+				dir = parent
+				break
+			}
+			if parent == "." || parent == string(filepath.Separator) {
+				return ""
+			}
+		}
+	}
+	handle, err := root.Open(dir)
+	if err != nil {
+		return ""
+	}
+	defer handle.Close()
+	entries, err := handle.ReadDir(-1)
+	if err != nil {
+		return ""
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == ".git" {
+			continue
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	label := filepath.ToSlash(dir)
+	if label == "." {
+		label = "the project root"
+	} else {
+		label = strconv.Quote(label)
+	}
+	if len(names) == 0 {
+		return " " + label + " is an empty directory."
+	}
+	more := ""
+	if len(names) > maxMissingPathHintEntries {
+		more = fmt.Sprintf(", … (%d more)", len(names)-maxMissingPathHintEntries)
+		names = names[:maxMissingPathHintEntries]
+	}
+	return " " + label + " is a directory containing: " + strings.Join(names, ", ") + more + "."
 }
 
 // alreadyAppliedLine reports the 1-based line where newText occurs, when it

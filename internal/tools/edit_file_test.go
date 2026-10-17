@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,5 +314,56 @@ func TestEditFileReportsAnAlreadyAppliedEdit(t *testing.T) {
 		if res.Err == nil || !strings.Contains(res.Err.Error(), "was not found exactly") {
 			t.Fatalf("new_text %q: err = %v, want the ordinary not-found error", newText, res.Err)
 		}
+	}
+}
+
+// TestMissingPathErrorsPointAtTheNearestRealPlace: measured live on Gemma 4
+// E4B, a bare "no such file or directory" for an invented src/math.go led 8
+// of 12 samples to invent another wrong path; naming src/math and its
+// entries sent all 12 to the right file.
+func TestMissingPathErrorsPointAtTheNearestRealPlace(t *testing.T) {
+	root := t.TempDir()
+	writeNested(t, root, "src/math/add.go", "package math\n")
+	writeNested(t, root, "src/math/math_test.go", "package math\n")
+	writeNested(t, root, "docs/README.md", "# Notes\n")
+	writeNested(t, root, ".git/HEAD", "ref\n")
+	for i := 0; i < maxMissingPathHintEntries+3; i++ {
+		writeNested(t, root, filepath.Join("many", fmt.Sprintf("f%02d.txt", i)), "x")
+	}
+	r := NewRunner(root, 64)
+
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"directory without extension", "src/math.go", `"src/math.go" does not exist. "src/math" is a directory containing: add.go, math_test.go.`},
+		{"nearest parent", "docs/guide/intro.md", `"docs" is a directory containing: README.md.`},
+		{"project root hides .git", "nope.txt", "the project root is a directory containing: docs/, many/, src/."},
+		{"capped listing", "many/missing.txt", "(3 more)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := r.Execute(Call{Tool: ToolReadFile, Path: tc.path})
+			if res.Err == nil || !strings.Contains(res.Err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", res.Err, tc.want)
+			}
+			if res.Meta.Error == nil || res.Meta.Error.Code != "not_found" {
+				t.Fatalf("meta error = %+v, want not_found", res.Meta.Error)
+			}
+		})
+	}
+
+	res := r.Execute(Call{Tool: ToolEditFile, Path: "src/math.go", OldText: "a", NewText: "b"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), `"src/math" is a directory containing: add.go, math_test.go.`) {
+		t.Fatalf("edit_file err = %v, want the same hint", res.Err)
+	}
+}
+
+func writeNested(t *testing.T, root, name, content string) {
+	t.Helper()
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

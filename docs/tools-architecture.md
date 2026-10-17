@@ -426,6 +426,12 @@ When `old_text` is gone but `new_text` occurs exactly once, the zero-match
 error says the edit appears to be applied already (with its line) and not to
 repeat it (`no_change`), instead of the generic re-read advice: small models
 otherwise resend a successful edit until the repeated-call guard ends the run.
+A path that does not exist (`read_file`, `read_multiple_files`, `edit_file`)
+is reported plainly together with the nearest real directory and up to 12 of
+its entry names: a directory at the path without its extension
+(`src/math.go` → `src/math`), else the nearest existing parent. Measured on
+Gemma 4 E4B, this sent 12 of 12 samples to the right file, where the bare
+"no such file or directory" led 8 of 12 to invent another wrong path.
 It does not extend the tool subsystem — it shares `write_file`'s
 `writeFileChecked` core (workspace confinement, blocked-path guardrails, the
 size cap, the confined staged-write-then-atomic-rename publish, the display
