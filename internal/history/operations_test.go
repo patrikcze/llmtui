@@ -188,3 +188,25 @@ func TestOperationLogDoesNotPersistEditReplacementText(t *testing.T) {
 		t.Fatalf("operation log leaked edit content: %s", data)
 	}
 }
+
+// TestRejectedArgumentsAreNotJournaled: a call whose arguments failed to
+// parse never reaches a producer. Journaling it recorded a "completed with an
+// error" side effect, and because a fenced call is keyed by content, the
+// model's identical retry was refused with outcome_unknown ("operation
+// previously completed with an error and was not executed again"), seen live
+// on a fenced move_file.
+func TestRejectedArgumentsAreNotJournaled(t *testing.T) {
+	for _, c := range []tools.Call{
+		{Tool: tools.ToolMoveFile, InputErr: "move_file needs one JSON object"},
+		{Tool: tools.ToolWriteFile, Path: "a.go", InputErr: "bad body"},
+		{Tool: tools.ToolRunCommand, InputErr: "bad body"},
+		{Tool: "mcp__jira__create_issue", MCPServer: "jira", MCPTool: "create_issue", InputErr: "bad args"},
+	} {
+		if IsDurableSideEffect(c) {
+			t.Errorf("%s with rejected arguments is journaled as a side effect", c.Tool)
+		}
+	}
+	if !IsDurableSideEffect(tools.Call{Tool: tools.ToolMoveFile, Path: "a", Destination: "b"}) {
+		t.Fatal("a valid move_file must still be journaled")
+	}
+}

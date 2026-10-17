@@ -312,7 +312,8 @@ unwanted save and `/memory off` stops future ones.
     process trees. Each write, command, and MCP call is fsynced to an
     append-only per-session journal before and after execution; a completed
     idempotency key is not run twice, and an ambiguous crash record fails
-    closed. On Windows, child trees are contained in kill-on-close Job
+    closed. A call rejected for invalid arguments never executes, so it is
+    not journaled and a corrected or repeated call is not refused. On Windows, child trees are contained in kill-on-close Job
     Objects; Unix uses process groups.
   - **Residual risk to know about** — content the model reads (files,
     command output) re-enters its context; a malicious file could try to

@@ -26,6 +26,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -349,6 +350,7 @@ func Parse(reply string) []Call {
 		for j := i + 1; j < len(lines); j++ {
 			if closing.MatchString(strings.TrimRight(lines[j], "\r")) {
 				call := Call{Tool: open[2], Path: strings.TrimSpace(open[3]), Body: joinBody(body)}
+				liftFenceLineJSON(&call)
 				if op := personalapps.Operation(call.Tool); op.Valid() {
 					// Fenced personal_apps tools are named one-per-operation
 					// (PersonalAppsFencedForms), matching native tool-calling's
@@ -430,6 +432,25 @@ func Parse(reply string) []Call {
 		}
 	}
 	return calls
+}
+
+// liftFenceLineJSON moves a JSON object written on the fence line into the
+// empty block body. Models generalize the documented `web_fetch {"url":…}`
+// form to every JSON-bodied tool; reproduced live with Gemma 4 E4B, which
+// wrote ```tool move_file {"source":"…","destination":"…"} with an empty
+// body and got "move_file needs one JSON object … in the block body". A
+// workspace path never parses as a JSON object, so the lift cannot capture
+// a real path, and an explicit body always wins.
+func liftFenceLineJSON(call *Call) {
+	arg := strings.TrimSpace(call.Path)
+	if !strings.HasPrefix(arg, "{") || strings.TrimSpace(call.Body) != "" {
+		return
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(arg), &object) != nil {
+		return
+	}
+	call.Path, call.Body = "", arg
 }
 
 func joinBody(lines []string) string {
@@ -2062,6 +2083,11 @@ func (c Call) Describe() string {
 		target := orWorkspace(c.Path)
 		if c.ResourceID != "" {
 			target = "resource_id=" + c.ResourceID
+		}
+		// The file filter changes what "no matches" means, so it is always
+		// shown: a grep limited to *.go must not read as a whole-project miss.
+		if filter := strings.TrimSpace(c.Filter); filter != "" {
+			target += " (files " + filter + ")"
 		}
 		return fmt.Sprintf("grep %q in %s%s", strings.TrimSpace(c.Body), target, describePageOptions(c))
 	case ToolListDir:

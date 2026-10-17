@@ -74,8 +74,14 @@ func OpenOperationLog(dir, session string) (*OperationLog, error) {
 
 // IsDurableSideEffect reports calls that must be journaled before execution.
 // MCP tools are treated as mutating because their schemas do not communicate
-// effect semantics.
+// effect semantics. A call whose arguments were rejected before execution
+// (InputErr) is never dispatched, so it has no effect to journal; recording
+// it would make a fenced call's content-keyed identical retry look like an
+// already-failed side effect and refuse it with outcome_unknown.
 func IsDurableSideEffect(c tools.Call) bool {
+	if c.InputErr != "" {
+		return false
+	}
 	return c.MCPServer != "" || c.Tool == tools.ToolWriteFile ||
 		(c.Tool == tools.ToolEditFile && !c.DryRun) || c.Tool == tools.ToolRunCommand ||
 		c.Tool == tools.ToolCreateDirectory || c.Tool == tools.ToolMoveFile

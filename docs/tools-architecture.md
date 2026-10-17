@@ -55,7 +55,10 @@ echo hello
 ​```
 ```
 
-The model just writes that text as part of its reply. `Parse()` in `internal/tools/tools.go` regexes it back out of the reply into the same `Call` struct that the native path produces. This is why the whole downstream pipeline — approval, execution, results — doesn't care which path was used; both funnel into `tools.Call`.
+The model just writes that text as part of its reply. Tools that take a JSON
+object accept it in the block body or, when the body is empty, on the fence
+line itself (`tool move_file {"source":"a","destination":"b"}`): small models
+generalize the documented `web_fetch {…}` form to every tool. `Parse()` in `internal/tools/tools.go` regexes it back out of the reply into the same `Call` struct that the native path produces. This is why the whole downstream pipeline — approval, execution, results — doesn't care which path was used; both funnel into `tools.Call`.
 
 `m.useNativeTools()` (`internal/tui/app.go`) decides which mode a given provider/model gets, and there's an automatic fallback: if a backend rejects `tools` in the request, llmtui remembers that and switches to fenced mode for that provider+model going forward (`resetNativeToolMode` in `internal/tui/app.go`).
 

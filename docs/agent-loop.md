@@ -807,7 +807,10 @@ Once a run's criteria are pinned, the transcript shows a run card right after
 the request that started it: the goal, a "Done when" list of the pinned
 criteria, which pass of the cycle limit the run is on, and how many criteria
 are met. Each criterion is ticked (`✓`), failed (`✗`), not applicable (`–`) or
-still open (`○`) as verification reports it, and a finished run adds one line
+still open (`○`) as verification reports it. In `deterministic` and `off`
+verifier modes nothing checks the criteria, so a finished run shows them as
+`?` and the header reads "N of M criteria accepted unchecked" instead of
+"met"; use `adaptive` (the default) to have them checked, and a finished run adds one line
 saying why it stopped (verified, cancelled, budget, no progress, verifier
 unavailable, waiting for input, parked or failed). The card is display-only
 (`internal/tui/agent_run_card.go`): it is never added to the session, a prompt,
