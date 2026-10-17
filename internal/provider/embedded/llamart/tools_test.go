@@ -278,6 +278,56 @@ func TestSplitGemmaBracketedArray(t *testing.T) {
 	}
 }
 
+// TestNormalizeArgumentNumbers pins the embedded path to the HTTP path's
+// native decoder (internal/tools coerceScalar): an unambiguous quoted number
+// and an integral value for an integer are accepted; anything else is not.
+func TestNormalizeArgumentNumbers(t *testing.T) {
+	integer := map[string]any{"type": "integer"}
+	number := map[string]any{"type": "number"}
+	tests := []struct {
+		name    string
+		raw     string
+		schema  map[string]any
+		want    json.Number
+		wantErr string
+	}{
+		{name: "bare integer", raw: "3", schema: integer, want: "3"},
+		{name: "json-quoted integer", raw: `"3"`, schema: integer, want: "3"},
+		{name: "gemma-quoted integer", raw: `<|"|>12<|"|>`, schema: integer, want: "12"},
+		{name: "padded quoted integer", raw: ` " 7 " `, schema: integer, want: "7"},
+		{name: "negative quoted integer", raw: `"-4"`, schema: integer, want: "-4"},
+		{name: "integral float for integer", raw: "3.0", schema: integer, want: "3"},
+		{name: "quoted integral float for integer", raw: `"200.0"`, schema: integer, want: "200"},
+		{name: "quoted float for number", raw: `"2.5"`, schema: number, want: "2.5"},
+		{name: "fraction for integer", raw: "2.5", schema: integer, wantErr: "expected an integer"},
+		{name: "quoted fraction for integer", raw: `"2.5"`, schema: integer, wantErr: "expected an integer"},
+		{name: "word", raw: "three", schema: integer, wantErr: "expected a JSON number"},
+		{name: "quoted word", raw: `"many"`, schema: integer, wantErr: "expected a JSON number"},
+		{name: "empty", raw: "", schema: integer, wantErr: "expected a JSON number"},
+		{name: "empty quotes", raw: `""`, schema: integer, wantErr: "expected a JSON number"},
+		{name: "double quoted", raw: `""3""`, schema: integer, wantErr: "expected a JSON number"},
+		{name: "quoted array", raw: `"[3]"`, schema: integer, wantErr: "expected a JSON number"},
+		{name: "beyond exact float range", raw: "1e300", schema: integer, wantErr: "expected an integer"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeArgument(tc.raw, tc.schema)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("normalizeArgument(%q) = %v, %v; want error %q", tc.raw, got, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeArgument(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizeArgument(%q) = %#v, want %#v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeArgumentArrayRepair(t *testing.T) {
 	stringItems := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	intItems := map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}
@@ -415,6 +465,17 @@ func TestToolOutputRouterRejectsMalformedAndUnknownCalls(t *testing.T) {
 		}
 		if !strings.Contains(calls[0].ArgumentsError, "expected a JSON number") {
 			t.Fatalf("ArgumentsError = %q", calls[0].ArgumentsError)
+		}
+	})
+	t.Run("quoted integer argument is accepted", func(t *testing.T) {
+		router := newToolOutputRouter(embedded.ToolFormatStandard, []provider.ToolSpec{weatherToolSpec()})
+		router.Push(`<tool_call>{"name":"weather","arguments":{"days":"3"}}</tool_call>`)
+		_, calls, err := router.Finish()
+		if err != nil {
+			t.Fatalf("Finish error = %v", err)
+		}
+		if len(calls) != 1 || calls[0].ArgumentsError != "" || !strings.Contains(calls[0].Arguments, `"days":3`) {
+			t.Fatalf("calls = %+v", calls)
 		}
 	})
 }

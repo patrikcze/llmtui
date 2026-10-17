@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/hybridgroup/yzma/pkg/message"
@@ -778,20 +780,7 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 	case "string":
 		return raw, nil
 	case "integer", "number":
-		normalized := strings.TrimSpace(raw)
-		if !json.Valid([]byte(normalized)) || strings.HasPrefix(normalized, `"`) {
-			return nil, errors.New("expected a JSON number")
-		}
-		var number json.Number
-		decoder := json.NewDecoder(strings.NewReader(normalized))
-		decoder.UseNumber()
-		if err := decoder.Decode(&number); err != nil {
-			return nil, errors.New("expected a JSON number")
-		}
-		if typeName == "integer" && strings.ContainsAny(number.String(), ".eE") {
-			return nil, errors.New("expected an integer")
-		}
-		return number, nil
+		return normalizeNumberArgument(raw, strings.ToLower(typeName) == "integer")
 	case "boolean":
 		normalized := strings.TrimSpace(raw)
 		if normalized == "true" {
@@ -839,6 +828,41 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 		}
 		return raw, nil
 	}
+}
+
+// normalizeNumberArgument parses one integer- or number-typed argument. It
+// accepts the same unambiguous spellings the HTTP providers' native decoder
+// coerces (internal/tools coerceScalar): a base-10 number wrapped in one
+// layer of JSON double quotes or Gemma quote tokens ("3", <|"|>3<|"|>), and,
+// for an integer, an integral value such as 3.0. Observed live: Gemma 4 E4B
+// sometimes quoted sequential_thinking's thought_number, and the call failed
+// here although the same value over HTTP would have been accepted. Anything
+// else — words, fractions for an integer, empty text — is still refused.
+func normalizeNumberArgument(raw string, integer bool) (any, error) {
+	normalized := strings.TrimSpace(raw)
+	if unquoted := stripGemmaQuoteWrapping(normalized); unquoted != normalized {
+		normalized = strings.TrimSpace(unquoted)
+		if strings.HasPrefix(normalized, `"`) || strings.HasPrefix(normalized, "<") {
+			return nil, errors.New("expected a JSON number")
+		}
+	}
+	if !json.Valid([]byte(normalized)) || strings.HasPrefix(normalized, `"`) {
+		return nil, errors.New("expected a JSON number")
+	}
+	var number json.Number
+	decoder := json.NewDecoder(strings.NewReader(normalized))
+	decoder.UseNumber()
+	if err := decoder.Decode(&number); err != nil {
+		return nil, errors.New("expected a JSON number")
+	}
+	if !integer || !strings.ContainsAny(number.String(), ".eE") {
+		return number, nil
+	}
+	value, err := number.Float64()
+	if err != nil || value != math.Trunc(value) || math.Abs(value) >= 1<<53 {
+		return nil, errors.New("expected an integer")
+	}
+	return json.Number(strconv.FormatInt(int64(value), 10)), nil
 }
 
 // repairScalarAsArray handles a common small-model tool-calling mistake:
