@@ -422,6 +422,10 @@ per-line numbers, so the model can copy a fragment straight into an
 
 `edit_file` performs exactly one literal, exact-match replacement in an
 existing text file: zero matches or more than one fails without writing.
+When `old_text` is gone but `new_text` occurs exactly once, the zero-match
+error says the edit appears to be applied already (with its line) and not to
+repeat it (`no_change`), instead of the generic re-read advice: small models
+otherwise resend a successful edit until the repeated-call guard ends the run.
 It does not extend the tool subsystem — it shares `write_file`'s
 `writeFileChecked` core (workspace confinement, blocked-path guardrails, the
 size cap, the confined staged-write-then-atomic-rename publish, the display

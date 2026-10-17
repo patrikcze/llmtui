@@ -279,3 +279,39 @@ func TestEditFileDescribeHidesContent(t *testing.T) {
 		t.Fatalf("Describe = %q, want it to name the file", d)
 	}
 }
+
+// TestEditFileReportsAnAlreadyAppliedEdit reproduces a live Gemma 4 E4B loop:
+// the first edit succeeded, then the model resent it verbatim, got a bare
+// "old_text was not found", and repeated it until the repeated-call guard
+// ended the run. When old_text is gone and new_text is there exactly once,
+// the error says the edit looks applied and not to repeat it. It stays an
+// error: nothing was written.
+func TestEditFileReportsAnAlreadyAppliedEdit(t *testing.T) {
+	root := t.TempDir()
+	content := "package math\n\n// Sum returns the sum of two integers.\nfunc Sum(a, b int) int { return a + b }\n"
+	writeTemp(t, root, "add.go", content)
+	r := NewRunner(root, 64)
+
+	res := r.Execute(Call{
+		Tool: ToolEditFile, Path: "add.go",
+		OldText: "// Sum returns the sum of a and b.", NewText: "// Sum returns the sum of two integers.",
+	})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "applied already") || !strings.Contains(res.Err.Error(), "line 3") {
+		t.Fatalf("err = %v, want an already-applied report at line 3", res.Err)
+	}
+	if res.Meta.Error == nil || res.Meta.Error.Code != "no_change" || res.Meta.Error.Retry != RetryNone {
+		t.Fatalf("meta error = %+v, want no_change with no retry", res.Meta.Error)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "add.go")); string(got) != content {
+		t.Fatalf("file changed:\n%s", got)
+	}
+
+	// new_text that is absent, or present more than once, says nothing about
+	// this edit: keep the ordinary re-read advice.
+	for _, newText := range []string{"// absent", "a"} {
+		res := r.Execute(Call{Tool: ToolEditFile, Path: "add.go", OldText: "// gone", NewText: newText})
+		if res.Err == nil || !strings.Contains(res.Err.Error(), "was not found exactly") {
+			t.Fatalf("new_text %q: err = %v, want the ordinary not-found error", newText, res.Err)
+		}
+	}
+}

@@ -1388,6 +1388,13 @@ func (r *Runner) editFileEdits(rel string, edits []EditPair, expected *entity.Fi
 		}
 		switch matches := strings.Count(updated, e.OldText); {
 		case matches == 0:
+			if line, ok := alreadyAppliedLine(updated, e.NewText); ok {
+				// Seen live (Gemma 4 E4B): a successful edit was resent
+				// verbatim three times, each answered with a bare "not
+				// found", until the repeated-call guard ended the run. Say
+				// what the file shows instead.
+				return "", "", meta, withCode(fmt.Errorf("%sold_text is not in %q, but new_text already is (line %d): this edit appears to be applied already. Do not repeat it; continue with the next step", prefix, displayPath, line), "no_change", RetryNone)
+			}
 			return "", "", meta, withCode(fmt.Errorf("%sold_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", prefix, displayPath), "match_not_found", RetryReread)
 		case matches > 1:
 			return "", "", meta, withCode(fmt.Errorf("%sold_text matches %d places in %q; include more surrounding context so it identifies exactly one location", prefix, matches, displayPath), "ambiguous_match", RetryCorrectInput)
@@ -2127,6 +2134,17 @@ func describePageOptions(c Call) string {
 		return ""
 	}
 	return " [" + strings.Join(options, ", ") + "]"
+}
+
+// alreadyAppliedLine reports the 1-based line where newText occurs, when it
+// occurs exactly once and is not blank. edit_file uses it to tell a model
+// that an edit whose old_text is gone has most likely been applied already;
+// several occurrences say nothing about this edit, so they do not count.
+func alreadyAppliedLine(content, newText string) (int, bool) {
+	if strings.TrimSpace(newText) == "" || strings.Count(content, newText) != 1 {
+		return 0, false
+	}
+	return strings.Count(content[:strings.Index(content, newText)], "\n") + 1, true
 }
 
 func orWorkspace(path string) string {
