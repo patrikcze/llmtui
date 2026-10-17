@@ -983,7 +983,7 @@ func (m *Model) debugOverlay() string {
 		if d.Usage.Estimated {
 			est = " (estimated)"
 		}
-		m.kv(&b, "usage", fmt.Sprintf("prompt %d · reply %d%s", d.Usage.PromptTokens, d.Usage.CompletionTokens, est))
+		m.kv(&b, "usage", fmt.Sprintf("prompt %d%s · reply %d%s", d.Usage.PromptTokens, reusedPromptNote(*d.Usage), d.Usage.CompletionTokens, est))
 	}
 	ctxLine := fmt.Sprintf("used %s of %s budget", components.FormatTokens(d.CtxDecision.Used), components.FormatTokens(d.CtxDecision.Budget))
 	if d.CtxDecision.Compress {
@@ -1242,10 +1242,7 @@ func cmdUsage(m *Model, args string) tea.Cmd {
 	case "last":
 		m.openModalOverlay("Debug · last request", "↑/↓ pgup/pgdn scroll · drag to copy · esc close", func() string { return m.debugOverlay() })
 	case "reset":
-		m.session.Stats = nil
-		m.session.TotalPromptTokens = 0
-		m.session.TotalCompletionTokens = 0
-		m.session.AnyEstimated = false
+		m.session.ResetUsage()
 		m.lastTPS = 0
 		m.notice = "session usage counters reset"
 	case "export":

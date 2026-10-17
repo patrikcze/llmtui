@@ -283,11 +283,32 @@ func ValidateResponseConstraint(req ChatRequest) error {
 
 // Usage reports token accounting for a completed request. Estimated is set
 // when the backend did not return usage and the numbers were approximated.
+//
+// PromptTokens is always the full prompt length the backend accounted for.
+// CachedPromptTokens is the part of it the backend reused from its prompt/KV
+// cache instead of recomputing; it is a subset of PromptTokens, never
+// additional to it. It is meaningful only when CachedPromptKnown is true: a
+// backend that does not report reuse leaves both zero, which consumers must
+// treat as "unknown", not as "nothing was reused". Ollama's prompt_eval_count
+// already excludes its cached prefix, so the Ollama provider leaves the
+// field unknown rather than reporting reuse it cannot see.
 type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	Estimated        bool
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	CachedPromptTokens int
+	CachedPromptKnown  bool
+	Estimated          bool
+}
+
+// WithCachedPrompt returns u with CachedPromptTokens set to cached clamped to
+// [0, PromptTokens] and CachedPromptKnown set. It is the one place providers
+// record reported reuse so a server that over-reports cannot make the reused
+// share exceed the prompt.
+func (u Usage) WithCachedPrompt(cached int) Usage {
+	u.CachedPromptTokens = min(max(cached, 0), max(u.PromptTokens, 0))
+	u.CachedPromptKnown = true
+	return u
 }
 
 // EventType discriminates ChatEvent variants.

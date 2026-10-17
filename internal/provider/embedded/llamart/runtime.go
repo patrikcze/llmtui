@@ -451,6 +451,8 @@ func (r *Runtime) Generate(
 			return result, err
 		}
 		result.PromptTokens = visionResult.promptTokens
+		// Image prompts clear model memory first, so nothing is reused.
+		result.CachedPromptKnown = true
 		maxNew = visionResult.maxNew
 		nextPosition = visionResult.nextPosition
 	} else {
@@ -459,6 +461,9 @@ func (r *Runtime) Generate(
 			return result, errors.New("chat template produced no prompt tokens")
 		}
 		result.PromptTokens = len(promptTokens)
+		// Isolated control prompts decode in full; the conversation path
+		// below overwrites this with its reused KV prefix.
+		result.CachedPromptKnown = true
 		if req.Isolated && r.nSeqMax >= contextSequences {
 			control = true
 			maxNew, err = r.prepareControlPrompt(len(promptTokens), req.MaxTokens)
@@ -483,6 +488,7 @@ func (r *Runtime) Generate(
 			if err != nil {
 				return result, err
 			}
+			result.CachedPromptTokens = len(promptTokens) - len(pending)
 			if err := r.decodePrompt(ctx, pending, len(promptTokens), req.Progress); err != nil {
 				return result, err
 			}

@@ -366,12 +366,17 @@ func mergeUsage(first, second *provider.Usage) *provider.Usage {
 	if second == nil {
 		return first
 	}
-	return &provider.Usage{
+	merged := provider.Usage{
 		PromptTokens:     first.PromptTokens + second.PromptTokens,
 		CompletionTokens: first.CompletionTokens + second.CompletionTokens,
 		TotalTokens:      first.TotalTokens + second.TotalTokens,
 		Estimated:        first.Estimated || second.Estimated,
 	}
+	// Reuse stays known only if both requests reported it.
+	if first.CachedPromptKnown && second.CachedPromptKnown {
+		merged = merged.WithCachedPrompt(first.CachedPromptTokens + second.CachedPromptTokens)
+	}
+	return &merged
 }
 
 func verifierMessages(evidence string, establishing bool) []provider.Message {

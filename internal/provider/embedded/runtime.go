@@ -62,13 +62,18 @@ type GenDelta struct {
 }
 
 // GenResult reports real (non-estimated) token accounting for a completed
-// generation.
+// generation. CachedPromptTokens is the prefix of PromptTokens reused from
+// the runtime's KV cache instead of decoded again; it counts only when
+// CachedPromptKnown is set, so a runtime that does not track reuse reports
+// it as unknown rather than zero.
 type GenResult struct {
-	PromptTokens     int
-	CompletionTokens int
-	ToolCalls        []provider.ToolCall
-	Turn             *provider.AssistantTurn
-	Truncated        bool
+	PromptTokens       int
+	CachedPromptTokens int
+	CachedPromptKnown  bool
+	CompletionTokens   int
+	ToolCalls          []provider.ToolCall
+	Turn               *provider.AssistantTurn
+	Truncated          bool
 }
 
 // MalformedToolCallError is the error a Runtime.Generate implementation

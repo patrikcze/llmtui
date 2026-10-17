@@ -8,18 +8,36 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
 
 // modelUsageStat accumulates completed-request usage for one provider/model
-// pair, in first-use order, for the exit summary table.
+// pair, in first-use order, for the exit summary table. Cached is the part of
+// Prompt the backend reported reusing from its prompt/KV cache, summed over
+// the CachedRequests requests that reported it; the other requests' reuse is
+// unknown, not zero.
 type modelUsageStat struct {
-	Provider  string
-	Model     string
-	Requests  int
-	Prompt    int
-	Reply     int
-	Estimated bool
+	Provider       string
+	Model          string
+	Requests       int
+	Prompt         int
+	Reply          int
+	Cached         int
+	CachedRequests int
+	Estimated      bool
+}
+
+// add folds one request's usage into the stat.
+func (s *modelUsageStat) add(u provider.Usage) {
+	s.Requests++
+	s.Prompt += u.PromptTokens
+	s.Reply += u.CompletionTokens
+	if u.CachedPromptKnown {
+		s.Cached += u.CachedPromptTokens
+		s.CachedRequests++
+	}
+	s.Estimated = s.Estimated || u.Estimated
 }
 
 // exitSummaryState is the per-session bookkeeping rendered after the TUI
@@ -81,22 +99,18 @@ func (m *Model) exitSummary() exitSummaryData {
 
 // recordModelUsage folds one completed provider request into the per-model
 // totals. Cache hits never reach here: they make no API request.
-func (m *Model) recordModelUsage(providerName, model string, prompt, reply int, estimated bool, d time.Duration) {
+func (m *Model) recordModelUsage(providerName, model string, usage provider.Usage, d time.Duration) {
 	m.exit.apiTime += d
 	for i := range m.exit.modelStats {
 		s := &m.exit.modelStats[i]
 		if s.Provider == providerName && s.Model == model {
-			s.Requests++
-			s.Prompt += prompt
-			s.Reply += reply
-			s.Estimated = s.Estimated || estimated
+			s.add(usage)
 			return
 		}
 	}
-	m.exit.modelStats = append(m.exit.modelStats, modelUsageStat{
-		Provider: providerName, Model: model,
-		Requests: 1, Prompt: prompt, Reply: reply, Estimated: estimated,
-	})
+	stat := modelUsageStat{Provider: providerName, Model: model}
+	stat.add(usage)
+	m.exit.modelStats = append(m.exit.modelStats, stat)
 }
 
 // Exit summary table column widths (right-aligned numeric columns).
@@ -168,7 +182,7 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 	if len(d.Models) == 0 {
 		b.WriteString(faint.Render("no completed requests this session") + "\n")
 	}
-	estimated := false
+	estimated, reused := false, false
 	for _, ms := range d.Models {
 		estimated = estimated || ms.Estimated
 		mark := ""
@@ -184,9 +198,16 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 		for _, cont := range lines[1:] {
 			b.WriteString(value.Render(cont) + "\n")
 		}
+		if line := reusedInputLine(ms); line != "" {
+			reused = true
+			b.WriteString(faint.Render(line) + "\n")
+		}
 	}
 	if estimated {
 		b.WriteString(faint.Render("~ provider returned no usage; token counts are estimated") + "\n")
+	}
+	if reused {
+		b.WriteString(faint.Render("↳ reused = Input Tokens served from the backend's KV/prompt cache") + "\n")
 	}
 
 	panel := t.Panel.Width(inner + frameWidth).Render(strings.TrimRight(b.String(), "\n"))
@@ -199,6 +220,45 @@ func renderExitSummary(t styles.Theme, d exitSummaryData) string {
 		out += "\n" + hint
 	}
 	return out
+}
+
+// reusedInputLine describes how much of a model's input the backend reused
+// from its prompt cache, or "" when no request reported reuse. A share is
+// shown only when every request reported, since unknown reuse is not zero.
+func reusedInputLine(ms modelUsageStat) string {
+	if ms.CachedRequests == 0 {
+		return ""
+	}
+	line := "  ↳ " + groupThousands(ms.Cached) + " reused from prompt cache"
+	switch {
+	case ms.CachedRequests < ms.Requests:
+		line += fmt.Sprintf(" (%d/%d reqs reported)", ms.CachedRequests, ms.Requests)
+	case ms.Prompt > 0:
+		line += fmt.Sprintf(" (%.0f%%)", 100*float64(ms.Cached)/float64(ms.Prompt))
+	}
+	return line
+}
+
+// reusedPromptNote is the " (N reused)" suffix for one request's prompt
+// count, empty when the backend did not report reuse.
+func reusedPromptNote(u provider.Usage) string {
+	if !u.CachedPromptKnown {
+		return ""
+	}
+	return fmt.Sprintf(" (%d reused)", u.CachedPromptTokens)
+}
+
+// reusedTotalNote is the session-total variant of reusedPromptNote: it names
+// how many requests reported reuse when not all of them did.
+func reusedTotalNote(cached, reported, requests int) string {
+	switch {
+	case reported == 0:
+		return ""
+	case reported < requests:
+		return fmt.Sprintf(" (%d reused, %d/%d requests reported)", cached, reported, requests)
+	default:
+		return fmt.Sprintf(" (%d reused)", cached)
+	}
 }
 
 func totalReplyTokens(models []modelUsageStat) int {

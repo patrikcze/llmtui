@@ -431,20 +431,29 @@ type chatCompletionResponse struct {
 }
 
 type usagePayload struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		// CachedTokens is a pointer so an absent field stays "unknown"
+		// rather than reading as zero reuse.
+		CachedTokens *int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 func (u *usagePayload) toUsage() *provider.Usage {
 	if u == nil {
 		return nil
 	}
-	return &provider.Usage{
+	usage := provider.Usage{
 		PromptTokens:     u.PromptTokens,
 		CompletionTokens: u.CompletionTokens,
 		TotalTokens:      u.TotalTokens,
 	}
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens != nil {
+		usage = usage.WithCachedPrompt(*u.PromptTokensDetails.CachedTokens)
+	}
+	return &usage
 }
 
 func (p *Provider) wholeResponse(ctx context.Context, body io.ReadCloser, req provider.ChatRequest, events chan<- provider.ChatEvent) {

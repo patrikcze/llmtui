@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tui/styles"
 )
 
@@ -65,9 +66,9 @@ func TestWrapName(t *testing.T) {
 
 func TestRecordModelUsageAggregates(t *testing.T) {
 	m := newTestModel(t)
-	m.recordModelUsage("ollama", "qwen3", 100, 20, false, 2*time.Second)
-	m.recordModelUsage("ollama", "qwen3", 50, 10, true, time.Second)
-	m.recordModelUsage("lmstudio", "phi-4", 30, 5, false, time.Second)
+	m.recordModelUsage("ollama", "qwen3", provider.Usage{PromptTokens: 100, CompletionTokens: 20}, 2*time.Second)
+	m.recordModelUsage("ollama", "qwen3", provider.Usage{PromptTokens: 50, CompletionTokens: 10, Estimated: true}, time.Second)
+	m.recordModelUsage("lmstudio", "phi-4", provider.Usage{PromptTokens: 30, CompletionTokens: 5}, time.Second)
 
 	if len(m.exit.modelStats) != 2 {
 		t.Fatalf("modelStats = %d entries, want 2", len(m.exit.modelStats))
@@ -150,6 +151,96 @@ func TestRenderExitSummaryPrivateSessionExplainsSkippedHistory(t *testing.T) {
 	}
 }
 
+func TestRecordModelUsageCachedPrompt(t *testing.T) {
+	m := newTestModel(t)
+	m.recordModelUsage("embedded", "gemma", provider.Usage{PromptTokens: 100}.WithCachedPrompt(80), time.Second)
+	m.recordModelUsage("embedded", "gemma", provider.Usage{PromptTokens: 50}, time.Second)
+	m.recordModelUsage("embedded", "gemma", provider.Usage{PromptTokens: 40}.WithCachedPrompt(0), time.Second)
+
+	got := m.exit.modelStats[0]
+	if got.Requests != 3 || got.Prompt != 190 || got.Cached != 80 || got.CachedRequests != 2 {
+		t.Errorf("aggregated stat = %+v, want 3 reqs, 190 prompt, 80 cached over 2 reqs", got)
+	}
+}
+
+func TestRenderExitSummaryReusedInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		stat    modelUsageStat
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "unknown reuse prints nothing",
+			stat:    modelUsageStat{Provider: "ollama", Model: "qwen3", Requests: 10, Prompt: 103261, Reply: 4000},
+			notWant: []string{"reused"},
+		},
+		{
+			name: "fully reported reuse shows share",
+			stat: modelUsageStat{Provider: "embedded", Model: "gemma", Requests: 10, Prompt: 103261, Reply: 4000, Cached: 91040, CachedRequests: 10},
+			want: []string{"103 261", "↳ 91 040 reused from prompt cache (88%)", "KV/prompt cache"},
+		},
+		{
+			name:    "partial reporting names the coverage instead of a share",
+			stat:    modelUsageStat{Provider: "lmstudio", Model: "phi", Requests: 4, Prompt: 1000, Reply: 10, Cached: 300, CachedRequests: 3},
+			want:    []string{"↳ 300 reused from prompt cache (3/4 reqs reported)"},
+			notWant: []string{"%)"},
+		},
+		{
+			name: "reported zero reuse is shown as zero",
+			stat: modelUsageStat{Provider: "embedded", Model: "gemma", Requests: 1, Prompt: 500, Reply: 10, CachedRequests: 1},
+			want: []string{"↳ 0 reused from prompt cache (0%)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, width := range []int{80, 100} {
+				out := renderExitSummary(styles.ClaudeInspired(), exitSummaryData{
+					SessionID: "session-x",
+					Models:    []modelUsageStat{tt.stat},
+					Width:     width,
+				})
+				for _, line := range strings.Split(out, "\n") {
+					if w := lipgloss.Width(line); w > width {
+						t.Errorf("width %d: line exceeds width (%d): %q", width, w, line)
+					}
+				}
+				for _, want := range tt.want {
+					if !strings.Contains(out, want) {
+						t.Errorf("summary missing %q:\n%s", want, out)
+					}
+				}
+				for _, notWant := range tt.notWant {
+					if strings.Contains(out, notWant) {
+						t.Errorf("summary unexpectedly contains %q:\n%s", notWant, out)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReusedNotes(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "request unknown", got: reusedPromptNote(provider.Usage{PromptTokens: 10}), want: ""},
+		{name: "request known", got: reusedPromptNote(provider.Usage{PromptTokens: 10}.WithCachedPrompt(7)), want: " (7 reused)"},
+		{name: "total unknown", got: reusedTotalNote(0, 0, 3), want: ""},
+		{name: "total partial", got: reusedTotalNote(70, 2, 3), want: " (70 reused, 2/3 requests reported)"},
+		{name: "total complete", got: reusedTotalNote(70, 3, 3), want: " (70 reused)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderExitSummaryEstimatedMarker(t *testing.T) {
 	out := renderExitSummary(styles.ClaudeInspired(), exitSummaryData{
 		SessionID: "session-x",
@@ -214,7 +305,7 @@ func TestExitSummarySnapshot(t *testing.T) {
 	m.exit.sentCount = 4
 	m.exit.replyCount = 3
 	m.exit.savedPath = "/tmp/x.json"
-	m.recordModelUsage("mock", "demo-model", 100, 50, false, time.Second)
+	m.recordModelUsage("mock", "demo-model", provider.Usage{PromptTokens: 100, CompletionTokens: 50}, time.Second)
 
 	d := m.exitSummary()
 	if d.SessionID != m.sessionName {
