@@ -449,6 +449,13 @@ structured overwrite form of `write_file`. The controller pins that body
 through approval and execution rechecks the complete raw digest, so an
 external change fails as `stale_source`; without an observed version the
 legacy exact-text-only edit and unguarded overwrite paths remain available.
+A `read_file` result shows that version as one line,
+`[file version ent_… — pass it as expected_resource_id to edit_file or write_file for this file]`,
+and does not print the read's citation entity (still registered for Entity
+Context and `get_entity_details`). Measured on Gemma 4 E4B re-reading after a
+stale edit, the earlier two-block form (citation ID plus "retained output … read
+it back instead of rerunning this command") led to a valid `old_text` in 10 of
+40 next edits; the single line, in 39 of 40. Other tools keep both blocks.
 
 `edit_file` also accepts an `edits` list (at most 16) instead of the single
 `old_text`/`new_text` pair. The replacements apply in order, each against the
