@@ -233,6 +233,9 @@ func (r *Runner) getFileInfo(c Call) (string, ResultMeta, error) {
 	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(name)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", meta, missingPathError(root, name, ToolGetFileInfo)
+		}
 		return "", meta, withCode(fmt.Errorf("get_file_info: %w", err), "not_found", RetryCorrectInput)
 	}
 	var b strings.Builder
@@ -303,6 +306,9 @@ func (r *Runner) directoryTree(ctx context.Context, c Call) (string, ResultMeta,
 	defer func() { _ = root.Close() }()
 	info, err := root.Stat(base)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", meta, missingPathError(root, base, ToolDirectoryTree)
+		}
 		return "", meta, withCode(fmt.Errorf("directory_tree: %w", err), "not_found", RetryCorrectInput)
 	}
 	if !info.IsDir() {

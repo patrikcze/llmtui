@@ -2210,6 +2210,12 @@ func missingPathHint(root *os.Root, rel string) string {
 	return " " + label + " is a directory containing: " + strings.Join(names, ", ") + more + "."
 }
 
+// missingPathError gives every workspace inspection tool the same bounded,
+// confined recovery hint that read_file provides for an invented path.
+func missingPathError(root *os.Root, rel, tool string) error {
+	return withCode(fmt.Errorf("%s: %q does not exist.%s", tool, filepath.ToSlash(rel), missingPathHint(root, rel)), "not_found", RetryCorrectInput)
+}
+
 // alreadyAppliedLine reports the 1-based line where newText occurs, when it
 // occurs exactly once and is not blank. edit_file uses it to tell a model
 // that an edit whose old_text is gone has most likely been applied already;
