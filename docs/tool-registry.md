@@ -120,6 +120,9 @@ cannot race session toggles. The snapshot is assembled by the same
   its MCP `tools/list` request successfully.
 - Connected MCP tools use `mcp__<server>__<tool>` names and their server-provided
   JSON Schemas. Small catalogs expose all of them.
+- `tool_search` is offered only while progressive disclosure hides MCP
+  schemas (below). With no MCP server connected, or a catalog at or below the
+  threshold, there is nothing hidden to search, so it is left out.
 - Above `tools.discovery.threshold`, undisclosed MCP tools stay internal to the
   eligible catalog. `tool_search` adds bounded matches to the model-visible
   snapshot for the current human task; the endpoint reflects that change on

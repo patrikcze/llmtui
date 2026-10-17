@@ -277,6 +277,7 @@ Three built-ins are controlled before ordinary Runner execution:
     silent UTC fallback. Asking only for `time` does not run the slower
     system-information collectors.
 - `tool_search` searches the authoritative eligible catalog deterministically.
+    It is model-visible only while discovery hides MCP schemas.
     It adds selected full schemas to a bounded task-local disclosure set, so the
     next inference can invoke them through the normal execution and approval
     path. Multiple search calls may share a batch only when every call is a
@@ -284,7 +285,8 @@ Three built-ins are controlled before ordinary Runner execution:
     all correlated results produce exactly one continuation inference.
 
 `eligibleToolSpecs` owns the complete current catalog. `modelVisibleToolSpecs`
-applies the threshold and disclosure set. `activeToolSpecs` exposes that exact
+applies the threshold and disclosure set, and drops `tool_search` while nothing
+is hidden. `activeToolSpecs` exposes that exact
 visible snapshot only for native providers, which keeps provider requests,
 cache keys, context estimates, debug hashes, and the HTTP registry aligned.
 Fenced fallback receives the same visible dynamic MCP metadata in prompt form.

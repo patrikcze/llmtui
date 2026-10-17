@@ -74,11 +74,39 @@ func TestSmallCatalogPreservesExistingToolVisibility(t *testing.T) {
 	m := configureDiscoveryModel(t, 2, nil)
 	eligible := m.eligibleToolSpecs()
 	visible := m.activeToolSpecs()
-	if len(visible) != len(eligible) {
-		t.Fatalf("small catalog visible=%d eligible=%d", len(visible), len(eligible))
+	// Everything stays visible except tool_search, which has nothing hidden
+	// to search below the discovery threshold.
+	if len(visible) != len(eligible)-1 {
+		t.Fatalf("small catalog visible=%d eligible=%d, want every tool but tool_search", len(visible), len(eligible))
 	}
 	if _, ok := specByName(visible, "mcp__jira__create_issue"); !ok {
 		t.Fatal("small catalog hid a connected MCP tool")
+	}
+	if _, ok := specByName(visible, tools.ToolSearch); ok {
+		t.Fatal("small catalog offered tool_search although no MCP schema is hidden")
+	}
+}
+
+// tool_search is offered exactly when progressive disclosure hides MCP
+// schemas, so a model only sees it when a search can return something.
+func TestToolSearchOfferedOnlyWhileDiscoveryHidesTools(t *testing.T) {
+	m := configureDiscoveryModel(t, 10, nil)
+	if _, ok := specByName(m.activeToolSpecs(), tools.ToolSearch); !ok {
+		t.Fatal("large catalog hides MCP schemas but does not offer tool_search")
+	}
+	if !strings.Contains(m.compactMCPToolCatalogInstructions(), `{"query":`) {
+		t.Fatal("compact MCP directory does not show the tool_search body, which fenced-protocol models need")
+	}
+
+	plain := newTestModel(t)
+	plain.toolsOn = true
+	plain.toolsNative = true
+	plain.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	if _, ok := specByName(plain.activeToolSpecs(), tools.ToolSearch); ok {
+		t.Fatal("session without MCP offered tool_search")
+	}
+	if plain.compactMCPToolCatalogInstructions() != "" {
+		t.Fatal("session without MCP carries MCP directory rules")
 	}
 }
 
@@ -94,8 +122,8 @@ func TestNewBuiltinsDoNotTriggerToolDiscovery(t *testing.T) {
 			t.Fatalf("eligible catalog is missing %s", name)
 		}
 	}
-	if visible := m.activeToolSpecs(); len(visible) != len(eligible) {
-		t.Fatalf("new built-ins triggered discovery: visible=%d eligible=%d", len(visible), len(eligible))
+	if visible := m.activeToolSpecs(); len(visible) != len(eligible)-1 {
+		t.Fatalf("new built-ins triggered discovery: visible=%d eligible=%d (want all but tool_search)", len(visible), len(eligible))
 	}
 }
 

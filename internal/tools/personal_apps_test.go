@@ -334,49 +334,69 @@ func TestPersonalAppsSchemasNameRealFieldsPerOperation(t *testing.T) {
 // six change_prepare variant shapes that the flat arguments schema cannot
 // express on its own.
 func TestPersonalAppsInstructionsDocumentReadFlowAndChangeShapes(t *testing.T) {
-	for _, want := range []string{
-		"mail_accounts", "mail_mailboxes", "mail_search", "mail_read",
-		"calendar_list", "calendar_events", "calendar_free_slots", "calendar_event",
-		"mail_move", "mail_set_read", "mail_set_flag", "mail_save_draft",
-		"calendar_create_event", "calendar_update_event",
-		"never invent",
-		"not supported",
-		"never tools to call by themselves",
-	} {
-		if !strings.Contains(PersonalAppsInstructions, want) {
-			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+	for _, native := range []bool{true, false} {
+		instructions := PersonalAppsInstructions(native)
+		for _, want := range []string{
+			"mail_accounts", "mail_mailboxes", "mail_search", "mail_read",
+			"calendar_list", "calendar_events", "calendar_free_slots", "calendar_event",
+			"mail_move", "mail_set_read", "mail_set_flag", "mail_save_draft",
+			"calendar_create_event", "calendar_update_event",
+			"never invent",
+			"not supported",
+			"never tools to call by themselves",
+		} {
+			if !strings.Contains(instructions, want) {
+				t.Errorf("PersonalAppsInstructions(native=%t) does not mention %q", native, want)
+			}
 		}
 	}
 }
 
-// TestPersonalAppsInstructionsExplainBothCallingConventions guards the
+// TestPersonalAppsInstructionsExplainEachCallingConvention guards the
 // protocol boundary: native mode calls an operation directly; fenced mode
 // emits the advertised same-named form and lets Parse synthesize the
 // combined envelope. Giving the model an unadvertised wrapper contradicts
 // the catalog and makes it hand-write JSON the parser can construct safely.
-func TestPersonalAppsInstructionsExplainBothCallingConventions(t *testing.T) {
+// Each protocol carries only its own convention, so a small model never
+// reads the other one and mixes them.
+func TestPersonalAppsInstructionsExplainEachCallingConvention(t *testing.T) {
+	native := PersonalAppsInstructions(true)
+	fenced := PersonalAppsInstructions(false)
+	for _, want := range []string{"personal_apps operation", "its own tool, called directly by that exact name", "unknown tool"} {
+		if !strings.Contains(native, want) {
+			t.Errorf("native instructions do not mention %q", want)
+		}
+	}
 	for _, want := range []string{
 		"personal_apps operation",
-		"its own tool, called directly by that exact name",
 		"emit the advertised fenced tool named exactly <name>",
 		"Do not emit an unadvertised personal_apps tool",
 		"unknown tool",
 	} {
-		if !strings.Contains(PersonalAppsInstructions, want) {
-			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+		if !strings.Contains(fenced, want) {
+			t.Errorf("fenced instructions do not mention %q", want)
 		}
+	}
+	if strings.Contains(native, "fenced") {
+		t.Error("native instructions describe the fenced convention")
+	}
+	if strings.Contains(fenced, "called directly by that exact name") {
+		t.Error("fenced instructions describe the native convention")
 	}
 }
 
 func TestPersonalAppsInstructionsRouteCalendarEditsThroughCalendar(t *testing.T) {
-	for _, want := range []string{
-		"Calendar records, never project files",
-		"never use list_dir, glob, grep, or workspace search",
-		"query calendar_events for a bounded time range",
-		"event_id and expected_version from that fresh Calendar read",
-	} {
-		if !strings.Contains(PersonalAppsInstructions, want) {
-			t.Errorf("PersonalAppsInstructions does not route calendar edits correctly: missing %q", want)
+	for _, native := range []bool{true, false} {
+		instructions := PersonalAppsInstructions(native)
+		for _, want := range []string{
+			"Calendar records, never project files",
+			"never use list_dir, glob, grep, or workspace search",
+			"query calendar_events for a bounded time range",
+			"event_id and expected_version from that fresh Calendar read",
+		} {
+			if !strings.Contains(instructions, want) {
+				t.Errorf("PersonalAppsInstructions(native=%t) does not route calendar edits correctly: missing %q", native, want)
+			}
 		}
 	}
 }
@@ -394,13 +414,16 @@ func TestPersonalAppsInstructionsRouteCalendarEditsThroughCalendar(t *testing.T)
 // model that outcome_unknown is not evidence of success, so it filled that
 // gap with the most dangerous possible assumption.
 func TestPersonalAppsInstructionsRequireReadingTheOutcomeBeforeClaimingSuccess(t *testing.T) {
-	for _, want := range []string{
-		"outcome_unknown",
-		"not evidence of success",
-		`"applied"`,
-	} {
-		if !strings.Contains(PersonalAppsInstructions, want) {
-			t.Errorf("PersonalAppsInstructions does not mention %q", want)
+	for _, native := range []bool{true, false} {
+		instructions := PersonalAppsInstructions(native)
+		for _, want := range []string{
+			"outcome_unknown",
+			"not evidence of success",
+			`"applied"`,
+		} {
+			if !strings.Contains(instructions, want) {
+				t.Errorf("PersonalAppsInstructions(native=%t) does not mention %q", native, want)
+			}
 		}
 	}
 }

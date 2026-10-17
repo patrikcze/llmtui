@@ -17,39 +17,39 @@ func Specs() []provider.ToolSpec {
 	return []provider.ToolSpec{
 		{
 			Name:        ToolListDir,
-			Description: "List a directory in the project workspace. Paths are relative to the project root; omit path for the root itself. Use limit/cursor to page a captured sorted listing.",
+			Description: "List one directory level. For a recursive view use directory_tree; to find files by name use glob.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Directory path relative to the project root. Optional; defaults to the root."},
+					"path": {"type": "string", "description": "Directory relative to the project root; omit for the root."},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
-					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
+					"cursor": {"type": "string", "description": "The cursor a previous page returned."}
 				},
 				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolReadFile,
-			Description: "Read a file in the project workspace and return its contents. Paths are relative to the project root. Pass offset/limit to read only a line range of a large file. Pass resource_id instead of path to recover a previously retained tool output body (see run_command) without rerunning it.",
+			Description: "Read a text file. Without offset/limit it returns a bounded first window and says how to continue. A result's resource_id identifies that exact snapshot: pass it as expected_resource_id to edit_file/write_file, or as resource_id here to page a retained tool output without rerunning it.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root. Omit when passing resource_id instead."},
-					"offset": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return. Omit to read from the start. Works for paths and retained resource bodies."},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Optional maximum number of lines to return (default 200 when offset is set; hard cap 500). Not supported with byte_offset."},
-					"byte_offset": {"type": "integer", "minimum": 0, "description": "Continue a partial giant line from this raw byte offset; cannot combine with offset or limit."},
-					"resource_id": {"type": "string", "description": "Recover a previously retained tool output body by its ent_... ID instead of reading a path. Exactly one of path or resource_id must be set."}
+					"path": {"type": "string", "description": "File relative to the project root. Omit when passing resource_id."},
+					"offset": {"type": "integer", "minimum": 1, "description": "1-based first line."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Lines to return (default 200 with offset)."},
+					"byte_offset": {"type": "integer", "minimum": 0, "description": "Continue a partial giant line from next_byte_offset; not with offset/limit."},
+					"resource_id": {"type": "string", "description": "ent_... ID of a retained output to page instead of a path."}
 				},
 				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolReadMultipleFiles,
-			Description: "Read several files in the project workspace in one call, each returned under a ==> path <== header with read_file's default window. A file that cannot be read is reported inline and does not stop the others. Use read_file for line ranges, retained bodies, or a version to edit against.",
+			Description: "Read up to 10 files in one call, each with read_file's default window under a ==> path <== header. A failing path is reported inline. Use read_file for line ranges or a version to edit against.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"paths": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "File paths relative to the project root."}
+					"paths": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "Files relative to the project root."}
 				},
 				"required": ["paths"],
 				"additionalProperties": false
@@ -57,99 +57,99 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGetFileInfo,
-			Description: "Get metadata for one file or directory in the project workspace — type, size, permissions, modified time, and created/changed time where the OS records them — without reading its content. Symlinks are described, not followed.",
+			Description: "Metadata of one file or directory (type, size, permissions, timestamps) without reading it. Symlinks are described, not followed.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Path relative to the project root. Optional; defaults to the root."}
+					"path": {"type": "string", "description": "Path relative to the project root; omit for the root."}
 				},
 				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolDirectoryTree,
-			Description: "Return a recursive JSON tree of a workspace directory: each entry has name, type (file, directory, symlink, other) and, for listed directories, children. Directories cut off by depth or the entry limit carry truncated=true. Skips .git and never follows symlinks.",
+			Description: "Recursive JSON tree of a directory (name, type, children). Entries cut off by depth or size carry truncated=true. Skips .git; never follows symlinks.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Directory relative to the project root. Optional; defaults to the root."},
-					"depth": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "How many directory levels to list."},
-					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Optional glob patterns to skip, for example node_modules or **/*.log. A pattern without / matches any name."}
+					"path": {"type": "string", "description": "Directory relative to the project root; omit for the root."},
+					"depth": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
+					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Glob patterns to skip, e.g. node_modules or **/*.log."}
 				},
 				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolGlob,
-			Description: "Recursively find files in the project workspace by glob pattern. Supports *, ?, character classes, and ** path segments; a pattern without / matches file names at any depth, so *config* finds every file whose name contains config. Use case_sensitive=false for case-insensitive matching and exclude to skip paths or directories. Use limit/cursor to page a captured sorted listing.",
+			Description: "Find files by name pattern, recursively. Supports *, ?, [classes] and ** segments; a pattern without / matches names at any depth, so *config* finds every file whose name contains config. Skips .git.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"pattern": {"type": "string", "description": "Glob pattern, for example **/*.go, README*, or *test*."},
-					"path": {"type": "string", "description": "Optional directory to search, relative to the project root."},
-					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Optional glob patterns to skip, for example node_modules or **/*.min.js. A pattern without / matches any file or directory name; an excluded directory is not descended into."},
+					"pattern": {"type": "string", "description": "For example **/*.go, README*, or *test*."},
+					"path": {"type": "string", "description": "Directory to search, relative to the project root; omit for the root."},
+					"exclude": {"type": "array", "maxItems": 16, "items": {"type": "string"}, "description": "Glob patterns to skip; an excluded directory is not descended into."},
 					"case_sensitive": {"type": "boolean", "default": true},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200},
-					"cursor": {"type": "string", "description": "Opaque continuation returned by a previous listing."}
+					"cursor": {"type": "string", "description": "The cursor a previous page returned."}
 				},
 				"required": ["pattern"]
 			}`),
 		},
 		{
 			Name:        ToolGrep,
-			Description: "Recursively search project files. Legacy calls use a Go regular expression; literal/case/context/limit/cursor options provide bounded immutable pages. Searches are read-only; recursive searches skip likely secret files.",
+			Description: "Search file contents, recursively, and return matching lines with paths and line numbers. Read-only; skips .git and likely secret files.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"pattern": {"type": "string", "description": "Go regular expression, unless literal=true."},
-					"path": {"type": "string", "description": "Optional file or directory to search, relative to the project root."},
-					"resource_id": {"type": "string", "description": "Search a retained body only; no workspace source is reopened."},
-					"glob": {"type": "string", "description": "Optional file-name glob filter for workspace files."},
+					"pattern": {"type": "string", "description": "Go regular expression, or plain text with literal=true."},
+					"path": {"type": "string", "description": "File or directory to search, relative to the project root; omit for the root."},
+					"resource_id": {"type": "string", "description": "Search a retained tool output instead of workspace files."},
+					"glob": {"type": "string", "description": "File-name filter, e.g. *.go."},
 					"literal": {"type": "boolean", "default": false},
 					"case_sensitive": {"type": "boolean", "default": true},
-					"context": {"type": "integer", "minimum": 0, "maximum": 5, "default": 0},
+					"context": {"type": "integer", "minimum": 0, "maximum": 5, "default": 0, "description": "Lines of context around each match."},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
-					"cursor": {"type": "string", "description": "Opaque continuation; omit all query/target fields."}
+					"cursor": {"type": "string", "description": "The cursor a previous page returned; send it without the other search fields."}
 				},
 				"additionalProperties": false
 			}`),
 		},
 		{
 			Name:        ToolWriteFile,
-			Description: "Create or overwrite a file in the project workspace with the given content. Pass expected_resource_id from a complete prior read to reject stale overwrites. Paths are relative to the project root. May require the user's approval.",
+			Description: "Create a file, or replace a whole file, with the given content. For a change to an existing file prefer edit_file.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root."},
-					"content": {"type": "string", "description": "The full file content to write."},
-					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
+					"path": {"type": "string", "description": "File relative to the project root."},
+					"content": {"type": "string", "description": "The full file content."},
+					"expected_resource_id": {"type": "string", "description": "resource_id of a complete earlier read; the write is rejected if the file changed since."}
 				},
 				"required": ["path", "content"]
 			}`),
 		},
 		{
 			Name:        ToolEditFile,
-			Description: "Replace exact, unique text fragments in an existing workspace file. Pass expected_resource_id from a complete prior read to reject stale edits. Use this for surgical changes instead of rewriting the whole file with write_file. Give one old_text/new_text pair, or an edits list applied in order (each against the result of the previous one). Every old_text must match exactly once — include enough surrounding lines to make it unique. Fails without writing anything if any old_text is missing or matches more than once. Set dry_run=true to get a unified diff of the change without writing. Cannot create files. May require the user's approval.",
+			Description: "Replace exact text in an existing file. Give old_text/new_text, or edits applied in order, all or nothing. Each old_text must occur exactly once — include enough surrounding lines to make it unique; nothing is written if any fails. Cannot create files.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "File path relative to the project root. The file must already exist."},
-					"old_text": {"type": "string", "description": "Exact text to find. Must occur exactly once in the file; include surrounding context to disambiguate. Omit when using edits."},
-					"new_text": {"type": "string", "description": "Replacement text. May be empty to delete the matched fragment. Omit when using edits."},
-					"edits": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["old_text", "new_text"], "additionalProperties": false}, "description": "Several exact replacements applied in order, all or nothing. Use instead of old_text/new_text."},
-					"dry_run": {"type": "boolean", "default": false, "description": "Return a unified diff of the change without writing the file."},
-					"expected_resource_id": {"type": "string", "description": "Optional complete file snapshot ID returned by a prior read; stale versions are rejected."}
+					"path": {"type": "string", "description": "Existing file relative to the project root."},
+					"old_text": {"type": "string", "description": "Exact text to replace. Omit when using edits."},
+					"new_text": {"type": "string", "description": "Replacement; empty deletes old_text. Omit when using edits."},
+					"edits": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["old_text", "new_text"], "additionalProperties": false}, "description": "Several replacements, each applied to the previous result."},
+					"dry_run": {"type": "boolean", "default": false, "description": "Return the unified diff without writing."},
+					"expected_resource_id": {"type": "string", "description": "resource_id of a complete earlier read; the edit is rejected if the file changed since."}
 				},
 				"required": ["path"]
 			}`),
 		},
 		{
 			Name:        ToolCreateDirectory,
-			Description: "Create a directory in the project workspace, including any missing parent directories. Succeeds without change if it already exists. May require the user's approval.",
+			Description: "Create a directory and any missing parents. An existing directory is fine.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Directory path relative to the project root."}
+					"path": {"type": "string", "description": "Directory relative to the project root."}
 				},
 				"required": ["path"],
 				"additionalProperties": false
@@ -157,12 +157,12 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolMoveFile,
-			Description: "Move or rename a file or directory inside the project workspace. Missing destination parent directories are created. Fails if the destination already exists — it never overwrites or deletes anything. Symlinks are not moved. May require the user's approval.",
+			Description: "Move or rename a file or directory; missing destination parents are created. Never overwrites: fails if the destination exists. Symlinks are not moved.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"source": {"type": "string", "description": "Existing path relative to the project root."},
-					"destination": {"type": "string", "description": "New path relative to the project root; must not exist yet."}
+					"destination": {"type": "string", "description": "New path relative to the project root; must not exist."}
 				},
 				"required": ["source", "destination"],
 				"additionalProperties": false
@@ -170,24 +170,24 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolRunCommand,
-			Description: "Run one shell command in the project workspace and return its output. Exactly one command line; save multi-line scripts with write_file first. Non-read-only commands may require the user's approval.",
+			Description: "Run one shell command line in the project directory and return its output. For builds, tests, git, and other programs; use the file tools to read, list, search, or edit files.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"command": {"type": "string", "description": "The command line to execute."}
+					"command": {"type": "string", "description": "Exactly one command line."}
 				},
 				"required": ["command"]
 			}`),
 		},
 		{
 			Name:        ToolAskUser,
-			Description: "Ask the user a necessary clarification question in regular chat or agent mode, and wait for their answer. Use this instead of asking in ordinary reply text; provide up to 4 choices to show a picker, or omit choices for text input. Do not use this for tool approval. Call it alone, without other tools in the same batch.",
+			Description: "Ask the user one necessary question and wait for the answer, instead of asking in reply text. Up to 4 choices show a picker; no choices shows text input. Do not use this for tool approval. Call it alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"question": {"type": "string", "description": "One concise question for the human."},
+					"question": {"type": "string", "description": "One concise question."},
 					"choices": {"type": "array", "maxItems": 4, "items": {"type": "string"}, "description": "Optional short choices."},
-					"allow_text": {"type": "boolean", "description": "Allow a free-text answer in addition to choices."}
+					"allow_text": {"type": "boolean", "description": "Also allow a free-text answer."}
 				},
 				"required": ["question"],
 				"additionalProperties": false
@@ -195,12 +195,12 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolLocalContext,
-			Description: "Read bounded information about the local computer or workspace. Use kind=time whenever the request depends on the current date, time, timezone, weekday, or relative dates such as today, tomorrow, yesterday, or next Monday; never guess the current date from training knowledge. Use this tool instead of inventing shell commands for time, system, process, clipboard, workspace, or recent-file context. Clipboard reads require human approval.",
+			Description: "Read bounded facts about this computer. Use kind=time whenever the answer depends on the current date, time, timezone, weekday, or relative dates such as today, tomorrow, or next Monday; never guess them from training knowledge. Use it instead of shell commands for time, system, processes, clipboard, workspace, or recent files. Clipboard reads require human approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"kind": {"type": "string", "enum": ["time", "system", "workspace", "processes", "clipboard", "recent_files"]},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Optional result limit for processes or recent_files; defaults to 10."}
+					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Result limit for processes or recent_files; default 10."}
 				},
 				"required": ["kind"],
 				"additionalProperties": false
@@ -208,12 +208,12 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolSearch,
-			Description: "Search connected MCP capabilities and disclose matching schemas. Use it before unrelated network or shell fallbacks when the compact MCP directory suggests a relevant tool; never pass an MCP tool name to run_command. Results can be a partial shortlist: check total_matches and truncated. Use max_results 1 when the directory gives you the tool name. Discovery grants no permission. Call it alone.",
+			Description: "Search the connected MCP tools hidden from this list and make matches callable. Use it when the MCP directory suggests a tool you do not have yet; never pass an MCP tool name to run_command. Results may be a partial shortlist (see total_matches, truncated). Discovery grants no permission. Call it alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"query": {"type": "string", "description": "Capability description or tool name from the compact MCP directory, for example jira_search_issues."},
-					"max_results": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Use 1 for a known tool name to keep prompt context small."}
+					"query": {"type": "string", "description": "Tool name from the MCP directory, e.g. jira_search_issues, or a capability description."},
+					"max_results": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Use 1 for a known tool name."}
 				},
 				"required": ["query"],
 				"additionalProperties": false
@@ -221,14 +221,14 @@ func Specs() []provider.ToolSpec {
 		},
 		{
 			Name:        ToolGetEntityDetails,
-			Description: "Find previously stored runtime data by name or topic keywords using query (up to 8 minimal candidates), optionally restricted by kinds, or expand exact entity_ids with level. Use exactly one selector. Query never returns full payloads: choose matching IDs before expanding. For prior screenshots/images use kinds=[vision_observation]; web results are not image evidence. Read-only, current session only; call alone.",
+			Description: "Look up data stored earlier this session (files read, web pages, tool results, image observations). Use query to find up to 8 minimal candidates, then entity_ids with level=full to expand exact returned IDs; one selector per call. For an earlier image use kinds=[vision_observation]; a web result is not image evidence. Read-only; call it alone.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"query": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Name, path, URL, or topic keywords to find stored entities without knowing IDs. Returns minimal candidates only."},
+					"query": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Name, path, URL, or topic keywords."},
 					"entity_ids": {"type": "array", "items": {"type": "string", "pattern": "^ent_[0-9]{5}$"}, "minItems": 1, "maxItems": 8},
 					"level": {"type": "string", "enum": ["identifier", "minimal", "full"]},
-					"kinds": {"type": "array", "items": {"type": "string", "enum": ["web_result", "web_page", "file", "mcp_result", "collection", "vision_observation"]}, "minItems": 1, "maxItems": 6, "description": "Optional evidence-kind filter; use vision_observation for prior image/screenshot evidence."}
+					"kinds": {"type": "array", "items": {"type": "string", "enum": ["web_result", "web_page", "file", "mcp_result", "collection", "vision_observation"]}, "minItems": 1, "maxItems": 6}
 				},
 				"oneOf": [{"required": ["entity_ids"]}, {"required": ["query"]}],
 				"additionalProperties": false
@@ -584,42 +584,41 @@ func WebSpecs() []provider.ToolSpec {
 	return []provider.ToolSpec{
 		{
 			Name:        ToolWebSearch,
-			Description: "Search the web (DuckDuckGo) and get result titles, URLs, and snippets. Use it to find current information, then web_fetch the most promising URL.",
+			Description: "Search the web (DuckDuckGo) for result titles, URLs, and snippets. Use it to find a specific page, then web_fetch the best URL. To answer a question, prefer web_research.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"query": {"type": "string", "description": "The search query."},
-					"max_results": {"type": "integer", "description": "Maximum results to return. Optional."},
-					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh poll is intentionally required."}
+					"query": {"type": "string"},
+					"max_results": {"type": "integer", "description": "Optional result limit."},
+					"freshness_token": {"type": "string", "description": "Optional. Change it only to repeat an identical search on purpose."}
 				},
 				"required": ["query"]
 			}`),
 		},
 		{
 			Name:        ToolWebFetch,
-			Description: "Fetch one web page and return its readable content as Markdown. Use cache_mode=refresh for explicitly current data; cached/auto reuse only a retained session snapshot. May require the user's approval.",
+			Description: "Fetch one http(s) page or JSON/XML endpoint and return its readable content as Markdown. May reuse a snapshot from earlier in this session; cache_mode=refresh forces a new fetch. May require the user's approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"url": {"type": "string", "description": "The http(s) URL to fetch."},
-					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh fetch is intentionally required."},
-					"cache_mode": {"type": "string", "enum": ["auto", "cached", "refresh"], "default": "auto"},
-					"cache_max_age": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "Maximum age in seconds for an automatic cached snapshot."},
-					"refresh_epoch": {"type": "string", "description": "Controller-issued refresh identity; changing it opts into a new observation."}
+					"url": {"type": "string", "description": "The http(s) URL."},
+					"freshness_token": {"type": "string", "description": "Optional. Change it only to repeat an identical fetch on purpose."},
+					"cache_mode": {"type": "string", "enum": ["auto", "cached", "refresh"], "default": "auto", "description": "auto may reuse a recent snapshot, cached requires one, refresh fetches anew."},
+					"cache_max_age": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "Maximum snapshot age in seconds for auto."}
 				},
 				"required": ["url"]
 			}`),
 		},
 		{
 			Name:        ToolWebResearch,
-			Description: "Research a question on the public web in one call: runs up to 3 searches, reads the best few pages from different sites, and returns numbered notes with only the relevant passages, to cite as [1], [2]. Prefer this over web_search + web_fetch for facts, current events, prices, versions, schedules, or anything that may have changed. Asks the user's approval once per request.",
+			Description: "Research a question on the web in one call: up to 3 searches, reads the best few pages from different sites, and returns numbered notes with the relevant passages to cite as [1], [2]. Prefer it over web_search + web_fetch for facts, current events, prices, versions, or anything that may have changed. Asks the user's approval once per request.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"question": {"type": "string", "description": "The question to answer, in full."},
-					"queries": {"type": "array", "items": {"type": "string"}, "maxItems": 3, "description": "1-3 distinct search queries, for example different phrasings, the official source, or a recent-news angle. Defaults to the question."},
-					"max_sources": {"type": "integer", "minimum": 1, "maximum": 6, "description": "How many pages to read, 1-6. Defaults to 4."},
-					"freshness_token": {"type": "string", "description": "Optional explicit polling epoch. Reuse it for the same observation; change it only when a fresh poll is intentionally required."}
+					"question": {"type": "string", "description": "The question, in full."},
+					"queries": {"type": "array", "items": {"type": "string"}, "maxItems": 3, "description": "1-3 distinct search queries, e.g. other phrasings or the official source. Defaults to the question."},
+					"max_sources": {"type": "integer", "minimum": 1, "maximum": 6, "description": "Pages to read; default 4."},
+					"freshness_token": {"type": "string", "description": "Optional. Change it only to repeat an identical research request on purpose."}
 				},
 				"required": ["question"]
 			}`),
@@ -774,7 +773,7 @@ func personalAppsFieldSchemas() map[string]map[string]any {
 		"item_id": field(str, "The item to open in its owning app, an id from any prior read result."),
 		"changes": map[string]any{
 			"type":        "array",
-			"description": "One or more change objects, each with its own \"type\" field (mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, or calendar_update_event) — see PersonalAppsInstructions for each type's exact shape. These are values for \"type\" inside this array, never tool names to call by themselves.",
+			"description": "One or more change objects, each with its own \"type\" field (mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, or calendar_update_event) — see the Personal Mail/Calendar rules for each type's exact fields. These are values for \"type\" inside this array, never tool names to call by themselves.",
 			"items":       map[string]any{"type": "object"},
 		},
 		"plan_id": field(str, "The plan_id a prior change_prepare returned, after a human approved it in a separate turn."),
@@ -918,24 +917,40 @@ func LimitResults(calls []Call, max int) []Result {
 // NativeInstructions is appended to the system prompt when tools are offered
 // natively; the protocol itself needs no explanation, only the house rules.
 // withWeb adds the web-tool rules when the user has turned them on.
+//
+// Per-argument mechanics (offset/limit, byte_offset, resource_id,
+// expected_resource_id, dry_run) live in each tool's own schema, which a
+// native model reads with the call. This text only carries what a schema
+// cannot: which tool to prefer, cross-tool rules, and safety boundaries. MCP
+// discovery rules travel with the compact MCP directory
+// (internal/tui/tool_search.go), so a session without hidden MCP tools does
+// not pay for them. See docs/prompt-composition.md "Tool guidance".
 func NativeInstructions(root string, withWeb bool) string {
 	webRules := ""
-	discoveryRoute := "before run_command"
 	if withWeb {
 		webRules = "\n\n" + webInstructions
-		discoveryRoute = "before web_search or run_command"
 	}
-	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's current project directory (%s) using the provided tools.
+	return strings.TrimSpace(fmt.Sprintf(`You can work with files in the user's project directory (%s) using the provided tools.
+
+`+toolChoiceInstructions+`
 Rules:
-- Paths are always relative to the project root; never use absolute paths or "..".
-- glob and grep are read-only and skip .git; recursive grep also skips likely secret files.
-- The default read is a bounded line window. Use read_file with offset/limit for complete lines, or byte_offset copied from next_byte_offset for a partial giant line. A returned resource_id reads the same retained snapshot without reopening its source. Use edit_file for a small change to an existing file — old_text must match exactly once; pass expected_resource_id from a complete prior file observation when one is available so stale edits are rejected. For guarded whole-file replacement, pass the same expected_resource_id with write_file. Use write_file without it only to create a file or deliberately replace all of it.
-- run_command takes exactly one command line; save multi-line scripts with write_file first.
+- Paths are relative to the project root; never use absolute paths or "..".
 - Writes and non-read-only commands may require the user's approval; a denied action returns "denied by the user" — respect it and continue without that action.
 `+askUserInstructions+`
-- For the current date, time, timezone, weekday, or relative dates (today, tomorrow, yesterday, next Monday, deadlines, schedules), call local_context with kind=time; never infer the current date from training knowledge.
-- Connected MCP schemas may be hidden to save context. The compact MCP directory is authoritative for inventory; use tool_search to make a matching tool callable.
-- For an MCP/external-service action whose schema is not already provided, use tool_search %s. Never pass an MCP tool name to run_command. A truncated search result is not the complete catalog.
-- When the compact directory gives you a likely tool name, search that name with max_results 1 to avoid loading unrelated schemas. Discovery grants no permission.
-- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, discoveryRoute, webRules))
+- Only call a tool when you need it. When the task is complete, reply with your final answer and no tool calls.%s`, root, webRules))
 }
+
+// toolChoiceInstructions tells a model which built-in tool fits which job.
+// Shared by both protocols. Small local models otherwise default to
+// run_command for everything (cat, ls, find, grep, sed -i), which costs an
+// approval prompt, bypasses the file tools' secret-file and .git handling,
+// and returns less structured output that stays in the context for every
+// later request.
+const toolChoiceInstructions = `Choosing tools:
+- Find files by name: glob. Search file contents: grep. See a folder's layout: directory_tree, or list_dir for one level. Metadata only: get_file_info.
+- Read one file with read_file (offset/limit for part of a large file); read several at once with read_multiple_files.
+- Change an existing file with edit_file; use write_file only to create a file or replace all of it. Organize with create_directory and move_file.
+- Use run_command only for what the file tools cannot do — builds, tests, git, package managers — not to read, list, search, or edit files. It takes exactly one command line; save a multi-line script with write_file first.
+- For the current date, time, timezone, weekday, or relative dates (today, tomorrow, yesterday, next Monday, deadlines, schedules), call local_context with kind=time; never infer the current date from training knowledge.
+- Put independent read-only calls in one batch. Do not repeat a call whose result is already in the conversation.
+`

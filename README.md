@@ -554,7 +554,7 @@ with native tool support interact most reliably; for the rest the fenced
 fallback needs an instruction-tuned model (≥7B recommended).
 
 When the connected catalog stays at or below `tools.discovery.threshold`, all
-eligible tools remain visible as before. Above the threshold, core tools stay
+eligible tools remain visible and `tool_search` is not offered. Above the threshold, core tools stay
 visible alongside a compact MCP directory containing server names, tool counts,
 and bounded tool names only. This keeps capability awareness in the prompt
 without carrying every description and JSON schema. `tool_search` discloses
