@@ -85,7 +85,7 @@ func TestClickOutsideViewportDoesNotSelect(t *testing.T) {
 	}
 }
 
-func TestScrollClearsSelection(t *testing.T) {
+func TestWheelScrollKeepsReleasedSelection(t *testing.T) {
 	m := newTestModel(t)
 	for i := 0; i < 40; i++ {
 		m.session.AddAssistant(fmt.Sprintf("line %d", i))
@@ -100,10 +100,14 @@ func TestScrollClearsSelection(t *testing.T) {
 		t.Fatal("setup: expected a selection before scrolling")
 	}
 
-	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	before := m.selectedText()
+	m.Update(tea.MouseWheelMsg{X: z.StartX, Y: z.StartY, Button: tea.MouseWheelUp})
 
-	if m.sel.hasSelection || m.sel.selecting {
-		t.Error("scrolling should clear the selection — its coordinates no longer point at the same content")
+	if !m.sel.hasSelection {
+		t.Error("scrolling should keep the selection — it is anchored to content")
+	}
+	if got := m.selectedText(); got != before {
+		t.Errorf("selected text changed across a scroll: %q -> %q", before, got)
 	}
 }
 

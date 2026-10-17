@@ -94,11 +94,8 @@ func (m *Model) updateToolOutputClick(msg tea.MouseReleaseMsg) (tea.Model, tea.C
 	if viewportZone == nil || !viewportZone.InBounds(msg) {
 		return m, nil, false
 	}
-	if m.sel.selecting {
-		x, y := clampToZone(viewportZone, msg.X, msg.Y)
-		if x != m.sel.selStartX || y != m.sel.selStartY {
-			return m, nil, false
-		}
+	if !m.isPlainClick(viewportZone, msg) {
+		return m, nil, false
 	}
 	for i, message := range m.session.Messages {
 		isResult := message.Role == provider.RoleTool ||

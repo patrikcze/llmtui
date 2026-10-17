@@ -78,6 +78,15 @@ click again to collapse it. Other results stay unchanged. `/tools output`
 resets individual choices and toggles all output. Dragging across a caption
 still selects text, and expansion keeps the current scroll position.
 
+Click-drag text selection works over the transcript and over any dialog
+(the `/agent` panel, `/debug last`, …) and is not limited to one screen. The
+selection is anchored to content lines, not screen rows: holding the pointer
+at or past the top or bottom edge of the scrollable area auto-scrolls one
+line per tick and keeps extending the selection, and the mouse wheel during
+a drag extends it too. A finished selection survives scrolling, and the copy
+on release includes every selected line, including those scrolled off
+screen. A resize that rewraps the text clears it.
+
 ## Components
 
 Status bar, provider/model badges, token meter, usage sparkline, bar chart
