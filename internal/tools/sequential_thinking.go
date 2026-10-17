@@ -254,6 +254,11 @@ func (r *Runner) sequentialThinking(c Call) (string, ResultMeta, error) {
 
 func describeThinking(c Call) string {
 	s := c.Thinking
+	if c.InputErr != "" || s.ThoughtNumber < 1 {
+		// A call that failed to decode has no meaningful step numbers;
+		// "thought 0/0" read like a real, empty thought.
+		return "sequential_thinking (invalid arguments)"
+	}
 	label := fmt.Sprintf("sequential_thinking: thought %d/%d", s.ThoughtNumber, max(s.TotalThoughts, s.ThoughtNumber))
 	switch {
 	case s.IsRevision:

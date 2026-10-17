@@ -125,6 +125,25 @@ func TestSequentialThinkingValidation(t *testing.T) {
 	}
 }
 
+func TestSequentialThinkingDescribesInvalidCalls(t *testing.T) {
+	for name, c := range map[string]Call{
+		"provider argument error": CallsFromNative([]provider.ToolCall{{ID: "1", Name: ToolSequentialThinking,
+			ArgumentsError: `argument "thought_number" is invalid: expected a JSON number`}})[0],
+		"decoder error": CallsFromNative([]provider.ToolCall{{ID: "1", Name: ToolSequentialThinking,
+			Arguments: `{"thought":"t","thought_number":"x","total_thoughts":1,"next_thought_needed":true}`}})[0],
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := c.Describe(); got != "sequential_thinking (invalid arguments)" {
+				t.Fatalf("describe = %q", got)
+			}
+		})
+	}
+	valid := thinkingCall(t, `{"thought":"t","thought_number":2,"total_thoughts":4,"next_thought_needed":true,"is_revision":true,"revises_thought":1}`)
+	if got := valid.Describe(); got != "sequential_thinking: thought 2/4 (revises 1)" {
+		t.Fatalf("valid describe = %q", got)
+	}
+}
+
 func TestSequentialThinkingFencedForm(t *testing.T) {
 	c := Parse("```tool sequential_thinking\n{\"thought\":\"plan\",\"thought_number\":1,\"total_thoughts\":2,\"next_thought_needed\":true}\n```\n")[0]
 	if c.InputErr != "" || c.Body != "plan" || c.Thinking.TotalThoughts != 2 {
