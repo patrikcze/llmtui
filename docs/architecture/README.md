@@ -281,6 +281,11 @@ a stream can take minutes. The connect timeout lives in
 `internal/app/factory.go`; the inactivity watchdog lives in
 `internal/tui/pipeline.go` (`startRequest`).
 
+`EventDone.Usage.PromptTokens` is the full prompt; `CachedPromptTokens` is
+the part the backend reused from its prompt/KV cache, valid only when
+`CachedPromptKnown` is set. Unreported reuse is unknown, never zero (see
+[providers.md](../providers.md#token-usage-and-prompt-cache-reuse)).
+
 `internal/provider/capabilities.go` distinguishes transport-wide booleans
 (`SupportsStreaming`, `SupportsTokenUsage`, `SupportsJSONMode`, …) from
 model-dependent tri-state support (`NativeTools`, `ParallelToolCalls`,

@@ -477,11 +477,7 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 				Turn:                &provider.AssistantTurn{Completed: true},
 				MalformedToolCall:   true,
 				ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, "", nil, result.Truncated, true),
-				Usage: &provider.Usage{
-					PromptTokens:     result.PromptTokens,
-					CompletionTokens: result.CompletionTokens,
-					TotalTokens:      result.PromptTokens + result.CompletionTokens,
-				},
+				Usage:               genUsage(result),
 			})
 			return
 		}
@@ -493,10 +489,21 @@ func (p *Provider) generate(ctx context.Context, req provider.ChatRequest, event
 	if result.Turn != nil {
 		content = result.Turn.FinalContent
 	}
-	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Turn: result.Turn, Truncated: result.Truncated, Usage: &provider.Usage{
-		PromptTokens: result.PromptTokens, CompletionTokens: result.CompletionTokens,
-		TotalTokens: result.PromptTokens + result.CompletionTokens, Estimated: false,
-	}, ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, content, result.ToolCalls, result.Truncated, false)})
+	provider.Emit(genCtx, events, provider.ChatEvent{Type: provider.EventDone, ToolCalls: result.ToolCalls, Turn: result.Turn, Truncated: result.Truncated, Usage: genUsage(result), ToolCallDiagnostics: provider.ObserveToolCallResponse(req.Model, req.Stream, content, result.ToolCalls, result.Truncated, false)})
+}
+
+// genUsage converts a runtime result into provider usage. Reuse is reported
+// only when the runtime tracked it; otherwise it stays unknown.
+func genUsage(result GenResult) *provider.Usage {
+	usage := provider.Usage{
+		PromptTokens:     result.PromptTokens,
+		CompletionTokens: result.CompletionTokens,
+		TotalTokens:      result.PromptTokens + result.CompletionTokens,
+	}
+	if result.CachedPromptKnown {
+		usage = usage.WithCachedPrompt(result.CachedPromptTokens)
+	}
+	return &usage
 }
 
 // switchModelIfRequested handles a ChatRequest.Model that names a different

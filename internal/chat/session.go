@@ -24,6 +24,13 @@ type Session struct {
 	TotalCompletionTokens int
 	AnyEstimated          bool
 
+	// TotalCachedPromptTokens sums the reused prompt tokens of the
+	// CachedPromptRequests requests whose backend reported reuse
+	// (Usage.CachedPromptKnown). It is a subset of TotalPromptTokens; when
+	// CachedPromptRequests is below len(Stats), the rest is unknown.
+	TotalCachedPromptTokens int
+	CachedPromptRequests    int
+
 	// rev counts every mutation to Messages, including in-place field edits
 	// that don't change its length. A caller that caches transcript
 	// rendering keyed on Rev() can detect any change without re-rendering
@@ -106,10 +113,24 @@ func (s *Session) RecordUsage(u provider.Usage, d time.Duration) RequestStats {
 	s.Stats = append(s.Stats, st)
 	s.TotalPromptTokens += u.PromptTokens
 	s.TotalCompletionTokens += u.CompletionTokens
+	if u.CachedPromptKnown {
+		s.TotalCachedPromptTokens += u.CachedPromptTokens
+		s.CachedPromptRequests++
+	}
 	if u.Estimated {
 		s.AnyEstimated = true
 	}
 	return st
+}
+
+// ResetUsage clears the accumulated statistics without touching messages.
+func (s *Session) ResetUsage() {
+	s.Stats = nil
+	s.TotalPromptTokens = 0
+	s.TotalCompletionTokens = 0
+	s.AnyEstimated = false
+	s.TotalCachedPromptTokens = 0
+	s.CachedPromptRequests = 0
 }
 
 // TotalTokens returns the session-wide token total.

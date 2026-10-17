@@ -25,6 +25,32 @@ recognized native tool grammars, and unloads its projector/model on provider
 switch or exit. Its native runtime, platform matrix, and limitations are documented in
 [embedded.md](embedded.md).
 
+## Token usage and prompt-cache reuse
+
+Each completed request reports prompt (input) and completion (output) tokens.
+Prompt tokens are always the **full** prompt the backend accounted for — on
+a multi-request tool turn that includes the system prompt and tool schemas
+resent with every request. Many local backends keep that unchanged prefix in
+their KV/prompt cache and do not recompute it, so a large input total does not
+mean all of it was processed again.
+
+Where the backend says how much it reused, `provider.Usage` carries it as
+`CachedPromptTokens` (a subset of `PromptTokens`, guarded by
+`CachedPromptKnown`); a backend that does not say leaves it **unknown**, which
+is never shown as zero:
+
+| Provider | Reused prompt tokens |
+| --- | --- |
+| Embedded GGUF | Always reported: the KV-cache prefix shared with the previous request. Image prompts and isolated control requests clear or bypass the conversation cache and report 0. |
+| OpenAI-compatible | Reported when the server sends `usage.prompt_tokens_details.cached_tokens`; unknown otherwise. |
+| Ollama | Unknown. Ollama's `prompt_eval_count` already excludes its cached prefix, so its input count is (roughly) the newly evaluated part and is not adjusted again. |
+
+The exit **Interaction Summary** adds a `↳ N reused from prompt cache (P%)`
+line under each model that reported reuse — or `(k/n reqs reported)` instead
+of a share when only some of its requests reported it. `/debug last`, the
+`--debug` notice, and the `/stats` (`/usage session`) total append `(N reused)` to the
+prompt count under the same rule.
+
 Structured-output requests use each backend's native mechanism: GBNF grammar
 for embedded llama.cpp, `format` with a JSON Schema for Ollama, and
 `response_format.type: json_schema` for OpenAI-compatible chat completions.

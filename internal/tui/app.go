@@ -493,7 +493,7 @@ func (m *Model) adoptSession(name string, s history.Session) {
 	m.session.SetMessages(s.Messages)
 	m.resetToolOutput()
 	m.resetAgentRunCards()
-	m.session.Stats = nil
+	m.session.ResetUsage()
 	m.session.TotalPromptTokens = s.Prompt
 	m.session.TotalCompletionTokens = s.Reply
 	m.session.AnyEstimated = s.Estimated
@@ -3143,11 +3143,10 @@ func (m *Model) finishStream(usage *provider.Usage, truncated bool) {
 		m.lastDebug.Duration = duration
 		m.lastDebug.Usage = usage
 		// Attribute to the dispatch-time provider/model for the exit summary.
-		m.recordModelUsage(m.lastDebug.Provider, m.lastDebug.Model,
-			usage.PromptTokens, usage.CompletionTokens, usage.Estimated, duration)
+		m.recordModelUsage(m.lastDebug.Provider, m.lastDebug.Model, *usage, duration)
 		if m.debugMode {
-			m.notice = fmt.Sprintf("debug: %s · prompt %d · reply %d · cache %s · retries %d — /debug last",
-				duration.Round(10*time.Millisecond), usage.PromptTokens, usage.CompletionTokens,
+			m.notice = fmt.Sprintf("debug: %s · prompt %d%s · reply %d · cache %s · retries %d — /debug last",
+				duration.Round(10*time.Millisecond), usage.PromptTokens, reusedPromptNote(*usage), usage.CompletionTokens,
 				m.lastDebug.CacheStatus, m.lastDebug.Retries)
 		}
 		if m.historyDir != "" {

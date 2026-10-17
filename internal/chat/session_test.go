@@ -39,6 +39,45 @@ func TestRecordUsageAccumulates(t *testing.T) {
 	}
 }
 
+func TestRecordUsageCachedPrompt(t *testing.T) {
+	tests := []struct {
+		name         string
+		usages       []provider.Usage
+		wantCached   int
+		wantReported int
+	}{
+		{name: "unknown everywhere", usages: []provider.Usage{{PromptTokens: 10}, {PromptTokens: 20}}},
+		{
+			name:         "all reported",
+			usages:       []provider.Usage{{PromptTokens: 10, CachedPromptKnown: true}, {PromptTokens: 20, CachedPromptTokens: 15, CachedPromptKnown: true}},
+			wantCached:   15,
+			wantReported: 2,
+		},
+		{
+			name:         "partially reported",
+			usages:       []provider.Usage{{PromptTokens: 10}, {PromptTokens: 20, CachedPromptTokens: 15, CachedPromptKnown: true}},
+			wantCached:   15,
+			wantReported: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewSession("")
+			for _, u := range tt.usages {
+				s.RecordUsage(u, time.Second)
+			}
+			if s.TotalCachedPromptTokens != tt.wantCached || s.CachedPromptRequests != tt.wantReported {
+				t.Fatalf("cached = (%d, %d reported), want (%d, %d)",
+					s.TotalCachedPromptTokens, s.CachedPromptRequests, tt.wantCached, tt.wantReported)
+			}
+			s.ResetUsage()
+			if s.TotalCachedPromptTokens != 0 || s.CachedPromptRequests != 0 || s.TotalPromptTokens != 0 || len(s.Stats) != 0 {
+				t.Fatalf("ResetUsage left counters: %+v", s)
+			}
+		})
+	}
+}
+
 func TestRecordUsageZeroDuration(t *testing.T) {
 	s := NewSession("")
 	st := s.RecordUsage(provider.Usage{CompletionTokens: 5}, 0)

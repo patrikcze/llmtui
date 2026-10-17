@@ -549,8 +549,10 @@ func (m *Model) statsOverlay() string {
 				st.Duration.Round(10*time.Millisecond), st.TokensPerSec)) + "\n")
 		}
 		b.WriteString("\n")
-		total := fmt.Sprintf("total  prompt %d · reply %d · %d tokens",
-			m.session.TotalPromptTokens, m.session.TotalCompletionTokens, m.session.TotalTokens())
+		total := fmt.Sprintf("total  prompt %d%s · reply %d · %d tokens",
+			m.session.TotalPromptTokens,
+			reusedTotalNote(m.session.TotalCachedPromptTokens, m.session.CachedPromptRequests, len(m.session.Stats)),
+			m.session.TotalCompletionTokens, m.session.TotalTokens())
 		if m.session.AnyEstimated {
 			total += "  (~ = estimated)"
 		}
