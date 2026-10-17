@@ -64,6 +64,7 @@ func TestPhase5ExpectedResourceIDValidation(t *testing.T) {
 		want string
 	}{
 		{name: "wrong kind", view: entity.ResourceView{Kind: entity.KindToolOutput}, want: "wrong_resource_kind"},
+		{name: "citation entity", err: entity.ErrNotAResourceBody, want: "wrong_resource_kind"},
 		{name: "partial", view: entity.ResourceView{Kind: entity.KindFile, Resource: entity.ResourceMetadata{FileVersion: &entity.FileVersion{Path: "f.txt", Complete: false}}}, want: "snapshot_incomplete"},
 		{name: "wrong path", view: entity.ResourceView{Kind: entity.KindFile, Resource: entity.ResourceMetadata{FileVersion: version}}, want: "invalid_arguments"},
 		{name: "evicted", err: errors.New("entity body is not present in this session"), want: "resource_unavailable"},
@@ -78,6 +79,9 @@ func TestPhase5ExpectedResourceIDValidation(t *testing.T) {
 			res := r.Execute(Call{Tool: ToolEditFile, Path: path, OldText: "a", NewText: "b", ExpectedResourceID: phase5ResourceID})
 			if res.Err == nil || errorInfoFor(res.Err).Code != tc.want {
 				t.Fatalf("result = %+v, want %s", res, tc.want)
+			}
+			if tc.name == "citation entity" && (!strings.Contains(res.Err.Error(), "[file version ...]") || !strings.Contains(res.Err.Error(), "re-read if needed")) {
+				t.Fatalf("citation error lacks a usable correction: %v", res.Err)
 			}
 		})
 	}

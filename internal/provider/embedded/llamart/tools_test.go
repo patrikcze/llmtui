@@ -1025,3 +1025,80 @@ func TestToolOutputRouterGemmaBareNullOmitsOptionalArgument(t *testing.T) {
 		})
 	}
 }
+
+// editFileGemmaSpec mirrors edit_file's array-of-objects "edits" argument.
+var editFileGemmaSpec = provider.ToolSpec{
+	Name: "edit_file",
+	Parameters: []byte(`{
+		"type":"object",
+		"required":["path"],
+		"properties":{
+			"path":{"type":"string"},
+			"old_text":{"type":"string"},
+			"new_text":{"type":"string"},
+			"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"]}},
+			"dry_run":{"type":"boolean"}
+		}
+	}`),
+}
+
+// TestToolOutputRouterGemmaAcceptsArrayOfObjects reproduces a live Gemma 4
+// E4B failure: a multi-edit edit_file written in Gemma's syntax was reported
+// malformed. yzma splits the nested value; the bracket repair reassembles it,
+// but the swallowed-key check then mistook the inner key:<quote> pairs for
+// corruption, and nothing converted Gemma's nested syntax to JSON. The
+// malformed report moved the turn to the fenced protocol, which this model
+// handles poorly, and the agent run failed.
+func TestToolOutputRouterGemmaAcceptsArrayOfObjects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			"two edits",
+			`<|tool_call>call:edit_file{edits:[{new_text:<|"|>// Sum returns the sum.<|"|>,old_text:<|"|>// Add returns the sum.<|"|>},{new_text:<|"|>c, d}<|"|>,old_text:<|"|>e<|"|>}],path:<|"|>src/math/add.go<|"|>}<tool_call|>`,
+			`{"edits":[{"new_text":"// Sum returns the sum.","old_text":"// Add returns the sum."},{"new_text":"c, d}","old_text":"e"}],"path":"src/math/add.go"}`,
+		},
+		{
+			"one edit, path first, scalar inside",
+			`<|tool_call>call:edit_file{path:<|"|>a.go<|"|>,edits:[{old_text:<|"|>x<|"|>,new_text:<|"|>y<|"|>}],dry_run:true}<tool_call|>`,
+			`{"dry_run":true,"edits":[{"new_text":"y","old_text":"x"}],"path":"a.go"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newToolOutputRouter(embedded.ToolFormatGemma, []provider.ToolSpec{editFileGemmaSpec})
+			router.Push(tc.raw)
+			_, calls, err := router.Finish()
+			if err != nil {
+				t.Fatalf("Finish: %T %v", err, err)
+			}
+			if len(calls) != 1 || calls[0].ArgumentsError != "" || calls[0].Arguments != tc.want {
+				t.Fatalf("calls = %+v, want arguments %s", calls, tc.want)
+			}
+		})
+	}
+}
+
+func TestGemmaCompositeValue(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+		ok              bool
+	}{
+		{"array of objects", `[{a:<|"|>1<|"|>,b:2},{a:<|"|>x<|"|>}]`, "array", true},
+		{"nested object", `{a:{b:[true,null,<|"|>s<|"|>]}}`, "object", true},
+		{"empty array", `[]`, "array", true},
+		{"json strings inside", `[{"a":"q, ]"}]`, "array", true},
+		{"wrong kind", `{a:1}`, "array", false},
+		{"unterminated", `[{a:<|"|>1<|"|>}`, "array", false},
+		{"trailing junk", `[1] x`, "array", false},
+		{"duplicate key", `{a:1,a:2}`, "object", false},
+		{"too deep", strings.Repeat("[", 20) + strings.Repeat("]", 20), "array", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := gemmaCompositeValue(tc.raw, tc.want); ok != tc.ok {
+				t.Fatalf("gemmaCompositeValue(%q, %s) ok = %v, want %v", tc.raw, tc.want, ok, tc.ok)
+			}
+		})
+	}
+}

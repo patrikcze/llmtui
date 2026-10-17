@@ -208,6 +208,9 @@ func (r *Runner) scanSearchWorkspace(ctx context.Context, call Call) ([]searchRo
 	}
 	info, err := root.Stat(baseRel)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, stats, missingPathError(root, baseRel, ToolGrep)
+		}
 		return nil, stats, withCode(fmt.Errorf("grep: %w", err), "not_found", RetryCorrectInput)
 	}
 	matcher, err := newSearchMatcher(call)
@@ -581,6 +584,9 @@ func (r *Runner) listDirPage(ctx context.Context, rel string, requestedLimit int
 	}
 	dir, err := root.Open(baseRel)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", meta, nil, missingPathError(root, baseRel, ToolListDir)
+		}
 		return "", meta, nil, withCode(fmt.Errorf("list directory: %w", err), "not_found", RetryCorrectInput)
 	}
 	defer dir.Close()
@@ -686,6 +692,9 @@ func (r *Runner) collectGlob(ctx context.Context, rel string, matcher globMatche
 		baseRel = "."
 	}
 	if _, err := root.Stat(baseRel); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, missingPathError(root, baseRel, ToolGlob)
+		}
 		return nil, false, withCode(fmt.Errorf("glob: %w", err), "not_found", RetryCorrectInput)
 	}
 	entries := make([]string, 0, 128)

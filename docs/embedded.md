@@ -448,7 +448,11 @@ advertise parallel tool calls in one assistant response.
   missing required arguments remain errors. Gemma bracketed array arguments
   (`calendar_ids:[<|"|>a<|"|>, <|"|>b<|"|>]`) are re-parsed by llmtui: the
   upstream parser has no `[` case and would otherwise drop every element after
-  the first and silently swallow the next argument's key. Gemma's syntax has
+  the first and silently swallow the next argument's key. Arrays of objects
+  and nested objects written in Gemma's syntax (`edit_file`'s
+  `edits:[{old_text:<|"|>a<|"|>,new_text:<|"|>b<|"|>}]`) are converted to
+  JSON the same way; before this, a multi-edit `edit_file` was reported as a
+  malformed call. Gemma's syntax has
   no JSON null, so an optional argument written as a bare `null`
   (`expected_resource_id:null`) is omitted, as JSON null is over HTTP, instead
   of reaching the tool as the text `"null"`; a required one is still passed on

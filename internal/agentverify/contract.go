@@ -297,13 +297,6 @@ func parseContract(raw string, allowAssessments bool) (Contract, error) {
 	if err := json.Unmarshal([]byte(object), &fields); err != nil {
 		return Contract{}, wrap(fmt.Errorf("%w: %v", agent.ErrMalformedControl, err))
 	}
-	if _, ok := fields["needs_user_input"]; !ok {
-		return Contract{}, wrap(fmt.Errorf("%w: missing required field %q", agent.ErrMalformedControl, "needs_user_input"))
-	}
-	needsInput, err := decodeRequiredBool(fields, "needs_user_input")
-	if err != nil {
-		return Contract{}, wrap(err)
-	}
 	criteria := []string{}
 	if _, ok := fields["criteria"]; ok {
 		if criteria, err = decodeStringArray(fields, "criteria"); err != nil {
@@ -326,6 +319,27 @@ func parseContract(raw string, allowAssessments bool) (Contract, error) {
 		return Contract{}, wrap(fmt.Errorf("%w: user_options exceeds maximum 16", agent.ErrMalformedControl))
 	}
 	question = strings.TrimSpace(question)
+	var needsInput bool
+	if _, ok := fields["needs_user_input"]; ok {
+		if needsInput, err = decodeRequiredBool(fields, "needs_user_input"); err != nil {
+			return Contract{}, wrap(err)
+		}
+	} else {
+		// The discriminator is missing (seen live: Gemma 4 E4B returned
+		// criteria and an empty question without it, and the run parked).
+		// Infer it only when the rest of the object settles it: criteria
+		// with no question or options means executable; a question with no
+		// criteria means clarification. Anything else stays malformed. The
+		// verifier's parser already defaults this field.
+		switch {
+		case len(criteria) > 0 && question == "" && len(options) == 0:
+			needsInput = false
+		case len(criteria) == 0 && question != "":
+			needsInput = true
+		default:
+			return Contract{}, wrap(fmt.Errorf("%w: missing required field %q", agent.ErrMalformedControl, "needs_user_input"))
+		}
+	}
 	assessmentRaw, hasAssessments := fields["assessments"]
 	if !allowAssessments {
 		hasAssessments = false

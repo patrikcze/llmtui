@@ -19,6 +19,11 @@ The window size is resolved in this order: `context.max_context_tokens`
   messages: condense older messages into a session summary
 - `auto` (default) — summarize long conversations, truncate short ones
 
+During an active `/agent on` run, the message-count threshold does not
+compact the executor's tool history. The configured strategy still compacts
+when the estimated request exceeds the context budget. This keeps user answers
+and tool receipts visible through a tool-heavy cycle when they fit.
+
 Whatever the strategy, the kept window never opens on a tool result: if the
 `keep_last_messages` boundary would separate a tool result from the
 assistant message that requested it, the window widens backwards to include

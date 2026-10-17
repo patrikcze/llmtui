@@ -935,6 +935,7 @@ func (m *Model) startNextAgentCycle(objective string) tea.Cmd {
 	}
 	m.agentLoop.cycleBoundaries = append(m.agentLoop.cycleBoundaries, boundary)
 	m.agentLoop.execution = agent.ExecutionResult{Objective: run.Objective}
+	m.restoreSuspendedNativeTools()
 	m.resetCycle()
 	m.agentLoop.compactedToolResults = 0
 	m.bypassCache = true

@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -886,6 +887,9 @@ func (r *Runner) readFileMetaContextByte(ctx context.Context, rel string, offset
 	defer func() { err = errors.Join(err, root.Close()) }()
 	name := filepath.Clean(rel)
 	info, err := root.Stat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", meta, withCode(fmt.Errorf("%q does not exist.%s", filepath.ToSlash(name), missingPathHint(root, name)), "not_found", RetryCorrectInput)
+	}
 	if err != nil {
 		return "", meta, withCode(fmt.Errorf("read file: %w", err), "not_found", RetryCorrectInput)
 	}
@@ -1354,7 +1358,7 @@ func (r *Runner) editFileEdits(rel string, edits []EditPair, expected *entity.Fi
 	defer func() { err = errors.Join(err, root.Close()) }()
 	info, statErr := root.Stat(rel)
 	if errors.Is(statErr, os.ErrNotExist) {
-		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one", displayPath), "not_found", RetryCorrectInput)
+		return "", "", meta, withCode(fmt.Errorf("%q does not exist; edit_file only changes existing files — use write_file to create one.%s", displayPath, missingPathHint(root, rel)), "not_found", RetryCorrectInput)
 	}
 	if statErr != nil {
 		return "", "", meta, fmt.Errorf("edit file: %w", statErr)
@@ -1388,6 +1392,13 @@ func (r *Runner) editFileEdits(rel string, edits []EditPair, expected *entity.Fi
 		}
 		switch matches := strings.Count(updated, e.OldText); {
 		case matches == 0:
+			if line, ok := alreadyAppliedLine(updated, e.NewText); ok {
+				// Seen live (Gemma 4 E4B): a successful edit was resent
+				// verbatim three times, each answered with a bare "not
+				// found", until the repeated-call guard ended the run. Say
+				// what the file shows instead.
+				return "", "", meta, withCode(fmt.Errorf("%sold_text is not in %q, but new_text already is (line %d): this edit appears to be applied already. Do not repeat it; continue with the next step", prefix, displayPath, line), "no_change", RetryNone)
+			}
 			return "", "", meta, withCode(fmt.Errorf("%sold_text was not found exactly in %q; re-read the file (or a line range of it) and retry with its current text", prefix, displayPath), "match_not_found", RetryReread)
 		case matches > 1:
 			return "", "", meta, withCode(fmt.Errorf("%sold_text matches %d places in %q; include more surrounding context so it identifies exactly one location", prefix, matches, displayPath), "ambiguous_match", RetryCorrectInput)
@@ -2127,6 +2138,93 @@ func describePageOptions(c Call) string {
 		return ""
 	}
 	return " [" + strings.Join(options, ", ") + "]"
+}
+
+// maxMissingPathHintEntries bounds the directory listing a not-found hint
+// shows.
+const maxMissingPathHintEntries = 12
+
+// missingPathHint points a model that asked for a path that does not exist
+// at the nearest real place. Measured live on Gemma 4 E4B: after a bare
+// "no such file or directory" for its invented src/math.go, 8 of 12 samples
+// invented another wrong path; told that src/math is a directory and what
+// it contains, all 12 went to the right file or listed it. The hint names a
+// directory at the path without its extension (src/math.go -> src/math) or
+// else the nearest existing ancestor, with up to maxMissingPathHintEntries
+// entry names. It reads only through the confined root, skips .git, and
+// lists names only, as list_dir would.
+func missingPathHint(root *os.Root, rel string) string {
+	rel = filepath.Clean(rel)
+	dir := ""
+	if ext := filepath.Ext(rel); ext != "" {
+		if info, err := root.Stat(strings.TrimSuffix(rel, ext)); err == nil && info.IsDir() {
+			dir = strings.TrimSuffix(rel, ext)
+		}
+	}
+	if dir == "" {
+		for parent := filepath.Dir(rel); ; parent = filepath.Dir(parent) {
+			if info, err := root.Stat(parent); err == nil && info.IsDir() {
+				dir = parent
+				break
+			}
+			if parent == "." || parent == string(filepath.Separator) {
+				return ""
+			}
+		}
+	}
+	handle, err := root.Open(dir)
+	if err != nil {
+		return ""
+	}
+	defer handle.Close()
+	entries, err := handle.ReadDir(-1)
+	if err != nil {
+		return ""
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == ".git" {
+			continue
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	label := filepath.ToSlash(dir)
+	if label == "." {
+		label = "the project root"
+	} else {
+		label = strconv.Quote(label)
+	}
+	if len(names) == 0 {
+		return " " + label + " is an empty directory."
+	}
+	more := ""
+	if len(names) > maxMissingPathHintEntries {
+		more = fmt.Sprintf(", … (%d more)", len(names)-maxMissingPathHintEntries)
+		names = names[:maxMissingPathHintEntries]
+	}
+	return " " + label + " is a directory containing: " + strings.Join(names, ", ") + more + "."
+}
+
+// missingPathError gives every workspace inspection tool the same bounded,
+// confined recovery hint that read_file provides for an invented path.
+func missingPathError(root *os.Root, rel, tool string) error {
+	return withCode(fmt.Errorf("%s: %q does not exist.%s", tool, filepath.ToSlash(rel), missingPathHint(root, rel)), "not_found", RetryCorrectInput)
+}
+
+// alreadyAppliedLine reports the 1-based line where newText occurs, when it
+// occurs exactly once and is not blank. edit_file uses it to tell a model
+// that an edit whose old_text is gone has most likely been applied already;
+// several occurrences say nothing about this edit, so they do not count.
+func alreadyAppliedLine(content, newText string) (int, bool) {
+	if strings.TrimSpace(newText) == "" || strings.Count(content, newText) != 1 {
+		return 0, false
+	}
+	return strings.Count(content[:strings.Index(content, newText)], "\n") + 1, true
 }
 
 func orWorkspace(path string) string {

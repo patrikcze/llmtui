@@ -55,6 +55,9 @@ type Params struct {
 	ContextWindow          int
 	ReserveResponseTokens  int
 	SummarizeAfterMessages int
+	// OnlyWhenOverBudget delays count-triggered compression while preserving
+	// the count's choice of summarize versus truncate once over budget.
+	OnlyWhenOverBudget bool
 	// FixedTokens accounts for provider-visible request data outside the
 	// conversation history, such as the composed system/user prompt and native
 	// tool schemas.
@@ -80,9 +83,9 @@ func Decide(msgs []provider.Message, p Params) Decision {
 	case StrategyTruncate:
 		d.Compress = overBudget
 	case StrategySummarize:
-		d.Compress = overBudget || longEnough
+		d.Compress = overBudget || (longEnough && !p.OnlyWhenOverBudget)
 	case StrategyAuto:
-		d.Compress = overBudget || longEnough
+		d.Compress = overBudget || (longEnough && !p.OnlyWhenOverBudget)
 		if longEnough {
 			d.Strategy = StrategySummarize
 		} else {

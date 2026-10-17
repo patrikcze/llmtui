@@ -289,10 +289,28 @@ func TestParseContractToleratesEnvelopeShapeNoise(t *testing.T) {
 		t.Fatalf("contract = %+v err = %v", c, err)
 	}
 
-	// needs_user_input itself is still required and must be a real boolean.
-	if _, err := ParseContract(`{"criteria":["x"],"question":"","user_options":[]}`); !errors.Is(err, agent.ErrMalformedControl) {
-		t.Fatalf("missing needs_user_input should still be malformed, got %v", err)
+	// A missing needs_user_input is inferred only when the rest of the
+	// object settles it (seen live: Gemma 4 E4B omitted it beside valid
+	// criteria and the run parked before doing anything).
+	c, err = ParseContract(`{"criteria":["x"],"question":"","user_options":[]}`)
+	if err != nil || c.NeedsUserInput || len(c.Criteria) != 1 {
+		t.Fatalf("criteria without a question should infer an executable contract, got %+v err = %v", c, err)
 	}
+	c, err = ParseContract(`{"criteria":[],"question":"Which file?"}`)
+	if err != nil || !c.NeedsUserInput || c.Question != "Which file?" {
+		t.Fatalf("a question without criteria should infer a clarification, got %+v err = %v", c, err)
+	}
+	for _, ambiguous := range []string{
+		`{"criteria":["x"],"question":"Which file?"}`,
+		`{"criteria":["x"],"question":"","user_options":["a","b"]}`,
+		`{"criteria":[],"question":""}`,
+		`{}`,
+	} {
+		if _, err := ParseContract(ambiguous); !errors.Is(err, agent.ErrMalformedControl) {
+			t.Fatalf("ambiguous %s without needs_user_input should stay malformed, got %v", ambiguous, err)
+		}
+	}
+	// A present needs_user_input must still be a real boolean.
 	if _, err := ParseContract(`{"needs_user_input":"maybe","criteria":["x"]}`); !errors.Is(err, agent.ErrMalformedControl) {
 		t.Fatalf("non-boolean needs_user_input should still be malformed, got %v", err)
 	}
