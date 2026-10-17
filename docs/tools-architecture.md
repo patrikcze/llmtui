@@ -509,3 +509,12 @@ or resume of each `/agent` run, and never persisted. The tool has no file,
 command or network effect, needs no approval, and runs in model order. In
 `/agent` a thinking step never counts as new evidence, so a model cannot look
 productive by only planning; it does count toward the tool-call budget.
+
+**When to enable it.** Like the reference server, it is meant for models
+without built-in reasoning, where it gives an otherwise single-pass model a
+place to plan, revise and branch. With a thinking model and reasoning on, the
+model already plans privately before every step, so each `sequential_thinking`
+call adds a second, visible layer at the cost of a full model turn (a
+live Gemma 4 E4B run with reasoning on spent 20–50 s per call and still
+interleaved one or two thoughts with actions). Leave it off for reasoning
+models; small models of either kind often use it shallowly.

@@ -331,7 +331,7 @@ guessing. None of these tools enables another tool or grants permission.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Offer the `sequential_thinking` planning tool while tools are on: numbered thoughts with revisions and branches, kept in memory for the current conversation or `/agent` run only (at most 64 thoughts). Off by default because small local models tend to spend their tool budget on it. See [tools-architecture.md](tools-architecture.md#sequential_thinking). |
+| `enabled` | `false` | Offer the `sequential_thinking` planning tool while tools are on: numbered thoughts with revisions and branches, kept in memory for the current conversation or `/agent` run only (at most 64 thoughts). Off by default because small local models tend to spend their tool budget on it. It is meant for models **without built-in reasoning**: with a thinking model and reasoning on (`/think on`, `chat.reasoning`), every call is a second, visible layer of planning on top of the hidden one, and each costs a full model turn. See [tools-architecture.md](tools-architecture.md#sequential_thinking). |
 
 ### `tools.guardrails`
 
