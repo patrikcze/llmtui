@@ -103,6 +103,40 @@ The Recent Messages section in `/prompt composed` is a shortened preview.
 `/debug last` labels it as such; the request estimate counts the full rendered
 messages and tool schemas, and remains an estimate rather than tokenizer usage.
 
+## Tool guidance
+
+While `/tools` is on, the System Prompt section ends with tool instructions
+(`tools.NativeInstructions` or, for the fenced protocol, `tools.Instructions`).
+Native requests also carry every visible tool's JSON schema. Both are resent on
+every request of a turn, so their size multiplies by the number of tool rounds:
+a turn with nine tool rounds sends the same instructions and schemas ten times.
+A backend with prompt caching (the embedded runtime, llama.cpp, LM Studio,
+vLLM) reuses that unchanged prefix instead of recomputing it, but the usage
+summary still counts it as input on each request.
+
+What goes where:
+
+| Text | Carries |
+| --- | --- |
+| Tool schema (native) | What one tool does and what each argument means: offsets, cursors, `resource_id`, `expected_resource_id`, `dry_run`. |
+| Choosing tools | Which tool fits which job: `glob` for names, `grep` for contents, `directory_tree`/`list_dir` for layout, `read_file`/`read_multiple_files`, `edit_file` before `write_file`, `run_command` only for builds, tests, git and other programs, `local_context kind=time` for dates. Batch independent reads; never repeat a call already answered. |
+| Rules | Path confinement, approvals and denials, `ask_user`, when to stop. |
+| Web rules | Only with `/web on`: `web_research` first, `web_search` then `web_fetch`, cache refresh, citations, untrusted content. |
+| Personal Mail/Calendar rules | Only with personal apps connected. The opening bullet is the active protocol's calling convention only; read flows, the two-step change flow, change-type shapes, and outcome honesty follow. |
+| Compact MCP directory | Only while discovery hides MCP schemas: the directory plus the `tool_search` rules and body format. `tool_search` itself is offered only then. |
+
+Native mode does not repeat argument mechanics in the system prompt, because
+the model reads the schema with every call. The fenced protocol has no
+schemas, so its instructions list each tool's block form. Every safety rule
+that came from a confirmed model failure (ids copied verbatim, change types are
+not tools, `outcome_unknown` is not success, calendar events are not files,
+`ask_user` is not approval) keeps a regression test on its wording.
+
+Measured with native tools, web, Mail/Calendar and entities on and no MCP
+server: tool schemas went from 22.6 KB to 18.9 KB, tool and web rules from
+3.9 KB to 2.8 KB, and the Mail/Calendar rules from 5.0 KB to 3.8 KB, about
+1.5k fewer tokens per request.
+
 ## Modes
 
 | Mode | Behavior |

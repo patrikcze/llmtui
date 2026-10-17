@@ -74,9 +74,14 @@ the YAML configuration loader normalizes map keys internally.
 
 Once a server is connected (`/mcp connect <server>`), its advertised tools
 become eligible whenever `/tools on` — the same switch native workspace tools
-use. There is no separate toggle. Small catalogs are offered directly. When the
+use. There is no separate toggle. Small catalogs are offered directly, without
+`tool_search` (nothing is hidden, so there is nothing to search). When the
 total eligible catalog exceeds `tools.discovery.threshold`, core tools remain
-visible with a compact names-only MCP directory in prompt context.
+visible with a compact names-only MCP directory in prompt context, and
+`tool_search` is offered. The directory also carries the discovery rules
+(search before a web or shell fallback, never pass an MCP name to
+`run_command`, a truncated result is not the whole catalog), so they cost
+nothing in a session without hidden MCP tools.
 `tool_search` discloses bounded matching MCP schemas for the current human task.
 Use the directory for inventory and search a likely exact name with
 `max_results: 1` to avoid loading unrelated schemas.

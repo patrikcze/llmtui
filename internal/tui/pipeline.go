@@ -547,7 +547,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			}
 		}
 		if m.personalApps != nil {
-			instructions += "\n\n" + tools.PersonalAppsInstructions
+			instructions += "\n\n" + tools.PersonalAppsInstructions(m.toolsNative)
 		}
 		instructions = strings.TrimSpace(instructions + "\n\n" + m.compactMCPToolCatalogInstructions())
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + instructions)
@@ -1707,7 +1707,16 @@ func (m *Model) eligibleToolSpecs() []provider.ToolSpec {
 func (m *Model) modelVisibleToolSpecs() []provider.ToolSpec {
 	eligible := m.eligibleToolSpecs()
 	if !m.toolDiscoveryActive(eligible) {
-		return eligible
+		// tool_search only searches hidden MCP schemas. With nothing hidden
+		// it can return nothing useful, so offering it costs every request
+		// its schema and tempts small models into a wasted round.
+		visible := make([]provider.ToolSpec, 0, len(eligible))
+		for _, spec := range eligible {
+			if spec.Name != tools.ToolSearch {
+				visible = append(visible, spec)
+			}
+		}
+		return visible
 	}
 	visible := make([]provider.ToolSpec, 0, len(eligible))
 	for _, spec := range eligible {

@@ -14,7 +14,8 @@ func TestWebSpecsOnlySentWhenWebOn(t *testing.T) {
 		t.Skip("no tool runner in this environment")
 	}
 
-	base := len(tools.Specs())
+	// tool_search is withheld while no MCP schema is hidden.
+	base := len(tools.Specs()) - 1
 	req := m.buildRequest(nil)
 	if len(req.Tools) != base {
 		t.Errorf("web off: %d tool specs, want %d", len(req.Tools), base)

@@ -231,6 +231,54 @@ func TestNativeInstructionsMentionRootAndRules(t *testing.T) {
 	}
 }
 
+// TestInstructionsSteerToolChoice guards the tool-preference guidance both
+// protocols carry. Small local models otherwise route file reads, listings,
+// and searches through run_command (approval prompts, no secret-file
+// handling, bulky output kept in context for every later request).
+func TestInstructionsSteerToolChoice(t *testing.T) {
+	for name, text := range map[string]string{
+		"native": NativeInstructions("/w", false),
+		"fenced": Instructions("/w", false),
+	} {
+		for _, want := range []string{
+			"Choosing tools:",
+			"Find files by name: glob",
+			"Search file contents: grep",
+			"read_multiple_files",
+			"Change an existing file with edit_file",
+			"not to read, list, search, or edit files",
+			"Put independent read-only calls in one batch",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s instructions missing %q", name, want)
+			}
+		}
+	}
+}
+
+// TestInstructionsLeaveMCPAndSchemaDetailsOut guards the two things the base
+// tool instructions deliberately do not carry. MCP discovery rules travel
+// with the compact MCP directory, which only exists while MCP schemas are
+// hidden, so a session without MCP never pays for them. Native mode leaves
+// per-argument mechanics to each tool's schema, which the model already
+// reads with the call.
+func TestInstructionsLeaveMCPAndSchemaDetailsOut(t *testing.T) {
+	native := NativeInstructions("/w", true)
+	fenced := Instructions("/w", true)
+	for name, text := range map[string]string{"native": native, "fenced": fenced} {
+		for _, unwanted := range []string{"tool_search", "MCP"} {
+			if strings.Contains(text, unwanted) {
+				t.Errorf("%s instructions mention %q without any MCP server", name, unwanted)
+			}
+		}
+	}
+	for _, unwanted := range []string{"byte_offset", "expected_resource_id", "resource_id"} {
+		if strings.Contains(native, unwanted) {
+			t.Errorf("native instructions repeat schema detail %q", unwanted)
+		}
+	}
+}
+
 func TestSplitMCPToolName(t *testing.T) {
 	tests := []struct {
 		name       string
