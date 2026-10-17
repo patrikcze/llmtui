@@ -54,4 +54,13 @@ func TestRunCardDoesNotCallAnUnverifiedRunVerified(t *testing.T) {
 	if strings.Contains(summary, "every criterion was verified") || !strings.Contains(summary, "without verification") {
 		t.Errorf("card summary = %q, want it to say the run stopped without verification", summary)
 	}
+	// Nothing checked the criteria, so neither the header nor the rows may
+	// claim them met. Seen live: a deterministic run ticked a failed file
+	// move and a test that was never written.
+	if strings.Contains(status, "criteria met") || !strings.Contains(status, "accepted unchecked") {
+		t.Errorf("card status = %q, want the criteria reported as accepted unchecked", status)
+	}
+	if rendered := m.renderAgentRunCard(card); strings.Contains(rendered, "✓") {
+		t.Errorf("unverified run card ticks a criterion:\n%s", rendered)
+	}
 }

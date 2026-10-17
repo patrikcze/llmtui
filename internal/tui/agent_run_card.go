@@ -116,9 +116,10 @@ func (m *Model) renderAgentRunCard(card agentRunCard) string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.theme.SystemNote.Render("  Done when:"))
+	unverified := agentRunCardUnverified(card)
 	for _, criterion := range card.Criteria {
 		b.WriteString("\n    ")
-		b.WriteString(m.renderAgentCardCriterion(criterion))
+		b.WriteString(m.renderAgentCardCriterion(criterion, unverified))
 	}
 	if summary := agentRunCardStopSummary(card); summary != "" {
 		b.WriteString("\n")
@@ -135,11 +136,20 @@ func (m *Model) renderAgentRunCard(card agentRunCard) string {
 	return b.String()
 }
 
-func (m *Model) renderAgentCardCriterion(c agentRunCardCriterion) string {
+// renderAgentCardCriterion draws one criterion. In an unverified run
+// (deterministic or off verifier mode) the controller marks every criterion
+// satisfied without checking it, so a green tick would claim success nobody
+// observed: seen live, a deterministic run ticked a file move that had
+// failed and a test that was never written. Those criteria get a neutral
+// "?" instead.
+func (m *Model) renderAgentCardCriterion(c agentRunCardCriterion, unverified bool) string {
 	glyph, style := "○", m.theme.SystemNote
 	switch c.Status {
 	case agent.CriterionSatisfied:
 		glyph, style = "✓", style.Foreground(m.theme.Good)
+		if unverified {
+			glyph, style = "?", m.theme.SystemNote
+		}
 	case agent.CriterionFailed:
 		glyph, style = "✗", style.Foreground(m.theme.Bad)
 	case agent.CriterionNotApplicable:
@@ -167,6 +177,7 @@ func agentRunCardStatus(card agentRunCard) string {
 		outcome := "verified"
 		if agentRunCardUnverified(card) {
 			outcome = "not verified"
+			progress = fmt.Sprintf("%d of %d criteria accepted unchecked", met, total)
 		}
 		if card.Cycle <= 1 {
 			return "done · " + outcome + " · " + progress

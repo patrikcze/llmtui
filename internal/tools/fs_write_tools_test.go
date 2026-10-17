@@ -176,3 +176,50 @@ func TestStructuralWriteToolsAreExclusiveAndAsk(t *testing.T) {
 		}
 	}
 }
+
+// TestParseLiftsJSONWrittenOnTheFenceLine: Gemma 4 E4B wrote a fenced
+// move_file with its JSON object on the fence line and an empty body, the
+// form the instructions document for web_fetch. It was rejected as missing a
+// body. A JSON object on the fence line with no body is now the body; an
+// explicit body still wins, and an ordinary path is untouched.
+func TestParseLiftsJSONWrittenOnTheFenceLine(t *testing.T) {
+	fence := "```"
+	t.Run("move_file", func(t *testing.T) {
+		calls := Parse(fence + `tool move_file {"source":"docs/README.md","destination":"docs/math/README.md"}` + "\n" + fence)
+		if len(calls) != 1 || calls[0].InputErr != "" {
+			t.Fatalf("calls = %+v, want one valid move_file", calls)
+		}
+		if calls[0].Path != "docs/README.md" || calls[0].Destination != "docs/math/README.md" {
+			t.Fatalf("move_file = %q -> %q", calls[0].Path, calls[0].Destination)
+		}
+	})
+	t.Run("web_fetch documented form", func(t *testing.T) {
+		calls := Parse(fence + `tool web_fetch {"url":"https://example.com/","cache_mode":"refresh"}` + "\n" + fence)
+		if len(calls) != 1 || calls[0].InputErr != "" || calls[0].Path != "https://example.com/" || calls[0].WebCacheMode != "refresh" {
+			t.Fatalf("calls = %+v, want web_fetch of https://example.com/ with refresh", calls)
+		}
+	})
+	t.Run("explicit body wins", func(t *testing.T) {
+		calls := Parse(fence + "tool write_file {\"x\":1}\nhello\n" + fence)
+		if len(calls) != 1 || calls[0].Path != `{"x":1}` || calls[0].Body != "hello\n" {
+			t.Fatalf("calls = %+v, want the fence argument kept as the path", calls)
+		}
+	})
+	t.Run("path untouched", func(t *testing.T) {
+		calls := Parse(fence + "tool read_file src/{a}.go\n" + fence)
+		if len(calls) != 1 || calls[0].Path != "src/{a}.go" {
+			t.Fatalf("calls = %+v, want the path kept", calls)
+		}
+	})
+}
+
+// TestGrepDescriptionShowsFileFilter: a grep limited by its glob filter must
+// say so. Seen live: the transcript showed `grep "TODO" in .`, the model
+// reported no TODO "in the project's .go files", and the README's TODO
+// looked like a grep miss.
+func TestGrepDescriptionShowsFileFilter(t *testing.T) {
+	calls := CallsFromNative([]provider.ToolCall{{ID: "1", Name: ToolGrep, Arguments: `{"pattern":"TODO","glob":"*.go"}`}})
+	if got := calls[0].Describe(); !strings.Contains(got, "*.go") {
+		t.Fatalf("Describe() = %q, want the *.go filter shown", got)
+	}
+}
