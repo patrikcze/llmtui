@@ -921,6 +921,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMotionMsg:
 		return m.extendSelection(msg)
 
+	case selectionScrollTickMsg:
+		return m.autoScrollSelection(msg)
+
 	case tea.MouseReleaseMsg:
 		// Click-to-select on picker rows, additive to the existing
 		// arrow+enter path (see updatePickerClick). A miss (click outside
@@ -1350,8 +1353,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// bubbles/v2 textarea already pages through long pasted content
 		// (PageUp/PageDown are in its default keymap); the chat transcript
 		// stays reachable via the mouse wheel regardless (see below, which
-		// also clears any active text selection on scroll — PgUp/PgDown no
-		// longer touch the viewport at all, so there's nothing to clear here).
+		// keeps any text selection, which is anchored to content).
 		before := m.input.Value()
 		m.input, cmd = m.input.Update(msg)
 		// Any key that changes the composer value while a history entry is
@@ -1371,8 +1373,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// events to both made the prompt and the chat scroll in lockstep. Route
 	// the mouse to the viewport alone; the input is navigated with the
 	// keyboard (arrows auto-scroll it to keep the cursor visible).
+	// A selection is anchored to content, so it survives the scroll; during
+	// a drag the wheel extends it (see scrollWithSelection).
+	if wheel, ok := msg.(tea.MouseWheelMsg); ok {
+		return m, m.scrollWithSelection(wheel)
+	}
 	if _, isMouse := msg.(tea.MouseMsg); isMouse {
-		m.clearSelection()
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	}
@@ -1573,11 +1579,8 @@ func (m *Model) updateReasoningClick(msg tea.MouseReleaseMsg) (tea.Model, tea.Cm
 	if !hit {
 		return m, nil, false
 	}
-	if z := zone.Get(m.selectionZoneID()); m.sel.selecting && z != nil {
-		x, y := clampToZone(z, msg.X, msg.Y)
-		if x != m.sel.selStartX || y != m.sel.selStartY {
-			return m, nil, false
-		}
+	if !m.isPlainClick(zone.Get(m.selectionZoneID()), msg) {
+		return m, nil, false
 	}
 	m.clearSelection()
 	m.showReasoning = !m.showReasoning
@@ -3212,6 +3215,9 @@ func (m *Model) resize(w, h int) {
 	}
 	if renderWidth != m.renderWidth {
 		m.renderWidth = renderWidth
+		// Rewrapping moves text between content lines, so a
+		// content-anchored selection would no longer cover what was picked.
+		m.clearSelection()
 		// A fixed standard style avoids WithAutoStyle's terminal query,
 		// which can stall the update loop on terminals that never answer.
 		// styles.IsDark caches its own query so this doesn't pay for a
