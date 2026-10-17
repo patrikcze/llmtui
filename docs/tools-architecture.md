@@ -456,6 +456,8 @@ Context and `get_entity_details`). Measured on Gemma 4 E4B re-reading after a
 stale edit, the earlier two-block form (citation ID plus "retained output … read
 it back instead of rerunning this command") led to a valid `old_text` in 10 of
 40 next edits; the single line, in 39 of 40. Other tools keep both blocks.
+If the model supplies a citation-only entity as `expected_resource_id`, the
+edit is rejected and the error points it back to the file-version line.
 
 `edit_file` also accepts an `edits` list (at most 16) instead of the single
 `old_text`/`new_text` pair. The replacements apply in order, each against the
