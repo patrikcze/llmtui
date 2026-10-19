@@ -1630,6 +1630,14 @@ struct ProviderModelMetadata: Equatable, Sendable {
     let trainedForToolUse: Bool?
     let supportsReasoning: Bool?
     let defaultReasoningEnabled: Bool?
+    /// LM Studio's `capabilities.reasoning.allowed_options` (empty when the
+    /// model exposes none); nil when the server did not report it.
+    var reasoningOptions: [String]? = nil
+    /// LM Studio's `capabilities.reasoning.default`.
+    var reasoningDefault: String? = nil
+    /// Read from LM Studio's native `/api/v1/models`, so chat requests go to
+    /// LM Studio and its `reasoning_effort` rules apply.
+    var reportedByLMStudio = false
 
     var profileValues: [String: String] {
         var values: [String: String] = [:]
@@ -1814,7 +1822,10 @@ enum ProviderModelDiscovery {
             supportsVision: entry.capabilities?.vision,
             trainedForToolUse: entry.capabilities?.trainedForToolUse,
             supportsReasoning: supportsReasoning,
-            defaultReasoningEnabled: entry.capabilities?.reasoning?.defaultOption.map { $0 == "on" }
+            defaultReasoningEnabled: entry.capabilities?.reasoning?.defaultOption.map { $0 != "off" },
+            reasoningOptions: entry.capabilities.map { $0.reasoning?.allowedOptions ?? [] },
+            reasoningDefault: entry.capabilities?.reasoning?.defaultOption,
+            reportedByLMStudio: true
         )
     }
 

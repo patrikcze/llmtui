@@ -81,6 +81,7 @@ struct MobileChatRuntime: Sendable {
         messages: [[String: Any]],
         tools: [[String: Any]]?,
         reasoning: MobileReasoning,
+        reasoningCapability: ReasoningCapability = .unknown,
         onReasoning: @escaping @Sendable (String) async -> Void = { _ in },
         onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> ChatTurnResult {
@@ -95,7 +96,13 @@ struct MobileChatRuntime: Sendable {
             body["tool_choice"] = "auto"
         }
         body.merge(
-            ReasoningRequest.fields(for: reasoning, model: profile.model, providerType: profile.type, baseURL: profile.baseURL)
+            ReasoningRequest.fields(
+                for: reasoning,
+                capability: reasoningCapability,
+                model: profile.model,
+                providerType: profile.type,
+                baseURL: profile.baseURL
+            )
         ) { _, new in new }
 
         var request = URLRequest(url: endpoint)

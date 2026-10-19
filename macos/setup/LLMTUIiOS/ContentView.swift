@@ -1318,6 +1318,7 @@ private struct ChatComposer: View {
         }
         .task(id: "\(model.activeProfile?.id.uuidString ?? "")|\(model.activeProfile?.model ?? "")") {
             model.refreshContextWindow()
+            model.refreshReasoningCapability()
         }
     }
 }
@@ -1448,6 +1449,7 @@ private struct ComposerIcon: View {
     let systemName: String
     let active: Bool
     let accessibilityLabel: String
+    var badge: String? = nil
 
     var body: some View {
         Image(systemName: systemName)
@@ -1455,6 +1457,18 @@ private struct ComposerIcon: View {
             .foregroundStyle(active ? Theme.accent : Color.secondary)
             .frame(width: 36, height: 36)
             .background(active ? Theme.accent.opacity(0.16) : Theme.raisedSurface.opacity(0.6), in: Circle())
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(active ? Color.white : Color.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(active ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.raisedSurface), in: Capsule())
+                        .offset(x: 6, y: -4)
+                        .accessibilityHidden(true)
+                }
+            }
             .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -1489,30 +1503,73 @@ private struct ReasoningDisclosure: View {
     }
 }
 
+/// The brain menu. It offers only what the active model accepts and shows
+/// the setting actually in effect: a choice the model cannot take (Off on
+/// GPT-OSS, a level on an on/off model) is shown as what it becomes.
 private struct ReasoningMenu: View {
     let model: MobileAppModel
 
+    private var capability: ReasoningCapability { model.activeReasoningCapability }
+    private var effective: MobileReasoning { model.effectiveReasoning }
+
     var body: some View {
         Menu {
-            ForEach(MobileReasoning.allCases) { choice in
-                Button {
-                    model.reasoning = choice
-                } label: {
-                    if model.reasoning == choice {
-                        Label(choice.title, systemImage: "checkmark")
-                    } else {
-                        Text(choice.title)
+            Section {
+                ForEach(capability.offered) { choice in
+                    Button {
+                        model.reasoning = choice
+                    } label: {
+                        if effective == choice {
+                            Label(choice.title, systemImage: "checkmark")
+                        } else {
+                            Text(choice.title)
+                        }
                     }
                 }
+            } footer: {
+                Text(Self.footer(capability, chosen: model.reasoning, effective: effective))
             }
         } label: {
             ComposerIcon(
                 systemName: "brain",
-                active: model.reasoning != .automatic,
-                accessibilityLabel: "Reasoning"
+                active: effective.isThinking,
+                accessibilityLabel: "Reasoning",
+                badge: effective.badge
             )
         }
-        .accessibilityValue(model.reasoning.title)
+        .accessibilityValue(effective.title)
+    }
+
+    static func footer(_ capability: ReasoningCapability, chosen: MobileReasoning, effective: MobileReasoning) -> String {
+        let note = chosen != effective ? "\(chosen.title) isn't available for this model; \(effective.title) is used. " : ""
+        switch capability {
+        case .unknown: return note + "Not reported for this model; every setting is sent as chosen."
+        case .unsupported: return note + "The server reports no reasoning control for this model."
+        case .toggle: return note + "This model only turns reasoning on or off."
+        case .levels(let canDisable): return note + (canDisable ? "This model accepts effort levels." : "This model always reasons; Low is the least.")
+        }
+    }
+}
+
+extension MobileReasoning {
+    /// Whether this setting asks the model to reason.
+    var isThinking: Bool {
+        switch self {
+        case .automatic, .off: false
+        case .on, .low, .medium, .high: true
+        }
+    }
+
+    /// The short mark on the brain icon; Automatic has none.
+    var badge: String? {
+        switch self {
+        case .automatic: nil
+        case .off: "Off"
+        case .on: "On"
+        case .low: "L"
+        case .medium: "M"
+        case .high: "H"
+        }
     }
 }
 

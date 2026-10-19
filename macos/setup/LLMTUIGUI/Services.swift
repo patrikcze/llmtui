@@ -307,6 +307,7 @@ struct NativeChatRuntimeOptions: Equatable, Sendable {
     var toolsEnabled: Bool = false
     var reasoningChoice: ChatReasoningChoice = .automatic
     var reasoningCapability: ReasoningCapability = .unknown
+    var reasoningServer: ReasoningServer = .openAICompatible(isOpenAI: false)
 
     static let ordinary = NativeChatRuntimeOptions(agentEnabled: false)
 }
@@ -604,7 +605,12 @@ struct OpenAICompatibleChatService: ChatService {
 
                         var toolsForRequest = toolsSupported ? currentlyAllowedTools : []
                         var reasoningBodyForRequest = reasoningSupported
-                            ? ReasoningRequestEncoder.requestBody(for: runtimeOptions.reasoningChoice, capability: runtimeOptions.reasoningCapability)
+                            ? ReasoningRequestEncoder.requestBody(
+                                for: runtimeOptions.reasoningChoice,
+                                capability: runtimeOptions.reasoningCapability,
+                                modelID: configuration.provider.model,
+                                server: runtimeOptions.reasoningServer
+                            )
                             : [:]
                         func performRequest(tools: [ToolDefinition], reasoningBody: [String: Any]) async throws -> OpenAIChatResponse {
                             try await OpenAIRequest.send(
