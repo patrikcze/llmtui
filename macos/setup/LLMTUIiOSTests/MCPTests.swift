@@ -2,15 +2,20 @@ import Foundation
 import Testing
 @testable import LLMTUIiOS
 
-actor MCPFakeHTTP: MCPHTTPFetching {
+/// A fake MCP server. A locked class rather than an actor: Xcode 26's Swift
+/// 6.2 can infer `nonisolated` from the `nonisolated protocol` onto an actor
+/// conformer and reject it, depending on how test files are batched.
+final class MCPFakeHTTP: MCPHTTPFetching, @unchecked Sendable {
     enum Mode: Sendable { case modern, legacy, auth, modernError, pagination, changed }
     let mode: Mode
-    var requests: [URLRequest] = []
+    private let lock = NSLock()
+    private var recorded: [URLRequest] = []
+    var requests: [URLRequest] { lock.withLock { recorded } }
     init(_ mode: Mode) { self.mode = mode }
-    nonisolated func invalidate() {}
+    func invalidate() {}
     func fetch(_ request: URLRequest) async throws -> MCPHTTPResponse {
         try Task.checkCancellation()
-        requests.append(request)
+        lock.withLock { recorded.append(request) }
         let message = try MCPJSON.parse(request.httpBody ?? Data())
         let id = message["id"] ?? .null
         let method = message["method"]?.string ?? ""
@@ -69,7 +74,7 @@ struct MCPProtocolTests {
             let text = try result.modelText()
             #expect(text.contains("observed-value"))
             #expect(text.contains("\"count\":7"))
-            let requests = await http.requests
+            let requests = http.requests
             #expect(requests.filter { (try? MCPJSON.parse($0.httpBody ?? Data()))?["method"]?.string == "tools/call" }.count == 1)
             if mode == .modern {
                 let call = try #require(requests.last)
@@ -78,7 +83,7 @@ struct MCPProtocolTests {
                 #expect(call.value(forHTTPHeaderField: "Mcp-Param-Region") == "EU")
                 #expect(call.value(forHTTPHeaderField: "Mcp-Session-Id") == nil)
             } else {
-                #expect(await http.methods().contains("initialize"))
+                #expect(http.methods().contains("initialize"))
                 #expect(requests.last?.value(forHTTPHeaderField: "Mcp-Session-Id") == "test-session")
             }
             await service.suspend()
@@ -89,7 +94,7 @@ struct MCPProtocolTests {
             let http = MCPFakeHTTP(mode)
             let client = MCPModernClient(endpoint: URL(string: "https://example.com/mcp")!, token: "", http: http)
             await #expect(throws: MobileMCPError.self) { try await client.connect() }
-            #expect(await http.requests.count == 1)
+            #expect(http.requests.count == 1)
         }
     }
     @Test func changedDefinitionPreventsTransmission() async throws {
@@ -99,7 +104,7 @@ struct MCPProtocolTests {
         let info = try await service.connect(profile, token: "")
         let binding = MobileMCPBinding(serverID: profile.id, serverName: profile.name, generation: info.generation, tool: try #require(info.tools.first))
         await #expect(throws: MobileMCPError.self) { try await service.call(binding, arguments: .object([:])) }
-        #expect(!(await http.methods()).contains("tools/call"))
+        #expect(!http.methods().contains("tools/call"))
     }
     @Test func cancelledTaskAndDisconnectedBindingCannotSend() async throws {
         let http = MCPFakeHTTP(.modern)
@@ -114,7 +119,7 @@ struct MCPProtocolTests {
         do { _ = try await task.value; Issue.record("Cancelled call was sent") } catch {}
         await service.disconnect(profile.id)
         await #expect(throws: MobileMCPError.self) { try await service.call(binding, arguments: .object([:])) }
-        #expect(!(await http.methods()).contains("tools/call"))
+        #expect(!http.methods().contains("tools/call"))
     }
     @Test func repeatedPaginationCursorIsRejected() async throws {
         let client = MCPModernClient(endpoint: URL(string: "https://example.com/mcp")!, token: "", http: MCPFakeHTTP(.pagination))
