@@ -167,3 +167,57 @@ func TestHarmonyContentGuardFlushesUnresolvedPrefixAtFinish(t *testing.T) {
 		t.Fatalf("Finish() = %q, want the held-back %q flushed through", tail, "to")
 	}
 }
+
+func TestResolveModelProtocolQwen38(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, model, architecture string
+		want                      bool
+	}{
+		{name: "lm studio id", model: "qwen/qwen3.8-27b", want: true},
+		{name: "hugging face id", model: "Qwen/Qwen3.8-27B", want: true},
+		{name: "ollama tag", model: "qwen3.8:27b", want: true},
+		{name: "mlx underscore", model: "mlx-community/Qwen3_8-27B-4bit", want: true},
+		{name: "hyphenated", model: "qwen-3.8", want: true},
+		{name: "gguf path", model: "/models/Qwen3.8-27B-Q4_K_M.gguf", want: true},
+		{name: "architecture", model: "custom.gguf", architecture: "qwen3.8", want: true},
+		{name: "longer version", model: "qwen3.80-test", want: false},
+		{name: "qwen3 8b underscore", model: "qwen3_8b", want: false},
+		{name: "qwen3 8b ollama", model: "qwen3:8b", want: false},
+		{name: "qwen3 8b hyphen", model: "Qwen/Qwen3-8B", want: false},
+		{name: "qwen3.6", model: "qwen3.6-35b-a3b", want: false},
+		{name: "qwen2.5", model: "qwen2.5-7b", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := ResolveModelProtocol(test.model, test.architecture)
+			if (got.Family == ModelFamilyQwen38) != test.want {
+				t.Fatalf("ResolveModelProtocol(%q, %q) = %+v", test.model, test.architecture, got)
+			}
+			if test.want && (got.HarmonyRequired || got.DefaultReasoningEffort != "") {
+				t.Fatalf("Qwen 3.8 protocol = %+v, want no Harmony and no default effort", got)
+			}
+		})
+	}
+}
+
+func TestQwen38ReasoningEffort(t *testing.T) {
+	t.Parallel()
+	protocol := ResolveModelProtocol("qwen3.8-27b", "")
+	for _, test := range []struct {
+		configured, want string
+		ok               bool
+	}{
+		{"low", "low", true}, {"medium", "medium", true},
+		// The official template raises an exception for "high".
+		{"high", "xhigh", true}, {"HIGH", "xhigh", true}, {"xhigh", "xhigh", true},
+		{"", "", false}, {"auto", "", false}, {"on", "", false}, {"off", "", false}, {"max", "", false},
+	} {
+		got, ok := ReasoningEffort(protocol, test.configured)
+		if got != test.want || ok != test.ok {
+			t.Errorf("ReasoningEffort(%q) = %q, %v; want %q, %v", test.configured, got, ok, test.want, test.ok)
+		}
+	}
+	if got, ok := ReasoningEffort(ResolveModelProtocol("qwen3:8b", ""), "high"); ok || got != "" {
+		t.Errorf("unknown family ReasoningEffort(high) = %q, %v; want none", got, ok)
+	}
+}

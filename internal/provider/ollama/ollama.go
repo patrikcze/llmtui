@@ -139,7 +139,7 @@ type chatRequest struct {
 	Options  chatOptions   `json:"options"`
 	Tools    []wireTool    `json:"tools,omitempty"`
 	// Think is either a boolean for generic reasoning models or a string
-	// effort level for GPT-OSS. nil omits it.
+	// effort level for GPT-OSS and Qwen 3.8. nil omits it.
 	Think any `json:"think,omitempty"`
 	// Format accepts either "json" or a JSON Schema object. LLMTUI uses the
 	// schema form so callers get field-level constraints where supported.
@@ -304,6 +304,13 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 			body.Think = true
 		case "off":
 			body.Think = false
+		case "low", "medium", "high":
+			// Ollama's Qwen 3.8 renderer advertises false, low, medium and
+			// xhigh, and resolves an unadvertised name such as "high" to its
+			// medium default, so high must be sent as xhigh.
+			if effort, ok := provider.ReasoningEffort(protocol, req.Reasoning); ok {
+				body.Think = effort
+			}
 		}
 	}
 	payload, err := json.Marshal(body)

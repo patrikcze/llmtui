@@ -295,7 +295,7 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 		if _, ok := provider.ReasoningEffort(protocol, req.Reasoning); !ok {
 			return nil, fmt.Errorf("embedded provider %q: GPT-OSS reasoning must be low, medium, or high; disabling reasoning is unsupported", p.name)
 		}
-	} else if err := validateReasoning(req.Reasoning); err != nil {
+	} else if err := validateReasoning(protocol, req.Reasoning); err != nil {
 		return nil, fmt.Errorf("embedded provider %q: %w", p.name, err)
 	}
 	if err := provider.ValidateResponseConstraint(req); err != nil {
@@ -740,13 +740,18 @@ func cleanFingerprintPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func validateReasoning(value string) error {
+func validateReasoning(protocol provider.ModelProtocol, value string) error {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "auto", "on", "off":
 		return nil
-	default:
-		return fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", value)
 	}
+	if protocol.Family == provider.ModelFamilyQwen38 {
+		if _, ok := provider.ReasoningEffort(protocol, value); ok {
+			return nil
+		}
+		return fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off, low, medium, high)", value)
+	}
+	return fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", value)
 }
 
 // writeField writes a length-prefixed field so concatenated field

@@ -334,6 +334,34 @@ func captureChatBody(t *testing.T, req provider.ChatRequest) string {
 	return body
 }
 
+func TestChatSendsQwen38ThinkLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name, model, reasoning string
+		want                   string // substring of the raw body, or "" for absent
+	}{
+		// Ollama's Qwen 3.8 renderer resolves an unadvertised "high" to medium.
+		{"high is xhigh", "qwen3.8:27b", "high", `"think":"xhigh"`},
+		{"low", "qwen3.8:27b", "low", `"think":"low"`},
+		{"medium", "qwen3.8:27b", "medium", `"think":"medium"`},
+		{"on stays boolean", "qwen3.8:27b", "on", `"think":true`},
+		{"off stays boolean", "qwen3.8:27b", "off", `"think":false`},
+		{"other model ignores effort", "qwen3:8b", "high", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := captureChatBody(t, provider.ChatRequest{Model: tc.model, Reasoning: tc.reasoning})
+			if tc.want == "" {
+				if strings.Contains(body, `"think"`) {
+					t.Fatalf("body must omit think: %s", body)
+				}
+				return
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Fatalf("body missing %s: %s", tc.want, body)
+			}
+		})
+	}
+}
+
 func TestChatSendsThinkWhenReasoningSet(t *testing.T) {
 	for _, tc := range []struct {
 		reasoning string
