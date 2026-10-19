@@ -140,11 +140,13 @@ struct MobileAttachment: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-/// The reasoning (brain) choice. `ReasoningRequest` turns it into request
-/// fields; Automatic sends nothing and keeps the model's own default.
+/// The reasoning (brain) choice. `ReasoningCapability` resolves it for the
+/// model and `ReasoningRequest` turns it into request fields; Automatic
+/// sends nothing and keeps the model's and server's own default.
 enum MobileReasoning: String, CaseIterable, Identifiable, Sendable {
     case automatic
     case off
+    case on
     case low
     case medium
     case high
@@ -155,6 +157,7 @@ enum MobileReasoning: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .automatic: "Automatic"
         case .off: "Off"
+        case .on: "On"
         case .low: "Low"
         case .medium: "Medium"
         case .high: "High"

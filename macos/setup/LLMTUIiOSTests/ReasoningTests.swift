@@ -6,8 +6,20 @@ import Testing
 /// families whose templates disagree, and how streamed reasoning is kept
 /// apart from the answer.
 struct ReasoningRequestTests {
-    private func fields(_ reasoning: MobileReasoning, _ model: String, _ type: MobileProviderType = .lmStudio, url: String = "http://192.168.1.2:1234/v1") -> [String: Any] {
-        ReasoningRequest.fields(for: reasoning, model: model, providerType: type, baseURL: url)
+    private func fields(
+        _ reasoning: MobileReasoning,
+        _ model: String,
+        _ type: MobileProviderType = .openAICompatible,
+        capability: ReasoningCapability? = nil,
+        url: String = "http://192.168.1.2:8000/v1"
+    ) -> [String: Any] {
+        ReasoningRequest.fields(
+            for: reasoning,
+            capability: capability ?? .family(model: model),
+            model: model,
+            providerType: type,
+            baseURL: url
+        )
     }
 
     private func kwargs(_ fields: [String: Any]) -> [String: Any]? {
@@ -16,21 +28,52 @@ struct ReasoningRequestTests {
 
     @Test func automaticSendsNothing() {
         for type in MobileProviderType.allCases {
-            #expect(fields(.automatic, "google/gemma-4-31b", type).isEmpty)
+            #expect(fields(.automatic, "google/gemma-4-e4b", type).isEmpty)
+            #expect(fields(.automatic, "openai/gpt-oss-20b", type).isEmpty)
         }
     }
 
-    /// Gemma 4's template treats a missing enable_thinking as off, so a bare
-    /// reasoning_effort never turned thinking on.
-    @Test func gemmaThinkingIsSwitchedThroughTheTemplate() {
-        let on = fields(.medium, "google/gemma-4-31b")
-        #expect(kwargs(on)?["enable_thinking"] as? Bool == true)
-        #expect(kwargs(on)?["reasoning_effort"] == nil)
-        #expect(on["reasoning_effort"] as? String == "medium")
+    // MARK: LM Studio (measured on 0.4: "none" is off, kwargs are ignored)
 
-        let off = fields(.off, "google/gemma-4-31b")
-        #expect(kwargs(off)?["enable_thinking"] as? Bool == false)
-        #expect(off["reasoning_effort"] == nil)
+    /// The reported bug: Off on Gemma 4 E4B in LM Studio sent only
+    /// chat_template_kwargs, which LM Studio ignores, so it kept thinking.
+    @Test func lmStudioOffIsReasoningEffortNone() {
+        let toggle = ReasoningCapability.toggle(defaultOn: true)
+        let off = fields(.off, "google/gemma-4-e4b", .lmStudio, capability: toggle)
+        #expect(off["reasoning_effort"] as? String == "none")
+        #expect(kwargs(off) == nil)
+    }
+
+    @Test func lmStudioOnAndLevelsOnAnOnOffModel() {
+        // On by default: On needs nothing.
+        #expect(fields(.on, "google/gemma-4-e4b", .lmStudio, capability: .toggle(defaultOn: true)).isEmpty)
+        // Off by default: a level name turns it on ("on" itself is a 400).
+        #expect(fields(.on, "x", .lmStudio, capability: .toggle(defaultOn: false))["reasoning_effort"] as? String == "medium")
+        // A level on an on/off model resolves to On.
+        #expect(fields(.high, "qwen3.8-27b", .lmStudio, capability: .toggle(defaultOn: true)).isEmpty)
+        for value in [MobileReasoning.on, .off, .low, .medium, .high] {
+            let sent = fields(value, "x", .lmStudio, capability: .toggle(defaultOn: false))["reasoning_effort"] as? String
+            #expect(sent != "on" && sent != "off", "\(value)")
+        }
+    }
+
+    @Test func lmStudioLevelsAreSentByName() {
+        let levels = ReasoningCapability.levels(canDisable: false)
+        #expect(fields(.high, "openai/gpt-oss-20b", .lmStudio, capability: levels)["reasoning_effort"] as? String == "high")
+        #expect(fields(.off, "openai/gpt-oss-20b", .lmStudio, capability: levels)["reasoning_effort"] as? String == "low")
+        #expect(fields(.on, "openai/gpt-oss-20b", .lmStudio, capability: levels)["reasoning_effort"] as? String == "medium")
+    }
+
+    // MARK: Other servers
+
+    /// Gemma 4's template treats a missing enable_thinking as off.
+    @Test func openAICompatibleSwitchesThroughTheTemplate() {
+        #expect(kwargs(fields(.on, "google/gemma-4-31b"))?["enable_thinking"] as? Bool == true)
+        #expect(kwargs(fields(.off, "google/gemma-4-31b"))?["enable_thinking"] as? Bool == false)
+        let medium = fields(.medium, "google/gemma-4-31b")
+        #expect(kwargs(medium)?["enable_thinking"] as? Bool == true)
+        #expect(medium["reasoning_effort"] as? String == "medium")
+        #expect(kwargs(medium)?["reasoning_effort"] == nil)
     }
 
     /// Qwen 3.8's template accepts low, medium and xhigh, and raises an error
@@ -40,36 +83,80 @@ struct ReasoningRequestTests {
             let high = fields(.high, model)
             #expect(high["reasoning_effort"] as? String == "xhigh", "\(model)")
             #expect(kwargs(high)?["reasoning_effort"] as? String == "xhigh", "\(model)")
-            #expect(kwargs(high)?["enable_thinking"] as? Bool == true, "\(model)")
-            #expect(kwargs(fields(.low, model))?["reasoning_effort"] as? String == "low", "\(model)")
+            #expect(kwargs(fields(.off, model))?["enable_thinking"] as? Bool == false, "\(model)")
         }
-        // Other Qwen releases keep the plain names and get no template effort.
-        for model in ["qwen3-32b", "qwen3.80-test", "qwen2.5-7b"] {
-            let high = fields(.high, model)
-            #expect(high["reasoning_effort"] as? String == "high", "\(model)")
-            #expect(kwargs(high)?["reasoning_effort"] == nil, "\(model)")
-        }
+        #expect(ReasoningCapability.family(model: "qwen3.80-test") == .unknown)
+        #expect(fields(.high, "qwen3-32b")["reasoning_effort"] as? String == "high")
     }
 
     @Test func ollamaGetsReasoningEffortOnly() {
-        let off = fields(.off, "gemma4:31b", .ollama, url: "http://192.168.1.2:11434")
-        #expect(off["reasoning_effort"] as? String == "none")
-        #expect(kwargs(off) == nil)
-        let high = fields(.high, "qwen3.8:27b", .ollama, url: "http://192.168.1.2:11434")
-        #expect(high["reasoning_effort"] as? String == "xhigh")
-        #expect(kwargs(high) == nil)
+        let url = "http://192.168.1.2:11434"
+        #expect(fields(.off, "gemma4:e4b", .ollama, url: url)["reasoning_effort"] as? String == "none")
+        #expect(fields(.on, "gemma4:e4b", .ollama, url: url)["reasoning_effort"] as? String == "medium")
+        #expect(fields(.high, "qwen3.8:27b", .ollama, url: url)["reasoning_effort"] as? String == "xhigh")
+        #expect(kwargs(fields(.high, "qwen3.8:27b", .ollama, url: url)) == nil)
+        // GPT-OSS cannot stop reasoning: Off is Low.
+        #expect(fields(.off, "gpt-oss:20b", .ollama, url: url)["reasoning_effort"] as? String == "low")
     }
 
     @Test func openAIAndGPTOSSNeverGetTemplateKwargs() {
-        let openAI = fields(.off, "gpt-5", .openAICompatible, url: "https://api.openai.com/v1")
-        #expect(openAI.isEmpty)
-        #expect(kwargs(fields(.high, "gpt-5", .openAICompatible, url: "https://api.openai.com/v1")) == nil)
+        let openAI = "https://api.openai.com/v1"
+        #expect(fields(.off, "gpt-5", url: openAI).isEmpty)
+        #expect(fields(.on, "gpt-5", url: openAI)["reasoning_effort"] as? String == "medium")
+        #expect(kwargs(fields(.high, "gpt-5", url: openAI)) == nil)
+        #expect(fields(.off, "openai/gpt-oss-20b")["reasoning_effort"] as? String == "low")
+        #expect(kwargs(fields(.on, "openai/gpt-oss-20b")) == nil)
+    }
+}
 
-        // GPT-OSS cannot turn reasoning off; Off asks for the least.
-        let oss = fields(.off, "openai/gpt-oss-20b")
-        #expect(oss["reasoning_effort"] as? String == "low")
-        #expect(kwargs(oss) == nil)
-        #expect(kwargs(fields(.high, "openai/gpt-oss-20b")) == nil)
+struct ReasoningCapabilityTests {
+    @Test func offeredChoicesAndResolution() {
+        let toggle = ReasoningCapability.toggle(defaultOn: true)
+        #expect(toggle.offered == [.automatic, .off, .on])
+        #expect(toggle.resolve(.high) == .on)
+        #expect(toggle.resolve(.off) == .off)
+
+        let gptOSS = ReasoningCapability.levels(canDisable: false)
+        #expect(!gptOSS.offered.contains(.off))
+        #expect(gptOSS.resolve(.off) == .low)
+        #expect(gptOSS.resolve(.on) == .medium)
+        #expect(gptOSS.resolve(.high) == .high)
+
+        #expect(ReasoningCapability.unsupported.offered == [.automatic])
+        #expect(ReasoningCapability.unsupported.resolve(.high) == .automatic)
+        #expect(ReasoningCapability.unknown.offered == MobileReasoning.allCases)
+        #expect(ReasoningCapability.unknown.resolve(.off) == .off)
+        for capability in [ReasoningCapability.unknown, .unsupported, toggle, gptOSS] {
+            #expect(capability.resolve(.automatic) == .automatic)
+        }
+    }
+
+    @Test func lmStudioReportIsParsed() throws {
+        let json = #"""
+        {"models":[
+          {"type":"llm","key":"google/gemma-4-e4b","loaded_instances":[{"id":"google/gemma-4-e4b"}],
+           "capabilities":{"reasoning":{"allowed_options":["off","on"],"default":"on"}}},
+          {"type":"llm","key":"openai/gpt-oss-20b","loaded_instances":[],
+           "capabilities":{"reasoning":{"allowed_options":["low","medium","high"],"default":"medium"}}},
+          {"type":"llm","key":"qwen/qwen3.8-27b-mlx","loaded_instances":[],"capabilities":{"vision":false}},
+          {"type":"embedding","key":"text-embedding-nomic-embed-text-v1.5"}
+        ]}
+        """#
+        let data = Data(json.utf8)
+        #expect(ReasoningProbe.parse(data, model: "google/gemma-4-e4b") == .toggle(defaultOn: true))
+        #expect(ReasoningProbe.parse(data, model: "gpt-oss-20b") == .levels(canDisable: false))
+        // No reasoning configuration exposed: LM Studio offers no control.
+        #expect(ReasoningProbe.parse(data, model: "qwen/qwen3.8-27b-mlx") == .unsupported)
+        #expect(ReasoningProbe.parse(data, model: "missing") == nil)
+        #expect(ReasoningCapability.lmStudio(allowedOptions: ["off", "low", "high"], defaultOption: "low") == .levels(canDisable: true))
+    }
+
+    @Test func iconShowsTheSettingInEffect() {
+        #expect(MobileReasoning.automatic.badge == nil)
+        #expect(!MobileReasoning.off.isThinking)
+        #expect(MobileReasoning.off.badge == "Off")
+        #expect(MobileReasoning.on.isThinking)
+        #expect(MobileReasoning.high.badge == "H")
     }
 }
 
@@ -158,8 +245,8 @@ nonisolated final class Collected: @unchecked Sendable {
     var text: String { lock.lock(); defer { lock.unlock() }; return parts.joined() }
 }
 
-@Suite(.serialized) struct ReasoningStreamTests {
-    private func turn(_ stream: String, model: String = "test", reasoning: MobileReasoning = .automatic) async throws -> (ChatTurnResult, answer: String, reasoning: String) {
+@MainActor @Suite(.serialized) struct ReasoningStreamTests {
+    private func turn(_ stream: String, model: String = "test", type: MobileProviderType = .lmStudio, reasoning: MobileReasoning = .automatic, capability: ReasoningCapability = .unknown) async throws -> (ChatTurnResult, answer: String, reasoning: String) {
         ReasoningStreamFixture.shared.set(stream)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ReasoningStreamURLProtocol.self]
@@ -168,11 +255,12 @@ nonisolated final class Collected: @unchecked Sendable {
         let answer = Collected()
         let thoughts = Collected()
         let result = try await MobileChatRuntime(session: session).streamTurn(
-            profile: MobileProviderProfile(type: .lmStudio, baseURL: "https://stream.fixture/v1", model: model),
+            profile: MobileProviderProfile(type: type, baseURL: "https://stream.fixture/v1", model: model),
             apiKey: "",
             messages: [],
             tools: nil,
             reasoning: reasoning,
+            reasoningCapability: capability,
             onReasoning: { thoughts.add($0) }
         ) { answer.add($0) }
         return (result, answer.text, thoughts.text)
@@ -198,6 +286,15 @@ nonisolated final class Collected: @unchecked Sendable {
         #expect(reasoning == "hmm")
     }
 
+    /// The request LM Studio got for Off on Gemma 4 E4B.
+    @Test func lmStudioOffRequestBody() async throws {
+        _ = try await turn(line(#"{"content":"ok"}"#) + done, model: "google/gemma-4-e4b", reasoning: .off, capability: .toggle(defaultOn: true))
+        let body = try #require(ReasoningStreamFixture.shared.lastBody())
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["reasoning_effort"] as? String == "none")
+        #expect(json["chat_template_kwargs"] == nil)
+    }
+
     @Test func anUnexpectedReasoningShapeDoesNotFailTheStream() async throws {
         let stream = line(#"{"reasoning":{"summary":"x"},"content":"Fine."}"#) + done
         let (result, _, _) = try await turn(stream)
@@ -206,7 +303,7 @@ nonisolated final class Collected: @unchecked Sendable {
     }
 
     @Test func requestCarriesTheMappedFields() async throws {
-        _ = try await turn(line(#"{"content":"ok"}"#) + done, model: "Qwen3.8-27B", reasoning: .high)
+        _ = try await turn(line(#"{"content":"ok"}"#) + done, model: "Qwen3.8-27B", type: .openAICompatible, reasoning: .high, capability: .family(model: "Qwen3.8-27B"))
         let body = try #require(ReasoningStreamFixture.shared.lastBody())
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(json["reasoning_effort"] as? String == "xhigh")

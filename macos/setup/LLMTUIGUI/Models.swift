@@ -563,8 +563,53 @@ final class AppModel {
     var chatReasoningCapability: ReasoningCapability {
         ReasoningCapabilityDetector.capability(
             modelID: configuration.provider.model,
-            metadata: discoveredProfileMetadata[configuration.provider.model]
+            metadata: chatModelMetadata
         )
+    }
+
+    /// The chat model's metadata: read for the composer, else from the
+    /// Model Profiles screen (keyed there by profile name, which is often
+    /// the model name).
+    private var chatModelMetadata: ProviderModelMetadata? {
+        chatReasoningMetadata[chatReasoningKey]
+            ?? discoveredProfileMetadata[configuration.provider.model]
+            ?? discoveredProfileMetadata.values.first { $0.model == configuration.provider.model }
+    }
+
+    /// Where chat requests go, for the reasoning fields they need.
+    var chatReasoningServer: ReasoningServer {
+        switch configuration.provider.type {
+        case .ollama: return .ollama
+        default:
+            if chatModelMetadata?.reportedByLMStudio == true { return .lmStudio }
+            let host = URL(string: configuration.provider.baseURL)?.host?.lowercased() ?? ""
+            return .openAICompatible(isOpenAI: host.hasSuffix("openai.com"))
+        }
+    }
+
+    /// The reasoning setting the next message actually uses.
+    var effectiveReasoningChoice: ChatReasoningChoice {
+        nativeReasoningChoice.resolved(for: chatReasoningCapability)
+    }
+
+    /// LM Studio's report for chat models, by provider address and model.
+    var chatReasoningMetadata: [String: ProviderModelMetadata] = [:]
+    private var chatReasoningKey: String { configuration.provider.baseURL + "|" + configuration.provider.model }
+
+    /// Asks an OpenAI-compatible server (LM Studio) for the chat model's
+    /// reasoning options so the brain menu offers only what it accepts.
+    /// Other servers simply do not answer, which leaves the family rules.
+    func refreshChatReasoningCapability() async {
+        guard configuration.provider.type == .openAICompatible, !configuration.provider.model.isEmpty else { return }
+        let key = chatReasoningKey
+        guard chatReasoningMetadata[key] == nil,
+              let metadata = try? await ProviderModelDiscovery.fetchProfileSettings(
+                configuration: configuration,
+                model: configuration.provider.model
+              ),
+              metadata.reportedByLMStudio
+        else { return }
+        chatReasoningMetadata[key] = metadata
     }
 
     var configurationStore = LLMTUIConfigurationStore()
@@ -1297,7 +1342,8 @@ final class AppModel {
             agentEnabled: usesNativeAgent,
             toolsEnabled: usesTools,
             reasoningChoice: reasoning,
-            reasoningCapability: chatReasoningCapability
+            reasoningCapability: chatReasoningCapability,
+            reasoningServer: chatReasoningServer
         )
     }
 

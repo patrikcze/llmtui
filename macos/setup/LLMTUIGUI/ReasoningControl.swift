@@ -1,16 +1,19 @@
 import Foundation
 
-/// Mirrors Go's `provider.ModelFamily` detection for the one family this
-/// chat needs to special-case: GPT-OSS models don't have a plain on/off for
-/// reasoning — only low/medium/high effort levels, with no way to fully
-/// disable it. Everything else is treated generically.
+/// Model families that need special reasoning handling. Mirrors Go's
+/// `provider.ModelFamily` for GPT-OSS (levels only, no off), plus Qwen 3.8,
+/// whose template accepts low, medium and xhigh and rejects "high".
 enum ModelFamily: Equatable {
     case gptOSS
+    case qwen38
     case other
 
     static func detect(modelID: String, architecture: String?) -> ModelFamily {
         if WordBoundaryMatcher.matches("gpt-oss", in: modelID) || WordBoundaryMatcher.matches("gpt-oss", in: architecture ?? "") {
             return .gptOSS
+        }
+        if modelID.lowercased().range(of: #"qwen-?3[._]8(?![0-9])"#, options: .regularExpression) != nil {
+            return .qwen38
         }
         return .other
     }
@@ -38,31 +41,45 @@ enum WordBoundaryMatcher {
     }
 }
 
-/// What a model actually accepts for reasoning control, so the composer only
-/// offers choices that make sense for the active model instead of a generic
-/// on/off that a level-only (or non-reasoning) model would reject.
-enum ReasoningCapability: Equatable {
-    /// GPT-OSS family: low/medium/high effort, no full off.
-    case levels
-    /// A plain on/off, reported by the provider (e.g. LM Studio's
-    /// `capabilities.reasoning`).
-    case toggle
-    /// The provider explicitly reported this model does not support
-    /// reasoning control at all.
+/// What a model accepts for reasoning control, so the composer offers only
+/// choices that work and turns an unavailable one into the nearest that does.
+enum ReasoningCapability: Equatable, Sendable {
+    /// Effort levels. `canDisable` is false for GPT-OSS, which always
+    /// reasons at least at low.
+    case levels(canDisable: Bool)
+    /// Only on and off, as LM Studio reports for Gemma 4 and most Qwen
+    /// builds. `defaultOn` is the server's default when it reports one.
+    case toggle(defaultOn: Bool?)
+    /// The provider reported that this model has no reasoning control.
     case unsupported
-    /// Not detected — no model metadata has been fetched for this model, or
-    /// the provider doesn't expose the capability. Every choice is offered,
-    /// marked as unconfirmed, rather than silently assuming none exist.
+    /// Not reported and not a known family: every choice is offered and
+    /// sent as chosen.
     case unknown
+
+    /// The capability from LM Studio's `capabilities.reasoning`:
+    /// `allowedOptions` is empty when the model exposes none.
+    static func lmStudio(allowedOptions: [String], defaultOption: String?) -> ReasoningCapability {
+        let options = allowedOptions.map { $0.lowercased() }
+        if options.isEmpty { return .unsupported }
+        if options.contains(where: { ["low", "medium", "high"].contains($0) }) {
+            return .levels(canDisable: options.contains("off"))
+        }
+        return .toggle(defaultOn: defaultOption.map { $0.lowercased() != "off" })
+    }
 }
 
 enum ReasoningCapabilityDetector {
+    /// GPT-OSS always gets levels without off, whatever a server reports;
+    /// otherwise LM Studio's report wins, then the Qwen 3.8 family.
     static func capability(modelID: String, metadata: ProviderModelMetadata?) -> ReasoningCapability {
-        if ModelFamily.detect(modelID: modelID, architecture: metadata?.architecture) == .gptOSS {
-            return .levels
+        let family = ModelFamily.detect(modelID: modelID, architecture: metadata?.architecture)
+        if family == .gptOSS { return .levels(canDisable: false) }
+        if let options = metadata?.reasoningOptions {
+            return .lmStudio(allowedOptions: options, defaultOption: metadata?.reasoningDefault)
         }
+        if family == .qwen38 { return .levels(canDisable: true) }
         switch metadata?.supportsReasoning {
-        case true?: return .toggle
+        case true?: return .toggle(defaultOn: metadata?.defaultReasoningEnabled)
         case false?: return .unsupported
         case nil: return .unknown
         }
@@ -75,8 +92,8 @@ enum ReasoningCapabilityDetector {
 enum ChatReasoningChoice: String, CaseIterable, Equatable, Sendable {
     /// Send nothing; let the server/model use its own default.
     case automatic = "auto"
-    case on
     case off
+    case on
     case low
     case medium
     case high
@@ -92,45 +109,122 @@ enum ChatReasoningChoice: String, CaseIterable, Equatable, Sendable {
         }
     }
 
+    /// Whether this setting asks the model to reason.
+    var isThinking: Bool {
+        switch self {
+        case .automatic, .off: false
+        case .on, .low, .medium, .high: true
+        }
+    }
+
+    /// The short mark on the brain icon; Default has none.
+    var badge: String? {
+        switch self {
+        case .automatic: nil
+        case .off: "Off"
+        case .on: "On"
+        case .low: "L"
+        case .medium: "M"
+        case .high: "H"
+        }
+    }
+
     /// The choices worth showing in the composer's reasoning menu for a
-    /// given capability, in display order. A level-only model never offers
-    /// "Off" — there isn't one.
+    /// given capability, in display order.
     static func offered(for capability: ReasoningCapability) -> [ChatReasoningChoice] {
         switch capability {
-        case .levels: [.automatic, .low, .medium, .high]
-        case .toggle: [.automatic, .on, .off]
+        case .levels(let canDisable): canDisable ? allCases : [.automatic, .on, .low, .medium, .high]
+        case .toggle: [.automatic, .off, .on]
         case .unsupported: [.automatic]
-        case .unknown: [.automatic, .on, .off, .low, .medium, .high]
+        case .unknown: allCases
+        }
+    }
+
+    /// The setting actually used: Off becomes Low on a model that cannot
+    /// stop reasoning, On becomes Medium on a level model (on, but not the
+    /// deepest), and a level becomes On on an on/off model.
+    func resolved(for capability: ReasoningCapability) -> ChatReasoningChoice {
+        switch (capability, self) {
+        case (_, .automatic), (.unknown, _): self
+        case (.unsupported, _): .automatic
+        case (.toggle, .low), (.toggle, .medium), (.toggle, .high): .on
+        case (.toggle, _): self
+        case (.levels(false), .off): .low
+        case (.levels, .on): .medium
+        case (.levels, _): self
         }
     }
 }
 
+/// The kind of server a chat request goes to, for reasoning fields.
+enum ReasoningServer: Equatable, Sendable {
+    /// LM Studio (detected from its `/api/v1/models` report).
+    case lmStudio
+    case ollama
+    /// vLLM, llama.cpp, mlx-lm, … or, with `isOpenAI`, api.openai.com.
+    case openAICompatible(isOpenAI: Bool)
+}
+
 /// Builds the extra top-level JSON body keys for a chosen reasoning setting,
-/// mirroring the Go OpenAI-compatible provider's own encoding
-/// (`internal/provider/openai/openai.go`): a GPT-OSS-family model gets
-/// `reasoning_effort`, since that's the field llama.cpp/vLLM/Ollama's
-/// OpenAI-compatible surface actually reads for it; any other model that
-/// supports toggling reasoning gets `chat_template_kwargs.enable_thinking`,
-/// which is how non-reasoning-native chat templates (Qwen3, …) expose it.
-/// `.automatic` always sends nothing, leaving the request exactly as it
-/// would be with no reasoning control at all.
+/// as each server reads them (measured against LM Studio 0.4 and the
+/// official model templates):
+/// - LM Studio maps `reasoning_effort` onto the model's own reasoning
+///   setting: "none" is off, a value the model does not list falls back to
+///   on, "on"/"off" are rejected with HTTP 400, and
+///   `chat_template_kwargs.enable_thinking` is ignored.
+/// - Ollama maps `reasoning_effort` to the model's levels; "none" is off.
+/// - Other OpenAI-compatible servers pass `chat_template_kwargs` to the
+///   template: `enable_thinking` switches Qwen 3 and Gemma 4 (whose template
+///   treats a missing value as off). Qwen 3.8 also reads the effort there,
+///   with High sent as "xhigh". GPT-OSS gets top-level levels only.
+/// `.automatic` always sends nothing.
 enum ReasoningRequestEncoder {
-    static func requestBody(for choice: ChatReasoningChoice, capability: ReasoningCapability) -> [String: Any] {
-        switch capability {
-        case .unsupported:
-            return [:]
-        case .levels:
-            switch choice {
-            case .low, .medium, .high: return ["reasoning_effort": choice.rawValue]
-            case .automatic, .on, .off: return [:]
+    static func requestBody(
+        for choice: ChatReasoningChoice,
+        capability: ReasoningCapability,
+        modelID: String = "",
+        server: ReasoningServer = .openAICompatible(isOpenAI: false)
+    ) -> [String: Any] {
+        let reasoning = choice.resolved(for: capability)
+        if reasoning == .automatic { return [:] }
+        let family = ModelFamily.detect(modelID: modelID, architecture: nil)
+        let level = effort(for: reasoning, family: family)
+
+        switch server {
+        case .lmStudio:
+            switch reasoning {
+            case .off: return ["reasoning_effort": "none"]
+            case .on:
+                // On by default: nothing to send. Otherwise any level name
+                // turns an on/off model on ("on" itself is rejected).
+                if case .toggle(defaultOn: true) = capability { return [:] }
+                return ["reasoning_effort": "medium"]
+            default: return ["reasoning_effort": reasoning.rawValue]
             }
-        case .toggle, .unknown:
-            switch choice {
-            case .on: return ["chat_template_kwargs": ["enable_thinking": true]]
+        case .ollama:
+            return ["reasoning_effort": reasoning == .off ? "none" : level]
+        case .openAICompatible(let isOpenAI):
+            if isOpenAI || family == .gptOSS {
+                return reasoning == .off ? [:] : ["reasoning_effort": level]
+            }
+            switch reasoning {
             case .off: return ["chat_template_kwargs": ["enable_thinking": false]]
-            case .low, .medium, .high: return ["reasoning_effort": choice.rawValue]
-            case .automatic: return [:]
+            case .on: return ["chat_template_kwargs": ["enable_thinking": true]]
+            default:
+                var kwargs: [String: Any] = ["enable_thinking": true]
+                if family == .qwen38 { kwargs["reasoning_effort"] = level }
+                return ["reasoning_effort": level, "chat_template_kwargs": kwargs]
             }
+        }
+    }
+
+    /// The effort name for a resolved setting: On is medium, and Qwen 3.8
+    /// calls High "xhigh".
+    static func effort(for reasoning: ChatReasoningChoice, family: ModelFamily) -> String {
+        switch reasoning {
+        case .high: family == .qwen38 ? "xhigh" : "high"
+        case .low, .medium: reasoning.rawValue
+        default: "medium"
         }
     }
 }

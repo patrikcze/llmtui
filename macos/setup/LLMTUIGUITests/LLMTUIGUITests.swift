@@ -1405,60 +1405,96 @@ struct LLMTUIGUITests {
         #expect(ModelFamily.detect(modelID: "qwen3-8b", architecture: "qwen3") == .other)
     }
 
+    private func metadata(_ model: String, supports: Bool?, options: [String]? = nil, defaultOption: String? = nil) -> ProviderModelMetadata {
+        ProviderModelMetadata(
+            model: model, loadedInstance: nil, configuredContextWindow: nil,
+            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
+            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: supports, defaultReasoningEnabled: nil,
+            reasoningOptions: options, reasoningDefault: defaultOption, reportedByLMStudio: options != nil
+        )
+    }
+
     @Test func reasoningCapabilityDetectionPrefersGPTOSSOverReportedMetadata() {
-        let toggleMetadata = ProviderModelMetadata(
-            model: "gpt-oss-20b", loadedInstance: nil, configuredContextWindow: nil,
-            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
-            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
-        )
         // Even if a server mistakenly reports a plain on/off, GPT-OSS always
-        // gets the level-based menu — it has no real "off".
-        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: toggleMetadata) == .levels)
-        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: nil) == .levels)
+        // gets levels without off: it always reasons.
+        let toggle = metadata("gpt-oss-20b", supports: true, options: ["off", "on"], defaultOption: "on")
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: toggle) == .levels(canDisable: false))
+        #expect(ReasoningCapabilityDetector.capability(modelID: "gpt-oss-20b", metadata: nil) == .levels(canDisable: false))
 
-        let qwenToggle = ProviderModelMetadata(
-            model: "qwen3-8b", loadedInstance: nil, configuredContextWindow: nil,
-            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
-            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: true, defaultReasoningEnabled: nil
-        )
-        #expect(ReasoningCapabilityDetector.capability(modelID: "qwen3-8b", metadata: qwenToggle) == .toggle)
+        // LM Studio's report wins over the Qwen 3.8 family rule: this GGUF
+        // only turns reasoning on or off there.
+        let qwen = metadata("qwen3.8-27b", supports: true, options: ["off", "on"], defaultOption: "on")
+        #expect(ReasoningCapabilityDetector.capability(modelID: "qwen3.8-27b", metadata: qwen) == .toggle(defaultOn: true))
+        #expect(ReasoningCapabilityDetector.capability(modelID: "qwen3.8-27b", metadata: nil) == .levels(canDisable: true))
 
-        let noReasoning = ProviderModelMetadata(
-            model: "plain-model", loadedInstance: nil, configuredContextWindow: nil,
-            maximumContextWindow: nil, architecture: nil, quantization: nil, parameterCount: nil,
-            supportsVision: nil, trainedForToolUse: nil, supportsReasoning: false, defaultReasoningEnabled: nil
-        )
-        #expect(ReasoningCapabilityDetector.capability(modelID: "plain-model", metadata: noReasoning) == .unsupported)
+        // An LM Studio entry without a reasoning configuration.
+        let none = metadata("plain-model", supports: nil, options: [])
+        #expect(ReasoningCapabilityDetector.capability(modelID: "plain-model", metadata: none) == .unsupported)
+        #expect(ReasoningCapabilityDetector.capability(modelID: "plain-model", metadata: metadata("plain-model", supports: false)) == .unsupported)
         #expect(ReasoningCapabilityDetector.capability(modelID: "unknown-model", metadata: nil) == .unknown)
     }
 
     @Test func reasoningChoicesOfferedMatchCapability() {
-        #expect(ChatReasoningChoice.offered(for: .levels) == [.automatic, .low, .medium, .high])
-        #expect(ChatReasoningChoice.offered(for: .toggle) == [.automatic, .on, .off])
+        #expect(ChatReasoningChoice.offered(for: .levels(canDisable: false)) == [.automatic, .on, .low, .medium, .high])
+        #expect(ChatReasoningChoice.offered(for: .levels(canDisable: true)) == ChatReasoningChoice.allCases)
+        #expect(ChatReasoningChoice.offered(for: .toggle(defaultOn: true)) == [.automatic, .off, .on])
         #expect(ChatReasoningChoice.offered(for: .unsupported) == [.automatic])
-        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.low))
-        #expect(ChatReasoningChoice.offered(for: .unknown).contains(.on))
+        #expect(ChatReasoningChoice.offered(for: .unknown) == ChatReasoningChoice.allCases)
     }
 
-    @Test func reasoningRequestEncoderProducesEffortForLevelsAndTemplateKwargsForToggle() {
-        #expect(ReasoningRequestEncoder.requestBody(for: .automatic, capability: .levels).isEmpty)
-        let levelBody = ReasoningRequestEncoder.requestBody(for: .high, capability: .levels)
-        #expect(levelBody["reasoning_effort"] as? String == "high")
-        #expect(levelBody["chat_template_kwargs"] == nil)
+    @Test func reasoningChoicesResolveToWhatTheModelAccepts() {
+        let gptOSS = ReasoningCapability.levels(canDisable: false)
+        #expect(ChatReasoningChoice.off.resolved(for: gptOSS) == .low)
+        #expect(ChatReasoningChoice.on.resolved(for: gptOSS) == .medium)
+        #expect(ChatReasoningChoice.high.resolved(for: .toggle(defaultOn: false)) == .on)
+        #expect(ChatReasoningChoice.high.resolved(for: .unsupported) == .automatic)
+        #expect(ChatReasoningChoice.off.resolved(for: .unknown) == .off)
+        #expect(ChatReasoningChoice.automatic.badge == nil)
+        #expect(!ChatReasoningChoice.off.isThinking)
+        #expect(ChatReasoningChoice.medium.badge == "M")
+    }
 
-        // A level-only model has no real "off" — sending .off produces no
-        // extra body keys rather than an invalid field.
-        #expect(ReasoningRequestEncoder.requestBody(for: .off, capability: .levels).isEmpty)
+    /// The reported bug: Off and On went out as chat_template_kwargs, which
+    /// LM Studio ignores, so Gemma 4 E4B kept thinking.
+    @Test func lmStudioGetsReasoningEffortNoneForOff() {
+        let toggle = ReasoningCapability.toggle(defaultOn: true)
+        let off = ReasoningRequestEncoder.requestBody(for: .off, capability: toggle, modelID: "google/gemma-4-e4b", server: .lmStudio)
+        #expect(off["reasoning_effort"] as? String == "none")
+        #expect(off["chat_template_kwargs"] == nil)
+        #expect(ReasoningRequestEncoder.requestBody(for: .on, capability: toggle, modelID: "google/gemma-4-e4b", server: .lmStudio).isEmpty)
+        let onFromOff = ReasoningRequestEncoder.requestBody(for: .on, capability: .toggle(defaultOn: false), modelID: "m", server: .lmStudio)
+        #expect(onFromOff["reasoning_effort"] as? String == "medium")
+        // LM Studio rejects "on"/"off" as reasoning_effort with HTTP 400.
+        for choice in ChatReasoningChoice.allCases {
+            let value = ReasoningRequestEncoder.requestBody(for: choice, capability: .unknown, modelID: "m", server: .lmStudio)["reasoning_effort"] as? String
+            #expect(value != "on" && value != "off")
+        }
+    }
 
-        let onBody = ReasoningRequestEncoder.requestBody(for: .on, capability: .toggle)
-        let onKwargs = onBody["chat_template_kwargs"] as? [String: Any]
-        #expect(onKwargs?["enable_thinking"] as? Bool == true)
+    @Test func reasoningRequestEncoderPerServer() {
+        #expect(ReasoningRequestEncoder.requestBody(for: .automatic, capability: .levels(canDisable: false), modelID: "gpt-oss-20b").isEmpty)
+        let gptHigh = ReasoningRequestEncoder.requestBody(for: .high, capability: .levels(canDisable: false), modelID: "gpt-oss-20b")
+        #expect(gptHigh["reasoning_effort"] as? String == "high")
+        #expect(gptHigh["chat_template_kwargs"] == nil)
+        // GPT-OSS has no off: it is sent as low.
+        let gptOff = ReasoningRequestEncoder.requestBody(for: .off, capability: .levels(canDisable: false), modelID: "gpt-oss-20b")
+        #expect(gptOff["reasoning_effort"] as? String == "low")
 
-        let offBody = ReasoningRequestEncoder.requestBody(for: .off, capability: .toggle)
-        let offKwargs = offBody["chat_template_kwargs"] as? [String: Any]
-        #expect(offKwargs?["enable_thinking"] as? Bool == false)
+        // vLLM / llama.cpp: Gemma 4 and Qwen switch through the template.
+        let on = ReasoningRequestEncoder.requestBody(for: .on, capability: .unknown, modelID: "google/gemma-4-31b")
+        #expect((on["chat_template_kwargs"] as? [String: Any])?["enable_thinking"] as? Bool == true)
+        let off = ReasoningRequestEncoder.requestBody(for: .off, capability: .unknown, modelID: "google/gemma-4-31b")
+        #expect((off["chat_template_kwargs"] as? [String: Any])?["enable_thinking"] as? Bool == false)
 
-        #expect(ReasoningRequestEncoder.requestBody(for: .on, capability: .unsupported).isEmpty)
+        // Qwen 3.8's template accepts low, medium and xhigh only.
+        let qwenHigh = ReasoningRequestEncoder.requestBody(for: .high, capability: .levels(canDisable: true), modelID: "Qwen3.8-27B")
+        #expect(qwenHigh["reasoning_effort"] as? String == "xhigh")
+        #expect((qwenHigh["chat_template_kwargs"] as? [String: Any])?["reasoning_effort"] as? String == "xhigh")
+
+        let ollamaOff = ReasoningRequestEncoder.requestBody(for: .off, capability: .unknown, modelID: "gemma4:e4b", server: .ollama)
+        #expect(ollamaOff["reasoning_effort"] as? String == "none")
+        #expect(ReasoningRequestEncoder.requestBody(for: .off, capability: .unknown, modelID: "gpt-5", server: .openAICompatible(isOpenAI: true)).isEmpty)
+        #expect(ReasoningRequestEncoder.requestBody(for: .on, capability: .unsupported, modelID: "m").isEmpty)
     }
 
     @Test func reasoningSupportTrackerRemembersUnsupportedModels() async {
@@ -1502,7 +1538,7 @@ struct LLMTUIGUITests {
         #expect(!options.agentEnabled)
         #expect(options.toolsEnabled)
         #expect(options.reasoningChoice == .high)
-        #expect(options.reasoningCapability == .levels)
+        #expect(options.reasoningCapability == .levels(canDisable: false))
     }
 
     @Test func toolRegistryReturnsStructuredErrorsForBadCalls() async {

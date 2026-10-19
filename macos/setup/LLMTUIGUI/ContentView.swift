@@ -1575,19 +1575,19 @@ private extension Array {
 }
 
 /// Lets the user choose a per-message reasoning setting, offering only the
-/// choices the active model actually supports — level-only models (GPT-OSS)
-/// never get a plain "Off", and an unrecognized model gets everything,
-/// marked as such, rather than a guess.
+/// choices the active model supports, and shows the setting actually in
+/// effect: a choice the model cannot take (Off on GPT-OSS, a level on an
+/// on/off model) is shown as what it becomes.
 struct ReasoningMenuButton: View {
     let model: AppModel
 
     private var capability: ReasoningCapability { model.chatReasoningCapability }
+    private var effective: ChatReasoningChoice { model.effectiveReasoningChoice }
     private var isDisabled: Bool {
         capability == .unsupported
             || model.configuration.provider.type == .embedded
             || model.configuration.provider.type == .mock
     }
-    private var isActive: Bool { model.nativeReasoningChoice != .automatic }
 
     var body: some View {
         Menu {
@@ -1595,22 +1595,30 @@ struct ReasoningMenuButton: View {
                 Button {
                     model.nativeReasoningChoice = choice
                 } label: {
-                    if model.nativeReasoningChoice == choice {
+                    if effective == choice {
                         Label(choice.title, systemImage: "checkmark")
                     } else {
                         Text(choice.title)
                     }
                 }
             }
-            if capability == .unknown {
-                Divider()
-                Text("Not confirmed for this model — fetch model profile settings to detect it.")
-            }
+            Divider()
+            Text(Self.note(capability, chosen: model.nativeReasoningChoice, effective: effective))
         } label: {
-            Image(systemName: isActive ? "brain.fill" : "brain")
+            Image(systemName: effective.isThinking ? "brain.fill" : "brain")
                 .frame(width: 24, height: 24)
-                .foregroundStyle(isActive ? Theme.accent : Color.secondary)
-                .background(isActive ? Theme.accent.opacity(0.14) : Color.clear, in: Circle())
+                .foregroundStyle(effective.isThinking ? Theme.accent : Color.secondary)
+                .background(effective.isThinking ? Theme.accent.opacity(0.14) : Color.clear, in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if let badge = effective.badge {
+                        Text(badge)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(effective.isThinking ? Color.white : Color.secondary)
+                            .padding(.horizontal, 3)
+                            .background(effective.isThinking ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.quaternary), in: Capsule())
+                            .offset(x: 6, y: -3)
+                    }
+                }
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1618,10 +1626,23 @@ struct ReasoningMenuButton: View {
         .disabled(isDisabled)
         .font(.title2)
         .accessibilityLabel("Reasoning")
-        .accessibilityValue(model.nativeReasoningChoice.title)
+        .accessibilityValue(effective.title)
         .help(isDisabled
             ? "This model doesn't support reasoning control"
-            : "Reasoning: \(model.nativeReasoningChoice.title)")
+            : "Reasoning: \(effective.title)")
+        .task(id: model.configuration.provider.baseURL + "|" + model.configuration.provider.model) {
+            await model.refreshChatReasoningCapability()
+        }
+    }
+
+    static func note(_ capability: ReasoningCapability, chosen: ChatReasoningChoice, effective: ChatReasoningChoice) -> String {
+        let change = chosen != effective ? "\(chosen.title) isn't available for this model; \(effective.title) is used. " : ""
+        switch capability {
+        case .unknown: return change + "Not reported for this model; every setting is sent as chosen."
+        case .unsupported: return change + "The server reports no reasoning control for this model."
+        case .toggle: return change + "This model only turns reasoning on or off."
+        case .levels(let canDisable): return change + (canDisable ? "This model accepts effort levels." : "This model always reasons; Low is the least.")
+        }
     }
 }
 

@@ -153,6 +153,45 @@ final class MobileAppModel {
         }
     }
 
+    /// Reasoning options LM Studio reported, per provider, address and model.
+    private var reasoningCapabilities: [String: ReasoningCapability] = [:]
+    /// Models whose server did not report reasoning options; a send does not
+    /// ask again, only the composer's refresh does.
+    private var reasoningProbesFailed: Set<String> = []
+    var reasoningProbe = ReasoningProbe()
+
+    /// What `profile`'s model accepts for reasoning: LM Studio's report when
+    /// there is one, else what its family is known to accept.
+    func reasoningCapability(for profile: MobileProviderProfile?) -> ReasoningCapability {
+        guard let profile else { return .unknown }
+        return reasoningCapabilities[contextKey(profile)] ?? .family(model: profile.model)
+    }
+
+    var activeReasoningCapability: ReasoningCapability { reasoningCapability(for: activeProfile) }
+
+    /// The reasoning setting the next message actually uses.
+    var effectiveReasoning: MobileReasoning { activeReasoningCapability.resolve(reasoning) }
+
+    /// Asks LM Studio for the active model's reasoning options, again after a
+    /// failure, so the brain menu offers only what the model accepts.
+    func refreshReasoningCapability() {
+        guard let profile = activeProfile, profile.type == .lmStudio, !profile.model.isEmpty else { return }
+        reasoningProbesFailed.remove(contextKey(profile))
+        Task { _ = await loadReasoningCapability(profile) }
+    }
+
+    private func loadReasoningCapability(_ profile: MobileProviderProfile) async -> ReasoningCapability {
+        let key = contextKey(profile)
+        if let known = reasoningCapabilities[key] { return known }
+        guard profile.type == .lmStudio, !reasoningProbesFailed.contains(key) else { return .family(model: profile.model) }
+        if let reported = await reasoningProbe.capability(profile: profile, apiKey: apiKey(for: profile)) {
+            reasoningCapabilities[key] = reported
+            return reported
+        }
+        reasoningProbesFailed.insert(key)
+        return .family(model: profile.model)
+    }
+
     var currentConversation: MobileConversation? {
         conversations.first { $0.id == currentConversationID }
     }
@@ -260,6 +299,7 @@ final class MobileAppModel {
             let reasoningSnapshot = bubble.flatMap { message(id: $0)?.reasoning }
             let separate = separateNextRound
             if let bubble { separateReasoning.insert(bubble) }
+            let capability = reasoning == .automatic ? .unknown : await loadReasoningCapability(profile)
             do {
                 return try await runtime.streamTurn(
                     profile: profile,
@@ -267,6 +307,7 @@ final class MobileAppModel {
                     messages: messages,
                     tools: tools,
                     reasoning: reasoning,
+                    reasoningCapability: capability,
                     onReasoning: { [weak self] thought in
                         guard let bubble else { return }
                         await self?.appendRoundReasoning(thought, to: bubble)
