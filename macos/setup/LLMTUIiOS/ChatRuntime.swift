@@ -17,10 +17,26 @@ struct MobileChatRuntime: Sendable {
 
             let content: String?
             let toolCalls: [StreamToolCall]?
+            /// Reasoning streamed apart from the answer: `reasoning` (Ollama,
+            /// LM Studio, newer vLLM) or `reasoning_content` (llama.cpp,
+            /// older vLLM). Read leniently: a server that sends another shape
+            /// here must not fail the stream.
+            let reasoning: String?
 
             enum CodingKeys: String, CodingKey {
                 case content
                 case toolCalls = "tool_calls"
+                case reasoning
+                case reasoningContent = "reasoning_content"
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                content = try container.decodeIfPresent(String.self, forKey: .content)
+                toolCalls = try container.decodeIfPresent([StreamToolCall].self, forKey: .toolCalls)
+                let primary = (try? container.decodeIfPresent(String.self, forKey: .reasoning)) ?? nil
+                let fallback = (try? container.decodeIfPresent(String.self, forKey: .reasoningContent)) ?? nil
+                reasoning = primary ?? fallback
             }
         }
 
@@ -65,6 +81,7 @@ struct MobileChatRuntime: Sendable {
         messages: [[String: Any]],
         tools: [[String: Any]]?,
         reasoning: MobileReasoning,
+        onReasoning: @escaping @Sendable (String) async -> Void = { _ in },
         onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> ChatTurnResult {
         let endpoint = try endpointURL(profile: profile, path: "chat/completions")
@@ -77,9 +94,9 @@ struct MobileChatRuntime: Sendable {
             body["tools"] = tools
             body["tool_choice"] = "auto"
         }
-        if reasoning != .automatic {
-            body["reasoning_effort"] = reasoning.rawValue
-        }
+        body.merge(
+            ReasoningRequest.fields(for: reasoning, model: profile.model, providerType: profile.type, baseURL: profile.baseURL)
+        ) { _, new in new }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -100,6 +117,8 @@ struct MobileChatRuntime: Sendable {
         }
 
         var fullText = ""
+        var fullReasoning = ""
+        var splitter = ReasoningSplitter()
         var accumulators: [Int: ToolAccumulator] = [:]
         var finished = false
         var finishReason: String?
@@ -112,9 +131,20 @@ struct MobileChatRuntime: Sendable {
                   let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else { throw MobileChatError.invalidResponse }
             for choice in chunk.choices {
                 if let reason = choice.finishReason { finishReason = reason }
+                if let thought = choice.delta.reasoning, !thought.isEmpty {
+                    fullReasoning += thought
+                    await onReasoning(thought)
+                }
                 if let content = choice.delta.content, !content.isEmpty {
-                    fullText += content
-                    await onDelta(content)
+                    let part = splitter.feed(content)
+                    if !part.reasoning.isEmpty {
+                        fullReasoning += part.reasoning
+                        await onReasoning(part.reasoning)
+                    }
+                    if !part.answer.isEmpty {
+                        fullText += part.answer
+                        await onDelta(part.answer)
+                    }
                 }
                 for call in choice.delta.toolCalls ?? [] {
                     var value = accumulators[call.index] ?? ToolAccumulator()
@@ -127,6 +157,15 @@ struct MobileChatRuntime: Sendable {
         }
 
         guard finished || finishReason != nil else { throw MobileChatError.invalidResponse }
+        let rest = splitter.finish()
+        if !rest.reasoning.isEmpty {
+            fullReasoning += rest.reasoning
+            await onReasoning(rest.reasoning)
+        }
+        if !rest.answer.isEmpty {
+            fullText += rest.answer
+            await onDelta(rest.answer)
+        }
         if !accumulators.isEmpty {
             guard ["tool_calls", "stop"].contains(finishReason ?? "") else { throw MobileChatError.invalidResponse }
             // A call needs a name and complete JSON-object arguments. An empty
@@ -148,7 +187,7 @@ struct MobileChatRuntime: Sendable {
                 arguments: value.arguments.isEmpty ? "{}" : value.arguments
             )
         }
-        return ChatTurnResult(text: fullText, toolCalls: calls)
+        return ChatTurnResult(text: fullText, toolCalls: calls, reasoning: fullReasoning)
     }
 
     private func endpointURL(profile: MobileProviderProfile, path: String) throws -> URL {

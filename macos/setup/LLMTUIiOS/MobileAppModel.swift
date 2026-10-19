@@ -257,14 +257,20 @@ final class MobileAppModel {
             let entries = backgroundEntries
             if bubble != nil { flushStreamedText() }
             let snapshot = bubble.flatMap { message(id: $0)?.text }
+            let reasoningSnapshot = bubble.flatMap { message(id: $0)?.reasoning }
             let separate = separateNextRound
+            if let bubble { separateReasoning.insert(bubble) }
             do {
                 return try await runtime.streamTurn(
                     profile: profile,
                     apiKey: apiKey,
                     messages: messages,
                     tools: tools,
-                    reasoning: reasoning
+                    reasoning: reasoning,
+                    onReasoning: { [weak self] thought in
+                        guard let bubble else { return }
+                        await self?.appendRoundReasoning(thought, to: bubble)
+                    }
                 ) { [weak self] delta in
                     guard let bubble else { return }
                     await self?.appendRoundDelta(delta, to: bubble)
@@ -278,6 +284,7 @@ final class MobileAppModel {
                 resumes += 1
                 if let bubble {
                     replaceText(of: bubble, with: snapshot ?? "")
+                    replaceReasoning(of: bubble, with: reasoningSnapshot)
                     separateNextRound = separate
                 }
                 await waitUntilActive()
@@ -1007,7 +1014,10 @@ final class MobileAppModel {
             run.pass = pass
             run.phase = .acting
             setAgentRun(run, on: assistantID)
-            if pass > 1 { replaceText(of: assistantID, with: "") }
+            if pass > 1 {
+                replaceText(of: assistantID, with: "")
+                replaceReasoning(of: assistantID, with: nil)
+            }
 
             // 2-3. Build the context from state and act.
             var passMessages = [["role": "system", "content": baseSystem + "\n\n" + AgentPrompts.agentInstructions(plan: plan, pass: pass, maxPasses: policy.maxPasses)]] + messages
@@ -1095,6 +1105,12 @@ final class MobileAppModel {
         flushStreamedText()
         guard let (c, m) = location(of: id) else { return }
         conversations[c].messages[m].text = text
+    }
+
+    private func replaceReasoning(of id: UUID, with reasoning: String?) {
+        flushStreamedText()
+        guard let (c, m) = location(of: id) else { return }
+        conversations[c].messages[m].reasoning = reasoning
     }
 
     /// Runs one tool call. A failure is returned to the model as the tool's
@@ -1464,6 +1480,28 @@ final class MobileAppModel {
         }
     }
 
+    /// Bubbles whose next reasoning starts a new request, so it is set off
+    /// from the previous round's reasoning by a blank line.
+    private var separateReasoning: Set<UUID> = []
+
+    /// Reasoning streams into the same batches as the answer text.
+    private func appendRoundReasoning(_ delta: String, to id: UUID) {
+        if separateReasoning.remove(id) != nil {
+            flushStreamedText()
+            if message(id: id)?.reasoning?.isEmpty == false {
+                streamedReasoning[id, default: ""] += "\n\n"
+            }
+        }
+        streamedReasoning[id, default: ""] += delta
+        guard streamFlush == nil else { return }
+        streamFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            self?.flushStreamedText()
+        }
+    }
+
+    private var streamedReasoning: [UUID: String] = [:]
+
     /// Streamed text waiting to be shown. Tokens are applied to the message
     /// in batches (about 12 times a second) instead of one by one, so the
     /// reply is re-rendered and the transcript re-scrolled far less often,
@@ -1477,6 +1515,12 @@ final class MobileAppModel {
         let pending = streamedText
         streamedText.removeAll()
         for (id, text) in pending { appendDelta(text, to: id) }
+        let thoughts = streamedReasoning
+        streamedReasoning.removeAll()
+        for (id, thought) in thoughts {
+            guard let (c, m) = location(of: id) else { continue }
+            conversations[c].messages[m].reasoning = (conversations[c].messages[m].reasoning ?? "") + thought
+        }
     }
 
     private func appendDelta(_ delta: String, to id: UUID) {

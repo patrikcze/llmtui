@@ -929,6 +929,14 @@ private struct MessageBubble: View {
                 if let run = message.agentRun {
                     AgentRunCard(run: run)
                 }
+                if message.role == .assistant, let reasoning = message.reasoning,
+                   !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ReasoningDisclosure(
+                        text: reasoning,
+                        isThinking: message.isStreaming && message.text.isEmpty,
+                        startsExpanded: !message.isStreaming && message.text.isEmpty
+                    )
+                }
                 if message.role == .assistant {
                     MobileRichMessageView(
                         source: message.text.isEmpty && message.isStreaming ? "Thinking…" : displayText
@@ -1448,6 +1456,36 @@ private struct ComposerIcon: View {
             .frame(width: 36, height: 36)
             .background(active ? Theme.accent.opacity(0.16) : Theme.raisedSurface.opacity(0.6), in: Circle())
             .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// The model's reasoning for a reply, collapsed above the answer. It is
+/// plain text (never rendered as Markdown) and is not sent back to the model.
+private struct ReasoningDisclosure: View {
+    let text: String
+    let isThinking: Bool
+    @State private var expanded: Bool
+
+    init(text: String, isThinking: Bool, startsExpanded: Bool) {
+        self.text = text
+        self.isThinking = isThinking
+        _expanded = State(initialValue: startsExpanded)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        } label: {
+            Label(isThinking ? "Thinking…" : "Thought", systemImage: "brain")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .tint(.secondary)
     }
 }
 

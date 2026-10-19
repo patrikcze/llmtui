@@ -71,6 +71,9 @@ struct MobileChatMessage: Codable, Identifiable, Equatable, Sendable {
     var sourceRefs: [String]?
     /// The ∞ agent run behind this reply: plan, passes and checks.
     var agentRun: MobileAgentRun?
+    /// The model's reasoning for this reply, kept apart from `text`: it is
+    /// shown collapsed and never sent back to the model.
+    var reasoning: String?
 
     init(
         id: UUID = UUID(),
@@ -137,8 +140,11 @@ struct MobileAttachment: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// The reasoning (brain) choice. `ReasoningRequest` turns it into request
+/// fields; Automatic sends nothing and keeps the model's own default.
 enum MobileReasoning: String, CaseIterable, Identifiable, Sendable {
     case automatic
+    case off
     case low
     case medium
     case high
@@ -148,6 +154,7 @@ enum MobileReasoning: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .automatic: "Automatic"
+        case .off: "Off"
         case .low: "Low"
         case .medium: "Medium"
         case .high: "High"
@@ -222,6 +229,7 @@ nonisolated struct ToolCall: Sendable, Equatable {
 struct ChatTurnResult: Sendable {
     let text: String
     let toolCalls: [ToolCall]
+    var reasoning = ""
 }
 
 struct PendingToolApproval: Identifiable, Equatable {
