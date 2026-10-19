@@ -68,6 +68,9 @@ struct ChatRetentionTests {
         let decision = ChatRetentionDecision(archive: [UUID(), UUID()], delete: [UUID()])
         #expect(decision.summary(days: 7) == "2 chats archived and 1 chat deleted after 7 days without activity.")
         #expect(ChatRetentionDecision().summary(days: 7) == nil)
+        // The Archive total appears only when it holds more than this report.
+        #expect(ChatRetentionDecision(archive: [UUID()]).summary(days: 7, inArchive: 1) == "1 chat archived after 7 days without activity.")
+        #expect(decision.summary(days: 7, inArchive: 5) == "2 chats archived and 1 chat deleted after 7 days without activity (5 in Archive).")
     }
 
     // MARK: - Model
@@ -102,6 +105,50 @@ struct ChatRetentionTests {
         model.restoreConversation(old.id)
         #expect(model.archivedConversations.isEmpty)
         #expect(model.applyRetention(ChatRetentionPolicy(days: 7, action: .archive)).isEmpty)
+    }
+
+    /// The notice used to show only the latest run, so it read "4 chats
+    /// archived" while the Archive listed 5. Runs now add up until
+    /// dismissed, and the Archive total is shown when it is larger.
+    @Test func noticeAddsUpRunsAndAgreesWithTheArchive() throws {
+        let earlier = chat(daysAgo: 30, archived: true)
+        let first = chat(daysAgo: 10)
+        let second = chat(daysAgo: 6)
+        let (model, base) = try model(with: [earlier, first, second])
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let policy = ChatRetentionPolicy(days: 7, action: .archive)
+        model.applyRetention(policy, now: now)
+        #expect(model.retentionNotice == "1 chat archived after 7 days without activity (2 in Archive).")
+
+        // A later run adds to the unread notice instead of replacing it.
+        model.applyRetention(policy, now: now.addingTimeInterval(2 * 86_400))
+        #expect(model.archivedConversations.count == 3)
+        #expect(model.retentionNotice == "2 chats archived after 7 days without activity (3 in Archive).")
+
+        // An empty run keeps the notice; a restored chat drops out of it.
+        model.applyRetention(policy, now: now.addingTimeInterval(2 * 86_400))
+        model.restoreConversation(first.id)
+        #expect(model.retentionNotice == "1 chat archived after 7 days without activity (2 in Archive).")
+
+        // Deleting the whole Archive leaves nothing to report.
+        model.deleteAllArchived()
+        #expect(model.retentionNotice == nil)
+    }
+
+    @Test func dismissingStartsAFreshNotice() throws {
+        let first = chat(daysAgo: 10)
+        let second = chat(daysAgo: 6)
+        let (model, base) = try model(with: [first, second])
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let policy = ChatRetentionPolicy(days: 7, action: .archive)
+        model.applyRetention(policy, now: now)
+        model.dismissRetentionNotice()
+        #expect(model.retentionNotice == nil)
+
+        model.applyRetention(policy, now: now.addingTimeInterval(2 * 86_400))
+        #expect(model.retentionNotice == "1 chat archived after 7 days without activity (2 in Archive).")
     }
 
     @Test func deleteModeRemovesChatsWithTheirAttachments() async throws {

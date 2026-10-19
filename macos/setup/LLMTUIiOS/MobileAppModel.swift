@@ -360,8 +360,25 @@ final class MobileAppModel {
 
     // MARK: - Retention, archive and pinning
 
-    /// A one-line report of the last retention run, shown on the chat list.
-    var retentionNotice: String?
+    /// What retention did since the notice was last dismissed. Runs add up
+    /// (a foreground run does not replace an unread launch report), and
+    /// the notice counts only chats still in the Archive.
+    private(set) var retentionReport: ChatRetentionDecision?
+    private var retentionReportDays: Int?
+
+    /// A one-line report of retention since the last dismissal, shown on
+    /// the chat list, with the Archive total when it holds more chats.
+    var retentionNotice: String? {
+        guard var report = retentionReport else { return nil }
+        let archived = Set(archivedConversations.map(\.id))
+        report.archive.removeAll { !archived.contains($0) }
+        return report.summary(days: retentionReportDays, inArchive: archived.count)
+    }
+
+    func dismissRetentionNotice() {
+        retentionReport = nil
+        retentionReportDays = nil
+    }
 
     /// Chats in the main list: not archived, with content, pinned first,
     /// then most recent.
@@ -403,7 +420,10 @@ final class MobileAppModel {
         let decision = retentionPreview(policy, now: now)
         for id in decision.archive { archiveConversation(id, at: now) }
         for id in decision.delete { deleteConversation(id) }
-        if let summary = decision.summary(days: policy.days) { retentionNotice = summary }
+        if !decision.isEmpty {
+            retentionReport = retentionReport.map { $0.merging(decision) } ?? decision
+            retentionReportDays = policy.days
+        }
         return decision
     }
 
