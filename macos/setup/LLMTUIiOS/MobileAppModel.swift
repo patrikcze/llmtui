@@ -867,7 +867,10 @@ final class MobileAppModel {
 
             Tools: work toward the user's goal with the available tools, inspect each result before continuing, ask with ask_user when an important choice is missing, and stop once the task is done. Never claim a tool ran unless its result is present. Call only the tools listed, by their exact names, and include every required argument; if a call returns an error, fix the call as the error says instead of repeating it.
 
-            Research: for facts you are not sure of, current events, prices, schedules, opening hours, or anything that may have changed, call web_research instead of answering from what you remember of training. Give it the full question and 2-3 distinct queries (different phrasings, the official source, a recent-news angle). Answer from its notes and cite sources as [1], [2]. If the notes are thin or disagree, research again with sharper queries (at most twice more), then say clearly what is still uncertain. Use local_context for the current date and time. Use web_search or web_fetch only for one specific page or site.
+            Research: for facts you are not sure of or that may have changed, use the web instead of what you remember of training. Use local_context for the current date and time.
+            - Exact data (hourly or daily values, a named site or API, a page or URL the user gave): web_search to find the page, then web_fetch it; fetch a known URL directly. If a result is cut off, call web_fetch again with the offset it gives.
+            - Broad questions (news, comparisons, explanations): web_research with the full question and 2-3 distinct queries; cite its notes as [1], [2] and web_fetch a source URL for more detail.
+            If results are thin or disagree, try again with sharper queries (at most twice more), then say clearly what is still uncertain.
             """
         }
         let memoryEnabled = MobileMemoryStore.isEnabled
@@ -1283,6 +1286,7 @@ final class MobileAppModel {
             // enforce the schema: the question under another name, or only
             // search queries (the first then stands for the question).
             let listedQueries = ToolArguments.strings(arguments["queries"] ?? arguments["search_queries"])
+            let urls = WebResearch.normalizedURLs(ToolArguments.strings(arguments["urls"] ?? arguments["url"] ?? arguments["sources"]))
             guard let question = ToolArguments.string(arguments, ["question", "query", "q", "topic", "prompt", "search", "text"]) ?? listedQueries.first else {
                 throw ValidationError(ToolArguments.missing(
                     tool: "web_research",
@@ -1291,14 +1295,18 @@ final class MobileAppModel {
                     received: arguments
                 ))
             }
-            let queries = WebResearch.normalizedQueries(listedQueries, fallback: question)
-            let maxSources = ToolArguments.int(arguments, ["max_sources", "maxSources", "sources", "limit"]) ?? WebResearch.defaultSources
-            let summary = "Search " + queries.map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")
-                + " and read up to \(min(max(maxSources, 1), WebResearch.maxSources)) pages."
+            // Given URLs only, it reads those pages and does not search.
+            let queries = urls.isEmpty || !listedQueries.isEmpty ? WebResearch.normalizedQueries(listedQueries, fallback: question) : []
+            let maxSources = ToolArguments.int(arguments, ["max_sources", "maxSources", "sources", "limit"]) ?? max(WebResearch.defaultSources, urls.count)
+            let pages = min(max(maxSources, 1), WebResearch.maxSources)
+            var steps: [String] = []
+            if !urls.isEmpty { steps.append("Read " + urls.prefix(pages).joined(separator: ", ")) }
+            if !queries.isEmpty { steps.append("Search " + queries.map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")) }
+            let summary = steps.joined(separator: "; ") + " (up to \(pages) pages)."
             guard await approveIfNeeded(call.name, summary: summary, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
             }
-            return try await WebResearch.run(question: question, queries: queries, maxSources: maxSources)
+            return try await WebResearch.run(question: question, queries: queries, urls: urls, maxSources: maxSources)
         case "web_search":
             guard let query = ToolArguments.string(arguments, ["query", "q", "question", "search", "text"]) ?? ToolArguments.strings(arguments["queries"]).first else {
                 throw ValidationError(ToolArguments.missing(tool: "web_search", argument: "query", example: #"{"query":"Motocykl 2027 Praha"}"#, received: arguments))
@@ -1314,7 +1322,12 @@ final class MobileAppModel {
             guard await approveIfNeeded(call.name, summary: url, activityID: activityID, assistantID: assistantID) else {
                 return Self.rejectedOutput
             }
-            return try await SafeWebFetcher.fetch(url, focus: ToolArguments.string(arguments, ["focus", "query", "question"]))
+            return try await SafeWebFetcher.fetch(
+                url,
+                focus: ToolArguments.string(arguments, ["focus", "query", "question"]),
+                offset: ToolArguments.int(arguments, ["offset", "start", "from", "cursor"]) ?? 0,
+                pageSize: WebPageText.pageSize(contextWindow: contextWindow)
+            )
         case "memory_remember":
             guard MobileMemoryStore.isEnabled else { return Self.memoryOffOutput }
             guard let text = ToolArguments.string(arguments, ["text", "fact", "memory", "content", "note"]) else {

@@ -305,27 +305,64 @@ enum SafeWebFetcher {
         return results
     }
 
-    /// Fetches a public page as plain text. With `focus`, returns only the
-    /// passages relevant to it instead of the start of the page.
-    static func fetch(_ rawURL: String, focus: String? = nil) async throws -> String {
-        let text = try await fetchText(rawURL)
-        if let focus, !focus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let passages = WebResearch.relevantPassages(in: text, terms: WebResearch.keyTerms(focus), limit: 8, budget: 6_000)
-            if !passages.isEmpty { return passages.joined(separator: "\n\n") }
+    /// The session every web request uses; tests replace it with a stub.
+    static var session: URLSession = .shared
+
+    /// Recently fetched documents, so paging through one with `offset` reads
+    /// the same text without downloading it again. Memory only.
+    private static var recentDocuments: [(url: String, fetched: Date, document: WebPageText.Document)] = []
+    private static let recentLimit = 4
+    private static let recentLifetime: TimeInterval = 600
+
+    static func clearRecentDocuments() { recentDocuments = [] }
+
+    /// Reads a public page for `web_fetch`. HTML comes back as Markdown-style
+    /// text, JSON and plain text nearly as-is, `pageSize` characters at a time
+    /// from `offset`. With `focus`, an HTML or text page returns only the
+    /// passages about it instead.
+    static func fetch(_ rawURL: String, focus: String? = nil, offset: Int = 0, pageSize: Int = 24_000) async throws -> String {
+        let document = try await fetchDocument(rawURL)
+        if let focus = focus?.trimmingCharacters(in: .whitespacesAndNewlines), !focus.isEmpty,
+           offset == 0, document.kind != .json {
+            let passages = WebResearch.relevantPassages(
+                in: WebPageText.withoutLinkTargets(document.text),
+                terms: WebResearch.keyTerms(focus),
+                limit: 8,
+                budget: min(pageSize, 6_000)
+            )
+            if !passages.isEmpty {
+                return WebPageText.focusOutput(url: rawURL, document: document, focus: focus, passages: passages)
+            }
         }
-        return String(text.prefix(40_000))
+        return WebPageText.fetchOutput(url: rawURL, document: document, offset: offset, limit: pageSize)
     }
 
     /// The readable text of a public HTTP or HTTPS page.
     static func fetchText(_ rawURL: String) async throws -> String {
+        try await fetchDocument(rawURL).text
+    }
+
+    /// A public HTTP or HTTPS response as readable text, from the recent
+    /// cache when the same URL was fetched in the last few minutes.
+    static func fetchDocument(_ rawURL: String) async throws -> WebPageText.Document {
         guard let url = URL(string: rawURL),
               let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
               let host = url.host,
               isPublicHost(host) else { throw MobileChatError.unsafeURL }
 
-        let data = try await fetchData(url, browserHeaders: true)
-        return plainText(String(decoding: data, as: UTF8.self))
+        recentDocuments.removeAll { Date.now.timeIntervalSince($0.fetched) > recentLifetime }
+        if let cached = recentDocuments.first(where: { $0.url == rawURL }) { return cached.document }
+        let (data, response) = try await fetchResponse(url, browserHeaders: true)
+        let document = WebPageText.document(
+            body: String(decoding: data, as: UTF8.self),
+            mimeType: response.mimeType,
+            baseURL: response.url ?? url
+        )
+        recentDocuments.removeAll { $0.url == rawURL }
+        recentDocuments.insert((rawURL, .now, document), at: 0)
+        if recentDocuments.count > recentLimit { recentDocuments.removeLast() }
+        return document
     }
 
     static func isPublicHost(_ host: String) -> Bool {
@@ -345,15 +382,19 @@ enum SafeWebFetcher {
     }
 
     private static func fetchData(_ url: URL, browserHeaders: Bool = false) async throws -> Data {
+        try await fetchResponse(url, browserHeaders: browserHeaders).0
+    }
+
+    private static func fetchResponse(_ url: URL, browserHeaders: Bool = false) async throws -> (Data, HTTPURLResponse) {
         guard let host = url.host, isPublicHost(host) else { throw MobileChatError.unsafeURL }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
-        request.setValue("text/plain, text/html, application/json", forHTTPHeaderField: "Accept")
+        request.setValue("text/html, application/json, text/plain, text/csv, */*;q=0.5", forHTTPHeaderField: "Accept")
         if browserHeaders {
             request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
             request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard data.count <= 1_000_000 else { throw MobileChatError.responseTooLarge }
         guard let http = response as? HTTPURLResponse,
               let finalHost = http.url?.host,
@@ -361,7 +402,7 @@ enum SafeWebFetcher {
         guard (200..<300).contains(http.statusCode) else {
             throw MobileChatError.server(http.statusCode, "Web request failed")
         }
-        return data
+        return (data, http)
     }
 
     private static func resolvedSearchURL(_ rawURL: String) -> String {

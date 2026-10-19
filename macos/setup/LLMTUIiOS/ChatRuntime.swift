@@ -240,26 +240,28 @@ struct MobileChatRuntime: Sendable {
         ),
         definition(
             name: "web_research",
-            description: "Research a question on the public web: runs up to 3 searches, reads the best few pages from different sites, and returns numbered notes with only the relevant passages, to cite as [1], [2]. Prefer this over web_search + web_fetch for facts, current events, prices, schedules, or anything that may have changed.",
+            description: "Answer a broad question from several web pages: runs up to 3 searches (or reads the urls you give), reads the best pages from different sites, and returns numbered notes with the relevant passages and each source URL, to cite as [1], [2]. For exact data from one site or API, use web_search and web_fetch instead.",
             properties: [
                 "question": stringProperty("The question to answer, in full."),
                 "queries": stringArrayProperty("1-3 distinct search queries, for example different phrasings, the official source, or a recent-news angle. Defaults to the question."),
+                "urls": stringArrayProperty("Optional: public page URLs to read instead of searching (add queries to search as well)."),
                 "max_sources": integerProperty("How many pages to read, 1-6. Defaults to 4.")
             ],
             required: ["question"]
         ),
         definition(
             name: "web_search",
-            description: "Search the public web and list result titles, URLs and snippets. Use it to find a specific page or site; for answering a question, use web_research.",
+            description: "Search the public web and list result titles, URLs and snippets. Use it to find the page or API with the data you need, then read it with web_fetch.",
             properties: ["query": stringProperty("Search query.")],
             required: ["query"]
         ),
         definition(
             name: "web_fetch",
-            description: "Read text from one public HTTP or HTTPS URL. Give a focus to get only the passages about it instead of the start of the page.",
+            description: "Read one public HTTP or HTTPS URL. Web pages come back as Markdown-style text, JSON and plain text as-is. Long content comes in parts: a cut-off result ends with the offset to call again with. A focus returns only the passages about it.",
             properties: [
                 "url": stringProperty("Public URL to fetch."),
-                "focus": stringProperty("Optional: what you are looking for on the page.")
+                "offset": integerProperty("Optional: character offset to continue from, as given at the end of a cut-off result. Defaults to 0."),
+                "focus": stringProperty("Optional: what you are looking for on a long web page.")
             ],
             required: ["url"]
         ),
