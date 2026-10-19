@@ -92,13 +92,25 @@ nonisolated struct ChatRetentionDecision: Equatable, Sendable {
 
     var isEmpty: Bool { archive.isEmpty && delete.isEmpty }
 
-    /// "3 chats archived after 7 days without activity."
-    func summary(days: Int?) -> String? {
+    /// This decision plus a later run's, each chat counted once.
+    func merging(_ other: ChatRetentionDecision) -> ChatRetentionDecision {
+        ChatRetentionDecision(
+            archive: archive + other.archive.filter { !archive.contains($0) },
+            delete: delete + other.delete.filter { !delete.contains($0) }
+        )
+    }
+
+    /// "3 chats archived after 7 days without activity." When the Archive
+    /// holds more chats than this decision archived (earlier runs, manual
+    /// archiving), `inArchive` adds the total so the two numbers agree:
+    /// "3 chats archived after 7 days without activity (5 in Archive)."
+    func summary(days: Int?, inArchive: Int = 0) -> String? {
         guard !isEmpty else { return nil }
         let period = days.map { ChatRetentionPolicy.periodTitle($0) } ?? ""
         var parts: [String] = []
         if !archive.isEmpty { parts.append("\(archive.count) \(archive.count == 1 ? "chat" : "chats") archived") }
         if !delete.isEmpty { parts.append("\(delete.count) \(delete.count == 1 ? "chat" : "chats") deleted") }
-        return parts.joined(separator: " and ") + " after \(period) without activity."
+        let total = inArchive > archive.count ? " (\(inArchive) in Archive)" : ""
+        return parts.joined(separator: " and ") + " after \(period) without activity\(total)."
     }
 }
