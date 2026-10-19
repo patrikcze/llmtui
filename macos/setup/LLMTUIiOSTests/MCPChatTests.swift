@@ -2,6 +2,11 @@ import Foundation
 import Testing
 @testable import LLMTUIiOS
 
+nonisolated final class MCPChatIntegrationURLProtocol: MCPStreamURLProtocol {
+    static let wire = MCPWireFixture()
+    override class var fixture: MCPWireFixture { wire }
+}
+
 @MainActor @Suite(.serialized) struct MCPChatIntegrationTests {
     private func configured(_ mode: MCPFakeHTTP.Mode, runtime: MobileChatRuntime? = nil) async throws -> (MobileAppModel, MCPFakeHTTP, MobileMCPProfile, MobileMCPBinding, UUID) {
         let http = MCPFakeHTTP(mode)
@@ -95,13 +100,13 @@ import Testing
     }
     @Test func liveToolLoopSendsCorrelatedResultBackToProvider() async throws {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MCPStreamURLProtocol.self]
+        configuration.protocolClasses = [MCPChatIntegrationURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let (model, http, _, binding, _) = try await configured(.modern, runtime: MobileChatRuntime(session: session))
         let call = #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"mcp-call","function":{"name":"NAME","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#.replacingOccurrences(of: "NAME", with: binding.providerName) + "\n\ndata: [DONE]\n\n"
         let answer = #"data: {"choices":[{"delta":{"content":"Observed the MCP result."},"finish_reason":"stop"}]}"# + "\n\ndata: [DONE]\n\n"
-        MCPWireFixture.shared.set([call, answer])
+        MCPChatIntegrationURLProtocol.wire.set([call, answer])
         model.draft = "Use the external lookup tool."
         model.send()
         try await awaitApproval(model)
@@ -111,7 +116,7 @@ import Testing
         #expect(!model.isGenerating)
         #expect((await http.methods()).filter { $0 == "tools/call" }.count == 1)
         #expect(model.messages.last?.text.contains("Observed the MCP result.") == true)
-        let requests = MCPWireFixture.shared.requests()
+        let requests = MCPChatIntegrationURLProtocol.wire.requests()
         #expect(requests.count == 2)
         let second = try #require(requests.last)
         var data = second.httpBody ?? Data()

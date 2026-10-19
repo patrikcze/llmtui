@@ -4,7 +4,6 @@ import Testing
 @testable import LLMTUIiOS
 
 nonisolated final class MCPWireFixture: @unchecked Sendable {
-    static let shared = MCPWireFixture()
     private let lock = NSLock()
     private var payloads: [Data] = []
     private var captured: [URLRequest] = []
@@ -13,11 +12,15 @@ nonisolated final class MCPWireFixture: @unchecked Sendable {
     func requests() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return captured }
     func response(_ request: URLRequest) -> Data { lock.lock(); defer { lock.unlock() }; captured.append(request); return payloads.count > 1 ? payloads.removeFirst() : payloads.first ?? Data() }
 }
-nonisolated final class MCPStreamURLProtocol: URLProtocol {
+/// Serves SSE payloads from `fixture`. Swift Testing may run suites in
+/// parallel, so each suite subclasses this with its own fixture instead of
+/// sharing one process-wide.
+nonisolated class MCPStreamURLProtocol: URLProtocol {
+    class var fixture: MCPWireFixture { preconditionFailure("Subclass MCPStreamURLProtocol with its own fixture.") }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let data = MCPWireFixture.shared.response(request)
+        let data = Self.fixture.response(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -26,11 +29,16 @@ nonisolated final class MCPStreamURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+nonisolated final class MCPProviderCompletionURLProtocol: MCPStreamURLProtocol {
+    static let wire = MCPWireFixture()
+    override class var fixture: MCPWireFixture { wire }
+}
+
 @Suite(.serialized) struct MCPProviderCompletionTests {
     private func turn(_ text: String) async throws -> ChatTurnResult {
-        MCPWireFixture.shared.set(text)
+        MCPProviderCompletionURLProtocol.wire.set(text)
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MCPStreamURLProtocol.self]
+        configuration.protocolClasses = [MCPProviderCompletionURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         return try await MobileChatRuntime(session: session).streamTurn(profile: MobileProviderProfile(baseURL: "https://stream.fixture", model: "test"), apiKey: "", messages: [], tools: [], reasoning: .automatic) { _ in }
