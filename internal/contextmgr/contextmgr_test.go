@@ -110,6 +110,21 @@ func TestDecideAutoPicksSummarizeForLongConversations(t *testing.T) {
 	}
 }
 
+func TestDecideAutoDelaysLongConversationCompressionUntilBudget(t *testing.T) {
+	p := Params{
+		Strategy: StrategyAuto, ContextWindow: 100000, ReserveResponseTokens: 2048,
+		SummarizeAfterMessages: 6, OnlyWhenOverBudget: true,
+	}
+	if d := Decide(msgs(8, 100), p); d.Compress || d.Strategy != StrategySummarize {
+		t.Fatalf("under-budget long conversation = %+v, want deferred summarize", d)
+	}
+	p.ContextWindow = 400
+	p.ReserveResponseTokens = 100
+	if d := Decide(msgs(8, 400), p); !d.Compress || d.Strategy != StrategySummarize {
+		t.Fatalf("over-budget long conversation = %+v, want summarize", d)
+	}
+}
+
 func TestSplitKeepsLastMessages(t *testing.T) {
 	conversation := append([]provider.Message{{Role: provider.RoleSystem, Content: "sys"}}, msgs(10, 50)...)
 	older, recent := Split(conversation, 4)

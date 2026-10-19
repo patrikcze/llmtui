@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/patrikcze/llmtui/internal/agent"
 	"github.com/patrikcze/llmtui/internal/cache"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/provider"
@@ -1489,5 +1490,41 @@ func TestMalformedNativeCallFallbackLastsOneTurn(t *testing.T) {
 	m.restoreSuspendedNativeTools()
 	if m.toolsNative || !m.nativeToolRejections[m.nativeToolCapabilityKey()] {
 		t.Fatal("a repeated malformed native call must reject native calling for this provider/model")
+	}
+}
+
+// TestNextAgentCycleRestoresSuspendedNativeTools drives the real cycle
+// transition. The restore was first wired only into the resume-with-input
+// path, so a normal second pass still ran on the fenced protocol (seen live:
+// pass 2 of a Gemma 4 E4B run wrote its native call syntax as text).
+func TestNextAgentCycleRestoresSuspendedNativeTools(t *testing.T) {
+	m := newTestModel(t)
+	m.toolsOn = true
+	m.toolRunner = tools.NewRunner(t.TempDir(), 64)
+	m.resetNativeToolMode()
+	if !m.toolsNative {
+		t.Skip("test provider does not offer native tools")
+	}
+	m.configureAgentLoop()
+	run, err := agent.NewRun("native-restore", "fix the package", agent.DefaultLimits(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.BeginCycle("fix the package", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.agentLoop.run = run
+
+	m.suspendNativeToolsAfterMalformedCall() // pass 1 hit a malformed native call
+	if m.toolsNative {
+		t.Fatal("pass 1's retry must use the fenced protocol")
+	}
+	run.Stage = agent.StageStopCheck // pass 1 finished; the controller chose another pass
+	m.startNextAgentCycle("continue the package fix")
+	if run.Cycle != 2 {
+		t.Fatalf("cycle = %d, want the run in pass 2", run.Cycle)
+	}
+	if !m.useNativeTools() {
+		t.Fatal("pass 2 must offer native tools again after a one-off malformed call")
 	}
 }

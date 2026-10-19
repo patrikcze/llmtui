@@ -58,6 +58,7 @@ func (r *Runner) resolveExpectedVersion(ctx context.Context, path, resourceID st
 			code = "resource_expired"
 		} else if errors.Is(err, entity.ErrNotAResourceBody) {
 			code = "wrong_resource_kind"
+			return nil, withCode(fmt.Errorf("expected_resource_id %q is a citation entity, not a file snapshot; use the [file version ...] ID from read_file for %q (re-read if needed): %w", resourceID, path, err), code, RetryReread)
 		}
 		return nil, withCode(fmt.Errorf("expected_resource_id %q cannot be used: %w", resourceID, err), code, RetryReread)
 	}

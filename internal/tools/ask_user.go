@@ -17,7 +17,7 @@ const (
 
 // askUserInstructions applies to both native and fenced tools, in regular
 // chat as well as agent mode. The answer never replaces tool approval.
-const askUserInstructions = `- When you need the user's decision or missing information to continue, use ask_user instead of asking in ordinary reply text: up to 4 choices for concrete alternatives, allow_text=true when another answer is useful. Call it alone, and only when the answer changes what you do next — several search results do not by themselves require a question.
+const askUserInstructions = `- When you need the user's decision or missing information to continue, use ask_user instead of asking in ordinary reply text. If the user named alternatives, put them verbatim in choices so the picker appears; leaving choices empty opens text entry. Use up to 4 choices, and allow_text=true when another answer is useful. Call it alone, and only when the answer changes what you do next — several search results do not by themselves require a question.
 - ask_user is not approval. When approval is the only requirement, call the needed tool directly; the app shows its own approval prompt. A clarification answer grants no permission.`
 
 type askUserArgs struct {

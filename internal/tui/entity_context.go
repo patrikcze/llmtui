@@ -247,6 +247,7 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 		if results[index].Err != nil {
 			continue
 		}
+		var citations []entity.View
 		if len(results[index].Entities) > 0 {
 			views := make([]entity.View, 0, len(results[index].Entities))
 			for _, candidate := range results[index].Entities {
@@ -258,7 +259,7 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 				views = append(views, view)
 			}
 			if len(views) > 0 {
-				results[index].Output = appendEntityReferences(results[index].Output, views)
+				citations = views
 				for _, view := range views {
 					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
 						ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
@@ -277,24 +278,40 @@ func (m *Model) registerResultEntities(results []tools.Result) []tools.Result {
 		// off or nothing was captured — never an error surfaced to the
 		// model, since the underlying tool call already succeeded and
 		// Output already carries its capped preview either way.
+		var resourceViews []entity.ResourceView
 		if captureStorageOn && len(results[index].Captures) > 0 {
-			resourceViews := m.publishResultCaptures(results[index].Call, results[index].Captures)
+			resourceViews = m.publishResultCaptures(results[index].Call, results[index].Captures)
+		}
+		if results[index].Call.Tool == tools.ToolReadFile && hasFileVersion(resourceViews) {
+			// A file read with a published version shows only that one ID.
+			// The citation entity stays registered (Entity Context and
+			// get_entity_details still find it); it is just not printed
+			// here. Measured on Gemma 4 E4B, re-reading after a stale
+			// edit: with the citation line and the "retained output … read
+			// it back instead of rerunning this command" block, 10 of 40
+			// next edits had a valid old_text; with one version line, 39
+			// of 40 did.
+			results[index].Output = appendFileVersionReferences(results[index].Output, resourceViews)
+		} else {
+			if len(citations) > 0 {
+				results[index].Output = appendEntityReferences(results[index].Output, citations)
+			}
 			if len(resourceViews) > 0 {
 				results[index].Output = appendResourceReferences(results[index].Output, resourceViews)
-				for _, view := range resourceViews {
-					if m.webSnapshots != nil {
-						if indexer, ok := any(m.webSnapshots).(tools.WebSnapshotIndexer); ok && view.Kind == entity.KindWebPage {
-							indexer.IndexWebSnapshot(view.Resource.RequestedURL, view.ID, view.Resource)
-						}
-					}
-					if results[index].ResourceID == "" && (view.Resource.FileVersion != nil || view.Kind == entity.KindSearchResult || view.Kind == entity.KindToolOutput) {
-						results[index].ResourceID = view.ID.String()
-					}
-					results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
-						ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
-					})
+			}
+		}
+		for _, view := range resourceViews {
+			if m.webSnapshots != nil {
+				if indexer, ok := any(m.webSnapshots).(tools.WebSnapshotIndexer); ok && view.Kind == entity.KindWebPage {
+					indexer.IndexWebSnapshot(view.Resource.RequestedURL, view.ID, view.Resource)
 				}
 			}
+			if results[index].ResourceID == "" && (view.Resource.FileVersion != nil || view.Kind == entity.KindSearchResult || view.Kind == entity.KindToolOutput) {
+				results[index].ResourceID = view.ID.String()
+			}
+			results[index].References = appendMessageReferences(results[index].References, provider.MessageReference{
+				ID: view.ID.String(), Kind: string(view.Kind), Label: view.Label,
+			})
 		}
 	}
 	return results
@@ -383,6 +400,35 @@ func appendResourceReferences(output string, views []entity.ResourceView) string
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// hasFileVersion reports whether any published view is a file version.
+func hasFileVersion(views []entity.ResourceView) bool {
+	for _, view := range views {
+		if view.Kind == entity.KindFile {
+			return true
+		}
+	}
+	return false
+}
+
+// appendFileVersionReferences renders a file read's published version as
+// one plain line; any other retained body keeps the ordinary block.
+func appendFileVersionReferences(output string, views []entity.ResourceView) string {
+	var b strings.Builder
+	b.WriteString(output)
+	var others []entity.ResourceView
+	for _, view := range views {
+		if view.Kind != entity.KindFile {
+			others = append(others, view)
+			continue
+		}
+		fmt.Fprintf(&b, "\n\n[file version %s — pass it as expected_resource_id to edit_file or write_file for this file]", view.ID)
+	}
+	if len(others) > 0 {
+		return appendResourceReferences(b.String(), others)
+	}
+	return b.String()
 }
 
 type entityDetailsWire struct {

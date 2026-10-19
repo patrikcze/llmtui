@@ -790,6 +790,13 @@ verifier protocol, choose a stronger `agent.verifier.model`, disable model
 verification for deterministic-only conversational checks, or return to
 ordinary chat with `/agent off`.
 
+The task-contract parser tolerates the same envelope noise: unknown fields are
+ignored and omitted empty fields default. A missing `needs_user_input` is
+inferred only when the rest settles it: criteria with no question or options
+is an executable contract, a question with no criteria is a clarification.
+Any other object without it is still malformed and gets the one repair
+request before the run parks.
+
 A response cut off by `max_tokens` (the backend's `finish_reason`/`done_reason`
 equals `"length"`) is never accepted as a normal completion, and a tool call
 truncated mid-arguments is never executed — this applies in ordinary

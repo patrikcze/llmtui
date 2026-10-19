@@ -281,12 +281,37 @@ var gemmaSwallowedKeyRE = regexp.MustCompile(`,\s*"?[A-Za-z_][A-Za-z0-9_.-]*"?\s
 func gemmaSwallowedKey(calls []message.ToolCall) bool {
 	for _, call := range calls {
 		for _, value := range call.Function.Arguments {
+			if gemmaBalancedComposite(value) {
+				// A whole "[…]"/"{…}" value (repairGemmaBracketSplitArgs'
+				// output for an array of objects, such as edit_file's edits)
+				// legitimately contains key:<quote> pairs. A swallowed key is
+				// residue after an unterminated string, never a balanced block.
+				continue
+			}
 			if gemmaSwallowedKeyRE.MatchString(value) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// gemmaBalancedComposite reports whether value is exactly one balanced
+// "[…]" or "{…}" block, quote tokens skipped.
+func gemmaBalancedComposite(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	open, closing := value[0], byte(']')
+	switch open {
+	case '[':
+	case '{':
+		closing = '}'
+	default:
+		return false
+	}
+	return gemmaBalancedEnd(value, open, closing) == len(value)-1
 }
 
 // gemmaArgumentKeyRE matches a key a Gemma call can actually name: the same
@@ -797,6 +822,9 @@ func normalizeArgument(raw string, schema map[string]any) (any, error) {
 					return v, nil
 				}
 			}
+			if v, ok := gemmaCompositeValue(raw, strings.ToLower(typeName)); ok {
+				return v, nil
+			}
 			return nil, fmt.Errorf("expected a JSON %s", typeName)
 		}
 		var value any
@@ -1094,4 +1122,126 @@ func validateUnrepairedJSONToolBlocks(raw string, format embedded.ToolFormat) er
 		}
 		normalized = rest[end+len("</tool_call>"):]
 	}
+}
+
+// gemmaCompositeValue converts an array or object written in Gemma's own call
+// syntax into the value JSON would give. Gemma writes nested values the way
+// it writes top-level arguments: bare keys and quote-token strings, as in
+// edit_file's edits:[{new_text:<|"|>a<|"|>,old_text:<|"|>b<|"|>}]. Without
+// this, an array of objects could never reach a tool from the embedded
+// runtime: seen live, Gemma 4 E4B's multi-edit edit_file was reported
+// malformed, which moved the turn to the fenced protocol. want is "array" or
+// "object"; anything that does not parse completely as that kind is refused.
+func gemmaCompositeValue(raw, want string) (any, bool) {
+	value, rest, ok := parseGemmaValue(strings.TrimSpace(raw), 0)
+	if !ok || strings.TrimSpace(rest) != "" {
+		return nil, false
+	}
+	switch value.(type) {
+	case []any:
+		return value, want == "array"
+	case map[string]any:
+		return value, want == "object"
+	}
+	return nil, false
+}
+
+// maxGemmaValueDepth bounds nesting so hostile output cannot recurse deeply.
+const maxGemmaValueDepth = 8
+
+// parseGemmaValue reads one value from the start of s and returns it with the
+// unread remainder: a quote-token or JSON-quoted string, a "[…]" array, a
+// "{key:value,…}" object, or a bare scalar (number, true, false, null, or
+// text up to the next delimiter).
+func parseGemmaValue(s string, depth int) (any, string, bool) {
+	if depth > maxGemmaValueDepth {
+		return nil, s, false
+	}
+	s = strings.TrimLeft(s, " \t\r\n")
+	if s == "" {
+		return nil, s, false
+	}
+	if width := gemmaQuotedValueWidth(s); width > 0 {
+		token := gemmaQuoteTokenPrefix(s)
+		return s[len(token) : width-len(token)], s[width:], true
+	}
+	switch s[0] {
+	case '"':
+		decoder := json.NewDecoder(strings.NewReader(s))
+		var text string
+		if err := decoder.Decode(&text); err != nil {
+			return nil, s, false
+		}
+		return text, s[decoder.InputOffset():], true
+	case '[':
+		items := []any{}
+		rest := strings.TrimLeft(s[1:], " \t\r\n")
+		if strings.HasPrefix(rest, "]") {
+			return items, rest[1:], true
+		}
+		for {
+			item, after, ok := parseGemmaValue(rest, depth+1)
+			if !ok {
+				return nil, s, false
+			}
+			items = append(items, item)
+			after = strings.TrimLeft(after, " \t\r\n")
+			switch {
+			case strings.HasPrefix(after, ","):
+				rest = after[1:]
+			case strings.HasPrefix(after, "]"):
+				return items, after[1:], true
+			default:
+				return nil, s, false
+			}
+		}
+	case '{':
+		object := map[string]any{}
+		rest := strings.TrimLeft(s[1:], " \t\r\n")
+		if strings.HasPrefix(rest, "}") {
+			return object, rest[1:], true
+		}
+		for {
+			colon := strings.Index(rest, ":")
+			if colon < 0 {
+				return nil, s, false
+			}
+			key := strings.Trim(strings.TrimSpace(rest[:colon]), `"`)
+			if !gemmaArgumentKeyRE.MatchString(key) {
+				return nil, s, false
+			}
+			if _, duplicate := object[key]; duplicate {
+				return nil, s, false
+			}
+			value, after, ok := parseGemmaValue(rest[colon+1:], depth+1)
+			if !ok {
+				return nil, s, false
+			}
+			object[key] = value
+			after = strings.TrimLeft(after, " \t\r\n")
+			switch {
+			case strings.HasPrefix(after, ","):
+				rest = strings.TrimLeft(after[1:], " \t\r\n")
+			case strings.HasPrefix(after, "}"):
+				return object, after[1:], true
+			default:
+				return nil, s, false
+			}
+		}
+	}
+	end := strings.IndexAny(s, ",]}")
+	if end < 0 {
+		end = len(s)
+	}
+	scalar := strings.TrimSpace(s[:end])
+	if scalar == "" {
+		return nil, s, false
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(scalar))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err == nil && decoder.InputOffset() == int64(len(scalar)) {
+		return value, s[end:], true
+	}
+	return scalar, s[end:], true
 }

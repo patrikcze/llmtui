@@ -308,7 +308,7 @@ func TestDisabledEntitiesAreNotModelVisible(t *testing.T) {
 // model picked the citation ID and got wrong_resource_kind /
 // "entity is not a resource body". The output text must now say, inline,
 // which ID is which.
-func TestReadFileDualIDsAreDisambiguatedForExpectedResourceID(t *testing.T) {
+func TestReadFileShowsOnlyItsFileVersionID(t *testing.T) {
 	m := newTestModel(t)
 	root := t.TempDir()
 	m.toolsOn = true
@@ -327,11 +327,22 @@ func TestReadFileDualIDsAreDisambiguatedForExpectedResourceID(t *testing.T) {
 	if results[0].ResourceID == "" {
 		t.Fatal("test setup: read_file result carries no resource_id — dual-ID scenario did not reproduce")
 	}
-	if !strings.Contains(output, "citation only, not a resource_id") {
-		t.Fatalf("citation entity block does not warn it is unusable as a resource_id:\n%s", output)
+	// Only the usable ID is shown, in one line. Measured on Gemma 4 E4B
+	// after a stale edit and re-read: the two-block form led to a valid
+	// old_text in 10 of 40 next edits, this line in 39 of 40.
+	want := "[file version " + results[0].ResourceID + " — pass it as expected_resource_id to edit_file or write_file for this file]"
+	if !strings.Contains(output, want) {
+		t.Fatalf("read_file output does not show the file version line %q:\n%s", want, output)
 	}
-	if !strings.Contains(output, "use this exact id as expected_resource_id") {
-		t.Fatalf("resource body block does not say it is the id to use for expected_resource_id:\n%s", output)
+	for _, unwanted := range []string{"citation only", "registered runtime entities", "instead of rerunning this command"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("read_file output still carries %q:\n%s", unwanted, output)
+		}
+	}
+	// The citation entity is still registered and referenced, so Entity
+	// Context and get_entity_details keep finding it.
+	if len(results[0].References) < 2 {
+		t.Fatalf("references = %+v, want the citation entity and the file version", results[0].References)
 	}
 }
 

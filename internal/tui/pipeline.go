@@ -1177,11 +1177,15 @@ func (m *Model) prepareFromBase(base compositionBase, omitRaw bool) (preparedReq
 		probe = composeFromBase(base, nil, "")
 		fixed = estimatePrepared(probe, specs, window, reserve, 0, 0)
 	}
+	// A tool-heavy agent cycle reaches the message threshold quickly even
+	// when its entire history fits. Delay compaction until the budget needs
+	// it, but still let auto choose summarize for a long conversation.
 	decision := contextmgr.Decide(historyMessages, contextmgr.Params{
 		Strategy:               m.ctxStrategy,
 		ContextWindow:          window,
 		ReserveResponseTokens:  reserve,
 		SummarizeAfterMessages: m.cfg.Context.SummarizeAfterMessages,
+		OnlyWhenOverBudget:     m.agentRunActive(),
 		FixedTokens:            fixed.Total,
 	})
 	if fixed.Total+reserve > window {

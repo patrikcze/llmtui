@@ -422,6 +422,18 @@ per-line numbers, so the model can copy a fragment straight into an
 
 `edit_file` performs exactly one literal, exact-match replacement in an
 existing text file: zero matches or more than one fails without writing.
+When `old_text` is gone but `new_text` occurs exactly once, the zero-match
+error says the edit appears to be applied already (with its line) and not to
+repeat it (`no_change`), instead of the generic re-read advice: small models
+otherwise resend a successful edit until the repeated-call guard ends the run.
+A path that does not exist (`read_file`, `read_multiple_files`, `edit_file`,
+`grep`, `list_dir`, `glob`, `get_file_info`, `directory_tree`) is reported
+plainly together with the nearest real directory and up to 12 of its entry
+names: a directory at the path without its extension
+(`src/math.go` → `src/math`), else the nearest existing parent. In an earlier
+Gemma 4 E4B test of the `read_file` hint, 12 of 12 samples went to the right
+file; a bare "no such file or directory" led 8 of 12 to invent another wrong
+path. The other inspection tools now return the same hint when a path is missing.
 It does not extend the tool subsystem — it shares `write_file`'s
 `writeFileChecked` core (workspace confinement, blocked-path guardrails, the
 size cap, the confined staged-write-then-atomic-rename publish, the display
@@ -439,6 +451,15 @@ structured overwrite form of `write_file`. The controller pins that body
 through approval and execution rechecks the complete raw digest, so an
 external change fails as `stale_source`; without an observed version the
 legacy exact-text-only edit and unguarded overwrite paths remain available.
+A `read_file` result shows that version as one line,
+`[file version ent_… — pass it as expected_resource_id to edit_file or write_file for this file]`,
+and does not print the read's citation entity (still registered for Entity
+Context and `get_entity_details`). Measured on Gemma 4 E4B re-reading after a
+stale edit, the earlier two-block form (citation ID plus "retained output … read
+it back instead of rerunning this command") led to a valid `old_text` in 10 of
+40 next edits; the single line, in 39 of 40. Other tools keep both blocks.
+If the model supplies a citation-only entity as `expected_resource_id`, the
+edit is rejected and the error points it back to the file-version line.
 
 `edit_file` also accepts an `edits` list (at most 16) instead of the single
 `old_text`/`new_text` pair. The replacements apply in order, each against the

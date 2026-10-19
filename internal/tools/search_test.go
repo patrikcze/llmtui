@@ -70,6 +70,33 @@ func TestGrepFilesRegexFilterAndSecretPolicy(t *testing.T) {
 	}
 }
 
+// A live Gemma run kept searching an invented src/math.go because grep and
+// list_dir returned only ENOENT, while read_file already named src/math and
+// its real files. The same hint must reach the native tool result for every
+// read-only path inspection tool.
+func TestMissingPathHintsReachNativeSearchAndListingResults(t *testing.T) {
+	root := t.TempDir()
+	writeSearchFixture(t, root, "src/math/add.go", "package math\n")
+	writeSearchFixture(t, root, "src/math/math_test.go", "package math\n")
+	r := NewRunner(root, 64)
+	want := `"src/math" is a directory containing: add.go, math_test.go.`
+	for _, tool := range []string{ToolGrep, ToolListDir, ToolGlob, ToolGetFileInfo, ToolDirectoryTree} {
+		t.Run(tool, func(t *testing.T) {
+			call := Call{ID: "missing-path", Tool: tool, Path: "src/math.go", Body: "Sum"}
+			if tool == ToolGlob {
+				call.Body = "*.go"
+			}
+			res := r.Execute(call)
+			if res.Err == nil || res.Meta.Error == nil || res.Meta.Error.Code != "not_found" {
+				t.Fatalf("result = %+v, want not_found", res)
+			}
+			if got := NativeResults([]Result{res})[0].Content; !strings.Contains(got, want) {
+				t.Fatalf("native result = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func writeSearchFixture(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))

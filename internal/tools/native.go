@@ -947,7 +947,7 @@ Rules:
 // and returns less structured output that stays in the context for every
 // later request.
 const toolChoiceInstructions = `Choosing tools:
-- Find files by name: glob. Search file contents: grep. See a folder's layout: directory_tree, or list_dir for one level. Metadata only: get_file_info.
+- Find files by name: glob. Search file contents: grep (regex by default; set literal=true for exact code text). See a folder's layout: directory_tree, or list_dir for one level. Metadata only: get_file_info.
 - Read one file with read_file (offset/limit for part of a large file); read several at once with read_multiple_files.
 - Change an existing file with edit_file; use write_file only to create a file or replace all of it. Organize with create_directory and move_file.
 - Use run_command only for what the file tools cannot do — builds, tests, git, package managers — not to read, list, search, or edit files. It takes exactly one command line; save a multi-line script with write_file first.
