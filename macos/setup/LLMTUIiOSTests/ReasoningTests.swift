@@ -245,7 +245,7 @@ nonisolated final class Collected: @unchecked Sendable {
     var text: String { lock.lock(); defer { lock.unlock() }; return parts.joined() }
 }
 
-@Suite(.serialized) struct ReasoningStreamTests {
+@MainActor @Suite(.serialized) struct ReasoningStreamTests {
     private func turn(_ stream: String, model: String = "test", type: MobileProviderType = .lmStudio, reasoning: MobileReasoning = .automatic, capability: ReasoningCapability = .unknown) async throws -> (ChatTurnResult, answer: String, reasoning: String) {
         ReasoningStreamFixture.shared.set(stream)
         let configuration = URLSessionConfiguration.ephemeral
