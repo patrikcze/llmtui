@@ -21,7 +21,8 @@ deployment target, iPhone and iPad, Swift with main-actor default isolation.
 | `ConversationStore.swift` | `MobileConversation` and its JSON file store under `Application Support/Conversations`. |
 | `ChatRetention.swift` | The retention policy (period, archive or delete) and its evaluation. |
 | `SafeToolRuntime.swift` | `MobileMemoryStore` (memories in preferences), `MobileLocalContext` (date, time and device facts) and `SafeWebFetcher` (DuckDuckGo search and public-page fetch). |
-| `WebResearch.swift` | `web_research`: multi-query search, result fusion, concurrent page reads, passage selection and the notes format. |
+| `WebResearch.swift` | `web_research`: multi-query search (or given `urls`), result fusion, concurrent page reads, passage selection and the notes format. |
+| `WebPageText.swift` | Fetched responses as model-readable text: HTML to compact Markdown, JSON and plain text passed through, and `web_fetch` paging by character `offset`, sized to the context window. |
 | `DocumentModels.swift` | Attachment kinds, statuses, chunks, source references and limits. |
 | `DocumentStore.swift` | Attachment storage under `Application Support/Attachments` and secure, coordinated import of external files. |
 | `DocumentExtractor.swift` | On-device text extraction: PDFKit per page, Vision OCR for image-only pages and images, UTF-8 text by lines. |
