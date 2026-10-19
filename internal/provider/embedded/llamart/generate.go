@@ -158,6 +158,9 @@ func jinjaTemplateDataForProtocol(
 		}
 		result["reasoning_effort"] = effort
 	} else {
+		// requestEffort is a per-request /think low|medium|high, which only
+		// families with an effort control (Qwen 3.8) accept.
+		requestEffort := ""
 		switch reasoning {
 		case "", "auto":
 			// Omission is intentional: model templates can distinguish their own
@@ -167,10 +170,24 @@ func jinjaTemplateDataForProtocol(
 		case "off":
 			result["enable_thinking"] = false
 		default:
-			return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
+			effort, ok := provider.ReasoningEffort(protocol, reasoning)
+			if !ok {
+				return nil, fmt.Errorf("invalid reasoning mode %q (supported: auto, on, off)", reasoning)
+			}
+			result["enable_thinking"] = true
+			requestEffort = effort
 		}
-		if reasoningEffort != embedded.ReasoningEffortAuto {
-			result["reasoning_effort"] = string(reasoningEffort)
+		switch {
+		case requestEffort != "":
+			result["reasoning_effort"] = requestEffort
+		case reasoningEffort != embedded.ReasoningEffortAuto:
+			effort := string(reasoningEffort)
+			// Qwen 3.8's template raises an exception for "high"; its
+			// highest level is xhigh. Other families get the value as set.
+			if mapped, ok := provider.ReasoningEffort(protocol, effort); ok {
+				effort = mapped
+			}
+			result["reasoning_effort"] = effort
 		}
 		if preserveReasoning && templateSupportsPreservedReasoning(messages) {
 			result["preserve_reasoning"] = true

@@ -279,7 +279,7 @@ providers:
   qwen38:
     type: embedded
     reasoning:
-      effort: medium       # auto|low|medium|high|xhigh; auto leaves the template default
+      effort: medium       # auto|low|medium|high|xhigh; auto leaves the template default; Qwen 3.8 gets high as xhigh
       preserve: true       # only compatible GGUF Jinja templates consume this
 ```
 

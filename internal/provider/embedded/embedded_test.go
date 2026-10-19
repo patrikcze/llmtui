@@ -212,6 +212,31 @@ func TestChatRejectsInvalidReasoningBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateReasoningAcceptsQwen38Effort(t *testing.T) {
+	qwen38 := provider.ResolveModelProtocol("/models/Qwen3.8-27B-Q4_K_M.gguf", "")
+	other := provider.ResolveModelProtocol("/models/Qwen3-8B-Q4_K_M.gguf", "")
+	for _, tc := range []struct {
+		name     string
+		protocol provider.ModelProtocol
+		value    string
+		ok       bool
+	}{
+		{"qwen38 high", qwen38, "high", true},
+		{"qwen38 low", qwen38, "low", true},
+		{"qwen38 on", qwen38, "on", true},
+		{"qwen38 nonsense", qwen38, "sometimes", false},
+		{"other high", other, "high", false},
+		{"other off", other, "off", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateReasoning(tc.protocol, tc.value)
+			if (err == nil) != tc.ok {
+				t.Fatalf("validateReasoning(%q) = %v, want ok=%v", tc.value, err, tc.ok)
+			}
+		})
+	}
+}
+
 func TestChatPassesResponseGrammarToRuntime(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := writeFakeModel(t, dir, "model.gguf")

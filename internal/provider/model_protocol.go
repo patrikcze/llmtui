@@ -12,6 +12,9 @@ type ModelFamily uint8
 const (
 	ModelFamilyUnknown ModelFamily = iota
 	ModelFamilyGPTOSS
+	// ModelFamilyQwen38 is Qwen 3.8, whose chat template reads its own
+	// reasoning_effort levels (low, medium, xhigh) beside enable_thinking.
+	ModelFamilyQwen38
 )
 
 // TemplateOwnership identifies the single layer responsible for rendering a
@@ -48,6 +51,11 @@ func ResolveModelProtocol(modelID, architecture string) ModelProtocol {
 			DefaultReasoningEffort:        "medium",
 		}
 	}
+	if modelFamily(architecture) == ModelFamilyQwen38 || modelFamily(modelID) == ModelFamilyQwen38 {
+		// No DefaultReasoningEffort: auto/on leave the template's own default
+		// (xhigh) untouched.
+		return ModelProtocol{Family: ModelFamilyQwen38, ReasoningSupported: true}
+	}
 	return ModelProtocol{}
 }
 
@@ -56,7 +64,32 @@ func modelFamily(value string) ModelFamily {
 	if MatchesWordBoundary(normalized, "gpt-oss") {
 		return ModelFamilyGPTOSS
 	}
+	if isQwen38(normalized) {
+		return ModelFamilyQwen38
+	}
 	return ModelFamilyUnknown
+}
+
+// isQwen38 matches Qwen 3.8 IDs as servers and files name them —
+// "qwen3.8-27b", "qwen/qwen3.8-27b", "qwen3.8:27b",
+// "mlx-community/qwen3_8-27b-4bit", "qwen-3.8" — but not a longer version
+// such as "qwen3.80", nor "qwen3_8b", which is Qwen3's 8B size (the iOS
+// app's qwen-?3[._]8(?![0-9]), without the lookahead RE2 lacks, plus that
+// size guard). value must already be lowercase.
+func isQwen38(value string) bool {
+	for idx := 0; ; {
+		i := strings.Index(value[idx:], "qwen")
+		if i < 0 {
+			return false
+		}
+		rest := value[idx+i+len("qwen"):]
+		rest = strings.TrimPrefix(rest, "-")
+		if len(rest) >= 3 && rest[0] == '3' && (rest[1] == '.' || rest[1] == '_') && rest[2] == '8' &&
+			(len(rest) == 3 || (rest[3] != 'b' && (rest[3] < '0' || rest[3] > '9'))) {
+			return true
+		}
+		idx += i + 1
+	}
 }
 
 // MatchesWordBoundary reports whether pattern occurs in text with no ASCII
@@ -67,7 +100,7 @@ func modelFamily(value string) ModelFamily {
 // version number with no separator ("qwen3", "llama3.1", "gpt-oss20b").
 //
 // Shared by this package's own narrow, safety-critical family detection
-// (only ModelFamilyGPTOSS, gating Harmony leak detection) and
+// (ModelFamilyGPTOSS, gating Harmony leak detection) and
 // internal/modelprofile's broader per-family tuning-default matcher
 // (context window, temperature, prompt style, six-plus families) — two
 // independently scoped matchers with different callers and different
@@ -98,9 +131,22 @@ func asciiLetter(value byte) bool {
 }
 
 // ReasoningEffort resolves the configured value for a model. GPT-OSS cannot
-// disable reasoning; auto/on select its documented medium default.
+// disable reasoning; auto/on select its documented medium default. Qwen 3.8
+// takes low, medium, or high, with high sent as the template's xhigh (its
+// template raises an exception for "high"); auto/on/off carry no effort.
+// Every other family has no effort control.
 func ReasoningEffort(protocol ModelProtocol, configured string) (string, bool) {
 	value := strings.ToLower(strings.TrimSpace(configured))
+	if protocol.Family == ModelFamilyQwen38 {
+		switch value {
+		case "low", "medium":
+			return value, true
+		case "high", "xhigh":
+			return "xhigh", true
+		default:
+			return "", false
+		}
+	}
 	if protocol.Family != ModelFamilyGPTOSS {
 		return "", false
 	}

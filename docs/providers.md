@@ -196,6 +196,15 @@ What llmtui does client-side, for any reasoning model:
   llama.cpp server, ignored elsewhere), Ollama receives `think`. `auto`
   sends nothing. Note: Ollama returns an error if `think` is set for a
   model without thinking support — use `auto` there.
+- **Qwen 3.8** also takes `/think low|medium|high` (other families ignore
+  them). Its template accepts only `low`, `medium` and `xhigh` and raises an
+  error for `high`, so `high` is sent as `xhigh`. OpenAI-compatible servers
+  receive the level as top-level `reasoning_effort` and in
+  `chat_template_kwargs` with `enable_thinking: true` (template variables are
+  never sent to `api.openai.com`); Ollama receives it as its string `think`
+  level; Embedded passes `enable_thinking` and `reasoning_effort` to the GGUF
+  template. Qwen 3.8 is recognized by model IDs such as `qwen3.8-27b`,
+  `Qwen/Qwen3.8-27B`, `qwen3.8:27b`, `Qwen3_8-27B-4bit` or `qwen-3.8`.
 
 For embedded GGUF models the same `auto|on|off` choice is applied locally to
 the GGUF Jinja template. `auto` omits `enable_thinking`; `on` and `off` set it

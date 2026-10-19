@@ -168,6 +168,7 @@ type ChatConfig struct {
 	// "on"/"off" request or suppress thinking explicitly (OpenAI-compatible
 	// chat_template_kwargs.enable_thinking, Ollama think). GPT-OSS additionally
 	// accepts "low", "medium", and "high" effort; auto defaults to medium.
+	// Qwen 3.8 also accepts them, with "high" sent as its template's "xhigh".
 	Reasoning string `mapstructure:"reasoning" yaml:"reasoning"`
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -178,13 +179,15 @@ type chatCompletionRequest struct {
 	Stream      bool           `json:"stream"`
 	StreamOpts  *streamOptions `json:"stream_options,omitempty"`
 	Tools       []wireTool     `json:"tools,omitempty"`
-	// ReasoningEffort is the structured GPT-OSS control used by compatible
-	// servers. It is omitted for every other model family.
+	// ReasoningEffort is the structured effort control used by compatible
+	// servers: GPT-OSS always, Qwen 3.8 when the user chose low, medium or
+	// high. It is omitted for every other model family.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ChatTemplateKwargs passes template variables to backends that support
-	// them (vLLM, llama.cpp server). Only enable_thinking is set, and only
-	// when the user chose an explicit reasoning mode; backends that don't
-	// know the field ignore it.
+	// them (vLLM, llama.cpp server). Only enable_thinking (plus Qwen 3.8's
+	// reasoning_effort) is set, and only when the user chose an explicit
+	// reasoning mode; backends that don't know the field ignore it. Never
+	// sent to api.openai.com, which rejects unknown request fields.
 	ChatTemplateKwargs map[string]any  `json:"chat_template_kwargs,omitempty"`
 	ResponseFormat     *responseFormat `json:"response_format,omitempty"`
 }
@@ -340,6 +343,17 @@ func toWireMessages(msgs []provider.Message) []wireMessage {
 	return out
 }
 
+// openAIHosted reports whether the base URL is OpenAI's own API, which has no
+// chat template to pass variables to.
+func (p *Provider) openAIHosted() bool {
+	u, err := url.Parse(p.baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "openai.com" || strings.HasSuffix(host, ".openai.com")
+}
+
 // Chat sends a chat completion request, streaming when req.Stream is set.
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	if err := provider.ValidateResponseConstraint(req); err != nil {
@@ -377,12 +391,22 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 	if req.Stream {
 		body.StreamOpts = &streamOptions{IncludeUsage: true}
 	}
-	if !protocol.HarmonyRequired {
+	if !protocol.HarmonyRequired && !p.openAIHosted() {
 		switch req.Reasoning {
 		case "on":
 			body.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
 		case "off":
 			body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+		case "low", "medium", "high":
+			// Qwen 3.8's template reads reasoning_effort from the template
+			// variables (vLLM, llama.cpp server, LM Studio); servers that map
+			// the top-level field themselves read that one. Both carry the
+			// same value, which is constant for the request, so the rendered
+			// system prefix is identical on every continuation.
+			if effort, ok := provider.ReasoningEffort(protocol, req.Reasoning); ok {
+				body.ReasoningEffort = effort
+				body.ChatTemplateKwargs = map[string]any{"enable_thinking": true, "reasoning_effort": effort}
+			}
 		}
 	}
 	payload, err := json.Marshal(body)

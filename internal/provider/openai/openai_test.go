@@ -746,6 +746,61 @@ func TestChatStreamingFlagsStrippedHarmonyRecipient(t *testing.T) {
 	}
 }
 
+func TestChatSendsQwen38ReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, model, reasoning string
+		want                   []string // substrings of the raw body
+		absent                 []string
+	}{
+		{name: "high is xhigh", model: "qwen/qwen3.8-27b", reasoning: "high",
+			want: []string{`"reasoning_effort":"xhigh"`, `"chat_template_kwargs":{"enable_thinking":true,"reasoning_effort":"xhigh"}`}},
+		{name: "low", model: "Qwen3_8-27B-4bit", reasoning: "low",
+			want: []string{`"reasoning_effort":"low"`, `"chat_template_kwargs":{"enable_thinking":true,"reasoning_effort":"low"}`}},
+		{name: "medium", model: "qwen3.8:27b", reasoning: "medium",
+			want: []string{`"reasoning_effort":"medium"`, `"chat_template_kwargs":{"enable_thinking":true,"reasoning_effort":"medium"}`}},
+		{name: "on carries no effort", model: "qwen3.8-27b", reasoning: "on",
+			want: []string{`"chat_template_kwargs":{"enable_thinking":true}`}, absent: []string{"reasoning_effort"}},
+		{name: "off carries no effort", model: "qwen3.8-27b", reasoning: "off",
+			want: []string{`"chat_template_kwargs":{"enable_thinking":false}`}, absent: []string{"reasoning_effort"}},
+		{name: "auto sends nothing", model: "qwen3.8-27b", reasoning: "",
+			absent: []string{"reasoning_effort", "chat_template_kwargs"}},
+		{name: "other qwen ignores effort", model: "qwen3-8b", reasoning: "high",
+			absent: []string{"reasoning_effort", "chat_template_kwargs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := captureChatBody(t, provider.ChatRequest{Model: tc.model, Reasoning: tc.reasoning})
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("body missing %s: %s", want, body)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(body, absent) {
+					t.Errorf("body must omit %s: %s", absent, body)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAIHostedOmitsTemplateKwargs(t *testing.T) {
+	for _, tc := range []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://api.openai.com/v1", true},
+		{"https://API.OpenAI.com/v1/", true},
+		{"http://localhost:1234/v1", false},
+		{"http://192.168.1.2:8000/v1", false},
+		{"https://notopenai.com/v1", false},
+		{"https://api.openai.com.example.net/v1", false},
+	} {
+		if got := New("test", tc.baseURL, "").openAIHosted(); got != tc.want {
+			t.Errorf("openAIHosted(%q) = %v, want %v", tc.baseURL, got, tc.want)
+		}
+	}
+}
+
 func TestChatSendsEnableThinkingWhenReasoningSet(t *testing.T) {
 	for _, tc := range []struct {
 		reasoning string

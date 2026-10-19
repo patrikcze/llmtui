@@ -223,3 +223,66 @@ func TestTemplateSupportsConfiguredEffortAndPreservedThinking(t *testing.T) {
 		t.Fatalf("rendered = %q", rendered.text)
 	}
 }
+
+// qwen38EffortTemplateFixture reproduces the reasoning controls of Qwen
+// 3.8's official chat_template.jinja: an effort other than xhigh, medium or
+// low raises an exception, and thinking is on unless enable_thinking is
+// explicitly false.
+const qwen38EffortTemplateFixture = `{%- if enable_thinking is undefined or enable_thinking is true %}` +
+	`{%- set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}` +
+	`{%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}` +
+	`{{- raise_exception('Unexpected reasoning effort ' ~ reasoning_effort) }}` +
+	`{%- endif %}effort={{ resolved_reasoning_effort }}` +
+	`{%- else %}thinking=off{%- endif %}`
+
+func TestQwen38TemplateReceivesSupportedEffort(t *testing.T) {
+	messages := []provider.Message{{Role: provider.RoleUser, Content: "hi"}}
+	protocol := provider.ResolveModelProtocol("/models/Qwen3.8-27B-Q4_K_M.gguf", "")
+	if protocol.Family != provider.ModelFamilyQwen38 {
+		t.Fatalf("protocol = %+v, want Qwen 3.8", protocol)
+	}
+	native := func(string, []llama.ChatMessage) (string, error) { return "", errors.New("native unsupported") }
+	for _, tc := range []struct {
+		name      string
+		reasoning string
+		effort    embedded.ReasoningEffort
+		want      string
+	}{
+		{"think high", "high", embedded.ReasoningEffortAuto, "effort=xhigh"},
+		{"think low", "low", embedded.ReasoningEffortAuto, "effort=low"},
+		{"think medium", "medium", embedded.ReasoningEffortAuto, "effort=medium"},
+		{"configured high", "on", embedded.ReasoningEffortHigh, "effort=xhigh"},
+		{"configured low", "on", embedded.ReasoningEffortLow, "effort=low"},
+		{"request beats config", "low", embedded.ReasoningEffortHigh, "effort=low"},
+		{"on keeps template default", "on", embedded.ReasoningEffortAuto, "effort=xhigh"},
+		{"off", "off", embedded.ReasoningEffortAuto, "thinking=off"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered, err := renderChatTemplateWithProtocol(qwen38EffortTemplateFixture, messages, nil, tc.reasoning, tc.effort, false, protocol, native)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if rendered.text != tc.want {
+				t.Fatalf("rendered = %q, want %q", rendered.text, tc.want)
+			}
+		})
+	}
+}
+
+func TestQwen38TemplateRejectsUnmappedHigh(t *testing.T) {
+	// Guards the fixture itself: without the high->xhigh mapping (an unknown
+	// family), "high" reaches the template and its exception fires.
+	messages := []provider.Message{{Role: provider.RoleUser, Content: "hi"}}
+	native := func(string, []llama.ChatMessage) (string, error) { return "", errors.New("native unsupported") }
+	if _, err := renderChatTemplateWithProtocol(qwen38EffortTemplateFixture, messages, nil, "on", embedded.ReasoningEffortHigh, false, provider.ModelProtocol{}, native); err == nil {
+		t.Fatal("render succeeded; want the template's unexpected-effort exception")
+	}
+}
+
+func TestGenericTemplateRejectsEffortReasoningMode(t *testing.T) {
+	messages := []provider.Message{{Role: provider.RoleUser, Content: "hi"}}
+	if _, err := jinjaTemplateDataForProtocol(messages, nil, "high", embedded.ReasoningEffortAuto, false, provider.ModelProtocol{}); err == nil ||
+		!strings.Contains(err.Error(), "invalid reasoning mode") {
+		t.Fatalf("err = %v, want invalid reasoning mode", err)
+	}
+}

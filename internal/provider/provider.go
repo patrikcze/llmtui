@@ -254,7 +254,8 @@ type ChatRequest struct {
 	Tools []ToolSpec
 	// Reasoning selects the reasoning mode. Generic reasoning backends accept
 	// "on"/"off"; GPT-OSS accepts "low"/"medium"/"high" and defaults to
-	// medium when this is empty or "auto". Adapters must use structured
+	// medium when this is empty or "auto". Qwen 3.8 also accepts
+	// "low"/"medium"/"high" (see ReasoningEffort). Adapters must use structured
 	// provider/template fields rather than inserting prompt text.
 	Reasoning string
 	// ResponseConstraint asks the backend to enforce structured output. It is
