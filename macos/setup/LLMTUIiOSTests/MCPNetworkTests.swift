@@ -109,8 +109,7 @@ nonisolated final class MCPNetworkFixture: @unchecked Sendable {
             model.conversations[0].messages = [assistant]
             model.prepareMCPForTesting(bindings: [binding.providerName: binding], conversationID: chat, profile: provider)
             let task = Task { try await model.executeMCP(ToolCall(id: "socket-call", name: binding.providerName, arguments: "{}"), arguments: [:], assistantID: assistant.id) }
-            for _ in 0..<10_000 { if model.pendingToolApproval != nil { break }; await Task.yield() }
-            #expect(model.pendingToolApproval != nil)
+            #expect(await waitUntil { model.pendingToolApproval != nil })
             #expect(server.calls == 0)
             model.resolveApproval(true)
             let output = try await task.value

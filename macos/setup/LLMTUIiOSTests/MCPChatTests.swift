@@ -2,6 +2,11 @@ import Foundation
 import Testing
 @testable import LLMTUIiOS
 
+nonisolated final class MCPChatIntegrationURLProtocol: MCPStreamURLProtocol {
+    static let wire = MCPWireFixture()
+    override class var fixture: MCPWireFixture { wire }
+}
+
 @MainActor @Suite(.serialized) struct MCPChatIntegrationTests {
     private func configured(_ mode: MCPFakeHTTP.Mode, runtime: MobileChatRuntime? = nil) async throws -> (MobileAppModel, MCPFakeHTTP, MobileMCPProfile, MobileMCPBinding, UUID) {
         let http = MCPFakeHTTP(mode)
@@ -29,11 +34,9 @@ import Testing
         return (model, http, server, binding, assistant.id)
     }
     private func awaitApproval(_ model: MobileAppModel) async throws {
-        for _ in 0..<10_000 {
-            if model.pendingToolApproval != nil { return }
-            await Task.yield()
+        guard await waitUntil({ model.pendingToolApproval != nil }) else {
+            throw MobileMCPError.message("Test did not observe an approval.")
         }
-        throw MobileMCPError.message("Test did not observe an approval.")
     }
     @Test func bothProtocolsRequireApprovalBeforeObservedCall() async throws {
         for mode in [MCPFakeHTTP.Mode.modern, .legacy] {
@@ -41,12 +44,12 @@ import Testing
             let call = ToolCall(id: "call", name: binding.providerName, arguments: "{}")
             let task = Task { try await model.executeMCP(call, arguments: [:], assistantID: assistant) }
             try await awaitApproval(model)
-            #expect(!(await http.methods()).contains("tools/call"))
+            #expect(!http.methods().contains("tools/call"))
             #expect(model.pendingToolApproval?.summary.contains("Server:") == true)
             model.resolveApproval(true)
             let output = try await task.value
             #expect(output.contains("observed-value"))
-            #expect((await http.methods()).filter { $0 == "tools/call" }.count == 1)
+            #expect(http.methods().filter { $0 == "tools/call" }.count == 1)
             #expect(model.messages.first?.toolActivities.last?.status == .completed)
             model.mcp.suspend()
         }
@@ -60,7 +63,7 @@ import Testing
             else if scenario == "cancel" { task.cancel(); model.stop() }
             else { model.resolveApproval(false) }
             do { _ = try await task.value } catch { #expect(scenario == "cancel") }
-            #expect(!(await http.methods()).contains("tools/call"))
+            #expect(!http.methods().contains("tools/call"))
             model.mcp.suspend()
         }
     }
@@ -73,7 +76,7 @@ import Testing
         try model.mcp.save(edited, bearer: nil)
         model.resolveApproval(true)
         #expect(try await task.value.contains("changed"))
-        #expect(!(await http.methods()).contains("tools/call"))
+        #expect(!http.methods().contains("tools/call"))
     }
     @Test func MCPResultsForceOutboundApprovalAndExtendContextEstimate() async throws {
         let (model, _, _, binding, assistant) = try await configured(.modern)
@@ -95,23 +98,22 @@ import Testing
     }
     @Test func liveToolLoopSendsCorrelatedResultBackToProvider() async throws {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MCPStreamURLProtocol.self]
+        configuration.protocolClasses = [MCPChatIntegrationURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let (model, http, _, binding, _) = try await configured(.modern, runtime: MobileChatRuntime(session: session))
         let call = #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"mcp-call","function":{"name":"NAME","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#.replacingOccurrences(of: "NAME", with: binding.providerName) + "\n\ndata: [DONE]\n\n"
         let answer = #"data: {"choices":[{"delta":{"content":"Observed the MCP result."},"finish_reason":"stop"}]}"# + "\n\ndata: [DONE]\n\n"
-        MCPWireFixture.shared.set([call, answer])
+        MCPChatIntegrationURLProtocol.wire.set([call, answer])
         model.draft = "Use the external lookup tool."
         model.send()
         try await awaitApproval(model)
-        #expect(!(await http.methods()).contains("tools/call"))
+        #expect(!http.methods().contains("tools/call"))
         model.resolveApproval(true)
-        for _ in 0..<20_000 { if !model.isGenerating { break }; await Task.yield() }
-        #expect(!model.isGenerating)
-        #expect((await http.methods()).filter { $0 == "tools/call" }.count == 1)
+        #expect(await waitUntil { !model.isGenerating })
+        #expect(http.methods().filter { $0 == "tools/call" }.count == 1)
         #expect(model.messages.last?.text.contains("Observed the MCP result.") == true)
-        let requests = MCPWireFixture.shared.requests()
+        let requests = MCPChatIntegrationURLProtocol.wire.requests()
         #expect(requests.count == 2)
         let second = try #require(requests.last)
         var data = second.httpBody ?? Data()
@@ -134,7 +136,7 @@ import Testing
             let output = try await task.value
             if index == 16 { #expect(output.contains("16-call")) }
         }
-        #expect((await http.methods()).filter { $0 == "tools/call" }.count == 16)
+        #expect(http.methods().filter { $0 == "tools/call" }.count == 16)
         model.mcp.suspend()
     }
 

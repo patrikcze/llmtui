@@ -4,7 +4,6 @@ import Testing
 @testable import LLMTUIiOS
 
 nonisolated final class MCPWireFixture: @unchecked Sendable {
-    static let shared = MCPWireFixture()
     private let lock = NSLock()
     private var payloads: [Data] = []
     private var captured: [URLRequest] = []
@@ -13,11 +12,15 @@ nonisolated final class MCPWireFixture: @unchecked Sendable {
     func requests() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return captured }
     func response(_ request: URLRequest) -> Data { lock.lock(); defer { lock.unlock() }; captured.append(request); return payloads.count > 1 ? payloads.removeFirst() : payloads.first ?? Data() }
 }
-nonisolated final class MCPStreamURLProtocol: URLProtocol {
+/// Serves SSE payloads from `fixture`. Swift Testing may run suites in
+/// parallel, so each suite subclasses this with its own fixture instead of
+/// sharing one process-wide.
+nonisolated class MCPStreamURLProtocol: URLProtocol {
+    class var fixture: MCPWireFixture { preconditionFailure("Subclass MCPStreamURLProtocol with its own fixture.") }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let data = MCPWireFixture.shared.response(request)
+        let data = Self.fixture.response(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -26,11 +29,16 @@ nonisolated final class MCPStreamURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+nonisolated final class MCPProviderCompletionURLProtocol: MCPStreamURLProtocol {
+    static let wire = MCPWireFixture()
+    override class var fixture: MCPWireFixture { wire }
+}
+
 @Suite(.serialized) struct MCPProviderCompletionTests {
     private func turn(_ text: String) async throws -> ChatTurnResult {
-        MCPWireFixture.shared.set(text)
+        MCPProviderCompletionURLProtocol.wire.set(text)
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MCPStreamURLProtocol.self]
+        configuration.protocolClasses = [MCPProviderCompletionURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         return try await MobileChatRuntime(session: session).streamTurn(profile: MobileProviderProfile(baseURL: "https://stream.fixture", model: "test"), apiKey: "", messages: [], tools: [], reasoning: .automatic) { _ in }
@@ -60,15 +68,20 @@ nonisolated final class MCPStreamURLProtocol: URLProtocol {
     }
 }
 
-actor MCPOAuthFakeHTTP: MCPHTTPFetching {
-    var requests: [URLRequest] = []
-    var mismatchIssuer = false
-    var registrationFails = false
-    nonisolated func invalidate() {}
-    func changeIssuer() { mismatchIssuer = true }
-    func failRegistration() { registrationFails = true }
+/// A fake OAuth server; a locked class for the same reason as `MCPFakeHTTP`.
+final class MCPOAuthFakeHTTP: MCPHTTPFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [URLRequest] = []
+    private var issuerMismatch = false
+    private var registrationFailure = false
+    var requests: [URLRequest] { lock.withLock { recorded } }
+    var mismatchIssuer: Bool { lock.withLock { issuerMismatch } }
+    var registrationFails: Bool { lock.withLock { registrationFailure } }
+    func invalidate() {}
+    func changeIssuer() { lock.withLock { issuerMismatch = true } }
+    func failRegistration() { lock.withLock { registrationFailure = true } }
     func fetch(_ request: URLRequest) async throws -> MCPHTTPResponse {
-        requests.append(request)
+        lock.withLock { recorded.append(request) }
         let path = request.url?.path ?? ""
         if path == "/mcp" { return MCPHTTPResponse(status: 401, headers: ["www-authenticate": "Bearer resource_metadata=\"https://server.example/resource\", scope=\"read\""], data: Data()) }
         let object: MCPJSON
@@ -104,7 +117,7 @@ struct MCPOAuthFlowTests {
         }
         #expect(secret.accessToken == "test-secret-access")
         #expect(secret.issuer == "https://auth.example")
-        let requests = await http.requests
+        let requests = http.requests
         let tokenRequest = try #require(requests.first(where: { $0.url?.path == "/token" }))
         let fields = URLComponents(string: "https://test/?" + String(decoding: tokenRequest.httpBody!, as: UTF8.self))!.queryItems!
         let verifier = try #require(fields.first(where: { $0.name == "code_verifier" })?.value)
@@ -112,17 +125,17 @@ struct MCPOAuthFlowTests {
         let leakedCredential = requests.filter { $0.url?.path != "/token" }.contains(where: { $0.value(forHTTPHeaderField: "Authorization") != nil })
         #expect(!leakedCredential)
         #expect(try await client.refresh(secret, profile: profile).refreshToken == "test-secret-refresh")
-        await http.changeIssuer()
+        http.changeIssuer()
         await #expect(throws: MobileMCPError.self) { try await client.refresh(secret, profile: profile) }
-        #expect((await http.requests).filter { $0.url?.path == "/token" }.count == 2)
+        #expect(http.requests.filter { $0.url?.path == "/token" }.count == 2)
     }
     @Test func registrationFailureNeverOpensBrowserOrExchangesCode() async throws {
-        let http = MCPOAuthFakeHTTP(); await http.failRegistration()
+        let http = MCPOAuthFakeHTTP(); http.failRegistration()
         var profile = MobileMCPProfile(); profile.endpoint = "https://server.example/mcp"; profile.authentication = .oauth
         await #expect(throws: MobileMCPError.self) {
             try await MCPOAuth(http: http).authorize(profile) { _ in Issue.record("Browser opened after registration failed"); throw CancellationError() }
         }
-        #expect(!(await http.requests).contains(where: { $0.url?.path == "/token" }))
+        #expect(!http.requests.contains(where: { $0.url?.path == "/token" }))
     }
     @MainActor @Test func credentialsAreSeparateFromProfileAndConversationPersistence() throws {
         let id = UUID(), store = MCPMemoryCredentials()
