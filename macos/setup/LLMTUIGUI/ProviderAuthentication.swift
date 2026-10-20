@@ -47,14 +47,14 @@ enum ProviderAuthentication {
     }
 
     /// A POSIX environment variable name; nothing else is passed to launchctl.
-    static func isValidVariableName(_ name: String) -> Bool {
+    nonisolated static func isValidVariableName(_ name: String) -> Bool {
         guard let first = name.unicodeScalars.first,
               first == "_" || (first.isASCII && CharacterSet.letters.contains(first)) else { return false }
         return name.unicodeScalars.allSatisfy { $0 == "_" || ($0.isASCII && CharacterSet.alphanumerics.contains($0)) }
     }
 
     /// `launchctl getenv <name>` for the user's session; nil on any failure.
-    static func launchdValue(_ name: String) -> String? {
+    nonisolated static func launchdValue(_ name: String) -> String? {
         guard isValidVariableName(name) else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
