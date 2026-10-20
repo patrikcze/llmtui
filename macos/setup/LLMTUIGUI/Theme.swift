@@ -4,8 +4,12 @@ import AppKit
 /// The app's colors and shared styles, the same palette as the iOS app
 /// (`LLMTUIiOS/Theme.swift`), defined once for both appearances:
 ///
-/// - Dark: near-black background, raised charcoal cards and a single vivid
-///   magenta accent, used sparingly (send, selection, links, active toggles).
+/// - Dark: a near-black (not pure black) background, raised charcoal cards
+///   and a single vivid magenta accent, used sparingly (send, selection,
+///   links, active toggles). The background is lifted off pure black because
+///   macOS draws grouped Form sections with a translucent fill that only
+///   reaches about 2% white on #000, so sections vanished into one block; on
+///   #121214 they read like System Settings.
 /// - Light: a soft lavender-grey background, white cards with gentle shadows
 ///   and a violet-to-pink gradient for the accent.
 ///
@@ -16,9 +20,9 @@ enum Theme {
 
     static let accent = Color(dynamic: NSColor(hex: 0x7A5CF0), dark: NSColor(hex: 0xE42DF2))
     static let accentSecondary = Color(dynamic: NSColor(hex: 0xE468B4), dark: NSColor(hex: 0xA51FE0))
-    static let background = Color(dynamic: NSColor(hex: 0xF3F2F8), dark: NSColor(hex: 0x000000))
-    static let surface = Color(dynamic: NSColor(hex: 0xFFFFFF), dark: NSColor(hex: 0x17171A))
-    static let raisedSurface = Color(dynamic: NSColor(hex: 0xF6F5FB), dark: NSColor(hex: 0x232327))
+    static let background = Color(dynamic: NSColor(hex: 0xF3F2F8), dark: NSColor(hex: 0x121214))
+    static let surface = Color(dynamic: NSColor(hex: 0xFFFFFF), dark: NSColor(hex: 0x222226))
+    static let raisedSurface = Color(dynamic: NSColor(hex: 0xF6F5FB), dark: NSColor(hex: 0x2D2D32))
     static let hairline = Color(dynamic: NSColor(white: 0, alpha: 0.06), dark: NSColor(white: 1, alpha: 0.08))
     static let shadow = Color(dynamic: NSColor(red: 0.25, green: 0.2, blue: 0.5, alpha: 0.10), dark: .clear)
 
