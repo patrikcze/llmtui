@@ -24,6 +24,10 @@ enum Theme {
     static let surface = Color(dynamic: NSColor(hex: 0xFFFFFF), dark: NSColor(hex: 0x222226))
     static let raisedSurface = Color(dynamic: NSColor(hex: 0xF6F5FB), dark: NSColor(hex: 0x2D2D32))
     static let hairline = Color(dynamic: NSColor(white: 0, alpha: 0.06), dark: NSColor(white: 1, alpha: 0.08))
+    /// The fill behind settings rows (`ThemedGroupedFormStyle`): clear in
+    /// light mode, where the system's white sections already stand out, and
+    /// a visible charcoal in dark mode, where the system's fill does not.
+    static let sectionFill = Color(dynamic: NSColor.clear, dark: NSColor(hex: 0x28282D))
     static let shadow = Color(dynamic: NSColor(red: 0.25, green: 0.2, blue: 0.5, alpha: 0.10), dark: .clear)
 
     static let success = Color(dynamic: NSColor(hex: 0x1FA971), dark: NSColor(hex: 0x3DDC97))
@@ -132,6 +136,50 @@ extension View {
         scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
     }
+}
+
+/// The system grouped form, with the app's own section fill.
+///
+/// macOS draws grouped `Form` sections with a translucent fill that barely
+/// shows in dark mode (about 11 levels above the page at best), and neither
+/// `listRowBackground` nor `backgroundStyle` reaches it. This style rebuilds
+/// a real grouped `Form` from the same sections, so every control keeps its
+/// native row layout (labels, text fields, pickers, steppers), and puts
+/// `Theme.sectionFill` behind each row. The fill reaches past the row's
+/// insets: horizontally it is clipped by the section's rounded shape, and
+/// vertically it stops just short of the system divider between rows.
+struct ThemedGroupedFormStyle: FormStyle {
+    /// Slightly less than the grouped row's vertical inset, so neighbouring
+    /// rows' fills never cover each other and the system divider shows.
+    static let verticalBleed: CGFloat = 9.5
+    /// Wider than any section, measured from the row's content (which can be
+    /// a single narrow button); the section's rounded shape clips it.
+    static let horizontalBleed: CGFloat = 4000
+
+    func makeBody(configuration: Configuration) -> some View {
+        Form {
+            ForEach(sections: configuration.content) { section in
+                Section {
+                    ForEach(subviews: section.content) { row in
+                        row.background {
+                            Theme.sectionFill
+                                .padding(.horizontal, -Self.horizontalBleed)
+                                .padding(.vertical, -Self.verticalBleed)
+                        }
+                    }
+                } header: {
+                    section.header
+                } footer: {
+                    section.footer
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+extension FormStyle where Self == ThemedGroupedFormStyle {
+    static var themedGrouped: ThemedGroupedFormStyle { ThemedGroupedFormStyle() }
 }
 
 // MARK: - Color helpers
