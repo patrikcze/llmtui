@@ -55,6 +55,12 @@ profiles, chat, tools, agent, Personal Apps) stay there.
   and set to ask before each tool call.
 - Secrets are never shown or written: provider `api_key` values and MCP
   server `env` values stay as they are in the file. Use `api_key_env`.
+- The app's own chat and model discovery send the key named by
+  `api_key_env` as a Bearer token, only to that provider's server. An app
+  opened from Finder or the Dock does not see variables exported in a shell
+  profile, so set the variable with `launchctl setenv NAME value` (the app
+  reads launchd when its own environment lacks it). A plaintext `api_key`
+  in the file is not used by the app.
 - Before Save replaces `config.yaml`, llmtui checks the new text
   (`llmtui config validate`, from a user-only temporary file next to it).
   An error leaves the file untouched; warnings, such as unknown keys, are

@@ -1574,6 +1574,7 @@ enum OpenAIRequest {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        ProviderAPIKey.authorize(&request, apiKey: ProviderAPIKey.resolve(for: configuration))
         var body: [String: Any] = [
             "model": configuration.provider.model,
             "messages": try JSONSerialization.jsonObject(with: JSONEncoder().encode(messages)),
@@ -1675,9 +1676,9 @@ enum ProviderModelDiscovery {
     static func fetchModels(configuration: LLMTUIConfiguration) async throws -> [String] {
         switch configuration.provider.type {
         case .ollama:
-            return try await fetchOllamaModels(baseURL: configuration.provider.baseURL)
+            return try await fetchOllamaModels(baseURL: configuration.provider.baseURL, apiKey: ProviderAPIKey.resolve(for: configuration))
         case .openAICompatible:
-            return try await fetchOpenAICompatibleModels(baseURL: configuration.provider.baseURL)
+            return try await fetchOpenAICompatibleModels(baseURL: configuration.provider.baseURL, apiKey: ProviderAPIKey.resolve(for: configuration))
         case .embedded, .mock:
             throw ProviderDiscoveryError.unsupportedProviderType
         }
@@ -1694,7 +1695,8 @@ enum ProviderModelDiscovery {
         case .ollama:
             let contextWindow = try await fetchOllamaContextLength(
                 baseURL: configuration.provider.baseURL,
-                model: model
+                model: model,
+                apiKey: ProviderAPIKey.resolve(for: configuration)
             )
             return ProviderModelMetadata(
                 model: model,
@@ -1712,7 +1714,8 @@ enum ProviderModelDiscovery {
         case .openAICompatible:
             return try await fetchLMStudioMetadata(
                 baseURL: configuration.provider.baseURL,
-                model: model
+                model: model,
+                apiKey: ProviderAPIKey.resolve(for: configuration)
             )
         case .embedded, .mock:
             throw ProviderDiscoveryError.unsupportedProviderType
@@ -1731,24 +1734,25 @@ enum ProviderModelDiscovery {
         baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    private static func fetchOllamaModels(baseURL: String) async throws -> [String] {
-        let data = try await get(trimmedBaseURL(baseURL) + "/api/tags")
+    private static func fetchOllamaModels(baseURL: String, apiKey: String?) async throws -> [String] {
+        let data = try await get(trimmedBaseURL(baseURL) + "/api/tags", apiKey: apiKey)
         let decoded = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
         return Array(Set(decoded.models.map(\.name))).sorted()
     }
 
-    private static func fetchOpenAICompatibleModels(baseURL: String) async throws -> [String] {
-        let data = try await get(trimmedBaseURL(baseURL) + "/models")
+    private static func fetchOpenAICompatibleModels(baseURL: String, apiKey: String?) async throws -> [String] {
+        let data = try await get(trimmedBaseURL(baseURL) + "/models", apiKey: apiKey)
         let decoded = try JSONDecoder().decode(OpenAIModelsListResponse.self, from: data)
         return Array(Set(decoded.data.map(\.id))).sorted()
     }
 
-    private static func fetchOllamaContextLength(baseURL: String, model: String) async throws -> Int {
+    private static func fetchOllamaContextLength(baseURL: String, model: String, apiKey: String?) async throws -> Int {
         guard let url = URL(string: trimmedBaseURL(baseURL) + "/api/show") else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["name": model])
+        ProviderAPIKey.authorize(&request, apiKey: apiKey)
         let (data, response) = try await URLSession.shared.data(for: request)
         try checkStatus(response, data: data)
 
@@ -1767,7 +1771,8 @@ enum ProviderModelDiscovery {
 
     private static func fetchLMStudioMetadata(
         baseURL: String,
-        model: String
+        model: String,
+        apiKey: String?
     ) async throws -> ProviderModelMetadata {
         // LM Studio's native REST API lives one path segment above the
         // OpenAI-compatible "/v1" root used for chat completions.
@@ -1777,12 +1782,12 @@ enum ProviderModelDiscovery {
         }
 
         do {
-            let data = try await get(base + "/api/v1/models")
+            let data = try await get(base + "/api/v1/models", apiKey: apiKey)
             return try parseLMStudioMetadata(data, model: model)
         } catch {
             // LM Studio versions predating the v1 native API exposed a smaller
             // v0 response. Keep context discovery working for those versions.
-            let data = try await get(base + "/api/v0/models")
+            let data = try await get(base + "/api/v0/models", apiKey: apiKey)
             return try parseLegacyLMStudioMetadata(data, model: model)
         }
     }
@@ -1852,9 +1857,11 @@ enum ProviderModelDiscovery {
         )
     }
 
-    private static func get(_ endpoint: String) async throws -> Data {
+    private static func get(_ endpoint: String, apiKey: String?) async throws -> Data {
         guard let url = URL(string: endpoint) else { throw URLError(.badURL) }
-        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        var request = URLRequest(url: url)
+        ProviderAPIKey.authorize(&request, apiKey: apiKey)
+        let (data, response) = try await URLSession.shared.data(for: request)
         try checkStatus(response, data: data)
         return data
     }
