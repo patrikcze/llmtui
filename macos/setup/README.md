@@ -63,8 +63,11 @@ profiles, chat, tools, agent, Personal Apps) stay there.
   file are listed and Save says the file was not checked.
 
 The macOS chat and model discovery resolve each provider’s `api_key_env` from
-the app process environment on every request, falling back to its existing
-`api_key` when the variable is empty or absent. A configured variable with no
+the app process environment on every request, then from launchd, falling back
+to its existing `api_key` when the variable is empty or absent. An app opened
+from Finder or the Dock does not see variables exported in a shell profile;
+set the variable with `launchctl setenv NAME value` instead, and the app picks
+it up without a relaunch. A configured variable with no
 usable credential produces a local error. Providers with neither field remain
 unauthenticated, as supported by local Ollama and LM Studio servers.
 

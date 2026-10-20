@@ -4,25 +4,66 @@ import Testing
 
 @MainActor
 struct ProviderAuthenticationTests {
+    /// Keeps these tests independent of the machine's launchd environment.
+    private let noLaunchd: (String) -> String? = { _ in nil }
+
+    /// A key set with `launchctl setenv` after the app launched is not in the
+    /// app's environment; it is read from launchd, before the YAML api_key.
+    @Test func launchdFallbackForGUIApps() throws {
+        var provider = ProviderConfiguration()
+        provider.apiKeyEnvironment = "BRNOLAB_LLAMA_API_KEY"
+        provider.apiKey = "explicit"
+        var asked: [String] = []
+        var request = URLRequest(url: URL(string: "https://provider.invalid")!)
+        try ProviderAuthentication.apply(to: &request, provider: provider, environment: [:]) { name in
+            asked.append(name)
+            return "from-launchd\n"
+        }
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer from-launchd")
+        #expect(asked == ["BRNOLAB_LLAMA_API_KEY"])
+
+        // The app's own environment wins and launchd is not asked.
+        asked = []
+        try ProviderAuthentication.apply(to: &request, provider: provider, environment: ["BRNOLAB_LLAMA_API_KEY": "env"]) { name in
+            asked.append(name); return "from-launchd"
+        }
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer env")
+        #expect(asked.isEmpty)
+    }
+
+    @Test func onlyValidNamesReachLaunchctl() throws {
+        for name in ["1KEY", "KEY;rm -rf ~", "$KEY", "KEY NAME", "-h", "KEY=1"] {
+            var provider = ProviderConfiguration()
+            provider.apiKeyEnvironment = name
+            var asked = false
+            var request = URLRequest(url: URL(string: "https://provider.invalid")!)
+            #expect(throws: ProviderAuthentication.MissingCredential.self) {
+                try ProviderAuthentication.apply(to: &request, provider: provider, environment: [:]) { _ in asked = true; return "x" }
+            }
+            #expect(!asked, "\(name)")
+        }
+        #expect(ProviderAuthentication.isValidVariableName("BRNOLAB_LLAMA_API_KEY"))
+        #expect(ProviderAuthentication.isValidVariableName("_KEY2"))
+    }
     @Test func credentialResolution() throws {
         var provider = ProviderConfiguration()
         provider.apiKeyEnvironment = "TEST_PROVIDER_KEY"
         for value in ["secret", "Bearer secret", "bearer secret", " secret \n"] {
             var request = URLRequest(url: URL(string: "https://provider.invalid")!)
-            try ProviderAuthentication.apply(to: &request, provider: provider, environment: ["TEST_PROVIDER_KEY": value])
+            try ProviderAuthentication.apply(to: &request, provider: provider, environment: ["TEST_PROVIDER_KEY": value], launchd: noLaunchd)
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
         }
         for environment in [[:], ["TEST_PROVIDER_KEY": ""], ["TEST_PROVIDER_KEY": "  "], ["WRONG_NAME": "secret"]] {
             var request = URLRequest(url: URL(string: "https://provider.invalid")!)
             #expect(throws: ProviderAuthentication.MissingCredential.self) {
-                try ProviderAuthentication.apply(to: &request, provider: provider, environment: environment)
+                try ProviderAuthentication.apply(to: &request, provider: provider, environment: environment, launchd: noLaunchd)
             }
         }
         provider.apiKey = "explicit"
         var request = URLRequest(url: URL(string: "https://provider.invalid")!)
-        try ProviderAuthentication.apply(to: &request, provider: provider, environment: [:])
+        try ProviderAuthentication.apply(to: &request, provider: provider, environment: [:], launchd: noLaunchd)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer explicit")
-        try ProviderAuthentication.apply(to: &request, provider: provider, environment: ["TEST_PROVIDER_KEY": "environment"])
+        try ProviderAuthentication.apply(to: &request, provider: provider, environment: ["TEST_PROVIDER_KEY": "environment"], launchd: noLaunchd)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer environment")
     }
 
