@@ -2494,25 +2494,25 @@ struct ProviderSettingsView: View {
                     .help(model.canDeleteProviderProfile(selected)
                         ? "Remove this profile and its whole block from config.yaml on Save"
                         : "The last profile can't be deleted")
+                    .confirmationDialog(
+                        "Delete provider \(selected)?",
+                        isPresented: $confirmingDelete,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Delete", role: .destructive) {
+                            model.deleteProviderProfile(selected)
+                        }
+                    } message: {
+                        Text(selected == llmtuiDefault
+                            ? "Its block is removed from config.yaml when you save. It is llmtui's default, so the default moves to another profile."
+                            : "Its block is removed from config.yaml when you save.")
+                    }
                 }
                 Text("Profiles are stored under providers: in the same llmtui configuration file. Saving keeps every other provider and section intact.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
                 Text("Profile \(selected)")
-            }
-            .confirmationDialog(
-                "Delete provider \(selected)?",
-                isPresented: $confirmingDelete,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    model.deleteProviderProfile(selected)
-                }
-            } message: {
-                Text(selected == llmtuiDefault
-                    ? "Its block is removed from config.yaml when you save. It is llmtui's default, so the default moves to another profile."
-                    : "Its block is removed from config.yaml when you save.")
             }
 
             if model.configuration.provider.type == .embedded {
@@ -2536,7 +2536,7 @@ struct ProviderSettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Providers")
     }
@@ -2691,7 +2691,7 @@ struct ChatSettingsView: View {
 
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Chat Settings")
     }
@@ -2743,7 +2743,7 @@ struct ToolsSettingsView: View {
 
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Tools & Safety")
     }
@@ -2832,7 +2832,7 @@ struct AgentRuntimeSettingsView: View {
 
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Agent & Runtime")
     }
@@ -3085,7 +3085,7 @@ struct ModelProfilesView: View {
             }
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Model Profiles")
         .sheet(isPresented: $isAddingProfile) {
@@ -3220,7 +3220,7 @@ struct NewModelProfileSheet: View {
                     Toggle("Reasoning hint", isOn: $reasoningHint)
                 }
             }
-            .formStyle(.grouped)
+            .formStyle(.themedGrouped)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -3563,7 +3563,7 @@ struct PersonalAppsSettingsView: View {
 
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("Personal Apps")
         .confirmationDialog(
@@ -3830,7 +3830,7 @@ struct MoreSettingsView: View {
             }
             SettingsSaveRow(model: model)
         }
-        .formStyle(.grouped)
+        .formStyle(.themedGrouped)
         .padding(24)
         .navigationTitle("More Settings")
         .confirmationDialog(
