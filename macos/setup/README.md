@@ -55,18 +55,21 @@ profiles, chat, tools, agent, Personal Apps) stay there.
   and set to ask before each tool call.
 - Secrets are never shown or written: provider `api_key` values and MCP
   server `env` values stay as they are in the file. Use `api_key_env`.
-- The app's own chat and model discovery send the key named by
-  `api_key_env` as a Bearer token, only to that provider's server. An app
-  opened from Finder or the Dock does not see variables exported in a shell
-  profile, so set the variable with `launchctl setenv NAME value` (the app
-  reads launchd when its own environment lacks it). A plaintext `api_key`
-  in the file is not used by the app.
 - Before Save replaces `config.yaml`, llmtui checks the new text
   (`llmtui config validate`, from a user-only temporary file next to it).
   An error leaves the file untouched; warnings, such as unknown keys, are
   shown. The saved file is checked again when loaded. With an llmtui that
   is missing or too old for these commands, only the keys already in the
   file are listed and Save says the file was not checked.
+
+The macOS chat and model discovery resolve each provider’s `api_key_env` from
+the app process environment on every request, then from launchd, falling back
+to its existing `api_key` when the variable is empty or absent. An app opened
+from Finder or the Dock does not see variables exported in a shell profile;
+set the variable with `launchctl setenv NAME value` instead, and the app picks
+it up without a relaunch. A configured variable with no
+usable credential produces a local error. Providers with neither field remain
+unauthenticated, as supported by local Ollama and LM Studio servers.
 
 Provider profiles are the `providers:` entries of `config.yaml`, shared with
 the terminal app. On the **Providers** screen:

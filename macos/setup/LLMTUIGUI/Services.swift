@@ -1590,7 +1590,8 @@ struct LLMTUIConfigurationStore: Sendable {
                 type: ProviderType(rawValue: values[profilePrefix + "type"] ?? "") ?? .openAICompatible,
                 baseURL: values[profilePrefix + "base_url"] ?? "",
                 model: values[profilePrefix + "default_model"] ?? "",
-                apiKeyEnvironment: values[profilePrefix + "api_key_env"] ?? ""
+                apiKeyEnvironment: values[profilePrefix + "api_key_env"] ?? "",
+                apiKey: fileValues[profilePrefix + "api_key"] ?? ""
             )
         }
 
@@ -2337,7 +2338,7 @@ struct LLMTUIConfigurationStore: Sendable {
         // Every profile gets a block; the default is the chosen one when it is
         // among them, otherwise the profile the app was set up with.
         let profiles = configuration.providers.isEmpty ? [ProviderProfile(
-            name: p.name, type: p.type, baseURL: p.baseURL, model: p.model, apiKeyEnvironment: p.apiKeyEnvironment
+            name: p.name, type: p.type, baseURL: p.baseURL, model: p.model, apiKeyEnvironment: p.apiKeyEnvironment, apiKey: p.apiKey
         )] : configuration.providers
         let defaultProfile = profiles.first { $0.name == configuration.defaultProviderName }
             ?? profiles.first { $0.name == p.name } ?? profiles[0]
