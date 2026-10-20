@@ -111,6 +111,7 @@ struct ProviderConfiguration: Equatable {
     var baseURL = "http://localhost:1234/v1/"
     var model = "google/gemma-4-e4b"
     var apiKeyEnvironment = ""
+    var apiKey = ""
 }
 
 struct ProviderProfile: Identifiable, Equatable {
@@ -120,6 +121,7 @@ struct ProviderProfile: Identifiable, Equatable {
     var baseURL: String
     var model: String
     var apiKeyEnvironment: String
+    var apiKey: String = ""
 }
 
 extension ProviderConfiguration {
@@ -129,7 +131,8 @@ extension ProviderConfiguration {
             type: profile.type,
             baseURL: profile.baseURL,
             model: profile.model,
-            apiKeyEnvironment: profile.apiKeyEnvironment
+            apiKeyEnvironment: profile.apiKeyEnvironment,
+            apiKey: profile.apiKey
         )
     }
 }
@@ -1054,7 +1057,8 @@ final class AppModel {
             type: configuration.provider.type,
             baseURL: configuration.provider.baseURL,
             model: configuration.provider.model,
-            apiKeyEnvironment: configuration.provider.apiKeyEnvironment
+            apiKeyEnvironment: configuration.provider.apiKeyEnvironment,
+            apiKey: configuration.provider.apiKey
         )
         if let index = configuration.providers.firstIndex(where: { $0.name == active.name }) {
             configuration.providers[index] = active

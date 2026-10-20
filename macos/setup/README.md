@@ -62,6 +62,12 @@ profiles, chat, tools, agent, Personal Apps) stay there.
   is missing or too old for these commands, only the keys already in the
   file are listed and Save says the file was not checked.
 
+The macOS chat and model discovery resolve each provider’s `api_key_env` from
+the app process environment on every request, falling back to its existing
+`api_key` when the variable is empty or absent. A configured variable with no
+usable credential produces a local error. Providers with neither field remain
+unauthenticated, as supported by local Ollama and LM Studio servers.
+
 Provider profiles are the `providers:` entries of `config.yaml`, shared with
 the terminal app. On the **Providers** screen:
 - **Chat uses** picks the profile for this app's chat. The choice is kept in
