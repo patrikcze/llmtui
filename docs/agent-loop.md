@@ -627,8 +627,11 @@ terminal. Exhausting `agent.verifier.max_attempts` is also terminal, as
 `verification_unavailable` (see [Verification](#verification)) — distinct
 from a hard-budget stop because the cause is the verifier's own
 infrastructure, not a run limit. Safety constraints and internal invariants
-escalate; provider failures are explicit and never swallowed merely to keep
-the loop running.
+escalate. A safety block that was the cycle's last tool call escalates; one
+the executor moved past with later calls (a path refused outside the
+workspace, then a search inside it) is treated like any other recovered tool
+failure — the block itself still refused the call. Provider failures are
+explicit and never swallowed merely to keep the loop running.
 
 ## Run memory, privacy, and resume
 
