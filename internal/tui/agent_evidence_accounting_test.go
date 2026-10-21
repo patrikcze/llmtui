@@ -179,3 +179,57 @@ func TestVerifiedAgentDifferentlyInvalidCallsDoNotEarnRetries(t *testing.T) {
 		t.Fatalf("provider requests = %d, want contract + 3 per cycle", len(prov.requests))
 	}
 }
+
+// TestRecordedSafetyBlockRecoversOnlyWhenNotTrailing drives the real
+// receipt recording: a directory_tree call outside the workspace is blocked,
+// then the model globs inside it. The recorded block must not escalate the
+// run once later calls ran, and must still escalate when it is the last call.
+func TestRecordedSafetyBlockRecoversOnlyWhenNotTrailing(t *testing.T) {
+	executed := uniformActionStatuses(1, agent.ActionExecuted)
+	blocked := tools.Result{
+		Call: tools.Call{ID: "t", Tool: tools.ToolDirectoryTree, Path: "/tmp/llmtui-smoke"},
+		Err:  errors.New(`path "/tmp/llmtui-smoke" is outside the workspace`),
+	}
+	glob := tools.Result{
+		Call:   tools.Call{ID: "g", Tool: tools.ToolGlob, Body: "*.txt", Path: "."},
+		Output: "dataset.txt",
+		Meta:   tools.ResultMeta{Outcome: tools.OutcomeOK, Effect: tools.EffectNone},
+	}
+
+	decide := func(t *testing.T, m *Model) agent.Decision {
+		t.Helper()
+		execution := m.agentLoop.execution
+		execution.Summary = "report written"
+		agent.PruneRecoveredToolErrors(&execution)
+		run := m.agentLoop.run
+		now := time.Now()
+		if err := run.CompleteExecution(execution, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.CompleteVerification(agent.VerificationResult{Verdict: agent.VerificationPassed, Summary: "verified"}, now); err != nil {
+			t.Fatal(err)
+		}
+		return agent.Decide(run, now).Decision
+	}
+
+	t.Run("recovered", func(t *testing.T) {
+		m := activeExecutorModel(t)
+		m.recordAgentToolResultsCount([]tools.Result{blocked}, false, executed)
+		if kind := m.agentLoop.execution.ToolCalls[0].ErrorKind; kind != agent.ErrorSafety {
+			t.Fatalf("blocked call kind = %q, want %q", kind, agent.ErrorSafety)
+		}
+		m.recordAgentToolResultsCount([]tools.Result{glob}, false, executed)
+		if got := decide(t, m); got == agent.DecisionEscalated {
+			t.Fatalf("decision = %q, want no escalation after the model moved past the block", got)
+		}
+	})
+
+	t.Run("trailing", func(t *testing.T) {
+		m := activeExecutorModel(t)
+		m.recordAgentToolResultsCount([]tools.Result{glob}, false, executed)
+		m.recordAgentToolResultsCount([]tools.Result{blocked}, false, executed)
+		if got := decide(t, m); got != agent.DecisionEscalated {
+			t.Fatalf("decision = %q, want escalated", got)
+		}
+	})
+}

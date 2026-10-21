@@ -44,6 +44,12 @@ func EvaluateDeterministic(execution ExecutionResult) (VerificationResult, bool)
 		case ErrorPermissionDenied:
 			return deterministicVerdict(VerificationBlocked, "execution requires user permission", false, false), true
 		case ErrorSafety:
+			// A block followed by other calls is recovered like any other
+			// non-trailing tool failure; a trailing one was already judged
+			// by the check above (see recoveredSafetyError).
+			if recoveredSafetyError(runErr, execution) {
+				continue
+			}
 			return deterministicVerdict(VerificationBlocked, "execution encountered a safety constraint", false, false), true
 		case ErrorCancelled:
 			return deterministicVerdict(VerificationBlocked, "execution was cancelled", false, false), true

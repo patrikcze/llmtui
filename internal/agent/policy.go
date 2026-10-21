@@ -34,7 +34,9 @@ func Decide(run *AgentRun, now time.Time) StopResult {
 	if verify.NeedsUserInput {
 		return StopResult{Decision: DecisionNeedsUserInput, Reason: nonempty(verify.Summary, "the executor's response requires your input to continue")}
 	}
-	if hasErrorKind(exec.Errors, ErrorSafety, ErrorInvariant) {
+	// A safety block the executor moved past in the same cycle is not a
+	// stop; only one nothing ran after escalates (see recoveredSafetyError).
+	if hasErrorKind(exec.Errors, ErrorInvariant) || hasUnrecoveredSafetyError(*exec) {
 		return StopResult{Decision: DecisionEscalated, Reason: "execution encountered a safety constraint or internal invariant failure"}
 	}
 	if run.ToolCalls > run.Limits.MaxToolCalls {
