@@ -599,6 +599,7 @@ func (m *Model) compositionBase(raw string, images []provider.Image, omitRaw boo
 			TemplatePrompt:             templatePrompt,
 			Mode:                       m.effectivePromptMode(),
 			HelperText:                 m.cfg.Prompt.HelperText,
+			HarnessGuidance:            m.experimentalHarnessGuidance(),
 			ModelHints:                 prompt.HintsForProfile(prof.PromptStyle, prof.ReasoningHint),
 			MemorySnippets:             memSnippets,
 			ProjectMemory:              projectMemory,

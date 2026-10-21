@@ -13,6 +13,8 @@ import (
 // Root bundles state shared by all commands.
 type Root struct {
 	cfgFile    string
+	harnessDir string
+	useHarness bool
 	viper      *viper.Viper
 	cfg        *config.Config
 	launchChat launchChatFunc
@@ -46,6 +48,8 @@ func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.
 	addChatFlags(cmd, &rootChatFlags)
 
 	pf := cmd.PersistentFlags()
+	pf.StringVar(&r.harnessDir, "harness-state-dir", "", "private harness experiment state directory (explicit commands only)")
+	pf.BoolVar(&r.useHarness, "experimental-harness", false, "use the explicitly adopted guidance for /agent in this session")
 	pf.StringVar(&r.cfgFile, "config", "", "path to config file")
 	pf.String("provider", "", "provider to use (ollama, lmstudio, openai_compatible, embedded, mock)")
 	pf.String("model", "", "model to use (a local .gguf file path for --provider embedded)")
@@ -68,6 +72,7 @@ func newRootCmd(version, commit, date string, launchChat launchChatFunc) *cobra.
 		newModelsCmd(r),
 		newRuntimeCmd(r),
 		newDecisionCmd(r),
+		newHarnessCmd(r),
 		newDoctorCmd(r),
 		newHistoryCmd(r),
 		newStatsCmd(r),

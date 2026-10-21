@@ -29,6 +29,7 @@ import (
 	"github.com/patrikcze/llmtui/internal/config"
 	"github.com/patrikcze/llmtui/internal/contextmgr"
 	"github.com/patrikcze/llmtui/internal/entity"
+	"github.com/patrikcze/llmtui/internal/harness"
 	"github.com/patrikcze/llmtui/internal/history"
 	"github.com/patrikcze/llmtui/internal/mcp"
 	"github.com/patrikcze/llmtui/internal/memory"
@@ -50,6 +51,8 @@ import (
 
 // Options configures the chat UI.
 type Options struct {
+	// Harness is a session-local, explicitly adopted overlay; nil does no work.
+	Harness    *harness.Snapshot
 	Config     *config.Config
 	Provider   provider.Provider
 	Model      string
@@ -121,13 +124,14 @@ type pendingAskUser struct {
 
 // Model is the root Bubble Tea model for the chat screen.
 type Model struct {
-	cfg      *config.Config
-	theme    styles.Theme
-	prov     provider.Provider
-	model    string
-	session  *chat.Session
-	episode  *history.Episode
-	renderer *glamour.TermRenderer
+	harnessSnapshot *harness.Snapshot
+	cfg             *config.Config
+	theme           styles.Theme
+	prov            provider.Provider
+	model           string
+	session         *chat.Session
+	episode         *history.Episode
+	renderer        *glamour.TermRenderer
 	turnRuntime
 	// entities is ephemeral session runtime state. It is never serialized as
 	// history, memory, cache content, or agent-run state.
@@ -448,6 +452,7 @@ func New(opts Options) *Model {
 
 	m := &Model{
 		cfg:                       opts.Config,
+		harnessSnapshot:           opts.Harness,
 		theme:                     t,
 		prov:                      opts.Provider,
 		model:                     opts.Model,

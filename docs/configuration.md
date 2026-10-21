@@ -642,3 +642,17 @@ dialog without contacting anything, and `r` rechecks. `use_nerd_font` remains re
 `privacy` section is declarative — the behaviors it describes (local-first,
 key redaction) are hardcoded and not configurable off; see
 [security.md](security.md).
+
+## Explicit harness experiment flags
+
+Harness experiments add no YAML/environment configuration hierarchy. Existing
+changed-flags > environment > YAML > defaults precedence continues to resolve
+the provider/model and chat sampling used by explicit proposal requests.
+`harness run` defaults to offline fixture simulations; `--model-proposals`
+explicitly permits two tool-free requests through that effective provider.
+An explicit `harness adopt ID` selects guidance privately; only a subsequent
+`chat --experimental-harness` uses it during `/agent`. No ordinary startup
+reads experimental state. `--harness-state-dir DIR` overrides the private
+state location (default: `harness/` beside the selected config, or under the
+default config directory). Config files and workspace sources are never edited
+by activation. See [harness-experiments.md](harness-experiments.md).

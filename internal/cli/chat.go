@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
 	"github.com/patrikcze/llmtui/internal/app"
 	"github.com/patrikcze/llmtui/internal/history"
+	"github.com/patrikcze/llmtui/internal/provider"
 	"github.com/patrikcze/llmtui/internal/tui"
 )
 
@@ -42,9 +44,15 @@ func runChat(r *Root, resumeName string, continueLatest bool) error {
 	if err != nil {
 		return fmt.Errorf("start chat: %w", err)
 	}
+	snapshot, err := r.activeHarness(context.Background(), prov)
+	if err != nil {
+		_ = provider.CloseProvider(prov)
+		return fmt.Errorf("activate harness: %w", err)
+	}
 	cfgPath, _ := r.configPath()
 	opts := tui.Options{
 		Config:     r.cfg,
+		Harness:    snapshot,
 		Provider:   prov,
 		Model:      r.cfg.ActiveModel(),
 		ConfigPath: cfgPath,

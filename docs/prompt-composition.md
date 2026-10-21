@@ -171,3 +171,15 @@ or globally via `prompt.mode` in the config. Individual helpers toggle with
 Set `memory.retrieval.enabled: false` to use the legacy separate memory and RAG
 sections. The raw-user-message and response-cache completeness invariants are
 the same in both modes.
+
+## Explicit experimental harness section
+
+An explicitly adopted harness plus the per-session `--experimental-harness`
+flag adds **Experimental Harness** immediately after System Prompt only while
+an agent run is active. The application-owned guidance catalog is framed with
+`untrusted.Frame`; it cannot override user/system instructions, verification,
+approvals or tool policy. Model proposal explanations and experience-library
+bodies never become production prompt instructions. The section participates
+in `StaticSystem` and therefore cache identity and frozen-prefix compatibility.
+It leaves the raw user message unchanged and is visible in `/prompt composed`
+while applicable. See [harness-experiments.md](harness-experiments.md).
