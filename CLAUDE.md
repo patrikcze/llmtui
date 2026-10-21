@@ -5,7 +5,7 @@ Ollama, LM Studio, vLLM, llama.cpp, any OpenAI-compatible server, or a GGUF run
 in-process. Local-first: no telemetry, no network call the user did not
 configure. Audience: developers running models on their own machine.
 
-This is a mature 43-package Go codebase (42 internal packages plus the
+This is a mature 44-package Go codebase (43 internal packages plus the
 `cmd/llmtui` entry point), not a scaffold. Read the code before changing it;
 refresh the exact inventory with `go list ./...` and see
 `docs/architecture/package-map.md` for the maintained map.
@@ -18,6 +18,7 @@ and macOS arm64 are the local reference environment, but timings vary.
 ```bash
 make build                # go build -ldflags … -o llmtui ./cmd/llmtui
 make check                # fmt + vet + lint + test-race — run before committing
+llmtui harness run tool-use # opt-in fixture simulation; see docs/harness-experiments.md
 go test -count=1 ./...    # full suite; duration varies by machine
 go vet ./...
 gofmt -l .                # must print nothing (CI fails on any output)
@@ -212,6 +213,11 @@ them **and add a regression test for the specific case it touches**:
   default** and a broken/disabled one must not block normal chat startup.
   The bounded entity runtime is enabled by default but remains inert unless
   tools are active; it is transient and must not block normal chat startup.
+- Harness experiments (`internal/harness`) run only through explicit CLI commands.
+  Probes are restricted fixture simulations, not live workspace/model evaluations.
+  Adoption is private state; only `chat --experimental-harness` supplies catalog
+  advice during `/agent`. No normal startup state I/O, tool authority, verifier
+  changes or ordinary-chat prompt changes. See `docs/harness-experiments.md`.
 - Laya MLX runs only through explicit decision runtime/predict commands or an
   explicitly constructed decision loader. Python imports and model loading
   never run during normal chat startup. See `docs/decision-engine.md`.

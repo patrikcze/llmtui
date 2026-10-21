@@ -10,6 +10,9 @@ comments, but this file is authoritative.
 - **Per-topic guides:** `docs/*.md` (agent loop, tools, prompt composition,
   context management, security, MCP, RAG, memory, skills, embedded inference,
   self-management, …)
+- **Harness experiments:** [`../harness-experiments.md`](../harness-experiments.md)
+  describes restricted fixture comparisons, explicit catalog-overlay adoption
+  and the separate experience library. The existing agent remains authoritative.
 - **Agent calibration:** [`../agent-evaluation.md`](../agent-evaluation.md)
   defines the deterministic baseline and the opt-in live-endpoint procedure;
   it does not treat synthetic fixture success as a model-quality claim.
@@ -17,7 +20,7 @@ comments, but this file is authoritative.
   records the commit/fixture binding, deterministic results, benchmark
   snapshot, and the local-model/platform gates that remain open.
 
-Current inventory: 42 internal Go packages plus `cmd/llmtui` (43 Go packages
+Current inventory: 43 internal Go packages plus `cmd/llmtui` (44 Go packages
 total), Go 1.27. Outside the Go module, `macos/setup` holds the SwiftUI macOS
 setup app (LLMTUIGUI) and iOS chat app (LLMTUIiOS); see
 `package-map.md` §8 and `macos/setup/README.md`. Verify version-sensitive details (the embedded runtime pin,

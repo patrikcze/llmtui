@@ -870,3 +870,15 @@ approvals, skills, MCP, RAG, and slash commands follow their previous path.
 Agent cycles bypass the response cache because completion must reflect current
 workspace/tool evidence. The same behavior works with Ollama, LM Studio,
 OpenAI-compatible servers, embedded GGUF models, and provider test doubles.
+
+## Experimental harness advice
+
+`llmtui harness` runs restricted fixture comparisons outside the agent loop.
+After reviewing and explicitly adopting a recommendation, start
+`llmtui chat --experimental-harness` to include its validated catalog guidance
+in active agent executor prompts. `/agent on` and tool permissions remain
+separate. Contracts, semantic verification, yield/recovery and deterministic
+policy keep their existing authority. Ordinary chat receives no overlay.
+No live workspace probes or second agent/tool loop are introduced. See
+[harness-experiments.md](harness-experiments.md) for evidence, lifecycle,
+containment limits and rollback.
