@@ -1,8 +1,6 @@
 module github.com/patrikcze/llmtui
 
-go 1.27.0
-
-toolchain go1.27.2
+go 1.27.3
 
 // Keep libffi lazy so non-embedded providers can start on Linux without libffi.so.8.
 replace github.com/jupiterrider/ffi => ./third_party/ffi

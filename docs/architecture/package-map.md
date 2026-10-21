@@ -4,7 +4,7 @@ A layer-by-layer tour of every Go package under `internal/`, plus a
 cross-check for apparent duplication (the same noun — *skill*, *memory*,
 *tool*, *runtime* — showing up in several packages).
 
-Current inventory: 43 Go packages (42 under `internal/` plus `cmd/llmtui`),
+Current inventory: 44 Go packages (43 under `internal/` plus `cmd/llmtui`),
 about 150k Go LOC including tests (excluding `third_party/`), measured
 2026-10-14. Use `go list ./...`
 for the exact package inventory; keep this file in sync with the one-line list
@@ -68,6 +68,7 @@ cmd/llmtui ──> internal/cli ──> internal/app ──> internal/provider/{
 | `internal/agent` | Provider- and UI-independent **state machine** for bounded, verified `/agent` runs, driven by the TUI adapter (`internal/tui/agent_loop.go`): stages (trigger → contract → rules-load → executor → verifier → memory-write → stop-check), `criteria.go` (semantic acceptance criteria, exact-read coverage proof, evidence ledger, read-coverage facts), `deterministic.go` (`EvaluateDeterministic` — failure-only mechanical verdicts and recovery objectives), `yield.go` (pure same-episode yield policy), `policy.go` (`Decide()` — budget/stop logic, no side effects), receipts/recovery attribution and executed-call accounting, behavior statistics, and `store.go` (persist runs: compaction, revision ordering, redaction). See `docs/agent-loop.md`; `docs/architecture/v1-agent-runtime.md` is the original design. | `types.go`, `run.go`, `criteria.go`, `deterministic.go`, `yield.go`, `policy.go`, `store.go`, `errors.go`, `assistance.go`, `observations.go`, `proof.go`, `receipts.go`, `recovered.go` |
 | `internal/agentverify` | Adapts `provider` to fresh-context, tool-free agent control requests: task-contract establishment before cycle 1 and semantic verification after execution (strict envelope parse, one bounded format repair, one per-criterion repair for a bare multi-criterion pass). Deliberately separate from `agent`, which stays provider-neutral. | `contract.go`, `verifier.go` |
 | `internal/decision` | Opt-in **Laya** structured-decision engine: provider-independent typed decision contracts, logits decoding, golden fixtures, model acquisition/verification, and execution through an explicit MLX subprocess (`mlx_worker.py`). A decision is a typed signal, never an authorization primitive; the agent loop uses it only through the shadow/add-only seam in `internal/tui/agent_observer.go`, and nothing loads during normal chat startup. See `docs/decision-engine.md`. | `types.go`, `decode.go`, `golden.go`, `models.go`, `model_manager.go`, `preprocess.go`, `router.go`, `runtime.go`, `service.go`, `mlx.go`, `mlx_validation.go`, `doc.go` |
+| `internal/harness` | Opt-in k=1 harness experiments: content-addressed catalog overlays, strict provider proposals, restricted fixture probes, deterministic comparison/composition, atomic adoption/rollback and a separate expiring experience library. Imports no TUI code; owns no agent execution or permissions. See `../harness-experiments.md`. | `snapshot.go`, `proposal.go`, `fixture.go`, `experiment.go`, `store.go`, `doc.go` |
 | `internal/eval` | Developer-only, opt-in evaluation library and endpoint tests. Repeats contract-stage and safe native-tool conformance probes, records bounded content-safe metrics (including optional Phase 8 baseline/candidate/fixture binding), and writes JSONL reports. It never runs automatically in CI, never executes host tools, and is not part of the normal chat runtime. | `doc.go`, `live.go`; opt-in endpoint test `live_test.go`; fake-provider tests `live_test_internal_test.go` |
 
 ---
@@ -169,6 +170,9 @@ pipeline where every layer has one job.
 | `internal/history` (imports `skill`) | Episode records store which skills were active. |
 
 Engine → config adapter → prompt integration → UI → agent tool → audit trail.
+
+`internal/harness` adds a separate experiment-experience store, not another user
+memory engine or run store. Nothing retrieves from it during ordinary chat.
 
 ### `memory` — five different things that share a word
 
