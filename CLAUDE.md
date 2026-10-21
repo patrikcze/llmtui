@@ -12,7 +12,7 @@ refresh the exact inventory with `go list ./...` and see
 
 ## Commands
 
-These are the repository gates; run them against the current revision. Go 1.27
+These are the repository gates; run them against the current revision. Go 1.27.3+
 and macOS arm64 are the local reference environment, but timings vary.
 
 ```bash

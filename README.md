@@ -89,7 +89,7 @@ fresh-context verifier, then decide whether to continue, retry, or stop. See
 
 ## Install
 
-Requires Go 1.27+.
+Requires Go 1.27.3+ (includes the `crypto/x509` security fix for GO-2026-6809).
 
 ```bash
 git clone https://github.com/patrikcze/llmtui.git
