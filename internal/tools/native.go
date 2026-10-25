@@ -774,9 +774,68 @@ func personalAppsFieldSchemas() map[string]map[string]any {
 		"changes": map[string]any{
 			"type":        "array",
 			"description": "One or more change objects, each with its own \"type\" field (mail_move, mail_set_read, mail_set_flag, mail_save_draft, calendar_create_event, or calendar_update_event) — see the Personal Mail/Calendar rules for each type's exact fields. These are values for \"type\" inside this array, never tool names to call by themselves.",
-			"items":       map[string]any{"type": "object"},
+			"items":       personalAppsChangeItemSchema(),
 		},
 		"plan_id": field(str, "The plan_id a prior change_prepare returned, after a human approved it in a separate turn."),
+	}
+}
+
+// personalAppsChangeItemSchema declares one change_prepare entry as the union
+// of every variant's fields in internal/personalapps/changes.go, keyed by
+// "type". A bare {"type":"object"} is not enough: strict schema-to-grammar
+// servers (Apple's `fm serve`) reject a request whose tools contain one, and
+// only let the model emit declared fields. Which fields a given type allows
+// stays in PersonalAppsInstructions; ParseRequest decodes each variant
+// strictly, so a field from another variant is still rejected.
+func personalAppsChangeItemSchema() map[string]any {
+	str := map[string]any{"type": "string"}
+	strArray := map[string]any{"type": "array", "items": str}
+	boolField := map[string]any{"type": "boolean"}
+	types := make([]string, 0, len(personalapps.ChangeTypes()))
+	for _, ct := range personalapps.ChangeTypes() {
+		types = append(types, string(ct))
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type": map[string]any{"type": "string", "enum": types},
+			"messages": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"message_id":       str,
+						"expected_version": str,
+					},
+					"required":             []string{"message_id", "expected_version"},
+					"additionalProperties": false,
+				},
+			},
+			"destination_mailbox_id": str,
+			"read":                   boolField,
+			"flagged":                boolField,
+			"sender_account_id":      str,
+			"in_reply_to_message_id": str,
+			"to":                     strArray,
+			"cc":                     strArray,
+			"bcc":                    strArray,
+			"subject":                str,
+			"body":                   str,
+			"include_quote":          boolField,
+			"calendar_id":            str,
+			"event_id":               str,
+			"expected_version":       str,
+			"title":                  str,
+			"notes":                  str,
+			"location":               str,
+			"timezone":               str,
+			"start":                  map[string]any{"type": "string", "description": "RFC3339 with offset."},
+			"end":                    map[string]any{"type": "string", "description": "RFC3339 with offset."},
+			"all_day_start":          map[string]any{"type": "string", "description": "YYYY-MM-DD."},
+			"all_day_end":            map[string]any{"type": "string", "description": "YYYY-MM-DD, exclusive."},
+		},
+		"required":             []string{"type"},
+		"additionalProperties": false,
 	}
 }
 
