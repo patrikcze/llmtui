@@ -3273,8 +3273,12 @@ func (m *Model) resize(w, h int) {
 		if styles.IsDark() {
 			style = "dark"
 		}
+		styleOpt := glamour.WithStandardStyle(style)
+		if m.theme.Markdown != nil {
+			styleOpt = glamour.WithStyles(*m.theme.Markdown)
+		}
 		r, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
+			styleOpt,
 			glamour.WithWordWrap(renderWidth),
 		)
 		if err == nil {

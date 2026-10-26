@@ -13,6 +13,7 @@ func TestByNameResolvesEveryBuiltInTheme(t *testing.T) {
 		"claude_inspired": "claude_inspired",
 		"midnight":        "midnight",
 		"forest":          "forest",
+		"hud":             "hud",
 	}
 	for input, wantName := range cases {
 		if got := ByName(input).Name; got != wantName {
@@ -34,7 +35,7 @@ func TestByNameFallsBackToDefaultForUnknownNames(t *testing.T) {
 // as the terminal's default foreground, which is easy to miss visually but
 // easy to catch here.
 func TestBuiltInThemesHaveNoEmptyColors(t *testing.T) {
-	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+	for _, theme := range builtInThemes() {
 		colors := map[string]color.Color{
 			"Accent": theme.Accent, "Subtle": theme.Subtle, "Text": theme.Text,
 			"Faint": theme.Faint, "Good": theme.Good, "Bad": theme.Bad,
@@ -53,7 +54,7 @@ func TestBuiltInThemesHaveNoEmptyColors(t *testing.T) {
 // onto an existing color would silently make approvals look like errors (or
 // like ordinary activity) again.
 func TestBuiltInThemesWarningIsDistinct(t *testing.T) {
-	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+	for _, theme := range builtInThemes() {
 		if sameColor(theme.Warning, theme.Bad) {
 			t.Errorf("%s: Warning resolves to the same color as Bad", theme.Name)
 		}
@@ -71,7 +72,7 @@ func TestBuiltInThemesWarningIsDistinct(t *testing.T) {
 // this split both drew on Bad, so a pending approval and a denied tool call
 // were visually identical.
 func TestBadgeWarnAndBadgeErrAreDistinct(t *testing.T) {
-	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+	for _, theme := range builtInThemes() {
 		warnFg := theme.BadgeWarn.GetForeground()
 		errFg := theme.BadgeErr.GetForeground()
 		if sameColor(warnFg, errFg) {
@@ -103,11 +104,11 @@ func TestContrastForegroundPicksTheHigherContrastOption(t *testing.T) {
 // TabActive fills its background with the theme's Accent color and must
 // pick a foreground that stays readable against it. A naive fixed choice
 // (always white, or always black) fails WCAG AA on at least one of these
-// three themes' Accent colors — that is the whole reason
+// themes' Accent colors — that is the whole reason
 // contrastForeground exists instead.
 func TestTabActiveMeetsWCAGAAForEveryThemeAccent(t *testing.T) {
 	const wcagAA = 4.5
-	for _, theme := range []Theme{ClaudeInspired(), Midnight(), Forest()} {
+	for _, theme := range builtInThemes() {
 		bg := theme.TabActive.GetBackground()
 		fg := theme.TabActive.GetForeground()
 		if bg == nil || fg == nil {
@@ -118,6 +119,10 @@ func TestTabActiveMeetsWCAGAAForEveryThemeAccent(t *testing.T) {
 			t.Errorf("%s: TabActive foreground/background contrast = %.2f, want >= %.1f (WCAG AA)", theme.Name, ratio, wcagAA)
 		}
 	}
+}
+
+func builtInThemes() []Theme {
+	return []Theme{ClaudeInspired(), Midnight(), Forest(), HUD()}
 }
 
 func sameColor(a, b color.Color) bool {
