@@ -1209,7 +1209,8 @@
       "enum": [
         "claude_inspired",
         "midnight",
-        "forest"
+        "forest",
+        "hud"
       ]
     },
     {

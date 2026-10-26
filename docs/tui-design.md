@@ -97,13 +97,18 @@ keeps them testable without a terminal.
 
 ## Theme and fallbacks
 
-- Three built-in themes, defined in `internal/tui/styles` as `Theme`
+- Four built-in themes, defined in `internal/tui/styles` as `Theme`
   structs of Lip Gloss styles: `claude_inspired` (default, warm orange
-  accent), `midnight` (cool indigo accent, cyan user rail), and `forest`
-  (mossy-olive accent, warm amber user rail). Select with `ui.theme` in
-  config or `--theme`. A new theme is a single constructor (built on the
-  shared `newTheme` helper, which derives every style from eight base
-  colors) plus a `ByName` case.
+  accent), `midnight` (cool indigo accent, cyan user rail), `forest`
+  (mossy-olive accent, warm amber user rail), and `hud` (mint-on-black,
+  after the llm-js browser UI). Select with `ui.theme` in config or
+  `--theme`. A new theme is a single constructor (built on the shared
+  `newTheme` helper, which derives every style from eight base colors)
+  plus a `ByName` case.
+- Answers render with glamour's standard dark or light style unless the
+  theme sets `Theme.Markdown`. Only `hud` does: uppercase accent headings,
+  accent links, dim block quotes and teal-tinted code, built on top of the
+  standard style in `internal/tui/styles/markdown.go`.
 - Every color is a lipgloss `AdaptiveColor` (light + dark variant), and Lip
   Gloss degrades TrueColor to 256/16-color terminals automatically.
 - Charts fall back from Unicode block-eighths to plain ASCII when needed.

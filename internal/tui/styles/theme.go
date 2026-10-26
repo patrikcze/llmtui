@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 
+	"charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
 )
 
@@ -65,7 +66,7 @@ func contrastRatio(l1, l2 float64) float64 {
 // selector's background (any theme's Accent, used as a pill fill) stays
 // legible regardless of how bright or dark that particular color is —
 // fixed white or fixed black text would each fail against at least one of
-// the three themes' Accent colors.
+// the themes' Accent colors.
 func contrastForeground(bg color.Color) color.Color {
 	bgLum := relativeLuminance(bg)
 	if contrastRatio(1, bgLum) >= contrastRatio(0, bgLum) {
@@ -109,6 +110,10 @@ type Theme struct {
 	ChartBar       lipgloss.Style
 	ChartLabel     lipgloss.Style
 	TabActive      lipgloss.Style
+
+	// Markdown is the glamour style for rendered answers. Nil keeps
+	// glamour's standard dark/light style, which every theme but hud uses.
+	Markdown *ansi.StyleConfig
 }
 
 // newTheme builds every derived style from one base palette, so each theme
@@ -223,6 +228,26 @@ func Forest() Theme {
 	)
 }
 
+// HUD returns a mint-on-black theme modeled on the llm-js browser UI: one
+// teal accent that also marks the user rail, as the web page does, and a
+// matching Markdown style for answers.
+func HUD() Theme {
+	t := newTheme("hud",
+		adaptiveColor{Light: "#1F7A68", Dark: "#8FE3CF"}, // Accent: deep teal / mint
+		adaptiveColor{Light: "#5E7A74", Dark: "#6E928B"}, // Subtle: the web UI's --dim
+		adaptiveColor{Light: "#16302B", Dark: "#CFE7E0"}, // Text: the web UI's --text
+		adaptiveColor{Light: "#9DB5AF", Dark: "#3C5752"}, // Faint: the web UI's --faint
+		adaptiveColor{Light: "#2E7D4F", Dark: "#A6E3A1"}, // Good: leaf green, kept off the mint accent
+		adaptiveColor{Light: "#B8432F", Dark: "#FF7A6B"}, // Bad: the web UI's --err
+		adaptiveColor{Light: "#8A6A12", Dark: "#E9C46A"}, // Warning: the web UI's --warn
+		adaptiveColor{Light: "#C5DAD4", Dark: "#2C4843"}, // PanelEdge: the web UI's --line over its background
+		adaptiveColor{Light: "#1F7A68", Dark: "#8FE3CF"}, // UserEdge: the accent, like the web UI's user rail
+	)
+	md := hudMarkdown(IsDark())
+	t.Markdown = &md
+	return t
+}
+
 // ByName resolves a theme by config name, falling back to the default.
 func ByName(name string) Theme {
 	switch name {
@@ -230,6 +255,8 @@ func ByName(name string) Theme {
 		return Midnight()
 	case "forest":
 		return Forest()
+	case "hud":
+		return HUD()
 	default:
 		return ClaudeInspired()
 	}

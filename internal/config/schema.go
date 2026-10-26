@@ -36,7 +36,7 @@ type SchemaField struct {
 // against those packages so the two cannot drift apart.
 var schemaEnums = map[string][]string{
 	"chat.reasoning":                {"auto", "on", "off", "low", "medium", "high"},
-	"ui.theme":                      {"claude_inspired", "midnight", "forest"},
+	"ui.theme":                      {"claude_inspired", "midnight", "forest", "hud"},
 	"entities.output_storage":       {"memory", "disk", "off"},
 	"prompt.mode":                   {"minimal", "balanced", "coding", "strict"},
 	"prompt.fresh_runtime_context":  {FreshRuntimeContextAuto, FreshRuntimeContextMessage, FreshRuntimeContextSystem},
