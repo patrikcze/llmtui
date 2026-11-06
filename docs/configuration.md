@@ -158,7 +158,7 @@ Embedded-only provider keys:
 | `sampling.dry_base` | `1.75` | Exponential base used when DRY is enabled |
 | `sampling.dry_allowed_length` | `2` | Repeated sequence length allowed before DRY applies |
 | `sampling.dry_penalty_last_n` | `-1` | DRY history window; `-1` resolves to the active context size |
-| `sampling.dry_sequence_breakers` | `["\\n", ":", "\\\"", "*"]` | Sequence boundaries; the listed llama.cpp defaults apply when DRY is enabled and this key is omitted |
+| `sampling.dry_sequence_breakers` | `["\\n", ":", "\\\"", "*"]` | Sequence boundaries; the listed llama.cpp defaults apply when DRY is enabled and this key is omitted. The embedded runtime uses at most 64 distinct breakers |
 | `sampling.seed` | `0` | Random; nonzero is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings |
 
