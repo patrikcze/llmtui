@@ -50,7 +50,7 @@ llmtui runtime install
 ```
 
 This explicit command downloads the official pinned asset for the current
-platform (the build in `internal/runtime/pin.json`, currently `b11669`),
+platform (the build in `internal/runtime/pin.json`, currently `b12110`),
 verifies its exact byte size and pinned SHA-256 before parsing it, extracts
 only the embedded allowlist, recreates trusted library aliases, fully verifies
 the result, and atomically installs it under the platform user-data directory
@@ -94,11 +94,11 @@ compile the pinned llama.cpp revision as shared libraries and select it with
 
 ```bash
 # PIN = the llama_tag from internal/runtime/pin.json in your llmtui source
-# tree; `llmtui doctor` also prints the build llmtui expects. Currently b11669
-# (the nightly build whose binaries upstream's v0.7.0 release ships). Check out
-# the bNNNNN tag pin.json records; here git tag v0.7.0 is the same commit, but
+# tree; `llmtui doctor` also prints the build llmtui expects. Currently b12110
+# (the nightly build whose binaries upstream's v0.9.0 release ships). Check out
+# the bNNNNN tag pin.json records; here git tag v0.9.0 is the same commit, but
 # a semver tag has pointed past its binaries before (v0.5.0).
-PIN=b11669
+PIN=b12110
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp && git checkout "$PIN"
 cmake -B build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release   # + your backend, e.g. -DGGML_CUDA=ON
@@ -117,8 +117,8 @@ runtime is hundreds of megabytes with separate redistribution requirements.
 no CUDA entry in `pin.json` for it to resolve, so it errors rather than
 downloading an unpinned or incomplete asset.) Keep yzma, the llama.cpp
 revision, and llmtui's pin aligned — the pin is the single source of truth
-(`internal/runtime/pin.json`: currently yzma `v1.30.0` and llama.cpp build
-`b11669`, i.e. the build behind upstream's `v0.7.0` tagged release).
+(`internal/runtime/pin.json`: currently yzma `v1.32.0` and llama.cpp build
+`b12110`, i.e. the build behind upstream's `v0.9.0` tagged release).
 
 Linux additionally needs `libffi.so.8` from the distribution's `libffi8`
 package. The dependency is initialized lazily: when it is missing, only the
@@ -258,7 +258,7 @@ model_profiles:
 | `sampling.dry_base` | `1.75` | DRY exponential base |
 | `sampling.dry_allowed_length` | `2` | Repeated sequence length allowed before a penalty |
 | `sampling.dry_penalty_last_n` | `-1` | History window; `-1` uses the active context size |
-| `sampling.dry_sequence_breakers` | newline, `:`, `"`, `*` | Boundaries that stop DRY sequence matching; these llama.cpp defaults apply when DRY is enabled and the key is omitted |
+| `sampling.dry_sequence_breakers` | newline, `:`, `"`, `*` | Boundaries that stop DRY sequence matching; these llama.cpp defaults apply when DRY is enabled and the key is omitted. llama.cpp uses at most 64 distinct breakers and ignores the rest |
 | `sampling.seed` | `0` | `0` selects a random seed; another value is deterministic |
 | `sampling.stop` | `[]` | Case-sensitive stop strings, safe across token/UTF-8 boundaries |
 
@@ -292,9 +292,9 @@ included in agent executor/verifier requests. Restarting or loading a saved
 session deliberately drops it. Its token cost is included while it remains in
 the active request history.
 
-The pinned Yzma v1.30.0 binding does not expose llama.cpp's common
+The pinned Yzma v1.32.0 binding does not expose llama.cpp's common
 reasoning-budget sampler, so llmtui intentionally has no `reasoning.budget`
-key. Yzma v1.30.0 exposes llama.cpp's NextN staging functions only through an
+key. Yzma v1.32.0 exposes llama.cpp's NextN staging functions only through an
 experimental package with no stability guarantee (llama.cpp may change or
 remove them), and llmtui implements no MTP decoder. `speculative.type:
 draft-mtp` therefore parses as an explicit request but fails before model
@@ -610,8 +610,8 @@ locally as an `openai_compatible` client (see
 
 Remove the incompatible runtime and install the pinned build. yzma and
 llama.cpp share a narrow compatible window: use only the tag/range in
-`internal/runtime/pin.json` (currently yzma `v1.30.0`, llama.cpp build
-`b11669` = upstream's `v0.7.0` release). Never pair a new binary with an old
+`internal/runtime/pin.json` (currently yzma `v1.32.0`, llama.cpp build
+`b12110` = upstream's `v0.9.0` release). Never pair a new binary with an old
 hand-built runtime, or vice versa.
 
 ## Design and licensing
