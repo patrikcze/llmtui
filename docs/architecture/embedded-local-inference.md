@@ -2,6 +2,110 @@
 
 Status: **Accepted** (2026-07-18)
 
+## 2026-11-17 addendum: runtime pin → llama.cpp v1.0.0 / yzma v1.33.0
+
+Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
+every earlier pin value in this document, including the 2026-11-06 addendum's.
+
+- yzma `v1.32.0` → **`v1.33.0`** (`go.mod`, one line; `go.sum` gains only the
+  new yzma hashes). This is yzma's declared binding for llama.cpp `v1.0.0`
+  (README table: `b12347+`; `pkg/download.DefaultVersion`). The `pkg/llama`
+  changes are a **struct-layout break** that must move with the runtime:
+  - `ContextParams` loses `DefragThold` (llama.cpp removed the deprecated
+    `defrag_thold`) from the middle of the struct and gains
+    `MoeCacheCpuShare` (`float32`, `moe_cache_cpu_share`) after
+    `MoeCacheSize`. A v1.32.0 binding against b12359, or the reverse, would
+    misplace every field after `YarnOrigCtx`, so yzma, `go.mod` and
+    `pin.json` move in one commit. llmtui never set `DefragThold`; it builds
+    context parameters from `llama.ContextDefaultParams()` and sets fields by
+    name, so it needs no code change. A load check against the b12359 library
+    reads back the expected defaults for every field after the change
+    (`f16` K/V types, `offload_kqv`, `op_offload`, `swa_full`, …).
+    `MoeCacheCpuShare` stays `0` (all MoE cache misses uploaded). Exposing it
+    next to `moe_cache_mib` is a separate config decision.
+  - `SetWarmup` is removed (llama.cpp removed `llama_set_warmup`), and
+    `Warmup` no longer calls it. llmtui uses neither.
+  - `pkg/mtmd`: new gen-audio (`mtmd_gen_audio_*`, preset voices) and
+    streaming-resampler (`mtmd_helper_resampler_*`) bindings. As in v1.32,
+    the loader **requires** them, so a v1.33 binding cannot load an older
+    `libmtmd`. llmtui uses none of them, and `mtmd_context_params` is
+    unchanged.
+  - `pkg/message`, `pkg/template` and `pkg/download`'s resolver are unchanged
+    for llmtui's use; `pkg/llamawasm` and `exp/decide` changes do not affect
+    the native build.
+- llama.cpp `b12110` / `v0.9.0` → **`b12359` / `v1.0.0`**, commit
+  `b1b770d90d94cad9e9ea5b993bdbc383a522fb28`. yzma's manifest `upstream_tag`
+  says `b12359`, and the upstream git tag `v1.0.0` is the same commit.
+- yzma pins the `v1.0.0` digest manifest (`llama-cpp-builder` release
+  `v1.0.0.json`) at
+  `sha256:7a0e37e1955c33346ada1885beda2cebe419f7e34ebc37aa5861c789b4e36b6b`;
+  the downloaded manifest hashes to exactly that. All eight archive SHA-256s in
+  `pin.json` (five platforms and three Vulkan packs) match that authenticated
+  manifest. Archive sizes and every allowlisted per-file hash were computed
+  from the downloaded archives.
+- **SONAME major bump.** With v1.0.0 the shared-library versions become
+  llama/mtmd `.1.0.0` and ggml `.1.0.0` (from `.0.9.0` / `.0.29.0`), and the
+  major-version aliases change from `.0` to `.1` (`libllama.so.1`,
+  `libggml-base.1.dylib`, …). The dylibs' install names and the ELF
+  `DT_NEEDED` entries reference the `.1` names, so the alias set in
+  `pin.json` moves with them. Nothing in llmtui hard-codes a SONAME: the
+  resolver anchors on the unversioned `libllama.{dylib,so}` / `llama.dll`,
+  and self-update accepts any bare-name sibling symlink. The allowlist is
+  otherwise unchanged, and no archive carries a library outside it other
+  than `libllama-common` and the `*-impl` tool libraries, which stay
+  excluded. Vulkan packs' shared base files are byte-identical to the CPU
+  archives. The upstream `LICENSE` is unchanged, and the Windows archives
+  still ship no `LICENSE` (the embedded fallback copy is still byte-identical).
+- Every one of the 318 `llama_*`/`mtmd_*`/`ggml_*` symbols yzma v1.33.0
+  prepares through `pkg/llama`, `pkg/mtmd` and `pkg/loader` is exported by
+  the libraries in all five platform archives.
+- Upstream API removals between b12110 and b12359, none used by llmtui or
+  bound by yzma v1.33.0: `defrag_thold`, `llama_set_warmup`, the old
+  deprecated wrappers (`llama_load_model_from_file`, `llama_free_model`,
+  `llama_new_context_with_model`, `llama_n_ctx_train`/`n_embd`/`n_layer`/
+  `n_head`/`n_vocab`, `llama_get_state_size`, `llama_copy_state_data`,
+  `llama_set_state_data`, `llama_load_session_file`,
+  `llama_save_session_file`, the `llama_token_*` vocab aliases,
+  `llama_vocab_cls`), and the trigger-words form of
+  `llama_sampler_init_grammar_lazy`. llmtui's tool grammars use the
+  non-lazy `llama_sampler_init_grammar`. `src/llama-chat.cpp` and
+  `src/llama-grammar.cpp` are unchanged, and the 64-entry DRY breaker cap is
+  still in place.
+- **MTP status.** llama.cpp v1.0.0 moves the NextN functions from the
+  `src/llama-ext.h` staging header into the public `llama.h`. It also adds
+  device-row variants (`llama_set_embeddings_nextn_dev`,
+  `llama_{get,set}_embeddings_nextn_rows`, `llama_set_ctx_state_src`,
+  `llama_batch_ext_set_embd_state_row`) and DFlash draft-model queries.
+  yzma v1.33.0 binds the NextN and device-row functions (with a fallback to
+  the old `llama_set_embd_state_src` name), but only in its experimental
+  `exp/speculative` package. It has no MTP or DFlash decoder: the draft loop
+  is in llama.cpp's `common/speculative`, inside the unshipped
+  `libllama-common`. Both bindings load against b12359 (`Available()` and
+  `DeviceRowsAvailable()` report true), but llmtui still implements no
+  decoder, so `speculative.type: draft-mtp` stays an explicit error. The
+  binding and the C API are now aligned and no longer staging-only, so a
+  native MTP decoder is a feasible separate feature. It is not a pin change.
+- `github.com/jupiterrider/ffi` stays at **`v0.8.0`** (still the newest
+  release and what yzma v1.33.0 requires), and `third_party/ffi` is current.
+  `github.com/ebitengine/purego` stays at `v0.10.2`.
+
+Validation: `go test -count=1 ./...`, the CI race subset, `go vet ./...`,
+`gofmt`, `golangci-lint` (0 issues) and `govulncheck` (no vulnerabilities)
+pass. `llmtui runtime install` downloads, size/SHA-256-verifies, extracts,
+and full-verifies the b12359 darwin-arm64 runtime. yzma's `llama`, `mtmd` and
+`exp/speculative` loaders all bind against it. The native integration suite
+passes on Metal with `gemma-4-26B-A4B-it-Q4_0.gguf` and its Q8_0 `mmproj`
+(text, native tools, vision, wrong-projector rejection, large prompt, large
+context memory options, runtime context, isolated requests, and the embedded
+provider factory) with one exception:
+`TestRuntimeVisionIntegration/reasoning_modes_isolate_thoughts/on`. There the
+26B model uses up the test's 96-token cap while still reasoning and returns no
+answer. That is model behaviour, not a regression: master's pin (yzma
+v1.32.0 / b12110) fails that subtest the same way with this model. The suite
+was tuned on gemma-4-E4B. A local CPU-only run was not completed. CPU
+coverage comes from CI's native lane (darwin and linux, SmolLM2-135M), and
+Windows is covered by the symbol check above.
+
 ## 2026-11-06 addendum: runtime pin → llama.cpp v0.9.0 / yzma v1.32.0
 
 Status: **Accepted and implemented**. Routine pinned-runtime bump. Supersedes
@@ -542,8 +646,8 @@ native threads run with Go's real cgo runtime; Linux and Windows remain
 `CGO_ENABLED=0`.
 
 The embedded runtime is pinned once in `internal/runtime/pin.json` (currently
-yzma `v1.32.0`, llama.cpp build `b12110` — the build behind upstream's
-`v0.9.0` tagged release; see the 2026-11-06 addendum). Packaged
+yzma `v1.33.0`, llama.cpp build `b12359` — the build behind upstream's
+`v1.0.0` tagged release; see the 2026-11-17 addendum). Packaged
 acceleration is Metal (macOS arm64) and the pinned Vulkan pack (Linux/Windows
 amd64/arm64); NVIDIA CUDA on Linux is a manually validated
 administrator-supplied `library_path` runtime (2026-09-04 addendum,
