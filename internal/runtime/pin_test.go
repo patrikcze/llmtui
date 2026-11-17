@@ -11,22 +11,22 @@ func TestLoadPin(t *testing.T) {
 	}
 
 	// Verify structure
-	if pin.YzmaVersion != "v1.32.0" {
-		t.Errorf("YzmaVersion = %q, want v1.32.0", pin.YzmaVersion)
+	if pin.YzmaVersion != "v1.33.0" {
+		t.Errorf("YzmaVersion = %q, want v1.33.0", pin.YzmaVersion)
 	}
-	if pin.LlamaTag != "b12110" {
-		t.Errorf("LlamaTag = %q, want b12110", pin.LlamaTag)
+	if pin.LlamaTag != "b12359" {
+		t.Errorf("LlamaTag = %q, want b12359", pin.LlamaTag)
 	}
-	if pin.LlamaCommit != "cd959bae99ff4bed22bef2604f45241c09bbb8c8" {
-		t.Errorf("LlamaCommit = %q, want cd959bae99ff4bed22bef2604f45241c09bbb8c8", pin.LlamaCommit)
+	if pin.LlamaCommit != "b1b770d90d94cad9e9ea5b993bdbc383a522fb28" {
+		t.Errorf("LlamaCommit = %q, want b1b770d90d94cad9e9ea5b993bdbc383a522fb28", pin.LlamaCommit)
 	}
 
 	// Verify compatible range
-	if pin.CompatibleRange.Min != "b12110" {
-		t.Errorf("CompatibleRange.Min = %q, want b12110", pin.CompatibleRange.Min)
+	if pin.CompatibleRange.Min != "b12359" {
+		t.Errorf("CompatibleRange.Min = %q, want b12359", pin.CompatibleRange.Min)
 	}
-	if pin.CompatibleRange.Max != "b12110" {
-		t.Errorf("CompatibleRange.Max = %q, want b12110", pin.CompatibleRange.Max)
+	if pin.CompatibleRange.Max != "b12359" {
+		t.Errorf("CompatibleRange.Max = %q, want b12359", pin.CompatibleRange.Max)
 	}
 
 	// Verify all platforms exist
@@ -62,7 +62,7 @@ func TestLoadPin(t *testing.T) {
 
 		// Every platform's fully-resolved managed file set guarantees a
 		// LICENSE entry, even for archives (Windows CPU/Vulkan, as of
-		// b12110) that don't include one themselves — see
+		// b12359) that don't include one themselves — see
 		// PlatformPin.ManagedFiles and Install's ensureLicensePresent.
 		if _, ok := managedFiles["LICENSE"]; !ok {
 			t.Errorf("Platform %q: LICENSE not in ManagedFiles()", platform)
@@ -144,8 +144,8 @@ func TestLlamaVersion(t *testing.T) {
 	}
 
 	version := pin.LlamaVersion()
-	if version != "b12110" {
-		t.Errorf("LlamaVersion() = %q, want b12110", version)
+	if version != "b12359" {
+		t.Errorf("LlamaVersion() = %q, want b12359", version)
 	}
 }
 

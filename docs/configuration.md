@@ -139,7 +139,7 @@ Embedded-only provider keys:
 | `flash_attention` | `auto` | `auto`, `on`, or `off` |
 | `reasoning.effort` | `auto` | Embedded compatible-template effort: `auto`, `low`, `medium`, `high`, or `xhigh` |
 | `reasoning.preserve` | `false` | Keep hidden reasoning in in-memory compatible-template history; never session-persisted |
-| `speculative.type` | `off` | `off` or explicit `draft-mtp`; the pinned Yzma binding currently rejects `draft-mtp` safely because its required staging APIs are unavailable |
+| `speculative.type` | `off` | `off` or explicit `draft-mtp`; llmtui currently rejects `draft-mtp` safely because neither it nor the pinned Yzma binding implements an MTP decoder |
 | `tool_format` | `auto` | Native tool grammar: `auto`, `standard`, `qwen`, `glm`, `mistral`, `gemma`, `gpt`, or `phi` |
 | `rope_scaling_type` | GGUF metadata | Optional override: `none`, `linear`, `yarn`, or `longrope` |
 | `rope_freq_base` | GGUF metadata | Positive RoPE base-frequency override |

@@ -244,16 +244,16 @@ symbol/ABI errors.
 
 ```bash
 # The authoritative values live in internal/runtime/pin.json:
-#   llama_tag  (e.g. b12110)      -> PIN below
+#   llama_tag  (e.g. b12359)      -> PIN below
 #   llama_commit                  -> exact commit for that tag
 #   compatible_range.min/max      -> the only builds yzma accepts
-PIN=b12110          # <-- read this from internal/runtime/pin.json of YOUR llmtui
-#   Upstream also publishes semver releases (v0.9.0, …) whose binaries come
+PIN=b12359          # <-- read this from internal/runtime/pin.json of YOUR llmtui
+#   Upstream also publishes semver releases (v1.0.0, …) whose binaries come
 #   from a nightly bNNNNN build (see the release's nightly-tag.txt). Always
 #   check out the bNNNNN tag that pin.json records: the semver *git* tag can
 #   point at a later commit (v0.5.0 -> b11149, while its binaries were
 #   b11146), which would build source that does not match the pin. For
-#   v0.9.0 the git tag and b12110 are the same commit.
+#   v1.0.0 the git tag and b12359 are the same commit.
 
 git clone https://github.com/ggml-org/llama.cpp.git /opt/build/llama.cpp-$PIN
 cd /opt/build/llama.cpp-$PIN
@@ -357,7 +357,7 @@ system's dynamic linker then has to resolve its siblings (`libggml.so`,
 tree is usually not in the linker cache, which surfaces as:
 
 ```text
-libggml-cpu.so.0: cannot open shared object file: No such file or directory
+libggml-cpu.so.1: cannot open shared object file: No such file or directory
 ```
 
 Register the directory permanently:
@@ -531,7 +531,7 @@ are different operations with different bottlenecks.
 | `No CMAKE_CUDA_COMPILER could be found` | `nvcc` not installed or not on `PATH` | Install the CUDA compiler package; `export PATH="$CUDA_HOME/bin:$PATH"` or pass `-DCMAKE_CUDA_COMPILER="$CUDACXX"` |
 | `Loading of module with unavailable key is rejected` | Secure Boot rejected the DKMS module | Disable Secure Boot where policy permits, or enroll the DKMS MOK with `mokutil` and reboot |
 | `cannot find -lllama-server-impl` / `-lllama-cli-impl` at link | Inconsistent `LLAMA_BUILD_APP` / `LLAMA_BUILD_SERVER` / CLI toggles | Use the minimal build (app + tools + server all OFF) or the full build (all ON); do not mix |
-| `libggml-cpu.so.0: cannot open shared object file` | Sibling libraries not in the linker cache | Add the install `lib`/`lib64` to `/etc/ld.so.conf.d/`, run `ldconfig`, re-check with `ldd` |
+| `libggml-cpu.so.1: cannot open shared object file` | Sibling libraries not in the linker cache | Add the install `lib`/`lib64` to `/etc/ld.so.conf.d/`, run `ldconfig`, re-check with `ldd` |
 | VM firmware cannot allocate PCI MMIO / VM won't power on with GPUs | 64-bit MMIO window too small | Raise `pciPassthru.64bitMMIOSizeGB` to cover the firmware's reported requirement, rounded up |
 | Inference runs but only CPU is busy | CPU runtime loaded, `libggml-cuda.so` missing/unloadable, or `gpu_layers: 0` | Check `library_path` points at the CUDA build, `libggml-cuda.so` is present and `ldd`-clean, `gpu_layers` is `-1`, and `/debug` shows CUDA devices |
 | Only one GPU is used | Model fits on one GPU, `CUDA_VISIBLE_DEVICES` restricts it, or llama.cpp's default split placed it there | Inspect `CUDA_VISIBLE_DEVICES`, `llama-cli --list-devices`, and `nvidia-smi`; try a larger model/context |
